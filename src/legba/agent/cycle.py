@@ -826,12 +826,14 @@ class AgentCycle:
 
     async def _store_reflection_facts(self) -> None:
         """Store facts extracted from the reflection phase."""
+        from .memory.fact_normalize import normalize_fact_predicate, normalize_fact_value
+
         facts = self._reflection_data.get("facts_learned", [])
         for fact_data in facts:
             try:
-                subject = str(fact_data.get("subject", ""))
-                predicate = str(fact_data.get("predicate", ""))
-                value = str(fact_data.get("value", ""))
+                subject = str(fact_data.get("subject", "")).strip()
+                predicate = normalize_fact_predicate(str(fact_data.get("predicate", "")))
+                value = normalize_fact_value(str(fact_data.get("value", "")))
                 if not (subject and predicate and value):
                     continue
 
@@ -839,7 +841,7 @@ class AgentCycle:
                     subject=subject,
                     predicate=predicate,
                     value=value,
-                    confidence=float(fact_data.get("confidence", 0.5)),
+                    confidence=min(float(fact_data.get("confidence", 0.5)), 1.0),
                     source_cycle=self.state.cycle_number,
                 )
 

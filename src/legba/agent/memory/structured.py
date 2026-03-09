@@ -77,6 +77,8 @@ class StructuredStore:
                 CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);
                 CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
                 CREATE INDEX IF NOT EXISTS idx_facts_source_cycle ON facts(source_cycle);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_triple
+                    ON facts (lower(subject), lower(predicate), lower(value));
 
                 CREATE TABLE IF NOT EXISTS modifications (
                     id UUID PRIMARY KEY,
@@ -272,14 +274,20 @@ class StructuredStore:
         if not self._available:
             return False
         try:
+            # Normalize predicate and value before storage
+            from .fact_normalize import normalize_fact_predicate, normalize_fact_value
+            fact.predicate = normalize_fact_predicate(fact.predicate)
+            fact.value = normalize_fact_value(fact.value)
+
             async with self._pool.acquire() as conn:
                 await conn.execute(
                     """
                     INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (id) DO UPDATE SET
-                        value = EXCLUDED.value,
-                        confidence = EXCLUDED.confidence,
+                    ON CONFLICT (lower(subject), lower(predicate), lower(value)) DO UPDATE SET
+                        confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
+                        source_cycle = EXCLUDED.source_cycle,
+                        data = EXCLUDED.data,
                         updated_at = NOW()
                     """,
                     fact.id,

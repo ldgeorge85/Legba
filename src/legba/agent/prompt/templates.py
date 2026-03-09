@@ -634,6 +634,13 @@ Rules:
   0.9-1.0: major breakthrough — new conflict detected, critical entity discovered, paradigm-shifting connection
   Be honest. Most cycles are 0.3-0.5. Reserve 0.7+ for genuinely significant work.
 - facts_learned: only verified facts from this cycle, can be empty list. All values MUST be strings (not numbers).
+  Predicate vocabulary (use these exact PascalCase forms):
+    LeaderOf, HostileTo, AlliedWith, LocatedIn, OperatesIn, PartOf,
+    SuppliesWeaponsTo, MemberOf, BordersWith, SanctionedBy, OccupiedBy,
+    TradesWith, AffiliatedWith, FundedBy, SignatoryTo, RelatedTo
+  Do NOT use variant forms (hostile_to, is hostile to, etc.) — use the canonical form above.
+  Values must be entity names only — do NOT append dates like "(since 2026-03-08)".
+  Skip facts you have already stored in previous cycles — check your memory first.
 - memories_to_promote: list of episode IDs from working memory that are important enough to preserve long-term. These are facts, patterns, or insights that will still matter 100 cycles from now. Can be empty list.
 - Output ONLY the JSON. Start with {{ end with }}."""
 
