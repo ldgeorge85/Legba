@@ -40,6 +40,9 @@ def _coerce_enum(val, enum_cls: type[Enum]) -> Enum:
 SOURCE_ADD_DEF = ToolDefinition(
     name="source_add",
     description="Register a new data source in the source registry. "
+                "IMPORTANT: Before adding, use source_list to check if a source "
+                "with the same name or domain already exists. Duplicate detection "
+                "will reject sources from the same feed domain. "
                 "All trust dimensions are optional with sensible defaults.",
     parameters=[
         ToolParameter(name="name", type="string",
@@ -160,26 +163,85 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
         if not name or not url:
             return "Error: name and url are required"
 
-        # --- Duplicate detection: check URL and name similarity ---
+        # --- Duplicate detection via direct DB query ---
+        # Checks: exact name (case-insensitive), normalized URL, same domain.
+        # Uses a direct query instead of get_sources() to avoid silent failures.
+        from urllib.parse import urlparse
+
+        def _norm_url(u: str) -> str:
+            return u.lower().replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
+
+        def _feed_domain(u: str) -> str:
+            try:
+                return urlparse(u).netloc.lower().replace("www.", "")
+            except Exception:
+                return ""
+
+        norm_name = name.lower().strip()
+        norm_url = _norm_url(url)
+        new_domain = _feed_domain(url)
+
         try:
-            existing = await structured.get_sources(limit=500)
-            # Normalize URL for comparison (strip protocol, trailing slash)
-            def _norm_url(u: str) -> str:
-                return u.lower().replace("https://", "").replace("http://", "").rstrip("/")
-            norm_url = _norm_url(url)
-            norm_name = name.lower().strip()
-            for src in existing:
-                if _norm_url(src.url) == norm_url or src.name.lower().strip() == norm_name:
+            async with structured._pool.acquire() as conn:
+                # Check by name (case-insensitive)
+                row = await conn.fetchrow(
+                    "SELECT id, name, url FROM sources WHERE lower(name) = $1 LIMIT 1",
+                    norm_name,
+                )
+                if row:
                     return json.dumps({
                         "status": "duplicate_detected",
-                        "existing_source_id": str(src.id),
-                        "existing_name": src.name,
-                        "existing_url": src.url,
-                        "hint": "A source with the same URL or name already exists. "
-                                "Use source_update to modify the existing source instead.",
+                        "existing_source_id": str(row["id"]),
+                        "existing_name": row["name"],
+                        "existing_url": row["url"],
+                        "reason": "same source name already registered",
+                        "hint": "Use source_update to modify the existing source.",
                     }, indent=2)
+
+                # Check by normalized URL (strip protocol)
+                row = await conn.fetchrow(
+                    "SELECT id, name, url FROM sources "
+                    "WHERE replace(replace(lower(url), 'https://', ''), 'http://', '') = $1 LIMIT 1",
+                    norm_url.replace("www.", ""),
+                )
+                if not row:
+                    # Also check without www. on stored URLs
+                    row = await conn.fetchrow(
+                        "SELECT id, name, url FROM sources "
+                        "WHERE replace(replace(replace(lower(url), 'https://', ''), 'http://', ''), 'www.', '') = $1 LIMIT 1",
+                        norm_url,
+                    )
+                if row:
+                    return json.dumps({
+                        "status": "duplicate_detected",
+                        "existing_source_id": str(row["id"]),
+                        "existing_name": row["name"],
+                        "existing_url": row["url"],
+                        "reason": "same URL (protocol-normalized)",
+                        "hint": "Use source_update to modify the existing source.",
+                    }, indent=2)
+
+                # Check by domain — same feed host already has sources
+                if new_domain:
+                    domain_rows = await conn.fetch(
+                        "SELECT id, name, url FROM sources "
+                        "WHERE url ILIKE $1 LIMIT 5",
+                        f"%{new_domain}%",
+                    )
+                    if domain_rows:
+                        existing_names = [r["name"] for r in domain_rows]
+                        return json.dumps({
+                            "status": "duplicate_detected",
+                            "existing_sources": [
+                                {"id": str(r["id"]), "name": r["name"], "url": r["url"]}
+                                for r in domain_rows[:3]
+                            ],
+                            "reason": f"same feed domain ({new_domain}) — {len(domain_rows)} source(s) already registered: {', '.join(existing_names[:3])}",
+                            "hint": "Sources from this domain are already registered. "
+                                    "Use source_list to review existing sources before adding more.",
+                        }, indent=2)
         except Exception:
-            pass  # If check fails, proceed with creation
+            pass  # If DB check fails, proceed with creation (save_source will still dedupe on url)
 
         from ....shared.schemas.sources import create_source, SourceType, BiasLabel, OwnershipType, CoverageScope
 
