@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Report — Cycle {{ report.cycle }} — Legba Console{% endblock %}
+
+{% block content %}
+<style>
+  .report-content { line-height: 1.7; }
+  .report-content p { margin-bottom: 0.75em; }
+  .report-content h1 { font-size: 1.3em; font-weight: 700; color: #f3f4f6; margin: 1em 0 0.5em; }
+  .report-content h2 { font-size: 1.1em; font-weight: 600; color: #e5e7eb; margin: 0.8em 0 0.4em; }
+  .report-content h3 { font-size: 1em; font-weight: 600; color: #d1d5db; margin: 0.6em 0 0.3em; }
+  .report-content ul, .report-content ol { margin: 0.4em 0; padding-left: 1.5em; }
+  .report-content ul { list-style-type: disc; }
+  .report-content ol { list-style-type: decimal; }
+  .report-content li { margin-bottom: 0.3em; }
+  .report-content strong { color: #e5e7eb; }
+  .report-content em { color: #d1d5db; }
+  .report-content blockquote { border-left: 3px solid #4b5563; padding-left: 0.75em; margin: 0.5em 0; color: #9ca3af; }
+  .report-content hr { border-color: #374151; margin: 1em 0; }
+  .report-content code { background: rgba(0,0,0,0.3); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; color: #67e8f9; }
+</style>
+
+<div class="mb-6">
+  <div class="flex items-center gap-3 mb-2">
+    <a href="/reports" class="text-sm text-gray-400 hover:text-gray-200">&larr; All Reports</a>
+  </div>
+  <h1 class="text-2xl font-bold text-gray-100">World Assessment</h1>
+  <div class="flex items-center gap-3 mt-2">
+    <span class="badge badge-purple">cycle {{ report.cycle }}</span>
+    <span class="text-xs text-gray-500">{{ report.timestamp[:19] }}</span>
+    <span class="text-xs text-gray-500">Report {{ total - index }} of {{ total }}</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="report-content text-sm text-gray-300">
+    {{ report.content | render_message | safe }}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Events — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-100">Event Explorer</h1>
+  <p class="text-sm text-gray-400 mt-1">{{ total }} events ingested</p>
+</div>
+
+<!-- Filters -->
+<div class="flex flex-wrap gap-3 mb-4">
+  <input type="text"
+         name="q"
+         value="{{ q or '' }}"
+         placeholder="Search events..."
+         class="flex-1 max-w-md bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-600"
+         hx-get="/events"
+         hx-trigger="keyup changed delay:300ms"
+         hx-target="#event-rows"
+         hx-include="[name='category']"
+         hx-push-url="true">
+  <select name="category"
+          class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-600"
+          hx-get="/events"
+          hx-trigger="change"
+          hx-target="#event-rows"
+          hx-include="[name='q']"
+          hx-push-url="true">
+    <option value="">All categories</option>
+    {% for c in categories %}
+      <option value="{{ c }}" {% if category == c %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+<!-- Table -->
+<div class="card overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+        <th class="pb-2 pr-4">Title</th>
+        <th class="pb-2 pr-4">Category</th>
+        <th class="pb-2 pr-4">Source</th>
+        <th class="pb-2 pr-4">Actors</th>
+        <th class="pb-2">Date</th>
+      </tr>
+    </thead>
+    <tbody id="event-rows">
+      {% include "events/_rows.html" %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

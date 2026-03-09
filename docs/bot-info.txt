@@ -1,0 +1,15 @@
+Legba Situational Awareness System
+====================================
+
+User-Agent: Legba-SA/1.0 (autonomous intelligence analyst)
+
+Legba is an autonomous situational awareness platform that monitors global events
+via RSS feeds, APIs, and public data sources. It ingests events, builds entity
+profiles, maintains a knowledge graph, detects anomalies, and produces structured
+intelligence briefings.
+
+Legba accesses only public information sources. It respects robots.txt, rate limits,
+and identifies itself via the User-Agent header on all HTTP requests.
+
+Contact: Operated by the platform administrator. For questions about automated
+access, check the User-Agent header in HTTP request logs.

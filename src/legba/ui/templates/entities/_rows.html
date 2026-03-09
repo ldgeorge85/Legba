@@ -1,0 +1,30 @@
+{% for entity in entities %}
+<tr class="border-b border-gray-800 hover:bg-gray-800/50">
+  <td class="py-2 pr-4">
+    <a href="/entities/{{ entity.id }}" class="text-cyan-400 hover:text-cyan-300 font-medium">
+      {{ entity.canonical_name }}
+    </a>
+    {% if entity.aliases %}
+      <div class="text-xs text-gray-500 mt-0.5">{{ entity.aliases[:3] | join(', ') }}{% if entity.aliases | length > 3 %} +{{ entity.aliases | length - 3 }}{% endif %}</div>
+    {% endif %}
+  </td>
+  <td class="py-2 pr-4">
+    <span class="badge badge-blue">{{ entity.entity_type.value }}</span>
+  </td>
+  <td class="py-2 pr-4">
+    <div class="flex items-center gap-2">
+      <div class="w-20 h-2 bg-gray-700 rounded-full overflow-hidden">
+        <div class="h-full rounded-full bar-fill {% if entity.completeness_score >= 0.7 %}bg-green-500{% elif entity.completeness_score >= 0.4 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
+             style="width: {{ (entity.completeness_score * 100) | int }}%"></div>
+      </div>
+      <span class="text-xs text-gray-400">{{ entity.completeness_score | format_pct }}</span>
+    </div>
+  </td>
+  <td class="py-2 pr-4 text-gray-400">{{ entity.event_link_count }}</td>
+  <td class="py-2 pr-4 text-gray-500 text-xs">{{ entity.updated_at | timeago }}</td>
+</tr>
+{% else %}
+<tr>
+  <td colspan="5" class="py-8 text-center text-gray-500">No entities found.</td>
+</tr>
+{% endfor %}

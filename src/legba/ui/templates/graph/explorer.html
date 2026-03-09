@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+{% block title %}Graph Explorer — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <h1 class="text-2xl font-bold text-gray-100">Knowledge Graph</h1>
+  <p class="text-sm text-gray-400 mt-1">{{ node_count }} entities, {{ edge_count }} relationships</p>
+</div>
+
+<!-- Controls -->
+<div class="flex flex-wrap items-center gap-3 mb-4">
+  <!-- Relationship type filter -->
+  <div class="flex items-center gap-2">
+    <span class="text-xs text-gray-500 uppercase">Edges:</span>
+    <button class="btn text-xs edge-filter active" data-type="all" onclick="filterEdges('all')">All</button>
+    {% for rt in graph_data.rel_types %}
+    <button class="btn text-xs edge-filter" data-type="{{ rt }}" onclick="filterEdges('{{ rt }}')">{{ rt }}</button>
+    {% endfor %}
+  </div>
+
+  <div class="flex-1"></div>
+
+  <!-- Layout controls -->
+  <button class="btn text-xs" onclick="setLayout('cose')">Force Layout</button>
+  <button class="btn text-xs" onclick="setLayout('circle')">Circle</button>
+  <button class="btn text-xs" onclick="setLayout('grid')">Grid</button>
+  <button class="btn text-xs" onclick="cy.fit(undefined, 30)">Fit</button>
+  <button class="btn text-xs" onclick="refreshGraph()">Reload</button>
+</div>
+
+<!-- Graph canvas + detail panel -->
+<div class="flex gap-4" style="height: calc(100vh - 220px);">
+  <!-- Cytoscape container -->
+  <div id="cy" class="flex-1 card" style="min-height: 400px;"></div>
+
+  <!-- Detail panel (hidden until node clicked) -->
+  <div id="detail-panel" class="w-72 card overflow-y-auto hidden">
+    <div class="flex items-center justify-between mb-3">
+      <h3 id="detail-name" class="text-sm font-semibold text-gray-100"></h3>
+      <button class="text-gray-500 hover:text-gray-300 text-xs" onclick="closeDetail()">close</button>
+    </div>
+    <div id="detail-type" class="mb-2"></div>
+    <div id="detail-rels" class="space-y-1"></div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="mt-3 flex flex-wrap gap-4 text-xs text-gray-500">
+  <span class="font-medium text-gray-400">Nodes:</span>
+  {% for ntype in graph_data.node_types %}
+  <span class="flex items-center gap-1">
+    <span class="w-2.5 h-2.5 rounded-full inline-block" style="background: {{ {'Country':'#38bdf8','Person':'#a78bfa','Organization':'#fb923c','Location':'#4ade80'}.get(ntype, '#94a3b8') }};"></span>
+    {{ ntype }}
+  </span>
+  {% endfor %}
+  <span class="ml-4 font-medium text-gray-400">Edges:</span>
+  {% for rt in graph_data.rel_types %}
+  <span class="flex items-center gap-1">
+    <span class="w-3 h-0.5 inline-block" style="background: {{ {'LeaderOf':'#60a5fa','AlliedWith':'#4ade80','HostileTo':'#f87171','EconomicTie':'#fbbf24','MemberOf':'#818cf8','LocatedIn':'#2dd4bf'}.get(rt, '#64748b') }};"></span>
+    {{ rt }}
+  </span>
+  {% endfor %}
+</div>
+
+<!-- Cytoscape.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+<script>
+const graphData = {{ graph_data | tojson }};
+
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements: [...graphData.nodes, ...graphData.edges],
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'background-color': 'data(color)',
+        'label': 'data(name)',
+        'color': '#e2e8f0',
+        'font-size': '11px',
+        'text-outline-color': '#1e293b',
+        'text-outline-width': 2,
+        'text-valign': 'bottom',
+        'text-margin-y': 6,
+        'width': 28,
+        'height': 28,
+        'border-width': 1,
+        'border-color': '#475569',
+      }
+    },
+    {
+      selector: 'node:active, node:selected',
+      style: {
+        'border-width': 2,
+        'border-color': '#f1f5f9',
+        'overlay-opacity': 0,
+      }
+    },
+    {
+      selector: 'node.highlighted',
+      style: {
+        'border-width': 2,
+        'border-color': '#fbbf24',
+        'width': 36,
+        'height': 36,
+        'font-size': '13px',
+        'font-weight': 'bold',
+      }
+    },
+    {
+      selector: 'node.dimmed',
+      style: {
+        'opacity': 0.2,
+      }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'line-color': 'data(color)',
+        'target-arrow-color': 'data(color)',
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'width': 1.5,
+        'arrow-scale': 0.8,
+        'label': 'data(type)',
+        'font-size': '9px',
+        'color': '#64748b',
+        'text-rotation': 'autorotate',
+        'text-outline-color': '#1e293b',
+        'text-outline-width': 1.5,
+        'text-margin-y': -8,
+      }
+    },
+    {
+      selector: 'edge.highlighted',
+      style: {
+        'width': 3,
+        'font-size': '11px',
+        'color': '#e2e8f0',
+      }
+    },
+    {
+      selector: 'edge.dimmed',
+      style: {
+        'opacity': 0.15,
+      }
+    },
+  ],
+  layout: {
+    name: 'cose',
+    animate: true,
+    animationDuration: 500,
+    nodeRepulsion: function() { return 8000; },
+    idealEdgeLength: function() { return 120; },
+    gravity: 0.3,
+    padding: 30,
+  },
+  minZoom: 0.2,
+  maxZoom: 4,
+  wheelSensitivity: 0.3,
+});
+
+// -- Node click: show detail panel with relationships --
+cy.on('tap', 'node', function(evt) {
+  const node = evt.target;
+  const name = node.data('name');
+  const ntype = node.data('type');
+
+  // Highlight connected
+  cy.elements().removeClass('highlighted dimmed');
+  const neighborhood = node.neighborhood().add(node);
+  neighborhood.addClass('highlighted');
+  cy.elements().not(neighborhood).addClass('dimmed');
+
+  // Populate detail panel
+  document.getElementById('detail-name').textContent = name;
+  document.getElementById('detail-type').innerHTML =
+    '<span class="badge badge-blue">' + ntype + '</span>';
+
+  // List relationships
+  const relsDiv = document.getElementById('detail-rels');
+  const connected = node.connectedEdges();
+  let html = '<div class="text-xs text-gray-400 mb-1">' + connected.length + ' relationship(s)</div>';
+  connected.forEach(edge => {
+    const src = edge.data('source');
+    const tgt = edge.data('target');
+    const rel = edge.data('type');
+    const other = (src === name) ? tgt : src;
+    const dir = (src === name) ? '→' : '←';
+    html += '<div class="flex items-center gap-1 text-xs text-gray-300 py-0.5">' +
+      '<span class="text-gray-500">' + dir + '</span> ' +
+      '<span class="text-cyan-400 cursor-pointer" onclick="focusNode(\'' + other.replace(/'/g, "\\'") + '\')">' + other + '</span> ' +
+      '<span class="text-gray-500">(' + rel + ')</span></div>';
+  });
+  relsDiv.innerHTML = html;
+
+  document.getElementById('detail-panel').classList.remove('hidden');
+});
+
+// Click background: clear selection
+cy.on('tap', function(evt) {
+  if (evt.target === cy) {
+    cy.elements().removeClass('highlighted dimmed');
+    document.getElementById('detail-panel').classList.add('hidden');
+  }
+});
+
+// -- Functions --
+function closeDetail() {
+  cy.elements().removeClass('highlighted dimmed');
+  document.getElementById('detail-panel').classList.add('hidden');
+}
+
+function focusNode(name) {
+  const node = cy.getElementById(name);
+  if (node.length) {
+    node.emit('tap');
+    cy.animate({ center: { eles: node }, zoom: 1.5, duration: 300 });
+  }
+}
+
+function filterEdges(type) {
+  // Update button states
+  document.querySelectorAll('.edge-filter').forEach(b => b.classList.remove('active'));
+  document.querySelector('.edge-filter[data-type="' + type + '"]').classList.add('active');
+
+  if (type === 'all') {
+    cy.edges().show();
+    cy.nodes().show();
+  } else {
+    cy.edges().hide();
+    cy.edges('[type="' + type + '"]').show();
+    // Show only nodes connected to visible edges
+    cy.nodes().hide();
+    cy.edges('[type="' + type + '"]').connectedNodes().show();
+  }
+}
+
+function setLayout(name) {
+  const opts = { name: name, animate: true, animationDuration: 500, padding: 30 };
+  if (name === 'cose') {
+    opts.nodeRepulsion = function() { return 8000; };
+    opts.idealEdgeLength = function() { return 120; };
+    opts.gravity = 0.3;
+  }
+  cy.layout(opts).run();
+}
+
+async function refreshGraph() {
+  const resp = await fetch('/api/graph');
+  const data = await resp.json();
+  cy.elements().remove();
+  cy.add([...data.nodes, ...data.edges]);
+  cy.layout({ name: 'cose', animate: true, animationDuration: 500, padding: 30,
+    nodeRepulsion: function() { return 8000; }, idealEdgeLength: function() { return 120; }, gravity: 0.3,
+  }).run();
+}
+</script>
+
+<style>
+  /* Active filter button */
+  .edge-filter.active {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: #38bdf8;
+    color: #38bdf8;
+  }
+  /* Override card background for graph container */
+  #cy {
+    background: #0f172a;
+  }
+</style>
+{% endblock %}

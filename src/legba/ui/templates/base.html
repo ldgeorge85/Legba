@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Legba Console{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    @layer components {
+      .card {
+        @apply bg-gray-800 border border-gray-700 rounded-lg p-4;
+      }
+      .badge {
+        @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+      }
+      .badge-blue { @apply bg-blue-900 text-blue-300; }
+      .badge-green { @apply bg-green-900 text-green-300; }
+      .badge-yellow { @apply bg-yellow-900 text-yellow-300; }
+      .badge-red { @apply bg-red-900 text-red-300; }
+      .badge-gray { @apply bg-gray-700 text-gray-300; }
+      .badge-purple { @apply bg-purple-900 text-purple-300; }
+      .badge-cyan { @apply bg-cyan-900 text-cyan-300; }
+      .btn {
+        @apply px-3 py-1.5 text-sm font-medium rounded border border-gray-600 text-gray-300 hover:bg-gray-700 transition-colors;
+      }
+    }
+    /* htmx loading indicator */
+    .htmx-indicator { opacity: 0; transition: opacity 200ms ease-in; }
+    .htmx-request .htmx-indicator { opacity: 1; }
+    .htmx-request.htmx-indicator { opacity: 1; }
+    /* Confidence/completeness bars */
+    .bar-fill { transition: width 300ms ease; }
+  </style>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {} }
+    }
+  </script>
+</head>
+<body class="h-full bg-gray-950 text-gray-200" hx-boost="true">
+  <div class="flex h-full">
+    <!-- Sidebar -->
+    <nav class="w-56 flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
+      <div class="px-4 py-4 border-b border-gray-800">
+        <a href="/" class="flex items-center gap-2 text-lg font-semibold text-gray-100">
+          <img src="/static/favicon.svg" class="w-6 h-6" alt="">
+          Legba Console
+        </a>
+      </div>
+      <div class="flex-1 px-2 py-4 space-y-1">
+        <a href="/"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'dashboard' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+          Dashboard
+        </a>
+        <a href="/entities"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'entities' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          Entities
+        </a>
+        <a href="/events"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'events' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>
+          Events
+        </a>
+        <a href="/sources"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'sources' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+          Sources
+        </a>
+        <a href="/goals"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'goals' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+          Goals
+        </a>
+        <a href="/cycles"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'cycles' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          Cycles
+        </a>
+        <a href="/messages"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'messages' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+          Messages
+        </a>
+        <a href="/journal"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'journal' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          Journal
+        </a>
+        <a href="/reports"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'reports' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          Reports
+        </a>
+        <a href="/graph" hx-boost="false"
+           class="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium {% if active_page == 'graph' %}bg-gray-800 text-white{% else %}text-gray-400 hover:bg-gray-800 hover:text-gray-200{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+          Graph
+        </a>
+      </div>
+      <div class="px-4 py-3 border-t border-gray-800 text-xs text-gray-500">
+        Legba v0.1.0
+      </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="flex-1 overflow-y-auto">
+      <div class="max-w-7xl mx-auto px-6 py-6">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+</body>
+</html>

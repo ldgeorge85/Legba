@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Cycles — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-100">Cycle Monitor</h1>
+  <p class="text-sm text-gray-400 mt-1">
+    Current cycle: {{ current_cycle }}
+    {% if not audit_available %}
+      <span class="text-yellow-500 ml-2">— Audit data not yet indexed</span>
+    {% endif %}
+  </p>
+</div>
+
+<!-- Table -->
+<div class="card overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+        <th class="pb-2 pr-4">Cycle #</th>
+        <th class="pb-2 pr-4">Status</th>
+        <th class="pb-2 pr-4">Events</th>
+        <th class="pb-2 pr-4">Tool Calls</th>
+        <th class="pb-2 pr-4">Errors</th>
+        <th class="pb-2">Timestamp</th>
+      </tr>
+    </thead>
+    <tbody id="cycle-rows">
+      {% include "cycles/_rows.html" %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

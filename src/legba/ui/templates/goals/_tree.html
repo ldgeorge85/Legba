@@ -1,0 +1,59 @@
+{% macro render_goal(goal, depth=0) %}
+<div class="{% if depth == 0 %}card mb-3{% else %}ml-6 mt-2 pl-4 border-l border-gray-700{% endif %}">
+  <div class="flex items-start gap-3">
+    <!-- Status indicator -->
+    {% if goal.status == 'active' %}
+      <span class="mt-1 w-2 h-2 rounded-full bg-green-400 flex-shrink-0" title="Active"></span>
+    {% elif goal.status == 'completed' %}
+      <span class="mt-1 w-2 h-2 rounded-full bg-gray-500 flex-shrink-0" title="Completed"></span>
+    {% else %}
+      <span class="mt-1 w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0" title="{{ goal.status }}"></span>
+    {% endif %}
+
+    <div class="flex-1 min-w-0">
+      <!-- Description -->
+      <p class="text-sm {% if goal.status == 'completed' %}text-gray-500 line-through{% else %}text-gray-200{% endif %}">
+        {{ goal.description }}
+      </p>
+
+      <!-- Meta row -->
+      <div class="flex flex-wrap items-center gap-3 mt-1 text-xs text-gray-500">
+        <span class="badge {% if goal.status == 'active' %}badge-green{% elif goal.status == 'completed' %}badge-gray{% else %}badge-yellow{% endif %}">
+          {{ goal.status }}
+        </span>
+        <span>P{{ goal.priority }}</span>
+
+        <!-- Progress bar -->
+        {% set pct = (goal.progress * 100) | int %}
+        <div class="flex items-center gap-1.5">
+          <div class="w-20 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+            <div class="h-full rounded-full bar-fill {% if pct >= 100 %}bg-green-400{% elif pct >= 50 %}bg-cyan-400{% else %}bg-blue-400{% endif %}"
+                 style="width: {{ pct }}%"></div>
+          </div>
+          <span>{{ pct }}%</span>
+        </div>
+
+        <span title="{{ goal.updated_at }}">{{ goal.updated_at | timeago }}</span>
+        <span class="font-mono text-gray-600">{{ goal.id | truncate_uuid }}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Children -->
+  {% if goal.children %}
+    {% for child in goal.children %}
+      {{ render_goal(child, depth + 1) }}
+    {% endfor %}
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% if goal_tree %}
+  {% for goal in goal_tree %}
+    {{ render_goal(goal) }}
+  {% endfor %}
+{% else %}
+  <div class="card">
+    <p class="text-sm text-gray-500">No goals found.</p>
+  </div>
+{% endif %}

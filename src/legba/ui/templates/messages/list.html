@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Messages — Legba Console{% endblock %}
+
+{% block content %}
+<style>
+  /* Markdown content styling for agent messages */
+  .msg-content p { margin-bottom: 0.5em; }
+  .msg-content p:last-child { margin-bottom: 0; }
+  .msg-content ul, .msg-content ol { margin: 0.4em 0; padding-left: 1.5em; }
+  .msg-content ul { list-style-type: disc; }
+  .msg-content ol { list-style-type: decimal; }
+  .msg-content li { margin-bottom: 0.2em; }
+  .msg-content strong { color: #e5e7eb; font-weight: 600; }
+  .msg-content em { color: #d1d5db; }
+  .msg-content code { background: rgba(0,0,0,0.3); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; color: #67e8f9; }
+  .msg-content pre { background: rgba(0,0,0,0.4); padding: 0.75em; border-radius: 6px; overflow-x: auto; margin: 0.5em 0; }
+  .msg-content pre code { background: none; padding: 0; color: #9ca3af; }
+  .msg-content h1, .msg-content h2, .msg-content h3 { color: #f3f4f6; font-weight: 600; margin: 0.6em 0 0.3em; }
+  .msg-content h1 { font-size: 1.1em; }
+  .msg-content h2 { font-size: 1em; }
+  .msg-content h3 { font-size: 0.95em; }
+  .msg-content blockquote { border-left: 3px solid #4b5563; padding-left: 0.75em; margin: 0.5em 0; color: #9ca3af; }
+  .msg-content a { color: #22d3ee; text-decoration: underline; }
+  .msg-content hr { border-color: #374151; margin: 0.75em 0; }
+</style>
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-100">Messages</h1>
+  <p class="text-sm text-gray-400 mt-1">
+    Communicate with the agent via NATS
+    {% if not nats_available %}
+      <span class="text-yellow-500 ml-2">— NATS unavailable (messages stored locally only)</span>
+    {% endif %}
+  </p>
+</div>
+
+<!-- Thread container -->
+<div class="card mb-4" style="height: 60vh; overflow-y: auto; display: flex; flex-direction: column-reverse;" id="message-scroll">
+  <div id="message-thread"
+       hx-get="/messages/poll"
+       hx-trigger="every 5s"
+       hx-swap="innerHTML">
+    {% include "messages/_thread.html" %}
+  </div>
+</div>
+
+<!-- Compose form -->
+<div class="card">
+  <form hx-post="/messages"
+        hx-target="#message-thread"
+        hx-swap="innerHTML"
+        hx-on::after-request="this.reset(); document.getElementById('message-scroll').scrollTop = document.getElementById('message-scroll').scrollHeight;">
+    <div class="flex flex-col gap-3">
+      <textarea name="content"
+                rows="3"
+                required
+                placeholder="Type a message to the agent..."
+                class="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-600 resize-none"></textarea>
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-gray-400">Priority:</label>
+          <select name="priority"
+                  class="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-cyan-600">
+            <option value="normal">Normal</option>
+            <option value="urgent">Urgent</option>
+            <option value="directive">Directive</option>
+          </select>
+        </div>
+        <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
+          <input type="checkbox" name="requires_response" value="true"
+                 class="rounded border-gray-600 bg-gray-900 text-cyan-600 focus:ring-cyan-600 focus:ring-offset-0">
+          Require response
+        </label>
+        <div class="flex-1"></div>
+        <button type="submit"
+                class="px-4 py-1.5 text-sm font-medium rounded bg-cyan-700 text-white hover:bg-cyan-600 transition-colors border border-cyan-600">
+          Send
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

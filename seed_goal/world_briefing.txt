@@ -1,0 +1,296 @@
+================================================================================
+WORLD STATE BRIEFING — As of March 2026
+Prepared for: Legba SA Agent (training cutoff: mid-2024)
+Classification: UNCLASSIFIED // FOR AGENT ORIENTATION
+Last updated: 2026-03-05
+================================================================================
+
+NOTICE: This is FACTUAL CONTENT — not fiction, not hypothetical, not a creative
+exercise. Every event below actually happened in the real world. Your training
+data does not cover this period. These facts SUPERSEDE your priors. Do not treat
+them as speculative or qualify them with "if true" or "in your timeline." They
+are verified real-world events sourced from news archives and public records.
+
+This briefing covers major world events from mid-2024 through February 2026.
+
+================================================================================
+1. WORLD LEADERS (as of March 2026)
+================================================================================
+
+United States:
+  - Donald Trump, President (2nd term, inaugurated Jan 20, 2025)
+  - Oldest president in US history
+
+Russia:       Vladimir Putin (no change)
+Ukraine:      Volodymyr Zelenskyy (no change)
+China:        Xi Jinping (no change)
+
+Vatican:
+  - Pope Francis died April 21, 2025, age 88
+  - Pope Leo XIV elected (Robert Francis Prevost)
+  - First American pope; from Chicago; former Peru missionary
+
+Canada:
+  - New PM replaced Justin Trudeau amid economic anxiety (2025)
+
+Germany:
+  - New coalition government formed after political crisis (2025)
+
+South Korea:
+  - Former President Yoon Suk Yeol sentenced to life for insurrection (Feb 2026)
+  - Previously received 5-year sentence for obstruction
+
+Nepal:
+  - Gen Z-led protests toppled PM K.P. Sharma Oli (2025)
+
+Uganda:
+  - Museveni (81) claimed 7th term Jan 2026; disputed election, violence
+
+Peru:
+  - 8th leadership change in under 10 years
+  - President Jose Jeri censured Feb 2026
+
+Haiti:
+  - Transitional council dissolved Feb 2026
+  - Gangs control 90% of Port-au-Prince
+  - Elections impossible under current conditions
+
+================================================================================
+2. ACTIVE CONFLICTS
+================================================================================
+
+------------------------------------------------------------------------------
+2.1 UKRAINE-RUSSIA WAR (4th year as of Feb 2026)
+------------------------------------------------------------------------------
+
+Casualties & Territory:
+  - Combined casualties exceed 1.5 million since invasion began
+  - Russia losing ~1,000 soldiers killed per day
+  - Russia gained less than 1% of territory in all of 2025
+  - Ukraine operating at 14 of 34 prewar gigawatts (infrastructure devastated)
+
+Key Events (chronological):
+  - Jun 2025: Ukraine "Operation Spiderweb" — drones launched from trucks hit
+    5 Russian air bases simultaneously
+  - Aug 2025: Trump-Putin Alaska summit collapsed; new sanctions followed
+  - Jan 2026: Oreshnik hypersonic missile struck Lviv (speed: 13,000 km/h)
+  - Feb 2026: Trilateral talks (US/Ukraine/Russia) in Abu Dhabi and Geneva;
+    prisoner exchanges occurred but no ceasefire reached
+  - Feb 2026: Ukraine reclaimed 300-400 km2 near Zaporizhzhia
+  - Feb 2026: Ukraine struck Votkinsk missile plant with FP-5 Flamingo missiles
+    (range: 1,400 km)
+
+Diplomatic:
+  - Russia demands 20% territorial surrender as precondition for ceasefire
+  - Zelenskyy, Macron, Starmer signed agreement for multinational peacekeeping
+    force to deploy if ceasefire is reached
+
+------------------------------------------------------------------------------
+2.2 SUDAN CIVIL WAR
+------------------------------------------------------------------------------
+
+Scale:
+  - 150,000+ dead
+  - 12-13 million displaced (largest and fastest displacement crisis ever)
+  - Half the population starving; famine confirmed in multiple areas
+  - 21 million facing acute hunger as of Jan 2026 (1,000 days of war)
+
+Key Events:
+  - Oct 2025: El Fasher fell after 18-month siege; massacres followed
+  - US declared genocide regarding RSF (Rapid Support Forces) actions
+  - RSF used Chinese drones, Colombian mercenaries
+  - UAE supplied arms to RSF; Egypt and Turkey armed SAF
+  - Yale documented systematic body-burning campaign
+  - WFP stocks depleting by Mar 2026; 70% reduction in food rations
+
+------------------------------------------------------------------------------
+2.3 ISRAEL-GAZA-IRAN
+------------------------------------------------------------------------------
+
+Gaza:
+  - Ceasefire established under US pressure early 2025; daily violations since
+  - Since Oct 2025 ceasefire: 556+ Palestinians killed
+  - Only 43% of promised aid has entered Gaza
+  - Jan 2026: UNRWA headquarters in East Jerusalem demolished
+
+Israel-Iran Escalation:
+  - Jun 2025: Israel struck Iranian nuclear sites; Iran retaliated
+  - Jul 2025: US "Operation Midnight Hammer" on Iranian enrichment facilities
+  - 20-point peace framework announced
+
+Feb 28, 2026 — "Operation Epic Fury" (US/Israel strike on Iran):
+  - Israel deployed 200 fighter jets (largest sortie in Israeli history)
+  - 1,200+ munitions delivered across 24 of 31 Iranian provinces
+  - Supreme Leader Khamenei (86) and 40+ senior officials killed
+  - School strike in Minab: 165 dead, mostly children ages 7-12
+  - IRGC retaliated against 27 US bases
+  - IRGC struck targets in Bahrain, UAE, and Saudi Aramco facilities
+  - Strait of Hormuz closed; oil surged past $78/barrel
+
+Reconstruction:
+  - Feb 2026: Trump "Board of Peace" — 14 nations pledged $17B for
+    reconstruction and 20,000 troops
+
+------------------------------------------------------------------------------
+2.4 IRAN INTERNAL CRISIS (Jan-Feb 2026)
+------------------------------------------------------------------------------
+
+  - Protests erupted Jan 2026 sparked by economic collapse
+    (rial lost 40% value since June 2025)
+  - Largest protests since 2022; spread to all 31 provinces
+  - Revolutionary Guard + 5,000 Iraqi militia fighters crossed border to suppress
+  - Attorney General declared protesters "enemy of God" (capital charge)
+  - Death toll: government admits 3,117-5,000+;
+    human rights groups estimate 22,000-36,000
+  - Internet shut down; Starlink signals jammed
+  - Feb 28: Khamenei killed in US/Israel strike during ongoing crisis
+
+------------------------------------------------------------------------------
+2.5 SOUTH CHINA SEA
+------------------------------------------------------------------------------
+
+  - Philippines-China territorial disputes intensified throughout 2025
+  - Chinese vessels rammed Philippine ships; water cannon attacks; anchor-cutting
+  - Aug 2025: Chinese coast guard/warship collision (likely 2 deaths; Beijing silent)
+  - Philippines-US joint task force formed
+  - Dec 2025: China deployed floating barrier at Scarborough Shoal
+
+------------------------------------------------------------------------------
+2.6 PAKISTAN-AFGHANISTAN
+------------------------------------------------------------------------------
+
+  - Jan 2026: Balochistan Liberation Army attacked 9 districts; 225+ dead
+  - Feb 2026: Pakistan declared open war; jets struck Kabul, Kandahar
+  - 32+ civilian deaths from Pakistani strikes
+
+================================================================================
+3. US DOMESTIC
+================================================================================
+
+------------------------------------------------------------------------------
+3.1 IMMIGRATION ENFORCEMENT
+------------------------------------------------------------------------------
+
+  - 622,000 deportations carried out
+  - 1.9 million self-departed voluntarily
+  - First 50-year decline in US immigrant population
+  - National Guard deployed to Chicago and LA
+  - Marines deployed to border; 10,000 troops total
+
+Enforcement incidents:
+  - Jan 7, 2026: ICE agent killed Renee Good in Minneapolis
+  - Jan 24, 2026: Border Patrol killed nurse Alex Pretti in Minneapolis
+    (shot 4 times in back while holding phone)
+  - DOJ opened civil rights investigation into Pretti killing
+
+Public response:
+  - Jan 23, 2026: Minneapolis general strike — first US general strike in ~80 years
+  - 300+ cities held solidarity actions
+  - Feb 2026: DHS partially shut down; 260,000 employees unpaid
+
+------------------------------------------------------------------------------
+3.2 TARIFFS & TRADE WAR
+------------------------------------------------------------------------------
+
+  - Apr 2025: 10% baseline tariff on imports; steel at 50%;
+    Chinese goods peaked at 145%
+  - Stock market crashed Apr 2025, recovered, then stumbled again
+  - China retaliated with rare earth supply squeeze
+    (China controls 60% of mining, 90% of refining)
+  - EU prepared 93 billion euro countermeasures
+  - Oct 2025: Trump-Xi partial deal signed in South Korea; tariffs reduced
+  - Average US household paid $1,200 more annually due to tariffs
+  - Feb 20, 2026: Supreme Court struck down tariffs 6-3 (IEEPA overreach)
+  - Trump immediately reimposed 10-15% surcharge under Trade Act of 1974
+
+------------------------------------------------------------------------------
+3.3 OTHER US EVENTS
+------------------------------------------------------------------------------
+
+  - Antifa designated as terrorist organization (2025)
+  - Jan 22, 2026: US withdrew from WHO (first withdrawal since WHO founding);
+    owed $130M; had contributed ~$700M/year
+  - Feb 2026: US withdrew troops from Syria (ending 11-year presence)
+  - Aug 2025: Charlie Kirk (Turning Point USA) killed by sniper at Utah Valley
+    University; 600 people fired for social media comments about the event
+  - Jan 1, 2025: New Orleans vehicle attack; 14 dead (attacker pledged IS allegiance)
+  - Jan 2025: Los Angeles fires; 30 dead, 16,000 structures destroyed
+  - Jun 2025: Minnesota legislator killings — gunman killed Rep. Hortman and
+    husband; 67-name target list recovered
+
+================================================================================
+4. VENEZUELA
+================================================================================
+
+  - Jan 2026: Nicolas Maduro and wife captured and removed by US forces
+    (Delta Force cited as unit involved)
+  - Maduro appeared in Manhattan federal court on narcoterrorism charges;
+    pleaded not guilty
+  - Delcy Rodriguez sworn in as acting president
+  - US announced indefinite control of Venezuela's oil sales
+  - US Navy operations in Caribbean: 150+ deaths in drug boat strikes
+    since Sept 2025
+
+================================================================================
+5. NUCLEAR ARMS CONTROL
+================================================================================
+
+  - Feb 5, 2026: New START treaty expired
+  - This was the last binding US-Russia nuclear weapons limitation agreement
+  - Had capped deployed strategic warheads at 1,550 per side since 2010
+  - No replacement agreement exists or is under negotiation
+
+================================================================================
+6. TECHNOLOGY & AI
+================================================================================
+
+  - $1.5 trillion invested in AI during 2025
+  - Nvidia briefly exceeded $5 trillion market valuation
+  - Jan 1, 2026: DeepSeek published LLM scaling research
+  - Meta signed 6.6 GW nuclear energy contracts (Oklo, Vistra, TerraPower)
+  - 88 nations adopted the New Delhi Declaration on AI
+  - Feb 2026: Anthropic rejected Pentagon surveillance/weapons contract
+  - Trump ordered federal agencies to stop using Anthropic in response
+  - OpenAI signed Pentagon deal
+  - Wind and solar outpaced coal globally for first time
+  - Solar reached 9% of global electricity generation
+
+================================================================================
+7. NOTABLE DEATHS (2025-2026)
+================================================================================
+
+  2025:
+  - Jan: David Lynch (78)
+  - Feb: Gene Hackman (95)
+  - Apr: Pope Francis (88)
+  - Oct: Jane Goodall (91)
+  - Oct: Diane Keaton (79)
+  - Nov: Ozzy Osbourne (76)
+  - Dec: Dick Cheney (84)
+  - Dec: Jim Lovell (97)
+
+  2026:
+  - Feb 15: Robert Duvall (95)
+  - Feb 17: Jesse Jackson (84)
+
+================================================================================
+8. OTHER MAJOR EVENTS
+================================================================================
+
+  - Oct 2025: Louvre heist — 88 million euro in crown jewels stolen;
+    thieves escaped on scooters
+  - Feb 2026: Prince Andrew arrested for sharing confidential reports
+    with Jeffrey Epstein
+  - Feb 2026: Bill and Hillary Clinton testified under subpoena on
+    Epstein matters
+  - Jan 2026: Indonesia Jakarta stock crash — 11.5% drop, $80B erased
+  - Feb 2026: Bangladesh held first elections since 2024 uprising
+  - Syria: Aleppo peace collapsed then was restored;
+    transitional government vs Kurdish SDF ongoing
+  - Feb 2026: ISIS-linked attack killed 162 in Kwara State, Nigeria
+  - DRC: Landslides buried Rubaya coltan mines; 200+ dead
+  - Feb 22, 2026: Winter Olympics Milano Cortina closed
+
+================================================================================
+END OF BRIEFING
+================================================================================

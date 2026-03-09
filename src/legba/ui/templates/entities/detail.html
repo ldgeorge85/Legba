@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}{{ entity.canonical_name }} — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <a href="/entities" class="text-sm text-gray-500 hover:text-gray-300">&larr; Entities</a>
+</div>
+
+<!-- Header -->
+<div class="card mb-6">
+  <div class="flex items-start justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-100">{{ entity.canonical_name }}</h1>
+      <div class="flex items-center gap-3 mt-2">
+        <span class="badge badge-blue">{{ entity.entity_type.value }}</span>
+        <span class="text-xs text-gray-500">v{{ entity.version }}</span>
+        <span class="text-xs text-gray-500">ID: {{ entity.id | truncate_uuid }}</span>
+      </div>
+      {% if entity.aliases %}
+        <div class="text-sm text-gray-400 mt-2">Aliases: {{ entity.aliases | join(', ') }}</div>
+      {% endif %}
+    </div>
+    <div class="text-right">
+      <div class="flex items-center gap-2">
+        <div class="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+          <div class="h-full rounded-full bar-fill {% if entity.completeness_score >= 0.7 %}bg-green-500{% elif entity.completeness_score >= 0.4 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
+               style="width: {{ (entity.completeness_score * 100) | int }}%"></div>
+        </div>
+        <span class="text-sm text-gray-400">{{ entity.completeness_score | format_pct }}</span>
+      </div>
+      <div class="text-xs text-gray-500 mt-1">Updated {{ entity.updated_at | timeago }}</div>
+    </div>
+  </div>
+  {% if entity.summary %}
+    <p class="mt-4 text-sm text-gray-300">{{ entity.summary }}</p>
+  {% endif %}
+</div>
+
+<!-- Assertions by section -->
+<div class="mb-6">
+  <h2 class="text-lg font-semibold text-gray-100 mb-3">Assertions</h2>
+  {% if entity.sections %}
+    {% for section_name, assertions in entity.sections.items() %}
+    <div class="card mb-3">
+      <h3 class="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-2">
+        {{ section_name or 'General' }}
+      </h3>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs text-gray-500 border-b border-gray-700">
+            <th class="pb-1 pr-3">Key</th>
+            <th class="pb-1 pr-3">Value</th>
+            <th class="pb-1 pr-3">Confidence</th>
+            <th class="pb-1 pr-3">Source</th>
+            <th class="pb-1">Observed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in assertions %}
+          <tr class="border-b border-gray-800/50 {% if a.superseded %}opacity-40 line-through{% endif %}">
+            <td class="py-1.5 pr-3 font-mono text-xs text-gray-400">{{ a.key }}</td>
+            <td class="py-1.5 pr-3 text-gray-200">{{ a.value }}</td>
+            <td class="py-1.5 pr-3">
+              <div class="flex items-center gap-1">
+                <div class="w-12 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                  <div class="h-full bg-cyan-500 rounded-full bar-fill"
+                       style="width: {{ (a.confidence * 100) | int }}%"></div>
+                </div>
+                <span class="text-xs text-gray-500">{{ a.confidence | format_confidence }}</span>
+              </div>
+            </td>
+            <td class="py-1.5 pr-3 text-xs">
+              {% if a.source_event_id %}
+                <a href="/events/{{ a.source_event_id }}" class="text-cyan-400 hover:text-cyan-300">{{ a.source_event_id | truncate_uuid }}</a>
+              {% elif a.source_url %}
+                <span class="text-gray-500" title="{{ a.source_url }}">url</span>
+              {% else %}
+                <span class="text-gray-600">—</span>
+              {% endif %}
+            </td>
+            <td class="py-1.5 text-xs text-gray-500">{{ a.observed_at | timeago }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="card"><p class="text-sm text-gray-500">No assertions recorded yet.</p></div>
+  {% endif %}
+</div>
+
+<!-- Linked events -->
+<div class="mb-6">
+  <h2 class="text-lg font-semibold text-gray-100 mb-3">Linked Events ({{ linked_events | length }})</h2>
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+          <th class="pb-2 pr-3">Title</th>
+          <th class="pb-2 pr-3">Role</th>
+          <th class="pb-2 pr-3">Confidence</th>
+          <th class="pb-2">Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for link in linked_events %}
+        <tr class="border-b border-gray-800 hover:bg-gray-800/50">
+          <td class="py-2 pr-3">
+            <a href="/events/{{ link.event.id }}" class="text-cyan-400 hover:text-cyan-300">{{ link.event.title }}</a>
+          </td>
+          <td class="py-2 pr-3"><span class="badge badge-gray">{{ link.role }}</span></td>
+          <td class="py-2 pr-3 text-xs text-gray-400">{{ link.confidence | format_confidence }}</td>
+          <td class="py-2 text-xs text-gray-500">{{ link.event.event_timestamp | timeago if link.event.event_timestamp else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="py-4 text-center text-gray-500">No linked events.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Graph neighbors -->
+<div class="mb-6">
+  <h2 class="text-lg font-semibold text-gray-100 mb-3">Graph Relationships ({{ relationships | length }})</h2>
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+          <th class="pb-2 pr-3">Direction</th>
+          <th class="pb-2 pr-3">Type</th>
+          <th class="pb-2 pr-3">Entity</th>
+          <th class="pb-2 pr-3">Since</th>
+          <th class="pb-2">Until</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rel in relationships %}
+        <tr class="border-b border-gray-800 hover:bg-gray-800/50">
+          <td class="py-2 pr-3">
+            {% if rel.direction == 'outgoing' %}
+              <span class="text-green-400">&rarr; out</span>
+            {% else %}
+              <span class="text-blue-400">&larr; in</span>
+            {% endif %}
+          </td>
+          <td class="py-2 pr-3"><span class="badge badge-purple">{{ rel.relation_type }}</span></td>
+          <td class="py-2 pr-3">
+            <span class="text-gray-200">{{ rel.entity_name }}</span>
+            <span class="text-xs text-gray-500 ml-1">{{ rel.entity_type }}</span>
+          </td>
+          <td class="py-2 pr-3 text-xs text-gray-500">{{ rel.rel_properties.get('since', '—') }}</td>
+          <td class="py-2 text-xs text-gray-500">{{ rel.rel_properties.get('until', '—') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="py-4 text-center text-gray-500">No graph relationships found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Version history -->
+<div class="mb-6">
+  <h2 class="text-lg font-semibold text-gray-100 mb-3">Version History</h2>
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+          <th class="pb-2 pr-3">Version</th>
+          <th class="pb-2 pr-3">Cycle</th>
+          <th class="pb-2">Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in versions %}
+        <tr class="border-b border-gray-800">
+          <td class="py-2 pr-3 font-mono">v{{ v.version }}</td>
+          <td class="py-2 pr-3 text-gray-400">{{ v.cycle_number if v.cycle_number is not none else '—' }}</td>
+          <td class="py-2 text-xs text-gray-500">{{ v.created_at | timeago }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="py-4 text-center text-gray-500">No version history.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

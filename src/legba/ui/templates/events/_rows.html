@@ -1,0 +1,40 @@
+{% for event in events %}
+<tr class="border-b border-gray-800 hover:bg-gray-800/50">
+  <td class="py-2 pr-4">
+    <a href="/events/{{ event.id }}" class="text-cyan-400 hover:text-cyan-300 font-medium">
+      {{ event.title[:80] }}{% if event.title | length > 80 %}...{% endif %}
+    </a>
+  </td>
+  <td class="py-2 pr-4">
+    {% set cat_colors = {
+      'conflict': 'badge-red',
+      'political': 'badge-blue',
+      'economic': 'badge-green',
+      'technology': 'badge-cyan',
+      'health': 'badge-purple',
+      'environment': 'badge-green',
+      'social': 'badge-yellow',
+      'disaster': 'badge-red',
+      'other': 'badge-gray'
+    } %}
+    <span class="badge {{ cat_colors.get(event.category.value, 'badge-gray') }}">{{ event.category.value }}</span>
+  </td>
+  <td class="py-2 pr-4 text-xs text-gray-400">
+    {% if event.source_id %}
+      <a href="/sources/{{ event.source_id }}" class="text-gray-400 hover:text-gray-200">{{ event.source_url[:30] if event.source_url else event.source_id | truncate_uuid }}</a>
+    {% else %}
+      <span class="text-gray-600">—</span>
+    {% endif %}
+  </td>
+  <td class="py-2 pr-4 text-xs text-gray-400">
+    {{ event.actors[:3] | join(', ') }}{% if event.actors | length > 3 %} +{{ event.actors | length - 3 }}{% endif %}
+  </td>
+  <td class="py-2 text-xs text-gray-500">
+    {{ event.event_timestamp | timeago if event.event_timestamp else event.created_at | timeago }}
+  </td>
+</tr>
+{% else %}
+<tr>
+  <td colspan="5" class="py-8 text-center text-gray-500">No events found.</td>
+</tr>
+{% endfor %}

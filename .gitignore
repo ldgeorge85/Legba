@@ -1,0 +1,30 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+*.log
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+!.env.claude.example
+
+# Runtime data
+backups/
+*.jsonl
+*.tar.gz
+cycle_*.txt
+step*_prompt.txt
+prompt*.txt
+feedback.md
+curl_*.json
+
+# IDE / tools
+.claude/
+.vscode/
+.idea/

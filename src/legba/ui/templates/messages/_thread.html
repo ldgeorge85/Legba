@@ -1,0 +1,68 @@
+{% if thread %}
+  <div class="flex flex-col gap-4 py-2">
+    {% for msg in thread %}
+      {% if msg.direction == "inbound" %}
+        {# Operator -> Agent: right-aligned, cyan #}
+        <div class="flex justify-end">
+          <div class="max-w-[75%] rounded-lg px-4 py-3 bg-cyan-900/40 border border-cyan-800/50">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-[10px] text-cyan-400 font-semibold uppercase tracking-wide">Operator</span>
+              {% if msg.priority and msg.priority != "normal" %}
+                <span class="badge {% if msg.priority == 'urgent' %}badge-yellow{% else %}badge-red{% endif %}" style="font-size: 10px;">
+                  {{ msg.priority }}
+                </span>
+              {% endif %}
+              {% if msg.requires_response %}
+                <span class="badge badge-purple" style="font-size: 10px;">response requested</span>
+              {% endif %}
+              <span class="text-[10px] text-gray-500 ml-auto">{{ msg.timestamp[:19] }}</span>
+            </div>
+            <div class="text-sm text-gray-200 whitespace-pre-wrap">{{ msg.content }}</div>
+          </div>
+        </div>
+      {% elif msg.direction == "outbound" %}
+        {# Agent -> Operator: left-aligned #}
+        {% set is_alert = msg.content.startswith('[SUPERVISOR') %}
+        {% set is_report = msg.content.startswith('[STATUS') %}
+        {% set is_analysis = msg.content.startswith('[ANALYSIS') %}
+        <div class="flex justify-start">
+          <div class="max-w-[85%] rounded-lg px-4 py-3 {% if is_alert %}bg-yellow-900/20 border border-yellow-800/50{% elif is_analysis %}bg-indigo-900/20 border border-indigo-800/50{% else %}bg-gray-800 border border-gray-700{% endif %}">
+            <div class="flex items-center gap-2 mb-2">
+              {% if is_alert %}
+                <span class="text-[10px] text-yellow-400 font-semibold uppercase tracking-wide">Supervisor</span>
+              {% elif is_analysis %}
+                <span class="text-[10px] text-indigo-400 font-semibold uppercase tracking-wide">Legba</span>
+                <span class="badge badge-purple" style="font-size: 10px;">world assessment</span>
+              {% elif is_report %}
+                <span class="text-[10px] text-cyan-400 font-semibold uppercase tracking-wide">Legba</span>
+                <span class="badge badge-cyan" style="font-size: 10px;">status report</span>
+              {% else %}
+                <span class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Legba</span>
+              {% endif %}
+              {% if msg.cycle_number %}
+                <span class="badge badge-gray" style="font-size: 10px;">cycle {{ msg.cycle_number }}</span>
+              {% endif %}
+              {% if msg.in_reply_to %}
+                <span class="badge badge-purple" style="font-size: 10px;">reply</span>
+              {% endif %}
+              <span class="text-[10px] text-gray-500 ml-auto">{{ msg.timestamp[:19] }}</span>
+            </div>
+            <div class="msg-content text-sm text-gray-200">
+              {{ msg.content | render_message | safe }}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="flex items-center justify-center h-full text-gray-500 text-sm py-16">
+    <div class="text-center">
+      <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+      </svg>
+      <p>No messages yet</p>
+      <p class="text-xs text-gray-600 mt-1">Send a message to start communicating with the agent</p>
+    </div>
+  </div>
+{% endif %}

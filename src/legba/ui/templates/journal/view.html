@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Journal — Legba Console{% endblock %}
+
+{% block content %}
+<style>
+  .journal-content p { margin-bottom: 0.75em; line-height: 1.7; }
+  .journal-content p:last-child { margin-bottom: 0; }
+  .journal-content em { color: #d1d5db; }
+  .journal-content strong { color: #e5e7eb; font-weight: 600; }
+</style>
+
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-100">Journal</h1>
+  <p class="text-sm text-gray-400 mt-1">Legba's narrative perspective — consolidated every introspection cycle</p>
+</div>
+
+{% if consolidation %}
+  <div class="card">
+    <div class="flex items-center gap-3 mb-4 pb-3 border-b border-gray-700">
+      {% if consolidation_cycle %}
+        <span class="badge badge-cyan">cycle {{ consolidation_cycle }}</span>
+      {% endif %}
+      {% if consolidation_timestamp %}
+        <span class="text-xs text-gray-500">{{ consolidation_timestamp }}</span>
+      {% endif %}
+      {% if pending_entries > 0 %}
+        <span class="text-xs text-gray-500 ml-auto">{{ pending_entries }} entries pending consolidation</span>
+      {% endif %}
+    </div>
+    <div class="journal-content text-sm text-gray-300 leading-relaxed">
+      {{ consolidation | render_message | safe }}
+    </div>
+  </div>
+{% else %}
+  <div class="card">
+    <div class="flex items-center justify-center py-16 text-gray-500">
+      <div class="text-center">
+        <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+        </svg>
+        <p>No journal entries yet</p>
+        <p class="text-xs text-gray-600 mt-1">
+          {% if pending_entries > 0 %}
+            {{ pending_entries }} entries awaiting first consolidation at next introspection cycle
+          {% else %}
+            Journal entries will appear after the agent runs a few cycles
+          {% endif %}
+        </p>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,297 @@
+# Legba — Claude Instance
+#
+# Standalone compose for running Legba against Anthropic's Claude API.
+# Runs in parallel with the main GPT-OSS 120B instance (project: legba).
+#
+# Usage:
+#   docker compose -p legba-claude -f docker-compose.claude.yml build
+#   docker compose -p legba-claude -f docker-compose.claude.yml up -d
+#   docker compose -p legba-claude -f docker-compose.claude.yml logs supervisor -f
+#
+# UI: ssh -L 8502:localhost:8502 user@<host> → http://localhost:8502
+
+services:
+  # --- Memory Services ---
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: apache/age:latest
+    environment:
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legba"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6335:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nats:
+    image: nats:2-alpine
+    command: ["--jetstream", "--store_dir", "/data", "-m", "8222"]
+    ports:
+      - "4223:4222"
+      - "8223:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  opensearch:
+    image: opensearchproject/opensearch:2
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      plugins.security.disabled: "true"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "9202:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  opensearch-audit:
+    image: opensearchproject/opensearch:2
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      plugins.security.disabled: "true"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "9203:9200"
+    volumes:
+      - opensearch_audit_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # --- Orchestration ---
+
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+      AIRFLOW__WEBSERVER__WARN_DEPLOYMENT_EXPOSURE: "false"
+      AIRFLOW_ADMIN_USER: airflow
+      AIRFLOW_ADMIN_PASSWORD: airflow
+      NATS_URL: nats://nats:4222
+      OPENSEARCH_HOST: opensearch
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+    ports:
+      - "8081:8080"
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+    depends_on:
+      nats:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # --- Operator Console UI ---
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/ui.Dockerfile
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      AUDIT_OPENSEARCH_HOST: opensearch-audit
+      AUDIT_OPENSEARCH_PORT: "9200"
+      LEGBA_SHARED: /shared
+      LEGBA_LOGS: /logs
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8502:8501"
+    volumes:
+      - shared_data:/shared:ro
+      - log_data:/logs:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      opensearch-audit:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8501/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Supervisor ---
+
+  supervisor:
+    build:
+      context: .
+      dockerfile: docker/supervisor.Dockerfile
+    env_file: .env.claude
+    environment:
+      LEGBA_SHARED: /shared
+      LEGBA_LOGS: /logs
+      LEGBA_SEED_GOAL: /seed_goal/goal.txt
+      LEGBA_SEED_GOAL_HOST_DIR: ${PWD}/seed_goal
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      QDRANT_HOST: qdrant
+      NATS_URL: nats://nats:4222
+      OPENSEARCH_HOST: opensearch
+      AUDIT_OPENSEARCH_HOST: opensearch-audit
+      AIRFLOW_URL: http://airflow:8080
+      AIRFLOW_ADMIN_USER: airflow
+      AIRFLOW_ADMIN_PASSWORD: airflow
+      # Instance isolation
+      LEGBA_AGENT_IMAGE: legba-claude-agent
+      LEGBA_DOCKER_NETWORK: legba-claude_default
+      LEGBA_AGENT_CONTAINER: legba-claude-agent-cycle
+      LEGBA_VOLUME_PREFIX: legba_claude
+    volumes:
+      - shared_data:/shared
+      - log_data:/logs
+      - agent_code:/agent
+      - airflow_dags:/airflow/dags
+      - ./seed_goal:/seed_goal:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      opensearch-audit:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+
+  # --- Agent (built only, launched by supervisor) ---
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    env_file: .env.claude
+    environment:
+      LEGBA_WORKSPACE: /workspace
+      LEGBA_AGENT_CODE: /agent
+      LEGBA_AGENT_TOOLS: /agent/tools
+      LEGBA_SHARED: /shared
+      LEGBA_LOGS: /logs
+      LEGBA_SEED_GOAL: /seed_goal/goal.txt
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      QDRANT_HOST: qdrant
+      NATS_URL: nats://nats:4222
+      OPENSEARCH_HOST: opensearch
+      AIRFLOW_URL: http://airflow:8080
+      AIRFLOW_ADMIN_USER: airflow
+      AIRFLOW_ADMIN_PASSWORD: airflow
+    volumes:
+      - workspace_data:/workspace
+      - agent_code:/agent
+      - shared_data:/shared
+      - log_data:/logs
+      - airflow_dags:/airflow/dags
+      - ./seed_goal:/seed_goal:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    profiles:
+      - dev
+
+volumes:
+  redis_data:
+    name: legba_claude_redis_data
+  postgres_data:
+    name: legba_claude_postgres_data
+  qdrant_data:
+    name: legba_claude_qdrant_data
+  nats_data:
+    name: legba_claude_nats_data
+  opensearch_data:
+    name: legba_claude_opensearch_data
+  opensearch_audit_data:
+    name: legba_claude_opensearch_audit_data
+  workspace_data:
+    name: legba_claude_workspace_data
+  agent_code:
+    name: legba_claude_agent_code
+  shared_data:
+    name: legba_claude_shared_data
+  log_data:
+    name: legba_claude_log_data
+  airflow_dags:
+    name: legba_claude_airflow_dags

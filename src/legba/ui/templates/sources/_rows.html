@@ -1,0 +1,36 @@
+{% for source in sources %}
+<tr class="border-b border-gray-800 hover:bg-gray-800/50">
+  <td class="py-2 pr-4">
+    <a href="/sources/{{ source.id }}" class="text-cyan-400 hover:text-cyan-300 font-medium">
+      {{ source.name }}
+    </a>
+  </td>
+  <td class="py-2 pr-4">
+    <span class="badge badge-gray">{{ source.source_type.value }}</span>
+  </td>
+  <td class="py-2 pr-4">
+    {% set status_colors = {
+      'active': 'badge-green',
+      'paused': 'badge-yellow',
+      'error': 'badge-red',
+      'retired': 'badge-gray'
+    } %}
+    <span class="badge {{ status_colors.get(source.status.value, 'badge-gray') }}">{{ source.status.value }}</span>
+  </td>
+  <td class="py-2 pr-4">
+    <div class="flex items-center gap-2">
+      <div class="w-16 h-2 bg-gray-700 rounded-full overflow-hidden">
+        <div class="h-full bg-cyan-500 rounded-full bar-fill"
+             style="width: {{ (source.reliability * 100) | int }}%"></div>
+      </div>
+      <span class="text-xs text-gray-400">{{ source.reliability | format_confidence }}</span>
+    </div>
+  </td>
+  <td class="py-2 pr-4 text-xs text-gray-400">{{ source.bias_label.value | replace('_', ' ') }}</td>
+  <td class="py-2 text-xs text-gray-500">{{ source.last_fetched_at | timeago }}</td>
+</tr>
+{% else %}
+<tr>
+  <td colspan="6" class="py-8 text-center text-gray-500">No sources found.</td>
+</tr>
+{% endfor %}

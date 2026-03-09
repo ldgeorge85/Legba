@@ -1,0 +1,345 @@
+services:
+  # --- Memory Services (long-lived) ---
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: apache/age:latest
+    environment:
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql  # PG18+ uses subdirectory layout
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legba"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nats:
+    image: nats:2-alpine
+    command: ["--jetstream", "--store_dir", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # HTTP monitoring
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  opensearch:
+    image: opensearchproject/opensearch:2
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      plugins.security.disabled: "true"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "9200:9200"
+      - "9600:9600"   # Performance analyzer
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # --- Audit OpenSearch (supervisor-only, agent cannot access) ---
+  # Dedicated instance for immutable cycle log indexing.
+  # Agent never receives this hostname — isolation by env var omission.
+
+  opensearch-audit:
+    image: opensearchproject/opensearch:2
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      plugins.security.disabled: "true"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "9201:9200"
+    volumes:
+      - opensearch_audit_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # --- Orchestration (Airflow) ---
+  # Persistent DAG-based pipelines. Agent writes DAG files to shared volume,
+  # Airflow picks them up and executes on schedule/trigger.
+
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+      AIRFLOW__WEBSERVER__WARN_DEPLOYMENT_EXPOSURE: "false"
+      AIRFLOW_ADMIN_USER: airflow
+      AIRFLOW_ADMIN_PASSWORD: airflow
+      NATS_URL: nats://nats:4222
+      OPENSEARCH_HOST: opensearch
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+    ports:
+      - "8080:8080"
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+    depends_on:
+      nats:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    profiles:
+      - dashboards
+
+  # --- Operator Console UI ---
+  # Read-only web interface for inspecting system state.
+  # Access via SSH tunnel: ssh -L 8501:localhost:8501
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/ui.Dockerfile
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      AUDIT_OPENSEARCH_HOST: opensearch-audit
+      AUDIT_OPENSEARCH_PORT: "9200"
+      LEGBA_SHARED: /shared
+      LEGBA_LOGS: /logs
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8501:8501"
+    volumes:
+      - shared_data:/shared:ro
+      - log_data:/logs:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      opensearch-audit:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8501/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Supervisor ---
+  # Manages agent lifecycle: launches one agent container per cycle,
+  # validates heartbeat, provides human comms interface.
+
+  supervisor:
+    build:
+      context: .
+      dockerfile: docker/supervisor.Dockerfile
+    env_file: .env
+    environment:
+      LEGBA_SHARED: /shared
+      LEGBA_LOGS: /logs
+      LEGBA_SEED_GOAL: /seed_goal/goal.txt
+      LEGBA_SEED_GOAL_HOST_DIR: ${PWD}/seed_goal
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      QDRANT_HOST: qdrant
+      NATS_URL: nats://nats:4222
+      OPENSEARCH_HOST: opensearch
+      AUDIT_OPENSEARCH_HOST: opensearch-audit
+      AIRFLOW_URL: http://airflow:8080
+      AIRFLOW_ADMIN_USER: airflow
+      AIRFLOW_ADMIN_PASSWORD: airflow
+    volumes:
+      - shared_data:/shared
+      - log_data:/logs
+      - agent_code:/agent
+      - airflow_dags:/airflow/dags
+      - ./seed_goal:/seed_goal:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      opensearch-audit:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+
+  # --- Agent ---
+  # NOT started by compose directly. The supervisor launches agent containers
+  # per cycle via the Docker socket. This definition exists for building
+  # the image and for development/testing.
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    env_file: .env
+    environment:
+      LEGBA_WORKSPACE: /workspace
+      LEGBA_AGENT_CODE: /agent
+      LEGBA_AGENT_TOOLS: /agent/tools
+      LEGBA_SHARED: /shared
+      LEGBA_LOGS: /logs
+      LEGBA_SEED_GOAL: /seed_goal/goal.txt
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      QDRANT_HOST: qdrant
+      NATS_URL: nats://nats:4222
+      OPENSEARCH_HOST: opensearch
+      AIRFLOW_URL: http://airflow:8080
+      AIRFLOW_ADMIN_USER: airflow
+      AIRFLOW_ADMIN_PASSWORD: airflow
+    volumes:
+      - workspace_data:/workspace
+      - agent_code:/agent
+      - shared_data:/shared
+      - log_data:/logs
+      - airflow_dags:/airflow/dags
+      - ./seed_goal:/seed_goal:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    profiles:
+      - dev  # Only started manually or for development
+
+  # --- Dev / Test runner ---
+  # Runs tests inside the agent container environment.
+
+  test:
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    env_file: .env
+    entrypoint: []  # Override agent entrypoint for test runner
+    environment:
+      PYTHONPATH: /app/src
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      QDRANT_HOST: qdrant
+      NATS_URL: nats://nats:4222
+      OPENSEARCH_HOST: opensearch
+      AIRFLOW_URL: http://airflow:8080
+      AIRFLOW_ADMIN_USER: airflow
+      AIRFLOW_ADMIN_PASSWORD: airflow
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    command: ["python", "-m", "pytest", "tests/", "-v"]
+    profiles:
+      - test
+
+volumes:
+  redis_data:
+    name: legba_redis_data
+  postgres_data:
+    name: legba_postgres_data
+  qdrant_data:
+    name: legba_qdrant_data
+  nats_data:
+    name: legba_nats_data
+  opensearch_data:
+    name: legba_opensearch_data
+  opensearch_audit_data:
+    name: legba_opensearch_audit_data
+  workspace_data:
+    name: legba_workspace_data
+  agent_code:
+    name: legba_agent_code
+  shared_data:
+    name: legba_shared_data
+  log_data:
+    name: legba_log_data
+  airflow_dags:
+    name: legba_airflow_dags

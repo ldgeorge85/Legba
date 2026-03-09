@@ -1,0 +1,1 @@
+"""Legba — Ambient Autonomous Agent."""

@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}{{ event.title if event else 'Event' }} — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <a href="/events" class="text-sm text-gray-500 hover:text-gray-300">&larr; Events</a>
+</div>
+
+{% if event %}
+<!-- Header -->
+<div class="card mb-6">
+  <h1 class="text-xl font-bold text-gray-100">{{ event.title }}</h1>
+  <div class="flex flex-wrap items-center gap-3 mt-2">
+    {% set cat_colors = {
+      'conflict': 'badge-red',
+      'political': 'badge-blue',
+      'economic': 'badge-green',
+      'technology': 'badge-cyan',
+      'health': 'badge-purple',
+      'environment': 'badge-green',
+      'social': 'badge-yellow',
+      'disaster': 'badge-red',
+      'other': 'badge-gray'
+    } %}
+    <span class="badge {{ cat_colors.get(event.category.value, 'badge-gray') }}">{{ event.category.value }}</span>
+    <span class="text-xs text-gray-500">ID: {{ event.id | truncate_uuid }}</span>
+    {% if event.event_timestamp %}
+      <span class="text-xs text-gray-500">Event: {{ event.event_timestamp | timeago }}</span>
+    {% endif %}
+    <span class="text-xs text-gray-500">Ingested: {{ event.created_at | timeago }}</span>
+    <span class="text-xs text-gray-400">Confidence: {{ event.confidence | format_confidence }}</span>
+    <span class="text-xs text-gray-500">Language: {{ event.language }}</span>
+  </div>
+
+  <!-- Source -->
+  {% if event.source_id or event.source_url %}
+  <div class="mt-3 text-sm">
+    <span class="text-gray-500">Source:</span>
+    {% if event.source_id %}
+      <a href="/sources/{{ event.source_id }}" class="text-cyan-400 hover:text-cyan-300">{{ source_name or event.source_id | truncate_uuid }}</a>
+    {% endif %}
+    {% if event.source_url %}
+      <span class="text-xs text-gray-500 ml-2">({{ event.source_url[:60] }}{% if event.source_url | length > 60 %}...{% endif %})</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Actors & locations -->
+  {% if event.actors %}
+  <div class="mt-2 text-sm">
+    <span class="text-gray-500">Actors:</span>
+    {% for actor in event.actors %}
+      <span class="badge badge-gray ml-1">{{ actor }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if event.locations %}
+  <div class="mt-1 text-sm">
+    <span class="text-gray-500">Locations:</span>
+    {% for loc in event.locations %}
+      <span class="badge badge-gray ml-1">{{ loc }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if event.tags %}
+  <div class="mt-1 text-sm">
+    <span class="text-gray-500">Tags:</span>
+    {% for tag in event.tags %}
+      <span class="badge badge-cyan ml-1">{{ tag }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- Summary -->
+{% if event.summary %}
+<div class="card mb-6">
+  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Summary</h2>
+  <p class="text-sm text-gray-300 whitespace-pre-wrap">{{ event.summary }}</p>
+</div>
+{% endif %}
+
+<!-- Full content -->
+{% if event.full_content %}
+<div class="card mb-6">
+  <details>
+    <summary class="text-sm font-semibold text-gray-400 uppercase tracking-wide cursor-pointer hover:text-gray-300">
+      Full Content
+    </summary>
+    <p class="text-sm text-gray-300 whitespace-pre-wrap mt-2">{{ event.full_content }}</p>
+  </details>
+</div>
+{% endif %}
+
+<!-- Raw content -->
+{% if event.raw_content %}
+<div class="card mb-6">
+  <details>
+    <summary class="text-sm font-semibold text-gray-400 uppercase tracking-wide cursor-pointer hover:text-gray-300">
+      Raw Content
+    </summary>
+    <pre class="text-xs text-gray-400 whitespace-pre-wrap mt-2 font-mono">{{ event.raw_content }}</pre>
+  </details>
+</div>
+{% endif %}
+
+<!-- Linked entities -->
+<div class="mb-6">
+  <h2 class="text-lg font-semibold text-gray-100 mb-3">Linked Entities ({{ linked_entities | length }})</h2>
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+          <th class="pb-2 pr-3">Entity</th>
+          <th class="pb-2 pr-3">Type</th>
+          <th class="pb-2 pr-3">Role</th>
+          <th class="pb-2">Confidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for link in linked_entities %}
+        <tr class="border-b border-gray-800 hover:bg-gray-800/50">
+          <td class="py-2 pr-3">
+            <a href="/entities/{{ link.profile.id }}" class="text-cyan-400 hover:text-cyan-300">{{ link.profile.canonical_name }}</a>
+          </td>
+          <td class="py-2 pr-3"><span class="badge badge-blue">{{ link.profile.entity_type }}</span></td>
+          <td class="py-2 pr-3"><span class="badge badge-gray">{{ link.role }}</span></td>
+          <td class="py-2 text-xs text-gray-400">{{ link.confidence | format_confidence }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="py-4 text-center text-gray-500">No linked entities.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div class="card">
+  <p class="text-sm text-gray-500">Event not found.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}{{ source.name if source else 'Source' }} — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <a href="/sources" class="text-sm text-gray-500 hover:text-gray-300">&larr; Sources</a>
+</div>
+
+{% if source %}
+<!-- Header -->
+<div class="card mb-6">
+  <div class="flex items-start justify-between">
+    <div>
+      <h1 class="text-xl font-bold text-gray-100">{{ source.name }}</h1>
+      <div class="flex items-center gap-3 mt-2">
+        <span class="badge badge-gray">{{ source.source_type.value }}</span>
+        {% set status_colors = {
+          'active': 'badge-green',
+          'paused': 'badge-yellow',
+          'error': 'badge-red',
+          'retired': 'badge-gray'
+        } %}
+        <span class="badge {{ status_colors.get(source.status.value, 'badge-gray') }}">{{ source.status.value }}</span>
+        <span class="text-xs text-gray-500">ID: {{ source.id | truncate_uuid }}</span>
+      </div>
+      {% if source.description %}
+        <p class="mt-3 text-sm text-gray-300">{{ source.description }}</p>
+      {% endif %}
+      <div class="mt-2 text-sm">
+        <a href="{{ source.url }}" class="text-cyan-400 hover:text-cyan-300 break-all" target="_blank">{{ source.url }}</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Trust metadata -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+  <div class="card">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Trust Dimensions</h2>
+    <div class="space-y-3">
+      <div>
+        <div class="flex justify-between text-xs text-gray-400 mb-1">
+          <span>Reliability</span>
+          <span>{{ source.reliability | format_confidence }}</span>
+        </div>
+        <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
+          <div class="h-full bg-cyan-500 rounded-full bar-fill"
+               style="width: {{ (source.reliability * 100) | int }}%"></div>
+        </div>
+      </div>
+      <div>
+        <div class="flex justify-between text-xs text-gray-400 mb-1">
+          <span>Timeliness</span>
+          <span>{{ source.timeliness | format_confidence }}</span>
+        </div>
+        <div class="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
+          <div class="h-full bg-green-500 rounded-full bar-fill"
+               style="width: {{ (source.timeliness * 100) | int }}%"></div>
+        </div>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-500">Bias</span>
+        <span class="text-gray-300">{{ source.bias_label.value | replace('_', ' ') | title }}</span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-500">Ownership</span>
+        <span class="text-gray-300">{{ source.ownership_type.value | replace('_', ' ') | title }}</span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-500">Coverage</span>
+        <span class="text-gray-300">{{ source.coverage_scope.value | title }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Operational Info</h2>
+    <div class="space-y-2 text-sm">
+      <div class="flex justify-between">
+        <span class="text-gray-500">Geo origin</span>
+        <span class="text-gray-300 font-mono">{{ source.geo_origin or '—' }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Language</span>
+        <span class="text-gray-300 font-mono">{{ source.language }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Fetch interval</span>
+        <span class="text-gray-300">{{ source.fetch_interval_minutes }} min</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Last fetched</span>
+        <span class="text-gray-300">{{ source.last_fetched_at | timeago }}</span>
+      </div>
+      {% if source.last_error %}
+      <div>
+        <span class="text-gray-500">Last error</span>
+        <p class="text-red-400 text-xs mt-1">{{ source.last_error }}</p>
+      </div>
+      {% endif %}
+      <div class="flex justify-between">
+        <span class="text-gray-500">Created</span>
+        <span class="text-gray-300">{{ source.created_at | timeago }}</span>
+      </div>
+      {% if source.tags %}
+      <div>
+        <span class="text-gray-500">Tags</span>
+        <div class="mt-1">
+          {% for tag in source.tags %}
+            <span class="badge badge-cyan">{{ tag }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Recent events from this source -->
+<div class="mb-6">
+  <h2 class="text-lg font-semibold text-gray-100 mb-3">Recent Events ({{ recent_events | length }})</h2>
+  <div class="card overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+          <th class="pb-2 pr-3">Title</th>
+          <th class="pb-2 pr-3">Category</th>
+          <th class="pb-2">Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in recent_events %}
+        <tr class="border-b border-gray-800 hover:bg-gray-800/50">
+          <td class="py-2 pr-3">
+            <a href="/events/{{ event.id }}" class="text-cyan-400 hover:text-cyan-300">{{ event.title[:60] }}{% if event.title | length > 60 %}...{% endif %}</a>
+          </td>
+          <td class="py-2 pr-3">
+            <span class="badge badge-gray">{{ event.category.value }}</span>
+          </td>
+          <td class="py-2 text-xs text-gray-500">{{ event.event_timestamp | timeago if event.event_timestamp else event.created_at | timeago }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="py-4 text-center text-gray-500">No events from this source yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div class="card">
+  <p class="text-sm text-gray-500">Source not found.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,264 @@
+{
+  "_doc": "Seed sources for Legba SA. Agent should source_add these on bootstrap. Verified working as of 2026-03-05.",
+
+  "seed_sources": [
+    {
+      "name": "BBC World News",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "source_type": "rss",
+      "reliability": 0.85,
+      "bias_label": "center",
+      "ownership_type": "public_broadcast",
+      "geo_origin": "GB",
+      "coverage_scope": "global",
+      "tags": "news,world,general",
+      "description": "BBC World Service news feed"
+    },
+    {
+      "name": "Al Jazeera English",
+      "url": "https://www.aljazeera.com/xml/rss/all.xml",
+      "source_type": "rss",
+      "reliability": 0.75,
+      "bias_label": "center",
+      "ownership_type": "state",
+      "geo_origin": "QA",
+      "coverage_scope": "global",
+      "tags": "news,world,middle-east",
+      "description": "Al Jazeera English full RSS feed"
+    },
+    {
+      "name": "UN OCHA ReliefWeb Updates",
+      "url": "https://reliefweb.int/updates/rss.xml",
+      "source_type": "rss",
+      "reliability": 0.90,
+      "bias_label": "center",
+      "ownership_type": "nonprofit",
+      "geo_origin": "CH",
+      "coverage_scope": "global",
+      "tags": "humanitarian,crisis,un",
+      "description": "UN OCHA humanitarian situation updates"
+    },
+    {
+      "name": "GDELT Project Events",
+      "url": "http://data.gdeltproject.org/gdeltv2/lastupdate.txt",
+      "source_type": "api",
+      "reliability": 0.70,
+      "bias_label": "center",
+      "ownership_type": "nonprofit",
+      "geo_origin": "US",
+      "coverage_scope": "global",
+      "tags": "events,conflict,geopolitical,automated",
+      "description": "GDELT 2.0 event database last update pointer"
+    },
+    {
+      "name": "NPR World News",
+      "url": "https://feeds.npr.org/1004/rss.xml",
+      "source_type": "rss",
+      "reliability": 0.80,
+      "bias_label": "center_left",
+      "ownership_type": "public_broadcast",
+      "geo_origin": "US",
+      "coverage_scope": "global",
+      "tags": "news,world",
+      "description": "NPR World section RSS"
+    },
+    {
+      "name": "France24 English",
+      "url": "https://www.france24.com/en/rss",
+      "source_type": "rss",
+      "reliability": 0.80,
+      "bias_label": "center",
+      "ownership_type": "state",
+      "geo_origin": "FR",
+      "coverage_scope": "global",
+      "tags": "news,world,europe,africa",
+      "description": "France24 English language RSS"
+    },
+    {
+      "name": "DW News",
+      "url": "https://rss.dw.com/rdf/rss-en-world",
+      "source_type": "rss",
+      "reliability": 0.80,
+      "bias_label": "center",
+      "ownership_type": "public_broadcast",
+      "geo_origin": "DE",
+      "coverage_scope": "global",
+      "tags": "news,world,europe",
+      "description": "Deutsche Welle English world news"
+    },
+    {
+      "name": "ACLED Conflict Data",
+      "url": "https://acleddata.com/acleddatanew/wp-content/uploads/dlm_uploads/last10.rss",
+      "source_type": "rss",
+      "reliability": 0.85,
+      "bias_label": "center",
+      "ownership_type": "nonprofit",
+      "geo_origin": "US",
+      "coverage_scope": "global",
+      "tags": "conflict,violence,data,research",
+      "description": "Armed Conflict Location & Event Data project updates"
+    },
+    {
+      "name": "ICG CrisisWatch",
+      "url": "https://www.crisisgroup.org/rss-0",
+      "source_type": "rss",
+      "reliability": 0.90,
+      "bias_label": "center",
+      "ownership_type": "nonprofit",
+      "geo_origin": "BE",
+      "coverage_scope": "global",
+      "tags": "conflict,analysis,crisis",
+      "description": "International Crisis Group monthly conflict tracker"
+    },
+    {
+      "name": "War on the Rocks",
+      "url": "https://warontherocks.com/feed/",
+      "source_type": "rss",
+      "reliability": 0.80,
+      "bias_label": "center",
+      "ownership_type": "independent",
+      "geo_origin": "US",
+      "coverage_scope": "global",
+      "tags": "defense,security,analysis,military",
+      "description": "Defense and security analysis from expert contributors"
+    },
+    {
+      "name": "Global Voices",
+      "url": "https://globalvoices.org/feed/",
+      "source_type": "rss",
+      "reliability": 0.70,
+      "bias_label": "center_left",
+      "ownership_type": "nonprofit",
+      "geo_origin": "NL",
+      "coverage_scope": "global",
+      "tags": "civil-society,human-rights,media",
+      "description": "Citizen media and independent journalism from around the world"
+    },
+    {
+      "name": "The Economist World",
+      "url": "https://www.economist.com/international/rss.xml",
+      "source_type": "rss",
+      "reliability": 0.85,
+      "bias_label": "center_right",
+      "ownership_type": "corporate",
+      "geo_origin": "GB",
+      "coverage_scope": "global",
+      "tags": "news,analysis,economics,geopolitical",
+      "description": "The Economist international section"
+    },
+
+    {"_comment": "--- STATE MEDIA (labeled as such — useful for tracking narratives and comparing framing) ---"},
+
+    {
+      "name": "Xinhua English",
+      "url": "http://www.xinhuanet.com/english/rss/worldrss.xml",
+      "source_type": "rss",
+      "reliability": 0.40,
+      "bias_label": "far_left",
+      "ownership_type": "state",
+      "geo_origin": "CN",
+      "coverage_scope": "global",
+      "tags": "state-media,china,geopolitical,narrative-tracking",
+      "description": "Xinhua News Agency — China's official state news wire. Reflects CPC positions. Useful for tracking Chinese government framing."
+    },
+    {
+      "name": "Global Times",
+      "url": "https://www.globaltimes.cn/rss/outbrain.xml",
+      "source_type": "rss",
+      "reliability": 0.30,
+      "bias_label": "far_left",
+      "ownership_type": "state",
+      "geo_origin": "CN",
+      "coverage_scope": "global",
+      "tags": "state-media,china,geopolitical,narrative-tracking,hawkish",
+      "description": "Global Times — Chinese state tabloid, hawkish nationalist tone. People's Daily subsidiary. Track for aggressive PRC messaging."
+    },
+    {
+      "name": "TASS English",
+      "url": "https://tass.com/rss/v2.xml",
+      "source_type": "rss",
+      "reliability": 0.30,
+      "bias_label": "far_right",
+      "ownership_type": "state",
+      "geo_origin": "RU",
+      "coverage_scope": "global",
+      "tags": "state-media,russia,geopolitical,narrative-tracking",
+      "description": "TASS — Russia's official state news agency. Reflects Kremlin positions. May block non-browser user agents."
+    },
+    {
+      "name": "Anadolu Agency English",
+      "url": "https://www.aa.com.tr/en/rss/default?cat=world",
+      "source_type": "rss",
+      "reliability": 0.50,
+      "bias_label": "center_right",
+      "ownership_type": "state",
+      "geo_origin": "TR",
+      "coverage_scope": "global",
+      "tags": "state-media,turkey,geopolitical,middle-east",
+      "description": "Anadolu Agency — Turkey's state wire service. Good regional coverage of Middle East, Caucasus, Central Asia."
+    },
+    {
+      "name": "Al Jazeera Arabic (via English)",
+      "url": "https://www.aljazeera.net/aljazeerarss/a7c186be-1baa-4bd4-9d80-a84db769f779/73d0e1b4-532f-45ef-b135-bfdff8b8cab9",
+      "source_type": "rss",
+      "reliability": 0.60,
+      "bias_label": "center",
+      "ownership_type": "state",
+      "geo_origin": "QA",
+      "coverage_scope": "regional",
+      "tags": "state-media,qatar,arabic,middle-east,narrative-tracking",
+      "description": "Al Jazeera Arabic feed — Qatar state-funded. Different editorial line from English edition. Compare framing."
+    }
+  ],
+
+  "discovery_sources": [
+    {
+      "name": "Wikipedia Current Events Portal",
+      "url": "https://en.wikipedia.org/wiki/Portal:Current_events",
+      "method": "scrape",
+      "purpose": "Daily curated summary of world events with source links. Parse for event names, locations, and linked news sources."
+    },
+    {
+      "name": "GDELT GKG (Global Knowledge Graph)",
+      "url": "http://data.gdeltproject.org/gdeltv2/lastupdate-translation.txt",
+      "method": "api",
+      "purpose": "Machine-indexed global news. Use to discover which outlets are covering what topics, find new source URLs."
+    },
+    {
+      "name": "MediaBias/FactCheck",
+      "url": "https://mediabiasfactcheck.com/",
+      "method": "scrape",
+      "purpose": "Directory of news sources with bias ratings and factual reporting scores. Use to discover and pre-rate new sources."
+    },
+    {
+      "name": "AllSides Media Bias Ratings",
+      "url": "https://www.allsides.com/media-bias/ratings",
+      "method": "scrape",
+      "purpose": "Another bias rating directory. Cross-reference with MediaBias/FactCheck for calibration."
+    },
+    {
+      "name": "ReliefWeb Sources Directory",
+      "url": "https://reliefweb.int/organizations",
+      "method": "scrape",
+      "purpose": "Directory of humanitarian organizations that publish reports. Many have RSS feeds. Good for expanding crisis/humanitarian coverage."
+    },
+    {
+      "name": "OSINT Framework",
+      "url": "https://osintframework.com/",
+      "method": "scrape",
+      "purpose": "Directory of open-source intelligence tools and data sources organized by category."
+    },
+    {
+      "name": "European Journalism Centre Media Landscape",
+      "url": "https://medialandscapes.org/",
+      "method": "scrape",
+      "purpose": "Country-by-country media landscape profiles. Use to find regional/national news sources per country."
+    },
+    {
+      "name": "UN Digital Library",
+      "url": "https://digitallibrary.un.org/",
+      "method": "scrape",
+      "purpose": "UN documents, resolutions, reports. Source for official institutional positions and policy documents."
+    }
+  ]
+}

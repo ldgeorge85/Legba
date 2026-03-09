@@ -1,0 +1,34 @@
+{% for cycle in cycles %}
+<tr class="border-b border-gray-800 hover:bg-gray-800/50">
+  <td class="py-2 pr-4">
+    <a href="/cycles/{{ cycle.cycle_number }}" class="text-cyan-400 hover:text-cyan-300 font-mono font-medium">
+      #{{ cycle.cycle_number }}
+    </a>
+  </td>
+  <td class="py-2 pr-4">
+    {% if cycle.status == 'completed' %}
+      <span class="badge badge-green">completed</span>
+    {% elif cycle.status == 'error' %}
+      <span class="badge badge-red">error</span>
+    {% elif cycle.status == 'running' %}
+      <span class="badge badge-yellow">running</span>
+    {% else %}
+      <span class="badge badge-gray">{{ cycle.status }}</span>
+    {% endif %}
+  </td>
+  <td class="py-2 pr-4 text-gray-400">{{ cycle.event_count }}</td>
+  <td class="py-2 pr-4 text-gray-400">{{ cycle.tool_count }}</td>
+  <td class="py-2 pr-4 {% if cycle.error_count > 0 %}text-red-400{% else %}text-gray-400{% endif %}">{{ cycle.error_count }}</td>
+  <td class="py-2 text-xs text-gray-500">{{ cycle.timestamp | timeago if cycle.timestamp else '—' }}</td>
+</tr>
+{% else %}
+<tr>
+  <td colspan="6" class="py-8 text-center text-gray-500">
+    {% if not audit_available %}
+      Audit data not yet indexed. Cycles will appear here once the supervisor begins logging.
+    {% else %}
+      No cycle data found.
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}
