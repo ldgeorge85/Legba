@@ -1,0 +1,93 @@
+<div class="space-y-3">
+{% for mem in memories %}
+  <div class="card">
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <!-- Cycle badge -->
+          {% if mem.cycle_number is defined and mem.cycle_number is not none %}
+            <span class="badge badge-cyan text-xs">C{{ mem.cycle_number }}</span>
+          {% endif %}
+
+          <!-- Episode type -->
+          {% if mem.episode_type is defined and mem.episode_type %}
+            <span class="badge badge-purple text-xs">{{ mem.episode_type }}</span>
+          {% endif %}
+
+          <!-- Significance badge -->
+          {% set sig = mem.significance if mem.significance is defined and mem.significance is not none else 0 %}
+          {% if sig >= 0.7 %}
+            <span class="badge badge-green text-xs">{{ "%.2f"|format(sig) }}</span>
+          {% elif sig >= 0.4 %}
+            <span class="badge badge-yellow text-xs">{{ "%.2f"|format(sig) }}</span>
+          {% else %}
+            <span class="badge badge-gray text-xs">{{ "%.2f"|format(sig) }}</span>
+          {% endif %}
+
+          <!-- Tool name -->
+          {% if mem.tool_name is defined and mem.tool_name %}
+            <span class="text-xs text-gray-500">{{ mem.tool_name }}</span>
+          {% endif %}
+
+          <!-- Similarity score (search mode) -->
+          {% if mem.score is defined and mem.score is not none %}
+            <span class="text-xs text-gray-500 ml-auto" title="Similarity score">sim: {{ "%.3f"|format(mem.score) }}</span>
+          {% endif %}
+        </div>
+
+        <!-- Content -->
+        <p class="text-sm text-gray-300 whitespace-pre-line break-words">{{ mem.content if mem.content is defined and mem.content else '(no content)' }}</p>
+
+        <!-- Tags -->
+        {% if mem.tags is defined and mem.tags %}
+          <div class="flex gap-1 mt-2 flex-wrap">
+            {% for tag in mem.tags %}
+              <span class="text-xs bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded">{{ tag }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- Timestamp -->
+      <div class="text-xs text-gray-500 whitespace-nowrap flex-shrink-0">
+        {% if mem.created_at is defined and mem.created_at %}
+          {{ mem.created_at[:19] | replace('T', ' ') }}
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Goal context -->
+    {% if mem.goal_id is defined and mem.goal_id %}
+      <div class="mt-2 text-xs text-gray-500">
+        Goal: {{ mem.goal_id[:8] if mem.goal_id | length > 8 else mem.goal_id }}
+      </div>
+    {% endif %}
+
+    <!-- Point ID -->
+    <div class="mt-1 text-xs text-gray-600">
+      id: {{ mem.id[:12] if mem.id is string and mem.id | length > 12 else mem.id }}
+    </div>
+  </div>
+{% else %}
+  <div class="card text-center text-gray-500 py-8">
+    {% if q %}
+      No memories found matching "{{ q }}".
+    {% else %}
+      No memories in this collection.
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+
+<!-- Pagination -->
+{% if next_offset and not q %}
+<div class="mt-4 flex justify-center">
+  <button class="btn"
+          hx-get="/memory?collection={{ collection }}&offset={{ next_offset }}"
+          hx-target="#memory-container"
+          hx-swap="innerHTML"
+          hx-push-url="true">
+    Load more
+  </button>
+</div>
+{% endif %}

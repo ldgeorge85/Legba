@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from ..shared.config import PostgresConfig, RedisConfig, OpenSearchConfig, NatsConfig
+from ..shared.config import PostgresConfig, RedisConfig, OpenSearchConfig, NatsConfig, QdrantConfig, LLMConfig
 from .stores import StoreHolder
 from .messages import UINatsClient, MessageStore
 
@@ -34,6 +34,8 @@ async def lifespan(app: FastAPI):
         redis_cfg=RedisConfig.from_env(),
         os_cfg=OpenSearchConfig.from_env(),
         audit_cfg=OpenSearchConfig.from_audit_env(),
+        qdrant_cfg=QdrantConfig.from_env(),
+        llm_cfg=LLMConfig.from_env(),
     )
     await stores.connect()
     app.state.stores = stores
@@ -168,10 +170,13 @@ from .routes.goals import router as goals_router
 from .routes.graph import router as graph_router
 from .routes.journal import router as journal_router
 from .routes.reports import router as reports_router
+from .routes.facts import router as facts_router
+from .routes.memory import router as memory_router
 
 app.include_router(dashboard_router)
 app.include_router(entities_router)
 app.include_router(events_router)
+app.include_router(facts_router)
 app.include_router(sources_router)
 app.include_router(goals_router)
 app.include_router(cycles_router)
@@ -179,3 +184,4 @@ app.include_router(messages_router)
 app.include_router(journal_router)
 app.include_router(reports_router)
 app.include_router(graph_router)
+app.include_router(memory_router)

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Facts — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-100">Fact Explorer</h1>
+  <p class="text-sm text-gray-400 mt-1">{{ total }} facts in the knowledge base</p>
+</div>
+
+<!-- Filters -->
+<div class="flex flex-wrap gap-3 mb-4">
+  <input type="text"
+         name="q"
+         value="{{ q or '' }}"
+         placeholder="Search by subject or predicate..."
+         class="flex-1 max-w-md bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-600"
+         hx-get="/facts"
+         hx-trigger="keyup changed delay:300ms"
+         hx-target="#fact-rows"
+         hx-include="[name='min_confidence']"
+         hx-push-url="true">
+  <select name="min_confidence"
+          class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-600"
+          hx-get="/facts"
+          hx-trigger="change"
+          hx-target="#fact-rows"
+          hx-include="[name='q']"
+          hx-push-url="true">
+    <option value="" {% if not min_confidence %}selected{% endif %}>Any confidence</option>
+    <option value="0.5" {% if min_confidence == '0.5' %}selected{% endif %}>&gt; 0.5</option>
+    <option value="0.7" {% if min_confidence == '0.7' %}selected{% endif %}>&gt; 0.7</option>
+    <option value="0.9" {% if min_confidence == '0.9' %}selected{% endif %}>&gt; 0.9</option>
+  </select>
+</div>
+
+<!-- Table -->
+<div class="card overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+        <th class="pb-2 pr-4">Subject</th>
+        <th class="pb-2 pr-4">Predicate</th>
+        <th class="pb-2 pr-4">Value</th>
+        <th class="pb-2 pr-4">Confidence</th>
+        <th class="pb-2 pr-4">Cycle</th>
+        <th class="pb-2">Date</th>
+      </tr>
+    </thead>
+    <tbody id="fact-rows">
+      {% include "facts/_rows.html" %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

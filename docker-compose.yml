@@ -168,6 +168,8 @@ services:
       LEGBA_SHARED: /shared
       LEGBA_LOGS: /logs
       NATS_URL: nats://nats:4222
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
     ports:
       - "8501:8501"
     volumes:

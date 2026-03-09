@@ -20,8 +20,12 @@
 
   <div class="flex-1"></div>
 
+  <!-- Search -->
+  <input type="text" id="graph-search" placeholder="Search nodes..." class="input text-xs w-48" oninput="searchNodes(this.value)">
+
   <!-- Layout controls -->
   <button class="btn text-xs" onclick="setLayout('cose')">Force Layout</button>
+  <button class="btn text-xs" onclick="setLayout('cose-bilkent')">Clustered</button>
   <button class="btn text-xs" onclick="setLayout('circle')">Circle</button>
   <button class="btn text-xs" onclick="setLayout('grid')">Grid</button>
   <button class="btn text-xs" onclick="cy.fit(undefined, 30)">Fit</button>
@@ -64,6 +68,7 @@
 
 <!-- Cytoscape.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape-cose-bilkent/4.1.0/cytoscape-cose-bilkent.min.js"></script>
 <script>
 const graphData = {{ graph_data | tojson }};
 
@@ -150,14 +155,22 @@ const cy = cytoscape({
     name: 'cose',
     animate: true,
     animationDuration: 500,
-    nodeRepulsion: function() { return 8000; },
-    idealEdgeLength: function() { return 120; },
-    gravity: 0.3,
+    nodeRepulsion: function() { return 50000; },
+    idealEdgeLength: function() { return 250; },
+    gravity: 0.05,
+    numIter: 500,
     padding: 30,
   },
   minZoom: 0.2,
   maxZoom: 4,
   wheelSensitivity: 0.3,
+});
+
+// -- Scale node size by degree --
+cy.nodes().forEach(n => {
+  const deg = n.degree();
+  n.style('width', Math.max(20, Math.min(60, 20 + deg * 3)));
+  n.style('height', Math.max(20, Math.min(60, 20 + deg * 3)));
 });
 
 // -- Node click: show detail panel with relationships --
@@ -239,9 +252,16 @@ function filterEdges(type) {
 function setLayout(name) {
   const opts = { name: name, animate: true, animationDuration: 500, padding: 30 };
   if (name === 'cose') {
-    opts.nodeRepulsion = function() { return 8000; };
-    opts.idealEdgeLength = function() { return 120; };
-    opts.gravity = 0.3;
+    opts.nodeRepulsion = function() { return 50000; };
+    opts.idealEdgeLength = function() { return 250; };
+    opts.gravity = 0.05;
+    opts.numIter = 500;
+  } else if (name === 'cose-bilkent') {
+    opts.nodeRepulsion = 50000;
+    opts.idealEdgeLength = 250;
+    opts.gravity = 0.05;
+    opts.numIter = 2500;
+    opts.tile = true;
   }
   cy.layout(opts).run();
 }
@@ -252,8 +272,30 @@ async function refreshGraph() {
   cy.elements().remove();
   cy.add([...data.nodes, ...data.edges]);
   cy.layout({ name: 'cose', animate: true, animationDuration: 500, padding: 30,
-    nodeRepulsion: function() { return 8000; }, idealEdgeLength: function() { return 120; }, gravity: 0.3,
+    nodeRepulsion: function() { return 50000; }, idealEdgeLength: function() { return 250; }, gravity: 0.05, numIter: 500,
   }).run();
+  // Rescale nodes by degree after reload
+  cy.nodes().forEach(n => {
+    const deg = n.degree();
+    n.style('width', Math.max(20, Math.min(60, 20 + deg * 3)));
+    n.style('height', Math.max(20, Math.min(60, 20 + deg * 3)));
+  });
+}
+
+function searchNodes(query) {
+  if (!query || !query.trim()) {
+    cy.elements().removeClass('highlighted dimmed');
+    return;
+  }
+  const q = query.toLowerCase();
+  cy.elements().removeClass('highlighted dimmed');
+  const matches = cy.nodes().filter(n => n.data('name').toLowerCase().includes(q));
+  if (matches.length === 0) {
+    return;
+  }
+  const neighborhood = matches.neighborhood().add(matches);
+  neighborhood.addClass('highlighted');
+  cy.elements().not(neighborhood).addClass('dimmed');
 }
 </script>
 

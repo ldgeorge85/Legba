@@ -35,6 +35,30 @@
 
         <span title="{{ goal.updated_at }}">{{ goal.updated_at | timeago }}</span>
         <span class="font-mono text-gray-600">{{ goal.id | truncate_uuid }}</span>
+
+        <!-- Actions -->
+        <span id="goal-status-{{ goal.id }}" class="inline-flex items-center gap-1">
+          {% if goal.status == 'active' %}
+          <button class="text-yellow-500 hover:text-yellow-300 text-xs"
+                  hx-put="/api/goals/{{ goal.id }}/status" hx-vals='{"status":"paused"}'
+                  hx-target="#goal-status-{{ goal.id }}" hx-swap="outerHTML"
+                  title="Pause">⏸</button>
+          <button class="text-green-500 hover:text-green-300 text-xs"
+                  hx-put="/api/goals/{{ goal.id }}/status" hx-vals='{"status":"completed"}'
+                  hx-target="#goal-status-{{ goal.id }}" hx-swap="outerHTML"
+                  title="Complete">✓</button>
+          <button class="text-red-500 hover:text-red-300 text-xs"
+                  hx-put="/api/goals/{{ goal.id }}/status" hx-vals='{"status":"abandoned"}'
+                  hx-target="#goal-status-{{ goal.id }}" hx-swap="outerHTML"
+                  hx-confirm="Abandon this goal?"
+                  title="Abandon">✕</button>
+          {% elif goal.status == 'paused' %}
+          <button class="text-green-500 hover:text-green-300 text-xs"
+                  hx-put="/api/goals/{{ goal.id }}/status" hx-vals='{"status":"active"}'
+                  hx-target="#goal-status-{{ goal.id }}" hx-swap="outerHTML"
+                  title="Resume">▶</button>
+          {% endif %}
+        </span>
       </div>
     </div>
   </div>

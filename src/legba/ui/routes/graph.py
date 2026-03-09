@@ -105,6 +105,16 @@ async def _fetch_full_graph(stores) -> dict:
             }
         })
 
+    # Count degree per node from edges
+    degree_count: dict[str, int] = {}
+    for e in edges:
+        s = e["data"]["source"]
+        t = e["data"]["target"]
+        degree_count[s] = degree_count.get(s, 0) + 1
+        degree_count[t] = degree_count.get(t, 0) + 1
+    for n in nodes:
+        n["data"]["degree"] = degree_count.get(n["data"]["id"], 0)
+
     return {
         "nodes": nodes,
         "edges": edges,

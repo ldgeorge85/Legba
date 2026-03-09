@@ -9,13 +9,25 @@
     <span class="badge badge-gray">{{ source.source_type.value }}</span>
   </td>
   <td class="py-2 pr-4">
-    {% set status_colors = {
-      'active': 'badge-green',
-      'paused': 'badge-yellow',
-      'error': 'badge-red',
-      'retired': 'badge-gray'
-    } %}
-    <span class="badge {{ status_colors.get(source.status.value, 'badge-gray') }}">{{ source.status.value }}</span>
+    <span id="status-{{ source.id }}">
+      {% set status_colors = {
+        'active': 'badge-green',
+        'paused': 'badge-yellow',
+        'error': 'badge-red',
+        'retired': 'badge-gray'
+      } %}
+      <span class="badge {{ status_colors.get(source.status.value, 'badge-gray') }}">{{ source.status.value }}</span>
+    </span>
+    <select class="bg-gray-900 border border-gray-700 rounded text-xs px-1 py-0.5 ml-1 text-gray-400"
+            hx-put="/api/sources/{{ source.id }}/status"
+            hx-target="#status-{{ source.id }}"
+            hx-swap="innerHTML"
+            name="status">
+      <option value="" disabled selected>change</option>
+      <option value="active">active</option>
+      <option value="paused">paused</option>
+      <option value="retired">retired</option>
+    </select>
   </td>
   <td class="py-2 pr-4">
     <div class="flex items-center gap-2">

@@ -2,9 +2,44 @@
 {% block title %}Sources — Legba Console{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-gray-100">Source Registry</h1>
-  <p class="text-sm text-gray-400 mt-1">{{ total }} registered sources</p>
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-100">Source Registry</h1>
+    <p class="text-sm text-gray-400 mt-1">{{ total }} registered sources</p>
+  </div>
+  <button class="btn text-xs" onclick="document.getElementById('add-source-form').classList.toggle('hidden')">+ Add Source</button>
+</div>
+
+<!-- Add Source Form (hidden by default) -->
+<div id="add-source-form" class="card mb-4 hidden">
+  <h3 class="text-sm font-semibold text-gray-200 mb-3">New Source</h3>
+  <form action="/api/sources" method="post" class="grid grid-cols-2 gap-3">
+    <input name="name" placeholder="Name" required class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 col-span-2">
+    <input name="url" placeholder="Feed URL" required class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 col-span-2">
+    <select name="source_type" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+      {% for t in source_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+    </select>
+    <select name="bias_label" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+      <option value="center">center</option>
+      <option value="center_left">center-left</option>
+      <option value="center_right">center-right</option>
+      <option value="left">left</option>
+      <option value="right">right</option>
+      <option value="far_left">far-left</option>
+      <option value="far_right">far-right</option>
+      <option value="unknown">unknown</option>
+    </select>
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-400">Reliability:</label>
+      <input name="reliability" type="number" min="0" max="1" step="0.05" value="0.5" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-20">
+    </div>
+    <input name="tags" placeholder="Tags (comma separated)" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+    <input name="description" placeholder="Description" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 col-span-2">
+    <div class="col-span-2 flex justify-end gap-2">
+      <button type="button" class="btn text-xs" onclick="document.getElementById('add-source-form').classList.add('hidden')">Cancel</button>
+      <button type="submit" class="btn text-xs bg-cyan-900 border-cyan-700 text-cyan-300 hover:bg-cyan-800">Create</button>
+    </div>
+  </form>
 </div>
 
 <!-- Filters -->

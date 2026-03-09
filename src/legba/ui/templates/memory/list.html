@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Memory — Legba Console{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-gray-100">Memory Explorer</h1>
+  <p class="text-sm text-gray-400 mt-1">
+    {{ total_short }} short-term &middot; {{ total_long }} long-term episodes in episodic memory
+  </p>
+</div>
+
+<!-- Collection toggle + search -->
+<div class="flex flex-wrap gap-3 mb-4 items-center">
+  <div class="flex rounded-md overflow-hidden border border-gray-700">
+    <button class="px-3 py-1.5 text-sm font-medium transition-colors
+                    {% if collection == 'short_term' %}bg-cyan-800 text-cyan-200{% else %}bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200{% endif %}"
+            hx-get="/memory?collection=short_term"
+            hx-target="#memory-container"
+            hx-include="[name='q']"
+            hx-push-url="true">
+      Short-term
+    </button>
+    <button class="px-3 py-1.5 text-sm font-medium transition-colors border-l border-gray-700
+                    {% if collection == 'long_term' %}bg-cyan-800 text-cyan-200{% else %}bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200{% endif %}"
+            hx-get="/memory?collection=long_term"
+            hx-target="#memory-container"
+            hx-include="[name='q']"
+            hx-push-url="true">
+      Long-term
+    </button>
+  </div>
+
+  <input type="text"
+         name="q"
+         value="{{ q or '' }}"
+         placeholder="Semantic search..."
+         class="flex-1 max-w-md bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-600"
+         hx-get="/memory"
+         hx-trigger="keyup changed delay:400ms"
+         hx-target="#memory-container"
+         hx-include="[name='collection']"
+         hx-push-url="true">
+
+  <!-- Hidden input to carry collection value with search -->
+  <input type="hidden" name="collection" value="{{ collection }}">
+</div>
+
+<!-- Memory cards -->
+<div id="memory-container">
+  {% include "memory/_rows.html" %}
+</div>
+{% endblock %}
