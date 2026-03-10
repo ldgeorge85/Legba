@@ -14,6 +14,7 @@ from ....shared.schemas.tools import ToolDefinition, ToolParameter
 
 if TYPE_CHECKING:
     from ...memory.opensearch import OpenSearchStore
+    from ...memory.structured import StructuredStore
     from ...memory.graph import GraphStore
     from ...tools.registry import ToolRegistry
 
@@ -164,6 +165,29 @@ CORRELATE_DEF = ToolDefinition(
     ],
 )
 
+TEMPORAL_QUERY_DEF = ToolDefinition(
+    name="temporal_query",
+    description="Query event trends over time periods. Returns event counts bucketed "
+                "by day/week/month, enabling trend detection and temporal pattern analysis. "
+                "Filter by category, entity name, or keyword.",
+    parameters=[
+        ToolParameter(name="period", type="string",
+                      description="Time period to analyze: 7d, 14d, 30d, 90d, 180d, 365d (default: 30d)"),
+        ToolParameter(name="bucket", type="string",
+                      description="Bucket size: day, week, month (default: day)",
+                      required=False),
+        ToolParameter(name="category", type="string",
+                      description="Filter by event category",
+                      required=False),
+        ToolParameter(name="keyword", type="string",
+                      description="Filter by keyword in event title",
+                      required=False),
+        ToolParameter(name="entity", type="string",
+                      description="Filter by entity name (matches actors/locations in event data)",
+                      required=False),
+    ],
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -214,6 +238,7 @@ def register(
     *,
     opensearch: OpenSearchStore,
     graph: GraphStore | None = None,
+    structured: StructuredStore | None = None,
 ) -> None:
     """Register all analytics tools with the given registry."""
 
@@ -741,6 +766,127 @@ def register(
         return json.dumps(result_data, indent=2)
 
     # ---------------------------------------------------------------
+    # temporal_query
+    # ---------------------------------------------------------------
+    async def temporal_query_handler(args: dict) -> str:
+        if structured is None or not structured._available:
+            return "Error: Structured store (Postgres) is not available"
+
+        period_str = args.get("period", "30d").strip().lower()
+        bucket = args.get("bucket", "day").strip().lower()
+        category = args.get("category")
+        keyword = args.get("keyword")
+        entity = args.get("entity")
+
+        # Parse period
+        import re as _re
+        m = _re.match(r"^(\d+)([dwm])$", period_str)
+        if not m:
+            return "Error: Invalid period format. Use: 7d, 14d, 30d, 90d, 180d, 365d"
+        num, unit = int(m.group(1)), m.group(2)
+        if unit == "w":
+            num *= 7
+        elif unit == "m":
+            num *= 30
+
+        if bucket not in ("day", "week", "month"):
+            return "Error: bucket must be one of: day, week, month"
+
+        from datetime import datetime, timezone, timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=num)
+
+        try:
+            async with structured._pool.acquire() as conn:
+                # Build query dynamically
+                conditions = ["e.created_at >= $1"]
+                params: list = [cutoff]
+                param_idx = 2
+
+                if category:
+                    conditions.append(f"e.category = ${param_idx}")
+                    params.append(category)
+                    param_idx += 1
+
+                if keyword:
+                    conditions.append(f"e.title ILIKE ${param_idx}")
+                    params.append(f"%{keyword}%")
+                    param_idx += 1
+
+                if entity:
+                    conditions.append(f"e.data::text ILIKE ${param_idx}")
+                    params.append(f"%{entity}%")
+                    param_idx += 1
+
+                where = " AND ".join(conditions)
+
+                # Bucketed counts
+                rows = await conn.fetch(f"""
+                    SELECT date_trunc('{bucket}', e.created_at) AS bucket_start,
+                           count(*) AS event_count
+                    FROM events e
+                    WHERE {where}
+                    GROUP BY bucket_start
+                    ORDER BY bucket_start
+                """, *params)
+
+                buckets = [
+                    {
+                        "period": row["bucket_start"].isoformat(),
+                        "count": row["event_count"],
+                    }
+                    for row in rows
+                ]
+
+                # Category breakdown
+                cat_rows = await conn.fetch(f"""
+                    SELECT category, count(*) AS cnt
+                    FROM events e
+                    WHERE {where}
+                    GROUP BY category
+                    ORDER BY cnt DESC
+                """, *params)
+
+                categories_breakdown = {
+                    r["category"]: r["cnt"] for r in cat_rows
+                }
+
+                total = sum(b["count"] for b in buckets)
+                avg_per_bucket = round(total / max(len(buckets), 1), 1)
+
+                # Trend detection: compare first half vs second half
+                trend = "stable"
+                if len(buckets) >= 4:
+                    mid = len(buckets) // 2
+                    first_half = sum(b["count"] for b in buckets[:mid])
+                    second_half = sum(b["count"] for b in buckets[mid:])
+                    if second_half > first_half * 1.3:
+                        trend = "increasing"
+                    elif second_half < first_half * 0.7:
+                        trend = "decreasing"
+
+                result = {
+                    "period": period_str,
+                    "bucket_size": bucket,
+                    "total_events": total,
+                    "num_buckets": len(buckets),
+                    "avg_per_bucket": avg_per_bucket,
+                    "trend": trend,
+                    "categories": categories_breakdown,
+                    "buckets": buckets,
+                }
+
+                if keyword:
+                    result["keyword_filter"] = keyword
+                if entity:
+                    result["entity_filter"] = entity
+                if category:
+                    result["category_filter"] = category
+
+                return json.dumps(result, indent=2, default=str)
+        except Exception as e:
+            return f"Error: temporal query failed: {e}"
+
+    # ---------------------------------------------------------------
     # Register all
     # ---------------------------------------------------------------
     registry.register(ANOMALY_DETECT_DEF, anomaly_detect_handler)
@@ -748,3 +894,4 @@ def register(
     registry.register(NLP_EXTRACT_DEF, nlp_extract_handler)
     registry.register(GRAPH_ANALYZE_DEF, graph_analyze_handler)
     registry.register(CORRELATE_DEF, correlate_handler)
+    registry.register(TEMPORAL_QUERY_DEF, temporal_query_handler)

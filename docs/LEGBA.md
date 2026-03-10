@@ -13,7 +13,7 @@ The operator provides a seed goal. The agent then operates indefinitely: ingesti
 
 **Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events, producing structured briefings, detecting patterns, and flagging significant developments.
 
-**Key numbers:** 100+ Python source files, 241 tests, **57 built-in tools** across 17 builtin modules, 7 platform services, 10 Docker containers.
+**Key numbers:** 100+ Python source files, 241 tests, **58 built-in tools** across 17 builtin modules, 7 platform services, 10 Docker containers.
 
 ---
 
@@ -152,7 +152,7 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 12 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 57 tools, drain inbox
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 58 tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (priority order):
    a. INTROSPECTION (every 15) -- mission review, deep audit, journal consolidation, analysis report
@@ -219,14 +219,17 @@ Every 10 cycles (when not introspection), the agent runs a dedicated analysis ph
 WAKE → ORIENT → ANALYZE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
 ```
 
-The analysis prompt includes **data context**: event distribution by category, top entities by event involvement, data thresholds for analytical tools (30+ events for anomaly_detect, 20+ relationships for graph_analyze), and active situations.
+The analysis prompt includes **data context**: event distribution by category, top entities by event involvement, data thresholds for analytical tools (30+ events for anomaly_detect, 20+ relationships for graph_analyze), active situations, watchlist trigger summary, and **differential reporting** (changes since last analysis cycle).
 
 The agent:
 1. Runs graph analysis (centrality, clustering, paths) for structural insights
 2. Detects event patterns (temporal, categorical, geographic)
 3. Uses anomaly detection when enough data exists
-4. Identifies gaps and under-covered areas
-5. Stores analytical insights as high-significance memories
+4. Queries temporal trends with `temporal_query` (day/week/month buckets)
+5. Identifies gaps and under-covered areas
+6. Stores analytical insights as high-significance memories
+
+**Differential reporting**: Each analysis cycle stores a snapshot (event/entity/relationship counts, category distribution, top entities, situation states) to Redis. The next analysis cycle compares against the previous snapshot and highlights changes: new events/entities, growing categories, new top entities, situation status changes.
 
 Analysis cycles use: graph tools, memory tools, entity tools, event query tools, analytics tools (`anomaly_detect`, `temporal_query`), watchlist/situation tools (can create new watches/situations based on findings).
 
@@ -446,7 +449,7 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 ### OpenSearch (6 tools)
 `os_create_index`, `os_index_document`, `os_search`, `os_aggregate`, `os_delete_index`, `os_list_indices`
 
-### Analytical Toolkit (5 tools)
+### Analytical Toolkit (6 tools)
 | Tool | Backend |
 |------|---------|
 | `anomaly_detect` | PyOD (IForest, LOF, KNN) |
@@ -454,6 +457,7 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 | `nlp_extract` | spaCy (entities, noun chunks, sentences) |
 | `graph_analyze` | NetworkX (centrality, PageRank, community, paths) |
 | `correlate` | scikit-learn (correlation, clustering, PCA) |
+| `temporal_query` | Postgres date_trunc (event trends, category breakdown, trend detection) |
 
 ### Orchestration (5 tools)
 `workflow_define`, `workflow_trigger`, `workflow_status`, `workflow_list`, `workflow_pause`
@@ -462,7 +466,12 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 `feed_parse`, `source_add`, `source_list`, `source_update`, `source_remove`
 
 ### SA: Event Tools (3 tools)
-`event_store` (dual Postgres + OpenSearch, auto geo-resolution), `event_query`, `event_search`
+`event_store` (dual Postgres + OpenSearch, auto geo-resolution, post-store intelligence hooks), `event_query`, `event_search`
+
+**Post-store hooks** (best-effort, appended to event_store response):
+- **Watchlist auto-matching**: checks new events against active watch patterns, creates triggers automatically
+- **Situation suggestions**: scores event relevance against active situations by entity/region/category overlap
+- **Novelty scoring**: rates how unexpected the event is based on actor familiarity and category rarity
 
 ### SA: Entity Intelligence Tools (3 tools)
 `entity_profile` (with tags), `entity_inspect`, `entity_resolve`
@@ -755,7 +764,7 @@ legba/
 |   |   +-- main.py                  -- Entry point
 |   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 12 phase mixins
 |   |   +-- phases/                  -- Phase mixin modules
-|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (57 tools)
+|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (58 tools)
 |   |   |   +-- orient.py           -- OrientMixin: memory/context + ingestion gap tracking + journal leads
 |   |   |   +-- plan.py             -- PlanMixin: LLM planning + tool selection
 |   |   |   +-- act.py              -- ActMixin: tool loop execution
@@ -773,7 +782,7 @@ legba/
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 17 modules (57 tools) + geo.py utility
+|   |   |   +-- builtins/            -- 17 modules (58 tools) + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/

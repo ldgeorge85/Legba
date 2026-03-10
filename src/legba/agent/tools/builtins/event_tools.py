@@ -86,6 +86,229 @@ def _events_index_name() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Post-store hooks (best-effort, non-blocking)
+# ---------------------------------------------------------------------------
+
+async def _check_watchlist_matches(structured: StructuredStore, event) -> list[dict]:
+    """Check if a newly stored event triggers any active watch patterns.
+
+    Matching is AND across criteria types (all non-empty must match),
+    OR within each type (at least one entity/keyword/region must hit).
+    """
+    try:
+        async with structured._pool.acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'watchlist')"
+            )
+            if not exists:
+                return []
+
+            rows = await conn.fetch(
+                "SELECT id, data, name, priority FROM watchlist WHERE active = true"
+            )
+            if not rows:
+                return []
+
+            matches = []
+            event_text = f"{event.title} {event.summary or ''}".lower()
+            event_actors_lower = {a.lower() for a in event.actors}
+            event_locations_lower = {loc.lower() for loc in event.locations}
+            event_geo_lower = {g.lower() for g in (event.geo_countries or [])}
+
+            for row in rows:
+                raw = row["data"]
+                data = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else {}
+
+                matched_criteria = []
+                failed = False
+
+                # Entity matching
+                watch_entities = [e.lower() for e in data.get("entities", [])]
+                if watch_entities:
+                    hit = next(
+                        (we for we in watch_entities
+                         if we in event_actors_lower or we in event_locations_lower or we in event_text),
+                        None,
+                    )
+                    if hit:
+                        matched_criteria.append(f"entity:{hit}")
+                    else:
+                        failed = True
+
+                # Keyword matching
+                if not failed:
+                    watch_keywords = [k.lower() for k in data.get("keywords", [])]
+                    if watch_keywords:
+                        hit = next((kw for kw in watch_keywords if kw in event_text), None)
+                        if hit:
+                            matched_criteria.append(f"keyword:{hit}")
+                        else:
+                            failed = True
+
+                # Category matching
+                if not failed:
+                    watch_categories = [c.lower() for c in data.get("categories", [])]
+                    if watch_categories:
+                        if event.category.value.lower() in watch_categories:
+                            matched_criteria.append(f"category:{event.category.value}")
+                        else:
+                            failed = True
+
+                # Region matching
+                if not failed:
+                    watch_regions = [r.lower() for r in data.get("regions", [])]
+                    if watch_regions:
+                        all_locs = event_locations_lower | event_geo_lower
+                        hit = next(
+                            (wr for wr in watch_regions if wr in all_locs or wr in event_text),
+                            None,
+                        )
+                        if hit:
+                            matched_criteria.append(f"region:{hit}")
+                        else:
+                            failed = True
+
+                if not failed and matched_criteria:
+                    from uuid import uuid4
+                    trigger_data = {
+                        "matched_criteria": matched_criteria,
+                        "event_title": event.title,
+                        "event_category": event.category.value,
+                    }
+                    await conn.execute(
+                        "INSERT INTO watch_triggers (id, watch_id, event_id, data) "
+                        "VALUES ($1, $2, $3, $4::jsonb)",
+                        uuid4(), row["id"], event.id, json.dumps(trigger_data),
+                    )
+                    await conn.execute(
+                        "UPDATE watchlist SET trigger_count = trigger_count + 1, "
+                        "last_triggered_at = NOW() WHERE id = $1",
+                        row["id"],
+                    )
+                    matches.append({
+                        "watch_id": str(row["id"]),
+                        "watch_name": row["name"],
+                        "priority": row["priority"],
+                        "matched": matched_criteria,
+                    })
+
+            return matches
+    except Exception:
+        return []
+
+
+async def _suggest_situations(structured: StructuredStore, event) -> list[dict]:
+    """Suggest active situations that may be related to this event."""
+    try:
+        async with structured._pool.acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'situations')"
+            )
+            if not exists:
+                return []
+
+            rows = await conn.fetch(
+                "SELECT id, data, name, status, category FROM situations "
+                "WHERE status != 'resolved' "
+                "ORDER BY intensity_score DESC LIMIT 50"
+            )
+            if not rows:
+                return []
+
+            suggestions = []
+            event_actors_lower = {a.lower() for a in event.actors}
+            event_locations_lower = {loc.lower() for loc in event.locations}
+            event_geo_lower = {g.lower() for g in (event.geo_countries or [])}
+
+            for row in rows:
+                raw = row["data"]
+                data = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else {}
+
+                score = 0.0
+                reasons = []
+
+                # Entity overlap
+                sit_entities = {e.lower() for e in data.get("key_entities", [])}
+                entity_overlap = sit_entities & (event_actors_lower | event_locations_lower)
+                if entity_overlap:
+                    score += 0.4 * min(len(entity_overlap), 3)
+                    reasons.append(f"entities: {', '.join(sorted(entity_overlap)[:3])}")
+
+                # Region overlap
+                sit_regions = {r.lower() for r in data.get("regions", [])}
+                region_overlap = sit_regions & (event_locations_lower | event_geo_lower)
+                if region_overlap:
+                    score += 0.3
+                    reasons.append(f"regions: {', '.join(sorted(region_overlap)[:3])}")
+
+                # Category match
+                if row["category"] and row["category"] == event.category.value:
+                    score += 0.2
+                    reasons.append(f"category: {event.category.value}")
+
+                if score >= 0.3:
+                    suggestions.append({
+                        "situation_id": str(row["id"]),
+                        "situation_name": row["name"],
+                        "relevance": round(min(score, 1.0), 2),
+                        "reasons": reasons,
+                    })
+
+            suggestions.sort(key=lambda x: x["relevance"], reverse=True)
+            return suggestions[:3]
+    except Exception:
+        return []
+
+
+async def _compute_novelty(structured: StructuredStore, event) -> dict | None:
+    """Score how novel/unexpected this event is given existing knowledge."""
+    try:
+        async with structured._pool.acquire() as conn:
+            score = 0.5  # baseline
+            factors = []
+
+            # Actor novelty: are actors known entities?
+            if event.actors:
+                known = 0
+                for actor in event.actors[:5]:
+                    exists = await conn.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM entity_profiles "
+                        "WHERE lower(canonical_name) = $1)",
+                        actor.lower(),
+                    )
+                    if exists:
+                        known += 1
+                unknown = len(event.actors[:5]) - known
+                if unknown > 0:
+                    score += min(0.2, 0.1 * unknown)
+                    factors.append(f"{unknown}_new_actors")
+
+            # Category rarity
+            total = await conn.fetchval("SELECT count(*) FROM events")
+            if total and total > 20:
+                cat_count = await conn.fetchval(
+                    "SELECT count(*) FROM events WHERE category = $1",
+                    event.category.value,
+                )
+                ratio = cat_count / total
+                if ratio < 0.05:
+                    score += 0.2
+                    factors.append("rare_category")
+                elif ratio < 0.15:
+                    score += 0.1
+                    factors.append("uncommon_category")
+
+            return {
+                "novelty_score": round(min(score, 1.0), 2),
+                "novelty_factors": factors,
+            }
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------
 
@@ -425,6 +648,28 @@ def register(
                 "Use entity_resolve to link these names to entity profiles. "
                 "This builds the world model and enables connection analysis."
             )
+
+        # --- Post-store intelligence hooks (best-effort) ---
+        if pg_ok:
+            # Watchlist auto-matching
+            watch_matches = await _check_watchlist_matches(structured, event)
+            if watch_matches:
+                result["watchlist_triggers"] = watch_matches
+
+            # Situation suggestions
+            sit_suggestions = await _suggest_situations(structured, event)
+            if sit_suggestions:
+                result["situation_suggestions"] = sit_suggestions
+                result["situation_hint"] = (
+                    "Consider linking this event to relevant situations "
+                    "using situation_link_event."
+                )
+
+            # Novelty scoring
+            novelty = await _compute_novelty(structured, event)
+            if novelty:
+                result["novelty"] = novelty
+        # ---------------------------------------------------
 
         return json.dumps(result, indent=2, default=str)
 

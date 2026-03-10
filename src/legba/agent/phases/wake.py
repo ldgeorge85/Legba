@@ -214,11 +214,12 @@ class WakeMixin:
         # OpenSearch tools — wired to live OpenSearch store
         opensearch_tools.register(self.registry, opensearch=self.opensearch)
 
-        # Analytics tools — wired to OpenSearch + graph for reference-based data flow
+        # Analytics tools — wired to OpenSearch + graph + structured for reference-based data flow
         analytics_tools.register(
             self.registry,
             opensearch=self.opensearch,
             graph=self.memory.graph,
+            structured=self.memory.structured,
         )
 
         # Orchestration tools — wired to live Airflow client
