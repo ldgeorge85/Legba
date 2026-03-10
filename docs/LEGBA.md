@@ -187,7 +187,7 @@ Legba maintains a personal stream of consciousness across cycles — the thread 
 - **Introspection cycles:** All accumulated entries are consolidated into a single narrative — Legba's current inner landscape. Old entries are cleared after consolidation.
 - **ORIENT injection:** The latest consolidation + recent entries are injected into the PLAN phase, giving the agent experiential continuity.
 - **Report separation:** Journal informs report *voice and continuity* but is explicitly not a source of facts for analysis reports.
-- **Storage:** Redis (`legba:journal` register). Max 30 entries between consolidations.
+- **Storage:** Redis (`legba:journal` register) for working context (max 30 entries between consolidations). OpenSearch (`legba-journal` index) for permanent archive of all entries and consolidations, searchable by cycle and content.
 - **UI:** `/journal` page shows only the latest consolidation.
 
 ### Analysis Reports

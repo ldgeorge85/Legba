@@ -1021,15 +1021,17 @@ class AgentCycle:
             self.logger.log_error(f"Narrate failed: {e}")
 
     async def _store_journal_entries(self, entries: list[str]) -> None:
-        """Append journal entries to Redis storage."""
+        """Append journal entries to Redis storage and archive to OpenSearch."""
         if not self.memory or not self.memory.registers:
             return
+
+        ts = datetime.now(timezone.utc).isoformat()
 
         journal_data = await self.memory.registers.get_json(self._JOURNAL_KEY) or {}
         raw_entries = journal_data.get("entries", [])
         raw_entries.append({
             "cycle": self.state.cycle_number,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": ts,
             "entries": entries,
         })
 
@@ -1039,6 +1041,15 @@ class AgentCycle:
 
         journal_data["entries"] = raw_entries
         await self.memory.registers.set_json(self._JOURNAL_KEY, journal_data)
+
+        # Archive to OpenSearch for permanent record
+        await self._archive_journal_to_opensearch(
+            doc_type="entry",
+            cycle=self.state.cycle_number,
+            timestamp=ts,
+            content="\n".join(entries),
+            entries=entries,
+        )
 
     async def _journal_consolidation(self) -> None:
         """Consolidate recent journal entries into a narrative (introspection only)."""
@@ -1076,10 +1087,21 @@ class AgentCycle:
             for token in ["<|end|>", "<|return|>"]:
                 new_consolidation = new_consolidation.replace(token, "")
 
+            # Archive consolidation to OpenSearch before clearing entries
+            consolidation_ts = datetime.now(timezone.utc).isoformat()
+            await self._archive_journal_to_opensearch(
+                doc_type="consolidation",
+                cycle=self.state.cycle_number,
+                timestamp=consolidation_ts,
+                content=new_consolidation,
+                entries_consolidated=len(raw_entries),
+                source_cycles=[e.get("cycle") for e in raw_entries if e.get("cycle")],
+            )
+
             # Store consolidation, clear old entries
             journal_data["consolidation"] = new_consolidation
             journal_data["consolidation_cycle"] = self.state.cycle_number
-            journal_data["consolidation_timestamp"] = datetime.now(timezone.utc).isoformat()
+            journal_data["consolidation_timestamp"] = consolidation_ts
             journal_data["entries"] = []  # Clear raw entries after consolidation
             await self.memory.registers.set_json(self._JOURNAL_KEY, journal_data)
 
@@ -1089,6 +1111,30 @@ class AgentCycle:
 
         except Exception as e:
             self.logger.log_error(f"Journal consolidation failed: {e}")
+
+    _JOURNAL_INDEX = "legba-journal"
+
+    async def _archive_journal_to_opensearch(self, *, doc_type: str, cycle: int,
+                                              timestamp: str, content: str,
+                                              **extra) -> None:
+        """Archive a journal document to OpenSearch for permanent storage."""
+        if not self.opensearch or not self.opensearch.available:
+            return
+        try:
+            doc = {
+                "type": doc_type,  # "entry" or "consolidation"
+                "cycle": cycle,
+                "timestamp": timestamp,
+                "content": content,
+                **extra,
+            }
+            await self.opensearch.index_document(
+                index=self._JOURNAL_INDEX,
+                document=doc,
+                doc_id=f"{doc_type}-{cycle}",
+            )
+        except Exception:
+            pass  # Best-effort — don't break the cycle if archiving fails
 
     async def _generate_analysis_report(self) -> None:
         """Generate a full Current World Assessment (introspection only).

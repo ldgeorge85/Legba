@@ -59,6 +59,7 @@ This saves ~5-10k tokens per cycle without limiting the agent's capabilities.
 | Structured | Postgres | Indefinite | Facts, goals, sources, events, entity profiles |
 | Graph | Apache AGE | Indefinite | Entity relationships (Cypher queries) |
 | Bulk | OpenSearch | Indefinite | Full-text search, event indices, aggregations |
+| Journal archive | OpenSearch | Indefinite | Permanent record of all journal entries and consolidations (`legba-journal` index) |
 
 ### Why Separate Stores
 
@@ -133,14 +134,15 @@ main.py:main()
         │
         ├── _narrate()
         │     ├── assemble_narrate_prompt() → [system, user]
-        │     └── LLM → JSON array of 1-3 journal entries
+        │     ├── LLM → JSON array of 1-3 journal entries
+        │     └── Archive entries to OpenSearch (legba-journal index)
         │
         └── _persist()
               ├── Store episodic memory (Qdrant)
               ├── Auto-complete goals at 100% progress
               ├── Auto-promote memories (significance >= 0.6 → long-term)
               ├── Update goal work tracker (Redis)
-              ├── Store facts from reflection (Postgres)
+              ├── Store facts from reflection (Postgres, normalized predicates, triple-deduped)
               ├── Publish outbox messages (NATS)
               ├── Store journal entries (Redis)
               └── Liveness check (nonce echo — dedicated LLM call, reasoning: low)
@@ -159,9 +161,10 @@ _wake() → _orient() →
     ├── reason_with_tools() → full tool loop with internal tools
     ├── _reflect()
     ├── _narrate()
-    ├── _journal_consolidation_text()
-    │   └── LLM weaves all journal entries since last consolidation
-    │       into a single narrative (Legba's inner voice)
+    ├── _journal_consolidation()
+    │   ├── LLM weaves all journal entries since last consolidation
+    │   │   into a single narrative (Legba's inner voice)
+    │   └── Archive consolidation to OpenSearch before clearing entries
     ├── _generate_analysis_report()
     │   ├── Query graph relationships, entity profiles, recent events
     │   └── LLM produces "Current World Assessment" (1000-3000 words)
