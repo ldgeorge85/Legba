@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from ..shared.config import PostgresConfig, RedisConfig, OpenSearchConfig, NatsConfig, QdrantConfig, LLMConfig
 from .stores import StoreHolder
 from .messages import UINatsClient, MessageStore
+from .consult import ConsultationEngine
 
 UI_DIR = Path(__file__).parent
 TEMPLATES_DIR = UI_DIR / "templates"
@@ -47,6 +48,24 @@ async def lifespan(app: FastAPI):
 
     msg_store = MessageStore(redis_client=stores.registers._redis)
     app.state.msg_store = msg_store
+
+    # Consultation engine — interactive LLM-backed operator interface
+    llm_cfg = LLMConfig.from_env()
+    consult_engine = None
+    if llm_cfg.api_key:
+        async def _send_msg(subject: str, body: str) -> bool:
+            try:
+                await ui_nats.publish(subject, body.encode())
+                return True
+            except Exception:
+                return False
+
+        consult_engine = ConsultationEngine(
+            stores=stores,
+            llm_config=llm_cfg,
+            send_message_callback=_send_msg,
+        )
+    app.state.consult_engine = consult_engine
 
     yield
 
@@ -174,6 +193,7 @@ from .routes.facts import router as facts_router
 from .routes.memory import router as memory_router
 from .routes.watchlist import router as watchlist_router
 from .routes.situations import router as situations_router
+from .routes.consult import router as consult_router
 
 app.include_router(dashboard_router)
 app.include_router(entities_router)
@@ -189,3 +209,4 @@ app.include_router(graph_router)
 app.include_router(memory_router)
 app.include_router(watchlist_router)
 app.include_router(situations_router)
+app.include_router(consult_router)

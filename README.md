@@ -16,7 +16,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 ├── Docker Compose (project: legba, 10 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
 │   ├── Agent (ephemeral) — One container per cycle, 5 cycle types, self-modifiable code
-│   ├── Operator UI       — Web console with CRUD (FastAPI + htmx)
+│   ├── Operator UI       — Web console with CRUD + consultation (FastAPI + htmx)
 │   ├── Redis             — Transient state, journal, reports
 │   ├── Postgres + AGE    — Structured data, entity graph (Cypher)
 │   ├── Qdrant            — Semantic search (episodic memory)
@@ -64,6 +64,7 @@ docker compose -p legba logs supervisor -f
 # Web UI (via SSH tunnel)
 ssh -L 8501:localhost:8501 user@<host>
 # Then open http://localhost:8501
+# Consult page: http://localhost:8501/consult  (interactive LLM-backed chat)
 
 # Send a message to the agent
 docker compose -p legba exec supervisor \

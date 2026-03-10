@@ -48,7 +48,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - OpenSearch Audit :9201 -- Audit logs (agent cannot access)
 |   |   - Airflow :8080       -- Scheduled pipelines, DAG orchestration
 |   |
-|   +-- Operator Console :8501  -- Read-only web UI (FastAPI + htmx)
+|   +-- Operator Console :8501  -- Web UI + consultation (FastAPI + htmx)
 |   |
 |   +-- Optional: OpenSearch Dashboards :5601
 |
@@ -539,7 +539,7 @@ event_store("Russia launches missile at Ukraine")
 
 ## 7. Operator Console UI
 
-Server-rendered web interface for inspecting and managing system state.
+Server-rendered web interface for inspecting, managing, and consulting Legba.
 
 **Stack:** FastAPI + Jinja2 + htmx + Tailwind CSS (CDN). No npm, no JS build step.
 
@@ -547,6 +547,7 @@ Server-rendered web interface for inspecting and managing system state.
 
 | Page | URL | Data Source | CRUD |
 |------|-----|-------------|------|
+| Consult | `/consult` | LLM + all stores (tool-calling loop). Interactive operator chat. | Read + Write |
 | Dashboard | `/` | Redis, Postgres, response.json. Auto-refreshes 30s. | Read |
 | Entity Explorer | `/entities`, `/entities/{id}` | Postgres entity profiles with search + type filter | Read, add/remove assertions |
 | Event Explorer | `/events`, `/events/{id}` | Postgres + OpenSearch full-text search | Read, edit metadata, delete |
@@ -583,6 +584,36 @@ All mutations use htmx for inline updates without full page reloads:
 | Create situation | `/api/situations` | POST | Inline form → name, description, category, entities, regions, tags |
 | Update situation status | `/api/situations/{id}` | PUT | Status dropdown → badge update |
 | Delete situation | `/api/situations/{id}` | DELETE | Confirm → cascade delete (event links) |
+
+### Consultation ("The Working")
+
+Interactive agentic chat interface at `/consult`. The operator converses directly with Legba, which has tool access to the same data stores the UI provides.
+
+**How it works:**
+- Lightweight LLM tool-calling loop (up to 10 tool steps per exchange) using the same provider as the agent
+- System prompt includes Legba's identity, live data context (entity/event/fact counts, latest journal, active situations)
+- Redis-backed session management (1-hour TTL per session)
+- Separate from the main agent cycle — does not interfere with autonomous operations
+
+**13 consultation tools:**
+
+| Tool | Purpose | Access |
+|------|---------|--------|
+| `search_events` | Full-text event search (OpenSearch) | Read |
+| `query_events` | Structured event query (Postgres) | Read |
+| `inspect_entity` | Entity profile + assertions + recent events | Read |
+| `search_facts` | Fact search by subject/predicate/value | Read |
+| `query_graph` | Cypher graph queries (Apache AGE) | Read |
+| `list_situations` | Active situations with event counts | Read |
+| `list_watchlist` | Active watches with trigger counts | Read |
+| `list_sources` | Source registry with health status | Read |
+| `list_goals` | Goals with status and progress | Read |
+| `search_memory` | Semantic search over episodic memory (Qdrant) | Read |
+| `update_situation` | Update situation status | Write |
+| `update_goal` | Update goal status/progress | Write |
+| `send_message` | Send message to agent via NATS | Write |
+
+**Provider handling:** vLLM gets a single combined user message; Anthropic gets proper multi-turn with system role — same branching as the agent.
 
 ---
 
