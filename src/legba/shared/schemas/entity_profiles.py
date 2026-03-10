@@ -119,20 +119,27 @@ class EntityProfile(BaseModel):
         return [a for a in self.all_assertions() if not a.superseded]
 
     def compute_completeness(self) -> float:
-        """Heuristic completeness based on entity type and filled sections."""
+        """Heuristic completeness based on entity type, filled sections, and depth.
+
+        For typed entities: each expected section contributes proportionally,
+        weighted by assertion depth (min(active_assertions / 3, 1.0) per section).
+        For other types: based on summary + assertion count.
+        """
         expected = _expected_sections(self.entity_type)
         if not expected:
             has_summary = 1.0 if self.summary else 0.0
             has_assertions = min(len(self.active_assertions()) / 3.0, 1.0)
             return round((has_summary + has_assertions) / 2.0, 2)
 
-        filled = sum(
-            1 for s in expected
-            if s in self.sections and any(
-                not a.superseded for a in self.sections[s]
-            )
-        )
-        return round(filled / len(expected), 2)
+        section_scores = []
+        for s in expected:
+            if s in self.sections:
+                active = [a for a in self.sections[s] if not a.superseded]
+                # Depth: 3+ assertions = fully complete for this section
+                section_scores.append(min(len(active) / 3.0, 1.0))
+            else:
+                section_scores.append(0.0)
+        return round(sum(section_scores) / len(expected), 2)
 
 
 class EventEntityLink(BaseModel):

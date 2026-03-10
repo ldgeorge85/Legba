@@ -220,7 +220,7 @@ def register(
 
         # --- Duplicate detection -------------------------------------------
 
-        # Fast path: GUID exact match
+        # Fast path 1: GUID exact match
         guid = args.get("guid", "")
         if guid:
             existing = await structured.check_event_guid(guid)
@@ -233,7 +233,23 @@ def register(
                     "hint": "This feed item has already been ingested (same GUID).",
                 }, indent=2)
 
-        # Title similarity check
+        # Fast path 2: source_url exact match
+        source_url = args.get("source_url", "")
+        if source_url:
+            existing = await structured.check_event_source_url(source_url)
+            if existing:
+                return json.dumps({
+                    "status": "duplicate_detected",
+                    "existing_event_id": str(existing["id"]),
+                    "existing_title": existing["title"],
+                    "reason": "source_url match",
+                    "hint": "An event from this exact URL already exists.",
+                }, indent=2)
+
+        # Title similarity check — adaptive threshold for short titles
+        title_words = _title_words(title)
+        sim_threshold = 0.4 if len(title_words) <= 5 else 0.5
+
         event_ts_raw = args.get("event_timestamp")
         if event_ts_raw:
             # With timestamp: check ±1 day window
@@ -245,11 +261,11 @@ def register(
                 candidates = await structured.query_events(
                     since=datetime.fromisoformat(day_start),
                     until=datetime.fromisoformat(day_end),
-                    limit=50,
+                    limit=200,
                 )
                 for existing in candidates:
                     sim = _title_similarity(title, existing.title)
-                    if sim >= 0.5:
+                    if sim >= sim_threshold:
                         return json.dumps({
                             "status": "duplicate_detected",
                             "existing_event_id": str(existing.id),
@@ -261,12 +277,12 @@ def register(
             except (ValueError, Exception):
                 pass  # If date parsing or query fails, proceed with store
         else:
-            # Without timestamp: check last 100 events by title similarity
+            # Without timestamp: check last 300 events by title similarity
             try:
-                candidates = await structured.get_recent_events_for_dedup(limit=100)
+                candidates = await structured.get_recent_events_for_dedup(limit=300)
                 for existing in candidates:
                     sim = _title_similarity(title, existing.title)
-                    if sim >= 0.5:
+                    if sim >= sim_threshold:
                         return json.dumps({
                             "status": "duplicate_detected",
                             "existing_event_id": str(existing.id),

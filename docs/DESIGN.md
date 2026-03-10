@@ -95,18 +95,36 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 
 ## 4. Cycle Flow
 
+### Module Structure
+
+`cycle.py` is a thin orchestrator (~190 lines) that inherits from 10 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
+
+| Mixin | File | Phase |
+|-------|------|-------|
+| `WakeMixin` | `phases/wake.py` | Service init, tool registration |
+| `OrientMixin` | `phases/orient.py` | Memory/context gathering |
+| `PlanMixin` | `phases/plan.py` | LLM planning + tool selection |
+| `ActMixin` | `phases/act.py` | Tool loop execution |
+| `ReflectMixin` | `phases/reflect.py` | Significance, facts, graph extraction |
+| `NarrateMixin` | `phases/narrate.py` | Journal entries + consolidation |
+| `PersistMixin` | `phases/persist.py` | Memory storage, goal completion, heartbeat |
+| `IntrospectMixin` | `phases/introspect.py` | Mission review, analysis reports |
+| `ResearchMixin` | `phases/research.py` | Entity enrichment cycles |
+
+Class attributes (e.g. `_JOURNAL_KEY`, `_JOURNAL_MAX_ENTRIES`) are defined on their owning mixin and accessed via MRO since `AgentCycle` inherits all mixins. Phase modules use `TYPE_CHECKING` guards for `AgentCycle` type hints to avoid circular imports.
+
 ### Normal Cycle
 
 ```
 main.py:main()
   └── AgentCycle.run()
-        ├── _wake()
+        ├── _wake()                     [phases/wake.py]
         │     ├── Load challenge.json, seed goal, world briefing
         │     ├── Connect: Redis, Postgres/AGE, Qdrant, OpenSearch, NATS, Airflow
         │     ├── _register_builtin_tools() → 50 tools from 15 modules
         │     └── Drain NATS inbox
         │
-        ├── _orient()
+        ├── _orient()                   [phases/orient.py]
         │     ├── Retrieve episodic memories (Qdrant similarity search)
         │     ├── Load active goals + goal work tracker (Postgres + Redis)
         │     ├── Query known facts (Postgres)
@@ -116,12 +134,12 @@ main.py:main()
         │     ├── Load previous reflection forward
         │     └── Load journal context (consolidation + recent entries)
         │
-        ├── _plan()
+        ├── _plan()                     [phases/plan.py]
         │     ├── assemble_plan_prompt() → [system, user]
         │     ├── LLM completion → prose plan + "Tools: tool1, tool2, ..."
         │     └── Parse planned_tools set
         │
-        ├── _act()
+        ├── _act()                      [phases/act.py]
         │     ├── assemble_reason_prompt(planned_tools=...) → [system, user]
         │     └── llm_client.reason_with_tools()
         │           ├── For each step (up to 20):
@@ -134,16 +152,16 @@ main.py:main()
         │           │     └── Check graceful shutdown flag
         │           └── Returns results summary
         │
-        ├── _reflect()
+        ├── _reflect()                  [phases/reflect.py]
         │     ├── assemble_reflect_prompt() → [system, user]
         │     └── LLM → JSON: {summary, significance, facts, entities, goal_progress, ...}
         │
-        ├── _narrate()
+        ├── _narrate()                  [phases/narrate.py]
         │     ├── assemble_narrate_prompt() → [system, user]
         │     ├── LLM → JSON array of 1-3 journal entries
         │     └── Archive entries to OpenSearch (legba-journal index)
         │
-        └── _persist()
+        └── _persist()                  [phases/persist.py]
               ├── Store episodic memory (Qdrant)
               ├── Auto-complete goals at 100% progress
               ├── Auto-promote memories (significance >= 0.6 → long-term)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Request, Form
@@ -99,6 +100,47 @@ async def update_source_status(
         return HTMLResponse(f'<span class="text-red-400 text-xs">Error: {e}</span>', status_code=500)
 
 
+@router.put("/api/sources/{source_id}")
+async def update_source(
+    request: Request,
+    source_id: UUID,
+    name: str = Form(...),
+    url: str = Form(...),
+    source_type: str = Form("rss"),
+    reliability: float = Form(0.5),
+    bias_label: str = Form("center"),
+    tags: str = Form(""),
+    description: str = Form(""),
+):
+    """Update a source's full metadata (U14)."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT data FROM sources WHERE id = $1", source_id,
+            )
+            if not row:
+                return HTMLResponse('<div class="text-red-400 text-sm p-2">Source not found.</div>', status_code=404)
+
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            data["name"] = name
+            data["url"] = url
+            data["source_type"] = source_type
+            data["reliability"] = reliability
+            data["bias_label"] = bias_label
+            data["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+            data["description"] = description
+
+            await conn.execute(
+                "UPDATE sources SET data = $1::jsonb, source_type = $2, updated_at = now() WHERE id = $3",
+                json.dumps(data, default=str), source_type, source_id,
+            )
+
+        return RedirectResponse(url=f"/sources/{source_id}", status_code=303)
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)
+
+
 @router.post("/api/sources")
 async def create_source(
     request: Request,
@@ -113,7 +155,6 @@ async def create_source(
     """Create a new source."""
     stores = get_stores(request)
     try:
-        import json
         from uuid import uuid4
         from datetime import datetime, timezone
         source_id = uuid4()

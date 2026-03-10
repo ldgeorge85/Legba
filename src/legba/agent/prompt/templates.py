@@ -401,6 +401,141 @@ RESEARCH_TOOLS: frozenset = frozenset({
 })
 
 
+# Acquire cycle — tools allowed (data ingestion focused)
+ACQUIRE_TOOLS: frozenset = frozenset({
+    # Data ingestion
+    "feed_parse", "http_request",
+    "event_store", "event_search", "event_query",
+    # Entity resolution (needed for linking events to entities)
+    "entity_resolve", "entity_profile",
+    # Source management
+    "source_list", "source_add", "source_update",
+    # Graph (event-entity linking)
+    "graph_store",
+    # Watchlist + situations (check for triggers, link events)
+    "watchlist_list",
+    "situation_list", "situation_link_event",
+    # Utilities
+    "note_to_self", "explain_tool",
+    "goal_update",
+    "cycle_complete",
+})
+
+ACQUIRE_PROMPT = """You are running a **dedicated data acquisition cycle**.
+
+## Primary Mission
+{seed_goal}
+
+## Active Goals
+{active_goals}
+
+## Source Status
+{source_status}
+
+---
+
+## YOUR TASK: Acquire New Data
+
+This is a focused data ingestion cycle. Your job is to:
+
+### 1. Fetch Unfetched Sources
+- Sources marked "never fetched" are HIGHEST priority — fetch them first
+- Use feed_parse for RSS sources, http_request for API/scrape sources
+- Process each source systematically: fetch → extract events → store
+
+### 2. Store Events Properly
+- For each item from a feed: use event_store with title, description, source_url, category
+- Set significance based on relevance to your mission (0.3-0.8 range; reserve >0.8 for truly major events)
+- Always include source_url for dedup — do NOT re-store events you've already ingested
+
+### 3. Resolve Entities
+- For key actors/locations/organizations mentioned in events, use entity_resolve
+- Link events to entities — this builds the knowledge graph
+
+### 4. Update Source Metadata
+- After fetching, use source_update to record success/failure
+- If a source consistently fails, set its status to "error" with last_error
+
+### DO NOT:
+- Do NOT spend time on graph enrichment or deep research — that's for research cycles
+- Do NOT run analytics or pattern detection — that's for analysis cycles
+- Do NOT get stuck on one source — move through them efficiently
+- Do NOT re-fetch sources that were recently fetched successfully
+
+After ingesting data, call cycle_complete.
+
+Your final action before cycle_complete should be a note_to_self summarizing what you fetched, how many events were stored, and which sources need attention.
+"""
+
+# Analysis cycle — tools allowed (analytical, no data ingestion)
+ANALYSIS_TOOLS: frozenset = frozenset({
+    # Graph analysis
+    "graph_query", "graph_store", "graph_analyze",
+    # Memory and search
+    "memory_query", "memory_store", "memory_promote", "memory_supersede",
+    "entity_inspect", "entity_profile", "entity_resolve",
+    "os_search",
+    "event_search", "event_query",
+    # Analytics
+    "anomaly_detect", "temporal_query",
+    # Watchlist + situations (analysis can create/update these)
+    "watchlist_add", "watchlist_list",
+    "situation_create", "situation_update", "situation_list", "situation_link_event",
+    # Utilities
+    "note_to_self", "explain_tool",
+    "goal_update", "goal_create",
+    "cycle_complete",
+})
+
+ANALYSIS_PROMPT = """You are running a **dedicated analysis cycle**.
+
+## Primary Mission
+{seed_goal}
+
+## Active Goals
+{active_goals}
+
+## Current Data State
+{analysis_context}
+
+---
+
+## YOUR TASK: Analyze Accumulated Data
+
+This is a focused analysis cycle. Your job is to find patterns, anomalies, and insights in the data you've accumulated.
+
+### 1. Graph Analysis
+- Use graph_query to explore relationship patterns between entities
+- Use graph_analyze (centrality, clustering, paths) to find structural insights
+- Look for unexpected connections — entities linked through intermediaries
+
+### 2. Event Pattern Analysis
+- Use event_search and event_query to find temporal patterns
+- Use anomaly_detect if you have 30+ events — look for unusual spikes or gaps
+- Use temporal_query to find trends over time periods
+- Cross-reference events with entity relationships for deeper context
+
+### 3. Identify Gaps and Anomalies
+- Which important entities have few events linked? (under-covered areas)
+- Which categories are over/under-represented?
+- Are there entities that should be connected but aren't?
+- Are there unexpected patterns in event timing or clustering?
+
+### 4. Synthesize Findings
+- Store important analytical insights with memory_store (significance 0.7+)
+- Update entity profiles if analysis reveals new understanding
+- Create goals for follow-up investigation of significant findings
+
+### DO NOT:
+- Do NOT fetch feeds or ingest new data — that's for acquire cycles
+- Do NOT do web research or entity enrichment — that's for research cycles
+- Do NOT skip analysis tools in favor of just reading data
+
+After completing your analysis, call cycle_complete.
+
+Your final action before cycle_complete should be a note_to_self summarizing your analytical findings, patterns discovered, and recommended follow-up.
+"""
+
 # Legacy single-shot review prompt — kept as fallback
 MISSION_REVIEW_PROMPT_SIMPLE = """You are conducting a periodic strategic review of your goal tree.
 
@@ -679,6 +814,7 @@ Entities are persistent things in the world: people, countries, organizations, l
   - **armed_group / military_unit**: non-state armed groups, military branches
   - **location**: cities, regions, geographic features
   - Also valid: corporation, media_outlet, event_series (recurring phenomena like "Syrian Civil War"), concept, commodity, infrastructure
+- **Avoid `other` or `unknown`** — always pick the closest canonical type above. If unsure, `organization` is a reasonable default for groups, `location` for places.
 - Add `aliases` for alternative names (e.g. "Russian Federation" -> aliases: "Russia, RF").
 - Include a one-paragraph `summary` that captures the entity's essence.
 

@@ -1,8 +1,8 @@
 # Legba Code Map
 
-**Generated:** 2026-03-07
-**Total Python files:** 82
-**Total lines of Python:** ~17,925
+**Generated:** 2026-03-10
+**Total Python files:** 93
+**Total lines of Python:** ~18,200
 
 ---
 
@@ -32,7 +32,19 @@ src/legba/
     __init__.py
     main.py                          (49 lines)  — Entry point: asyncio.run(run_cycle())
     log.py                           (149 lines) — Structured JSON logging (CycleLogger)
-    cycle.py                         (1827 lines)— Core agent cycle (all phases)
+    cycle.py                         (192 lines) — Orchestrator: AgentCycle inherits phase mixins
+
+    phases/
+      __init__.py                    (12 lines)  — Constants (REPORT_INTERVAL, RESEARCH_INTERVAL)
+      wake.py                        (387 lines) — WakeMixin: init, connections, tool registration
+      orient.py                      (212 lines) — OrientMixin: context from all memory layers
+      plan.py                        (75 lines)  — PlanMixin: LLM plan + tool filtering
+      act.py                         (65 lines)  — ActMixin: REASON+ACT tool loop
+      reflect.py                     (181 lines) — ReflectMixin: structured extraction, fact/graph storage
+      narrate.py                     (178 lines) — NarrateMixin: journal entries, consolidation, archival
+      persist.py                     (362 lines) — PersistMixin: save state, liveness check, heartbeat
+      introspect.py                  (319 lines) — IntrospectMixin: deep review, analysis reports
+      research.py                    (157 lines) — ResearchMixin: entity enrichment, health summary
 
     llm/
       __init__.py
@@ -106,21 +118,23 @@ src/legba/
 
   ui/
     __init__.py
-    app.py                           (181 lines) — FastAPI app: Jinja2 + htmx + Tailwind
+    app.py                           (188 lines) — FastAPI app: Jinja2 + htmx + Tailwind
     messages.py                      (226 lines) — MessageStore (Redis) + UINatsClient
-    stores.py                        (149 lines) — StoreHolder: read-only store connections
+    stores.py                        (294 lines) — StoreHolder: read-only store connections + Qdrant helpers
     routes/
       __init__.py
       dashboard.py                   (71 lines)  — GET / stats dashboard
       messages.py                    (103 lines) — GET/POST /messages
       cycles.py                      (187 lines) — GET /cycles/{n}
-      events.py                      (102 lines) — GET /events
-      entities.py                    (99 lines)  — GET /entities
-      sources.py                     (67 lines)  — GET /sources
-      goals.py                       (83 lines)  — GET /goals
-      graph.py                       (134 lines) — GET /graph (vis.js visualization)
+      events.py                      (176 lines) — CRUD /events: list, detail, delete, metadata edit
+      entities.py                    (195 lines) — CRUD /entities: list, detail, add/remove assertions
+      sources.py                     (198 lines) — CRUD /sources: list, detail, create, edit, delete, status
+      goals.py                       (83 lines)  — CRUD /goals: list, create, status, delete
+      graph.py                       (221 lines) — GET /graph (Cytoscape.js) + edge add/remove
       journal.py                     (30 lines)  — GET /journal
       reports.py                     (47 lines)  — GET /reports
+      facts.py                       (161 lines) — CRUD /facts: list, paginated rows, delete, inline edit
+      memory.py                      (87 lines)  — GET /memory + DELETE episodes from Qdrant
 ```
 
 ---

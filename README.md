@@ -15,8 +15,8 @@ Legba is a persistent AI agent that runs indefinitely — ingesting global event
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
 ├── Docker Compose (project: legba, 10 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
-│   ├── Agent (ephemeral) — One container per cycle, self-modifiable code
-│   ├── Operator UI       — Read-only web console (FastAPI + htmx)
+│   ├── Agent (ephemeral) — One container per cycle, 5 cycle types, self-modifiable code
+│   ├── Operator UI       — Web console with CRUD (FastAPI + htmx)
 │   ├── Redis             — Transient state, journal, reports
 │   ├── Postgres + AGE    — Structured data, entity graph (Cypher)
 │   ├── Qdrant            — Semantic search (episodic memory)
@@ -28,23 +28,28 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 
 ## Agent Cycle
 
-Every cycle (~2-10 minutes), the agent runs:
+Every cycle (~2-10 minutes), the agent runs one of **5 cycle types** (selected by priority):
 
 ```
-WAKE → ORIENT → PLAN → REASON+ACT → REFLECT → NARRATE → PERSIST
+WAKE → ORIENT → [cycle type routing] → REFLECT → NARRATE → PERSIST
+
+Cycle types (priority order):
+  Every 15 cycles: INTROSPECTION — deep audit, journal consolidation, world assessment
+  Every 10 cycles: ANALYSIS     — pattern detection, graph mining, anomaly detection
+  Every 5 cycles:  RESEARCH     — entity enrichment via Wikipedia/reference sources
+  Every 3 cycles:  ACQUIRE      — dedicated source fetching, event ingestion
+  Otherwise:       NORMAL       — goal-directed PLAN → REASON+ACT
 ```
 
-- **WAKE**: Load config, connect services, register 50 tools, drain inbox
-- **ORIENT**: Retrieve memories, goals, facts, graph inventory, source health, journal
-- **PLAN**: LLM selects focus and approach, outputs expected tool list
+- **WAKE**: Load config, connect services, register 57 tools, drain inbox
+- **ORIENT**: Retrieve memories, goals, graph inventory, source health, ingestion gap tracking, journal leads
+- **PLAN** (normal cycles): LLM selects focus and approach, outputs expected tool list
 - **REASON+ACT**: Tool loop (up to 20 steps) — LLM reasons, calls tools, feeds results back
 - **REFLECT**: LLM evaluates cycle significance, facts learned, goal progress
-- **NARRATE**: LLM writes personal journal entries (self-continuity)
-- **PERSIST**: Store episode, auto-complete goals, promote memories, heartbeat, exit
+- **NARRATE**: LLM writes journal entries + extracts investigation leads for next cycle
+- **PERSIST**: Store episode, track ingestion, auto-complete goals, promote memories, heartbeat, exit
 
-Every 5 cycles: **research** — entity enrichment via Wikipedia/reference sources, filling profile gaps, resolving data conflicts.
-
-Every 15 cycles: **introspection** — deep graph audit, entity review, data quality audit, self-review, journal consolidation, full world assessment report.
+Each specialized cycle type uses a **filtered tool set** — only tools relevant to that cycle's purpose are available, preventing the agent from drifting into unrelated work.
 
 ## Quick Start
 
@@ -75,9 +80,9 @@ docker compose -p legba exec supervisor \
 
 | Metric | Value |
 |--------|-------|
-| Python source files | 86 |
+| Python source files | 100+ |
 | Tests | 241 |
-| Built-in tools | 50 across 15 modules |
+| Built-in tools | 57 across 17 modules |
 | Platform services | 7 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, Airflow) |
 | Canonical relationship types | 30 |
 | LLM context window | 128k tokens (120k budget) |
@@ -138,6 +143,7 @@ docker compose -p legba up -d supervisor
 | [OPERATIONS.md](docs/OPERATIONS.md) | Ops runbook — deployment, resets, monitoring, debugging, backups |
 | [PROMPT_DUMP.md](docs/PROMPT_DUMP.md) | Full assembled prompts for each cycle phase |
 | [PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md) | Prompt engineering notes |
+| [PLAN_V2.md](docs/PLAN_V2.md) | V2 architecture plan — cycle types, data pipeline, intelligence capabilities |
 | [GRACEFUL_SHUTDOWN.md](docs/GRACEFUL_SHUTDOWN.md) | Shutdown protocol details |
 
 ## Testing

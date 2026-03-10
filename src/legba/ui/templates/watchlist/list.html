@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Watchlist — Legba Console{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-100">Watchlist</h1>
+    <p class="text-sm text-gray-400 mt-1">{{ total }} watches — {{ active_count }} active, {{ total_triggers }} total triggers</p>
+  </div>
+  <button class="btn text-xs" onclick="document.getElementById('add-watch-form').classList.toggle('hidden')">+ Add Watch</button>
+</div>
+
+<!-- Add Watch Form (hidden by default) -->
+<details id="add-watch-form" class="card mb-4">
+  <summary class="text-sm font-semibold text-gray-200 cursor-pointer select-none">New Watch Pattern</summary>
+  <form action="/api/watchlist" method="post" class="mt-3 space-y-3">
+    <input name="name" placeholder="Watch name (e.g. 'Taiwan Strait Tensions')" required
+           class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full">
+    <div class="grid grid-cols-2 gap-3">
+      <input name="entities" placeholder="Entities (comma-sep, e.g. China,Taiwan)"
+             class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+      <input name="keywords" placeholder="Keywords (comma-sep, e.g. invasion,blockade)"
+             class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+      <input name="categories" placeholder="Categories (comma-sep, e.g. conflict,political)"
+             class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+      <input name="regions" placeholder="Regions (comma-sep, e.g. East Asia)"
+             class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+    </div>
+    <div class="flex items-center gap-3">
+      <label class="text-xs text-gray-400">Priority:</label>
+      <select name="priority" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+        <option value="normal">Normal</option>
+        <option value="high">High</option>
+        <option value="critical">Critical</option>
+      </select>
+    </div>
+    <div class="flex justify-end gap-2">
+      <button type="submit" class="btn text-xs bg-cyan-900 border-cyan-700 text-cyan-300 hover:bg-cyan-800">Create Watch</button>
+    </div>
+  </form>
+</details>
+
+<!-- Watches table -->
+<div class="card overflow-x-auto mb-6">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+        <th class="pb-2 pr-4">Name</th>
+        <th class="pb-2 pr-4">Priority</th>
+        <th class="pb-2 pr-4">Entities</th>
+        <th class="pb-2 pr-4">Keywords</th>
+        <th class="pb-2 pr-4">Categories</th>
+        <th class="pb-2 pr-4">Regions</th>
+        <th class="pb-2 pr-4">Triggers</th>
+        <th class="pb-2 pr-4">Last Triggered</th>
+        <th class="pb-2">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in watches %}
+      <tr class="border-b border-gray-800 hover:bg-gray-800/50" id="watch-{{ w.id }}">
+        <td class="py-2 pr-4">
+          <span class="font-medium text-gray-200">{{ w.name }}</span>
+          {% if w.description %}
+          <p class="text-xs text-gray-500 mt-0.5">{{ w.description }}</p>
+          {% endif %}
+        </td>
+        <td class="py-2 pr-4">
+          {% if w.priority == 'critical' %}
+            <span class="badge badge-red">critical</span>
+          {% elif w.priority == 'high' %}
+            <span class="badge badge-yellow">high</span>
+          {% else %}
+            <span class="badge badge-gray">normal</span>
+          {% endif %}
+        </td>
+        <td class="py-2 pr-4">
+          {% for e in w.entities %}
+            <span class="badge badge-cyan text-xs mr-1 mb-1">{{ e }}</span>
+          {% endfor %}
+          {% if not w.entities %}<span class="text-gray-600">—</span>{% endif %}
+        </td>
+        <td class="py-2 pr-4">
+          {% for k in w.keywords %}
+            <span class="badge badge-blue text-xs mr-1 mb-1">{{ k }}</span>
+          {% endfor %}
+          {% if not w.keywords %}<span class="text-gray-600">—</span>{% endif %}
+        </td>
+        <td class="py-2 pr-4">
+          {% for c in w.categories %}
+            <span class="badge badge-purple text-xs mr-1 mb-1">{{ c }}</span>
+          {% endfor %}
+          {% if not w.categories %}<span class="text-gray-600">—</span>{% endif %}
+        </td>
+        <td class="py-2 pr-4">
+          {% for r in w.regions %}
+            <span class="badge badge-green text-xs mr-1 mb-1">{{ r }}</span>
+          {% endfor %}
+          {% if not w.regions %}<span class="text-gray-600">—</span>{% endif %}
+        </td>
+        <td class="py-2 pr-4 text-center">
+          <span class="text-gray-300 font-medium">{{ w.trigger_count }}</span>
+        </td>
+        <td class="py-2 pr-4 text-xs text-gray-400">
+          {% if w.last_triggered_at %}
+            {{ w.last_triggered_at|timeago }}
+          {% else %}
+            never
+          {% endif %}
+        </td>
+        <td class="py-2">
+          <button class="btn text-xs text-red-400 border-red-800 hover:bg-red-900/50"
+                  hx-delete="/api/watchlist/{{ w.id }}"
+                  hx-target="#watch-{{ w.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete watch '{{ w.name }}'?">Delete</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="9" class="py-8 text-center text-gray-500">No watches configured. Add one above.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Recent Triggers -->
+<div class="mb-2">
+  <h2 class="text-lg font-semibold text-gray-200 mb-3">Recent Triggers</h2>
+</div>
+<div id="triggers-container"
+     hx-get="/api/watchlist/triggers"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+  <div class="text-sm text-gray-500">Loading triggers...</div>
+</div>
+{% endblock %}

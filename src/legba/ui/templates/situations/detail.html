@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}{{ situation.name if situation else 'Situation' }} — Legba Console{% endblock %}
+
+{% block content %}
+{% if situation %}
+<div class="mb-6">
+  <div class="flex items-center gap-3 mb-2">
+    <a href="/situations" class="text-sm text-gray-400 hover:text-gray-200">&larr; All Situations</a>
+  </div>
+
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-100">{{ situation.name }}</h1>
+      <div class="flex items-center gap-2 mt-2">
+        {% if situation.status == 'escalating' %}
+          <span class="badge badge-red">escalating</span>
+        {% elif situation.status == 'de_escalating' %}
+          <span class="badge badge-green">de-escalating</span>
+        {% elif situation.status == 'active' %}
+          <span class="badge badge-blue">active</span>
+        {% elif situation.status == 'dormant' %}
+          <span class="badge badge-gray">dormant</span>
+        {% elif situation.status == 'resolved' %}
+          <span class="badge badge-gray">resolved</span>
+        {% else %}
+          <span class="badge badge-gray">{{ situation.status }}</span>
+        {% endif %}
+        {% if situation.category %}
+          <span class="badge badge-purple">{{ situation.category }}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Delete button -->
+    <button class="btn text-xs text-red-400 border-red-800 hover:bg-red-900"
+            hx-delete="/api/situations/{{ situation.id }}"
+            hx-confirm="Delete this situation and all its event links?"
+            hx-target="#action-result">
+      Delete
+    </button>
+  </div>
+</div>
+
+<div id="action-result"></div>
+
+<!-- Description -->
+{% if situation.description %}
+  <div class="card mb-4">
+    <p class="text-sm text-gray-300">{{ situation.description }}</p>
+  </div>
+{% endif %}
+
+<!-- Key Entities & Regions -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+  {% if situation.key_entities %}
+    <div class="card">
+      <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Key Entities</h3>
+      <div class="flex flex-wrap gap-1">
+        {% for ent in situation.key_entities %}
+          <span class="badge badge-cyan">{{ ent }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if situation.regions %}
+    <div class="card">
+      <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Regions</h3>
+      <div class="flex flex-wrap gap-1">
+        {% for reg in situation.regions %}
+          <span class="badge badge-gray">{{ reg }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+<!-- Stats -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+  <div class="card text-center">
+    <div class="text-xl font-bold text-gray-100">{{ situation.event_count }}</div>
+    <div class="text-xs text-gray-500">Events Linked</div>
+  </div>
+  <div class="card text-center">
+    <div class="text-xl font-bold text-gray-100">{{ "%.0f"|format(situation.intensity_score * 100) }}%</div>
+    <div class="text-xs text-gray-500">Intensity</div>
+    <div class="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden mt-1">
+      {% set pct = (situation.intensity_score * 100)|int %}
+      {% if situation.intensity_score > 0.7 %}
+        <div class="bar-fill h-full bg-red-500 rounded-full" style="width: {{ pct }}%"></div>
+      {% elif situation.intensity_score > 0.4 %}
+        <div class="bar-fill h-full bg-yellow-500 rounded-full" style="width: {{ pct }}%"></div>
+      {% else %}
+        <div class="bar-fill h-full bg-cyan-500 rounded-full" style="width: {{ pct }}%"></div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card text-center">
+    <div class="text-sm text-gray-300">{{ situation.created_at|timeago }}</div>
+    <div class="text-xs text-gray-500">Created</div>
+  </div>
+  <div class="card text-center">
+    <div class="text-sm text-gray-300">{{ situation.updated_at|timeago }}</div>
+    <div class="text-xs text-gray-500">Updated</div>
+  </div>
+</div>
+
+<!-- Update Status -->
+<div class="card mb-4">
+  <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Update Status</h3>
+  <div class="flex items-center gap-3">
+    <select name="status" id="status-select"
+            class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
+      <option value="active" {% if situation.status == 'active' %}selected{% endif %}>Active</option>
+      <option value="escalating" {% if situation.status == 'escalating' %}selected{% endif %}>Escalating</option>
+      <option value="de_escalating" {% if situation.status == 'de_escalating' %}selected{% endif %}>De-escalating</option>
+      <option value="dormant" {% if situation.status == 'dormant' %}selected{% endif %}>Dormant</option>
+      <option value="resolved" {% if situation.status == 'resolved' %}selected{% endif %}>Resolved</option>
+    </select>
+    <button class="btn text-xs"
+            hx-put="/api/situations/{{ situation.id }}"
+            hx-include="#status-select"
+            hx-target="#status-result"
+            hx-swap="innerHTML">
+      Update
+    </button>
+    <span id="status-result"></span>
+  </div>
+</div>
+
+<!-- Tags -->
+{% if situation.tags %}
+  <div class="card mb-4">
+    <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Tags</h3>
+    <div class="flex flex-wrap gap-1">
+      {% for tag in situation.tags %}
+        <span class="badge badge-yellow">{{ tag }}</span>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+
+<!-- Linked Events -->
+<div class="card">
+  <h3 class="text-sm font-semibold text-gray-200 mb-3">Linked Events ({{ linked_events|length }})</h3>
+  {% if linked_events %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+            <th class="pb-2 pr-4">Title</th>
+            <th class="pb-2 pr-4">Category</th>
+            <th class="pb-2 pr-4">Relevance</th>
+            <th class="pb-2 pr-4">Event Time</th>
+            <th class="pb-2">Linked</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800">
+          {% for evt in linked_events %}
+            <tr class="hover:bg-gray-800/50">
+              <td class="py-2 pr-4">
+                <a href="/events/{{ evt.id }}" class="text-cyan-400 hover:text-cyan-300">{{ evt.title[:80] }}{% if evt.title|length > 80 %}...{% endif %}</a>
+              </td>
+              <td class="py-2 pr-4">
+                <span class="badge badge-gray">{{ evt.category }}</span>
+              </td>
+              <td class="py-2 pr-4">
+                <span class="text-xs text-gray-400">{{ "%.0f"|format(evt.relevance * 100) }}%</span>
+              </td>
+              <td class="py-2 pr-4 text-xs text-gray-400">
+                {% if evt.event_timestamp %}
+                  {{ evt.event_timestamp[:19] if evt.event_timestamp is string else evt.event_timestamp.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="py-2 text-xs text-gray-500">
+                {{ evt.added_at|timeago }}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="text-sm text-gray-500 py-4 text-center">No events linked to this situation yet</p>
+  {% endif %}
+</div>
+
+{% else %}
+<div class="mb-6">
+  <a href="/situations" class="text-sm text-gray-400 hover:text-gray-200">&larr; All Situations</a>
+</div>
+<div class="card">
+  <div class="flex items-center justify-center py-16 text-gray-500">
+    <p>Situation not found</p>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

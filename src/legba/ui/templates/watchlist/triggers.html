@@ -1,0 +1,44 @@
+{% if triggers %}
+<div class="card overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+        <th class="pb-2 pr-4">Watch</th>
+        <th class="pb-2 pr-4">Event</th>
+        <th class="pb-2 pr-4">Match Reasons</th>
+        <th class="pb-2 pr-4">Priority</th>
+        <th class="pb-2">Triggered</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in triggers %}
+      <tr class="border-b border-gray-800 hover:bg-gray-800/50">
+        <td class="py-2 pr-4 font-medium text-gray-300">{{ t.watch_name }}</td>
+        <td class="py-2 pr-4">
+          <a href="/events/{{ t.event_id }}" class="text-cyan-400 hover:underline">{{ t.event_title }}</a>
+        </td>
+        <td class="py-2 pr-4">
+          {% for reason in t.match_reasons %}
+            <span class="badge badge-blue text-xs mr-1 mb-1">{{ reason }}</span>
+          {% endfor %}
+        </td>
+        <td class="py-2 pr-4">
+          {% if t.priority == 'critical' %}
+            <span class="badge badge-red">critical</span>
+          {% elif t.priority == 'high' %}
+            <span class="badge badge-yellow">high</span>
+          {% else %}
+            <span class="badge badge-gray">normal</span>
+          {% endif %}
+        </td>
+        <td class="py-2 text-xs text-gray-400">{{ t.triggered_at|timeago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card">
+  <p class="text-sm text-gray-500 text-center py-4">No triggers yet. Watches will fire when matching events are stored.</p>
+</div>
+{% endif %}

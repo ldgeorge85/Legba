@@ -1,8 +1,11 @@
-"""Fact Explorer routes — GET /facts + GET /facts/rows."""
+"""Fact Explorer routes — CRUD for facts."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from uuid import UUID
+
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import HTMLResponse
 
 from ..app import get_stores, templates
 
@@ -107,3 +110,52 @@ async def fact_rows(
     }
 
     return templates.TemplateResponse("facts/_rows.html", context)
+
+
+# ------------------------------------------------------------------
+# Write operations (U6: delete, U7: inline edit)
+# ------------------------------------------------------------------
+
+@router.delete("/api/facts/{fact_id}")
+async def delete_fact(request: Request, fact_id: UUID):
+    """Delete a fact permanently."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute("DELETE FROM facts WHERE id = $1", fact_id)
+        return HTMLResponse('<div class="text-green-400 text-sm p-2">Fact deleted.</div>')
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)
+
+
+@router.put("/api/facts/{fact_id}")
+async def update_fact(
+    request: Request,
+    fact_id: UUID,
+    subject: str = Form(...),
+    predicate: str = Form(...),
+    value: str = Form(...),
+    confidence: float = Form(...),
+):
+    """Update a fact inline."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE facts SET subject = $1, predicate = $2, value = $3, "
+                "confidence = $4 WHERE id = $5",
+                subject, predicate, value, confidence, fact_id,
+            )
+        # Return the updated row HTML
+        fact = {
+            "id": fact_id,
+            "subject": subject,
+            "predicate": predicate,
+            "value": value,
+            "confidence": confidence,
+        }
+        return templates.TemplateResponse("facts/_row_single.html", {
+            "request": request, "fact": fact,
+        })
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)

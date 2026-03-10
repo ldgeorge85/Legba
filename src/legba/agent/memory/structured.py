@@ -189,6 +189,64 @@ class StructuredStore:
                 ALTER TABLE sources ADD COLUMN IF NOT EXISTS events_produced_count INTEGER DEFAULT 0;
                 ALTER TABLE sources ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER DEFAULT 0;
                 ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_successful_fetch_at TIMESTAMPTZ;
+
+                -- Event source_url index for fast dedup
+                CREATE INDEX IF NOT EXISTS idx_events_source_url
+                    ON events(source_url) WHERE source_url != '';
+
+                -- GUID unique constraint (catch racing stores)
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_events_guid_unique
+                    ON events(guid) WHERE guid IS NOT NULL AND guid != '';
+
+                -- Watchlist table
+                CREATE TABLE IF NOT EXISTS watchlist (
+                    id UUID PRIMARY KEY,
+                    data JSONB NOT NULL,
+                    name TEXT NOT NULL,
+                    priority TEXT NOT NULL DEFAULT 'normal',
+                    active BOOLEAN NOT NULL DEFAULT true,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_triggered_at TIMESTAMPTZ,
+                    trigger_count INTEGER NOT NULL DEFAULT 0
+                );
+
+                -- Watch triggers log
+                CREATE TABLE IF NOT EXISTS watch_triggers (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    watch_id UUID NOT NULL REFERENCES watchlist(id) ON DELETE CASCADE,
+                    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    watch_name TEXT NOT NULL DEFAULT '',
+                    event_title TEXT NOT NULL DEFAULT '',
+                    match_reasons JSONB NOT NULL DEFAULT '[]',
+                    priority TEXT NOT NULL DEFAULT 'normal',
+                    triggered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_triggers_time
+                    ON watch_triggers(triggered_at DESC);
+
+                -- Situations table
+                CREATE TABLE IF NOT EXISTS situations (
+                    id UUID PRIMARY KEY,
+                    data JSONB NOT NULL,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    category TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_event_at TIMESTAMPTZ,
+                    event_count INTEGER NOT NULL DEFAULT 0,
+                    intensity_score REAL NOT NULL DEFAULT 0.0
+                );
+                CREATE INDEX IF NOT EXISTS idx_situations_status ON situations(status);
+
+                -- Situation-event links
+                CREATE TABLE IF NOT EXISTS situation_events (
+                    situation_id UUID NOT NULL REFERENCES situations(id) ON DELETE CASCADE,
+                    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    relevance REAL NOT NULL DEFAULT 1.0,
+                    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (situation_id, event_id)
+                );
             """)
 
     # --- Goal operations ---
@@ -697,6 +755,22 @@ class StructuredStore:
                 row = await conn.fetchrow(
                     "SELECT id, title FROM events WHERE guid = $1 LIMIT 1",
                     guid,
+                )
+                if row:
+                    return {"id": row["id"], "title": row["title"]}
+        except Exception:
+            pass
+        return None
+
+    async def check_event_source_url(self, source_url: str) -> dict | None:
+        """Check if an event with this source_url already exists."""
+        if not self._available or not source_url:
+            return None
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id, title FROM events WHERE source_url = $1 LIMIT 1",
+                    source_url,
                 )
                 if row:
                     return {"id": row["id"], "title": row["title"]}

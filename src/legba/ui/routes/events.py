@@ -1,10 +1,12 @@
-"""Event Explorer routes — GET /events + GET /events/{event_id}."""
+"""Event Explorer routes — CRUD for events."""
 
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..app import get_stores, templates
 from ...shared.schemas.events import EventCategory
@@ -98,5 +100,77 @@ async def event_detail(request: Request, event_id: UUID):
             "event": event,
             "source_name": source_name,
             "linked_entities": linked_entities,
+            "categories": CATEGORIES,
         },
     )
+
+
+# ------------------------------------------------------------------
+# Write operations (U11: delete, U12: metadata edit)
+# ------------------------------------------------------------------
+
+@router.delete("/api/events/{event_id}")
+async def delete_event(request: Request, event_id: UUID):
+    """Delete an event and its entity links."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            # Delete entity links first (FK cascade)
+            await conn.execute(
+                "DELETE FROM event_entity_links WHERE event_id = $1", event_id,
+            )
+            # Delete the event
+            await conn.execute("DELETE FROM events WHERE id = $1", event_id)
+
+        # Also delete from OpenSearch (best-effort)
+        if stores.opensearch and stores.opensearch.available:
+            try:
+                await stores.opensearch.delete_document("legba-events-*", str(event_id))
+            except Exception:
+                pass
+
+        return HTMLResponse(
+            '<div class="text-green-400 text-sm p-2">Event deleted.</div>'
+            '<script>setTimeout(() => window.location="/events", 800)</script>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)
+
+
+@router.put("/api/events/{event_id}")
+async def update_event_metadata(
+    request: Request,
+    event_id: UUID,
+    category: str = Form(...),
+    tags: str = Form(""),
+    confidence: float = Form(0.5),
+):
+    """Update event metadata (category, tags, confidence)."""
+    if category not in CATEGORIES:
+        return HTMLResponse(f'<span class="text-red-400 text-xs">Invalid category: {category}</span>', status_code=400)
+
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT data FROM events WHERE id = $1", event_id,
+            )
+            if not row:
+                return HTMLResponse('<div class="text-red-400 text-sm p-2">Event not found.</div>', status_code=404)
+
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            data["category"] = category
+            data["confidence"] = confidence
+            data["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+
+            await conn.execute(
+                "UPDATE events SET data = $1::jsonb, updated_at = now() WHERE id = $2",
+                json.dumps(data, default=str), event_id,
+            )
+
+        return HTMLResponse(
+            '<div class="text-green-400 text-sm p-2">Event updated.</div>'
+            '<script>setTimeout(() => location.reload(), 500)</script>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)

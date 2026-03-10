@@ -172,6 +172,8 @@ from .routes.journal import router as journal_router
 from .routes.reports import router as reports_router
 from .routes.facts import router as facts_router
 from .routes.memory import router as memory_router
+from .routes.watchlist import router as watchlist_router
+from .routes.situations import router as situations_router
 
 app.include_router(dashboard_router)
 app.include_router(entities_router)
@@ -185,3 +187,5 @@ app.include_router(journal_router)
 app.include_router(reports_router)
 app.include_router(graph_router)
 app.include_router(memory_router)
+app.include_router(watchlist_router)
+app.include_router(situations_router)

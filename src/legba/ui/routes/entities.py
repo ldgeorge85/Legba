@@ -1,11 +1,13 @@
-"""Entity Explorer routes — GET /entities + GET /entities/{entity_id}."""
+"""Entity Explorer routes — CRUD for entities."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import HTMLResponse
 
 from ..app import get_stores, templates
 from ...shared.schemas.entity_profiles import EntityType
@@ -97,3 +99,97 @@ async def entity_detail(request: Request, entity_id: UUID):
             "versions": versions,
         },
     )
+
+
+# ------------------------------------------------------------------
+# Write operations (U9: add/remove assertions)
+# ------------------------------------------------------------------
+
+@router.post("/api/entities/{entity_id}/assertions")
+async def add_assertion(
+    request: Request,
+    entity_id: UUID,
+    section: str = Form("general"),
+    key: str = Form(...),
+    value: str = Form(...),
+    confidence: float = Form(0.7),
+):
+    """Add an assertion to an entity profile."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT data FROM entity_profiles WHERE id = $1", entity_id,
+            )
+            if not row:
+                return HTMLResponse('<div class="text-red-400 text-sm p-2">Entity not found.</div>', status_code=404)
+
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            sections = data.get("sections", {})
+            section_list = sections.get(section, [])
+
+            from datetime import datetime, timezone
+            section_list.append({
+                "key": key,
+                "value": value,
+                "confidence": confidence,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "source": "operator",
+                "superseded": False,
+            })
+            sections[section] = section_list
+            data["sections"] = sections
+
+            await conn.execute(
+                "UPDATE entity_profiles SET data = $1::jsonb, updated_at = now() WHERE id = $2",
+                json.dumps(data, default=str), entity_id,
+            )
+
+        return HTMLResponse(
+            f'<div class="text-green-400 text-sm p-2">Assertion added: {key} = {value}</div>'
+            f'<script>setTimeout(() => location.reload(), 500)</script>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)
+
+
+@router.delete("/api/entities/{entity_id}/assertions")
+async def remove_assertion(
+    request: Request,
+    entity_id: UUID,
+    section: str = "",
+    key: str = "",
+    value: str = "",
+):
+    """Remove a specific assertion from an entity profile."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT data FROM entity_profiles WHERE id = $1", entity_id,
+            )
+            if not row:
+                return HTMLResponse('<div class="text-red-400 text-sm p-2">Entity not found.</div>', status_code=404)
+
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            sections = data.get("sections", {})
+            section_list = sections.get(section, [])
+
+            # Filter out the matching assertion
+            sections[section] = [
+                a for a in section_list
+                if not (a.get("key") == key and a.get("value") == value)
+            ]
+            # Remove section if empty
+            if not sections[section]:
+                del sections[section]
+            data["sections"] = sections
+
+            await conn.execute(
+                "UPDATE entity_profiles SET data = $1::jsonb, updated_at = now() WHERE id = $2",
+                json.dumps(data, default=str), entity_id,
+            )
+
+        return HTMLResponse('<div class="text-green-400 text-sm p-2">Assertion removed.</div>')
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)

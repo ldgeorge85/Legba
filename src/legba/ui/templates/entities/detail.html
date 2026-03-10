@@ -52,7 +52,8 @@
             <th class="pb-1 pr-3">Value</th>
             <th class="pb-1 pr-3">Confidence</th>
             <th class="pb-1 pr-3">Source</th>
-            <th class="pb-1">Observed</th>
+            <th class="pb-1 pr-3">Observed</th>
+            <th class="pb-1"></th>
           </tr>
         </thead>
         <tbody>
@@ -78,7 +79,14 @@
                 <span class="text-gray-600">—</span>
               {% endif %}
             </td>
-            <td class="py-1.5 text-xs text-gray-500">{{ a.observed_at | timeago }}</td>
+            <td class="py-1.5 pr-3 text-xs text-gray-500">{{ a.observed_at | timeago }}</td>
+            <td class="py-1.5 text-right">
+              <button class="text-xs text-gray-500 hover:text-red-400"
+                      hx-delete="/api/entities/{{ entity.id }}/assertions?section={{ section_name }}&key={{ a.key }}&value={{ a.value }}"
+                      hx-confirm="Remove this assertion?"
+                      hx-target="closest tr"
+                      hx-swap="outerHTML">remove</button>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -88,6 +96,34 @@
   {% else %}
     <div class="card"><p class="text-sm text-gray-500">No assertions recorded yet.</p></div>
   {% endif %}
+
+  <!-- Add assertion form -->
+  <div class="card mt-3" id="add-assertion-result">
+    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Add Assertion</h3>
+    <form hx-post="/api/entities/{{ entity.id }}/assertions"
+          hx-target="#add-assertion-result"
+          hx-swap="innerHTML"
+          class="flex flex-wrap items-end gap-2">
+      <div>
+        <label class="text-xs text-gray-500">Section</label>
+        <input name="section" value="general" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-28 block">
+      </div>
+      <div>
+        <label class="text-xs text-gray-500">Key</label>
+        <input name="key" required class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-32 block">
+      </div>
+      <div>
+        <label class="text-xs text-gray-500">Value</label>
+        <input name="value" required class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-48 block">
+      </div>
+      <div>
+        <label class="text-xs text-gray-500">Confidence</label>
+        <input name="confidence" type="number" step="0.01" min="0" max="1" value="0.7"
+               class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-20 block">
+      </div>
+      <button type="submit" class="btn text-xs">Add</button>
+    </form>
+  </div>
 </div>
 
 <!-- Linked events -->

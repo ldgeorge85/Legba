@@ -1,9 +1,9 @@
-"""Graph Explorer route — GET /graph + GET /api/graph."""
+"""Graph Explorer route — GET /graph + GET /api/graph + edge CRUD."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import JSONResponse, HTMLResponse
 
 from ..app import get_stores, templates
 
@@ -31,6 +31,17 @@ EDGE_COLORS = {
 
 DEFAULT_NODE_COLOR = "#94a3b8"
 DEFAULT_EDGE_COLOR = "#64748b"
+
+# Canonical relationship types for the dropdown
+RELATIONSHIP_TYPES = [
+    "AlliedWith", "HostileTo", "LeaderOf", "MemberOf", "LocatedIn",
+    "OperatesIn", "OccupiedBy", "SuppliesWeaponsTo", "SanctionedBy",
+    "TradesWith", "EconomicTie", "SignatoryTo", "SubsidiaryOf",
+    "ParentOf", "PartOf", "BordersWith", "InfluencedBy",
+    "SuccessorTo", "PredecessorTo", "MediatedBy", "NegotiatesWith",
+    "CompetitorOf", "ParticipatesIn", "Administers", "FundedBy",
+    "HeadquarteredIn", "FoundedBy", "DisputesWith", "RelatedTo",
+]
 
 
 async def _fetch_full_graph(stores) -> dict:
@@ -135,6 +146,7 @@ async def graph_page(request: Request):
             "graph_data": graph_data,
             "node_count": len(graph_data["nodes"]),
             "edge_count": len(graph_data["edges"]),
+            "relationship_types": RELATIONSHIP_TYPES,
         },
     )
 
@@ -145,3 +157,65 @@ async def graph_api(request: Request):
     stores = get_stores(request)
     graph_data = await _fetch_full_graph(stores)
     return JSONResponse(graph_data)
+
+
+# ------------------------------------------------------------------
+# Write operations (U13: add/remove edges)
+# ------------------------------------------------------------------
+
+@router.post("/api/graph/edges")
+async def add_edge(
+    request: Request,
+    from_entity: str = Form(...),
+    to_entity: str = Form(...),
+    relation_type: str = Form(...),
+    since: str = Form(""),
+):
+    """Add a relationship between two entities."""
+    stores = get_stores(request)
+    graph = stores.graph
+    if not graph.available:
+        return HTMLResponse('<div class="text-red-400 text-sm p-2">Graph unavailable.</div>', status_code=503)
+
+    try:
+        props = {}
+        if since.strip():
+            props["since"] = since.strip()
+        props["source"] = "operator"
+
+        await graph.add_relationship(from_entity, to_entity, relation_type, props)
+        return HTMLResponse(
+            f'<div class="text-green-400 text-sm p-2">Edge added: {from_entity} --[{relation_type}]--> {to_entity}</div>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)
+
+
+@router.delete("/api/graph/edges")
+async def remove_edge(
+    request: Request,
+    from_entity: str = "",
+    to_entity: str = "",
+    relation_type: str = "",
+):
+    """Remove a relationship between two entities."""
+    stores = get_stores(request)
+    graph = stores.graph
+    if not graph.available:
+        return HTMLResponse('<div class="text-red-400 text-sm p-2">Graph unavailable.</div>', status_code=503)
+
+    if not (from_entity and to_entity and relation_type):
+        return HTMLResponse('<div class="text-red-400 text-sm p-2">Missing parameters.</div>', status_code=400)
+
+    try:
+        # AGE Cypher to delete specific edge
+        cypher = (
+            f"MATCH (a {{name: '{from_entity}'}})-[r:{relation_type}]->(b {{name: '{to_entity}'}}) "
+            f"DELETE r"
+        )
+        await graph.execute_cypher(cypher)
+        return HTMLResponse(
+            f'<div class="text-green-400 text-sm p-2">Edge removed: {from_entity} --[{relation_type}]--> {to_entity}</div>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)

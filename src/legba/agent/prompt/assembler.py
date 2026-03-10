@@ -274,6 +274,76 @@ class PromptAssembler:
             Message(role="user", content=user_text),
         ]
 
+    def assemble_acquire_prompt(
+        self,
+        cycle_number: int,
+        seed_goal: str,
+        active_goals: list[dict],
+        source_status: str,
+        allowed_tools: frozenset[str],
+        inbox_messages: list[InboxMessage] | None = None,
+    ) -> list[Message]:
+        """Build the message list for the acquire/ingestion cycle."""
+        goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
+
+        from ..llm.format import format_tool_definitions
+        acquire_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
+        system_text = templates.SYSTEM_PROMPT.format(
+            cycle_number=cycle_number,
+            context_tokens="acquire",
+        )
+        system_text += "\n\n" + format_tool_definitions(acquire_tool_data)
+        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+
+        user_text = templates.ACQUIRE_PROMPT.format(
+            seed_goal=seed_goal,
+            active_goals=goals_text,
+            source_status=source_status,
+        )
+
+        if inbox_messages:
+            user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+
+        return [
+            Message(role="system", content=system_text),
+            Message(role="user", content=user_text),
+        ]
+
+    def assemble_analysis_cycle_prompt(
+        self,
+        cycle_number: int,
+        seed_goal: str,
+        active_goals: list[dict],
+        analysis_context: str,
+        allowed_tools: frozenset[str],
+        inbox_messages: list[InboxMessage] | None = None,
+    ) -> list[Message]:
+        """Build the message list for the analysis cycle."""
+        goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
+
+        from ..llm.format import format_tool_definitions
+        analysis_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
+        system_text = templates.SYSTEM_PROMPT.format(
+            cycle_number=cycle_number,
+            context_tokens="analysis",
+        )
+        system_text += "\n\n" + format_tool_definitions(analysis_tool_data)
+        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+
+        user_text = templates.ANALYSIS_PROMPT.format(
+            seed_goal=seed_goal,
+            active_goals=goals_text,
+            analysis_context=analysis_context,
+        )
+
+        if inbox_messages:
+            user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+
+        return [
+            Message(role="system", content=system_text),
+            Message(role="user", content=user_text),
+        ]
+
     def assemble_reason_prompt(
         self,
         cycle_number: int,

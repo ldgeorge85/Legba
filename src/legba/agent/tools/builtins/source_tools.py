@@ -221,25 +221,33 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
                         "hint": "Use source_update to modify the existing source.",
                     }, indent=2)
 
-                # Check by domain — same feed host already has sources
+                # Check by domain — only block if an existing source URL is a
+                # prefix of the new URL or vice versa (allows different feeds
+                # from the same outlet, e.g. reuters.com/world vs reuters.com/tech)
                 if new_domain:
                     domain_rows = await conn.fetch(
                         "SELECT id, name, url FROM sources "
-                        "WHERE url ILIKE $1 LIMIT 5",
+                        "WHERE url ILIKE $1 LIMIT 10",
                         f"%{new_domain}%",
                     )
                     if domain_rows:
-                        existing_names = [r["name"] for r in domain_rows]
-                        return json.dumps({
-                            "status": "duplicate_detected",
-                            "existing_sources": [
-                                {"id": str(r["id"]), "name": r["name"], "url": r["url"]}
-                                for r in domain_rows[:3]
-                            ],
-                            "reason": f"same feed domain ({new_domain}) — {len(domain_rows)} source(s) already registered: {', '.join(existing_names[:3])}",
-                            "hint": "Sources from this domain are already registered. "
-                                    "Use source_list to review existing sources before adding more.",
-                        }, indent=2)
+                        # Only block on path-prefix overlap (not just same domain)
+                        blocking = []
+                        for r in domain_rows:
+                            existing_norm = _norm_url(r["url"])
+                            if existing_norm.startswith(norm_url) or norm_url.startswith(existing_norm):
+                                blocking.append(r)
+                        if blocking:
+                            return json.dumps({
+                                "status": "duplicate_detected",
+                                "existing_sources": [
+                                    {"id": str(r["id"]), "name": r["name"], "url": r["url"]}
+                                    for r in blocking[:3]
+                                ],
+                                "reason": f"overlapping feed URL path — {len(blocking)} source(s) cover the same path",
+                                "hint": "A source with an overlapping URL path is already registered. "
+                                        "Use source_list to review, or use a more specific feed URL.",
+                            }, indent=2)
         except Exception:
             pass  # If DB check fails, proceed with creation (save_source will still dedupe on url)
 

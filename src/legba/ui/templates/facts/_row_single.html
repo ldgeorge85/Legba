@@ -1,4 +1,3 @@
-{% for fact in facts %}
 <tr id="fact-{{ fact.id }}" class="border-b border-gray-800 hover:bg-gray-800/50">
   <td class="py-2 pr-4 text-gray-200 font-medium">
     {{ fact.subject[:60] }}{% if fact.subject | length > 60 %}...{% endif %}
@@ -23,14 +22,14 @@
     {% endif %}
   </td>
   <td class="py-2 pr-4 text-xs text-gray-400">
-    {% if fact.source_cycle is not none %}
+    {% if fact.source_cycle is defined and fact.source_cycle is not none %}
       {{ fact.source_cycle }}
     {% else %}
       <span class="text-gray-600">&mdash;</span>
     {% endif %}
   </td>
   <td class="py-2 text-xs text-gray-500">
-    {{ fact.created_at | timeago }}
+    {% if fact.created_at is defined %}{{ fact.created_at | timeago }}{% endif %}
   </td>
   <td class="py-2 pl-2 text-right whitespace-nowrap">
     <button class="text-xs text-gray-500 hover:text-cyan-400 mr-2"
@@ -42,23 +41,3 @@
             hx-swap="outerHTML">del</button>
   </td>
 </tr>
-{% else %}
-<tr>
-  <td colspan="7" class="py-8 text-center text-gray-500">No facts found.</td>
-</tr>
-{% endfor %}
-
-{% if has_more %}
-<tr id="load-more-row">
-  <td colspan="7" class="py-4 text-center">
-    <button class="btn"
-            hx-get="/facts/rows?offset={{ next_offset }}{% if q %}&q={{ q }}{% endif %}{% if min_confidence %}&min_confidence={{ min_confidence }}{% endif %}"
-            hx-target="#load-more-row"
-            hx-swap="outerHTML"
-            hx-indicator=".htmx-indicator">
-      Load more
-    </button>
-    <span class="htmx-indicator text-xs text-gray-500 ml-2">Loading...</span>
-  </td>
-</tr>
-{% endif %}

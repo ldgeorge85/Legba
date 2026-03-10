@@ -177,7 +177,7 @@ async def _find_similar_entity(
     candidates = await graph.search_entities(
         query=None,
         entity_type=entity_type if entity_type and entity_type != "unknown" else None,
-        limit=100,
+        limit=500,
     )
     for c in candidates:
         if c.name.lower() == name.lower():

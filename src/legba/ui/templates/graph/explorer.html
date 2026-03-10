@@ -32,8 +32,47 @@
   <button class="btn text-xs" onclick="refreshGraph()">Reload</button>
 </div>
 
+<!-- Add edge form (U13) -->
+<details class="mb-4">
+  <summary class="text-sm text-gray-400 cursor-pointer hover:text-gray-300">Add/Remove Edge</summary>
+  <div class="card mt-2">
+    <div class="flex flex-wrap items-end gap-3">
+      <form id="edge-form" class="flex flex-wrap items-end gap-2" hx-post="/api/graph/edges" hx-target="#edge-result" hx-swap="innerHTML">
+        <div>
+          <label class="text-xs text-gray-500">From Entity</label>
+          <input name="from_entity" required list="node-list" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-36 block">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500">Relation</label>
+          <select name="relation_type" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 block">
+            {% for rt in relationship_types %}
+              <option value="{{ rt }}">{{ rt }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500">To Entity</label>
+          <input name="to_entity" required list="node-list" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-36 block">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500">Since</label>
+          <input name="since" placeholder="e.g. 2024" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-24 block">
+        </div>
+        <button type="submit" class="btn text-xs">Add Edge</button>
+        <button type="button" class="btn text-xs" onclick="deleteEdge()">Remove Edge</button>
+      </form>
+      <datalist id="node-list">
+        {% for node in graph_data.nodes %}
+          <option value="{{ node.data.name }}">
+        {% endfor %}
+      </datalist>
+      <div id="edge-result" class="text-sm"></div>
+    </div>
+  </div>
+</details>
+
 <!-- Graph canvas + detail panel -->
-<div class="flex gap-4" style="height: calc(100vh - 220px);">
+<div class="flex gap-4" style="height: calc(100vh - 260px);">
   <!-- Cytoscape container -->
   <div id="cy" class="flex-1 card" style="min-height: 400px;"></div>
 
@@ -296,6 +335,19 @@ function searchNodes(query) {
   const neighborhood = matches.neighborhood().add(matches);
   neighborhood.addClass('highlighted');
   cy.elements().not(neighborhood).addClass('dimmed');
+}
+
+async function deleteEdge() {
+  const form = document.getElementById('edge-form');
+  const from_entity = form.querySelector('[name="from_entity"]').value;
+  const to_entity = form.querySelector('[name="to_entity"]').value;
+  const relation_type = form.querySelector('[name="relation_type"]').value;
+  if (!from_entity || !to_entity) { alert('Fill in From and To entities'); return; }
+  if (!confirm(`Remove edge: ${from_entity} --[${relation_type}]--> ${to_entity}?`)) return;
+  const resp = await fetch(`/api/graph/edges?from_entity=${encodeURIComponent(from_entity)}&to_entity=${encodeURIComponent(to_entity)}&relation_type=${encodeURIComponent(relation_type)}`, { method: 'DELETE' });
+  const html = await resp.text();
+  document.getElementById('edge-result').innerHTML = html;
+  if (resp.ok) setTimeout(() => refreshGraph(), 500);
 }
 </script>
 

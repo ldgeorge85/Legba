@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Situations — Legba Console{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-100">Situations</h1>
+    <p class="text-sm text-gray-400 mt-1">
+      {{ total }} tracked —
+      <span class="text-blue-400">{{ active_count }} active</span>,
+      <span class="text-red-400">{{ escalating_count }} escalating</span>,
+      <span class="text-gray-500">{{ dormant_count }} dormant</span>
+    </p>
+  </div>
+  <button class="btn text-xs" onclick="document.getElementById('create-form').classList.toggle('hidden')">+ Create Situation</button>
+</div>
+
+<!-- Create Form -->
+<div id="create-form" class="card mb-4 hidden">
+  <h3 class="text-sm font-semibold text-gray-200 mb-3">New Situation</h3>
+  <form action="/api/situations" method="post" class="space-y-3">
+    <input name="name" placeholder="Situation name (e.g. Iran Nuclear Crisis)" required
+           class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full">
+    <textarea name="description" placeholder="Brief description" rows="2"
+              class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full"></textarea>
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="text-xs text-gray-400 block mb-1">Category</label>
+        <select name="category" class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full">
+          <option value="">-- none --</option>
+          <option value="conflict">conflict</option>
+          <option value="political">political</option>
+          <option value="economic">economic</option>
+          <option value="technology">technology</option>
+          <option value="health">health</option>
+          <option value="environment">environment</option>
+          <option value="social">social</option>
+          <option value="disaster">disaster</option>
+          <option value="other">other</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-xs text-gray-400 block mb-1">Tags (comma-separated)</label>
+        <input name="tags" placeholder="e.g. nuclear, sanctions"
+               class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full">
+      </div>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="text-xs text-gray-400 block mb-1">Key Entities (comma-separated)</label>
+        <input name="key_entities" placeholder="e.g. Iran, IAEA, United States"
+               class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full">
+      </div>
+      <div>
+        <label class="text-xs text-gray-400 block mb-1">Regions (comma-separated)</label>
+        <input name="regions" placeholder="e.g. Middle East, Europe"
+               class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 w-full">
+      </div>
+    </div>
+    <div class="flex justify-end gap-2">
+      <button type="button" class="btn text-xs" onclick="document.getElementById('create-form').classList.add('hidden')">Cancel</button>
+      <button type="submit" class="btn text-xs bg-cyan-900 border-cyan-700 text-cyan-300 hover:bg-cyan-800">Create</button>
+    </div>
+  </form>
+</div>
+
+<!-- Filter -->
+<div class="flex gap-3 mb-4">
+  <select onchange="window.location = this.value ? '/situations?status=' + this.value : '/situations'"
+          class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-600">
+    <option value="">All statuses</option>
+    <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
+    <option value="escalating" {% if status_filter == 'escalating' %}selected{% endif %}>Escalating</option>
+    <option value="de_escalating" {% if status_filter == 'de_escalating' %}selected{% endif %}>De-escalating</option>
+    <option value="dormant" {% if status_filter == 'dormant' %}selected{% endif %}>Dormant</option>
+    <option value="resolved" {% if status_filter == 'resolved' %}selected{% endif %}>Resolved</option>
+  </select>
+</div>
+
+<!-- Situation Cards -->
+{% if situations %}
+  <div class="space-y-3">
+    {% for s in situations %}
+      <a href="/situations/{{ s.id }}" class="card block hover:border-gray-600 transition-colors">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+              <h3 class="text-base font-bold text-gray-100 truncate">{{ s.name }}</h3>
+              {% if s.status == 'escalating' %}
+                <span class="badge badge-red">escalating</span>
+              {% elif s.status == 'de_escalating' %}
+                <span class="badge badge-green">de-escalating</span>
+              {% elif s.status == 'active' %}
+                <span class="badge badge-blue">active</span>
+              {% elif s.status == 'dormant' %}
+                <span class="badge badge-gray">dormant</span>
+              {% elif s.status == 'resolved' %}
+                <span class="badge badge-gray">resolved</span>
+              {% else %}
+                <span class="badge badge-gray">{{ s.status }}</span>
+              {% endif %}
+              {% if s.category %}
+                <span class="badge badge-purple">{{ s.category }}</span>
+              {% endif %}
+            </div>
+
+            {% if s.description %}
+              <p class="text-xs text-gray-400 mb-2 line-clamp-2">{{ s.description[:200] }}</p>
+            {% endif %}
+
+            <!-- Key entities -->
+            {% if s.key_entities %}
+              <div class="flex flex-wrap gap-1 mb-2">
+                {% for ent in s.key_entities[:8] %}
+                  <span class="badge badge-cyan">{{ ent }}</span>
+                {% endfor %}
+                {% if s.key_entities|length > 8 %}
+                  <span class="text-xs text-gray-500">+{{ s.key_entities|length - 8 }} more</span>
+                {% endif %}
+              </div>
+            {% endif %}
+          </div>
+
+          <!-- Stats column -->
+          <div class="flex-shrink-0 text-right space-y-1">
+            <div class="text-sm font-bold text-gray-200">{{ s.event_count }}</div>
+            <div class="text-xs text-gray-500">events</div>
+
+            <!-- Intensity bar -->
+            <div class="w-24 mt-1">
+              <div class="flex items-center gap-1">
+                <div class="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                  {% set pct = (s.intensity_score * 100)|int %}
+                  {% if s.intensity_score > 0.7 %}
+                    <div class="bar-fill h-full bg-red-500 rounded-full" style="width: {{ pct }}%"></div>
+                  {% elif s.intensity_score > 0.4 %}
+                    <div class="bar-fill h-full bg-yellow-500 rounded-full" style="width: {{ pct }}%"></div>
+                  {% else %}
+                    <div class="bar-fill h-full bg-cyan-500 rounded-full" style="width: {{ pct }}%"></div>
+                  {% endif %}
+                </div>
+                <span class="text-xs text-gray-500 w-8 text-right">{{ "%.0f"|format(s.intensity_score * 100) }}%</span>
+              </div>
+              <div class="text-xs text-gray-500 text-right">intensity</div>
+            </div>
+
+            {% if s.last_event_at %}
+              <div class="text-xs text-gray-500 mt-1">{{ s.last_event_at|timeago }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card">
+    <div class="flex items-center justify-center py-16 text-gray-500">
+      <div class="text-center">
+        <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <p>No situations tracked yet</p>
+        <p class="text-xs text-gray-600 mt-1">The agent creates situations to track persistent narratives across events</p>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

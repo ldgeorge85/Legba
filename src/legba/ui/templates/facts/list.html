@@ -44,6 +44,7 @@
         <th class="pb-2 pr-4">Confidence</th>
         <th class="pb-2 pr-4">Cycle</th>
         <th class="pb-2">Date</th>
+        <th class="pb-2 pl-2 text-right">Actions</th>
       </tr>
     </thead>
     <tbody id="fact-rows">
@@ -51,4 +52,33 @@
     </tbody>
   </table>
 </div>
+
+<script>
+function startEditFact(factId, row) {
+  const cells = row.querySelectorAll('td');
+  const subject = cells[0].textContent.trim();
+  const predicate = cells[1].textContent.trim();
+  const value = cells[2].textContent.trim();
+  const confBadge = cells[3].querySelector('.badge');
+  const conf = confBadge ? confBadge.textContent.trim().replace('%', '') : '50';
+  const confVal = (parseFloat(conf) / 100).toFixed(2);
+
+  row.innerHTML = `
+    <td colspan="7" class="py-2">
+      <form hx-put="/api/facts/${factId}" hx-target="#fact-${factId}" hx-swap="outerHTML"
+            class="flex flex-wrap items-center gap-2">
+        <input name="subject" value="${subject}" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-40">
+        <input name="predicate" value="${predicate}" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-32">
+        <input name="value" value="${value}" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 flex-1 min-w-[120px]">
+        <input name="confidence" type="number" step="0.01" min="0" max="1" value="${confVal}"
+               class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-20">
+        <button type="submit" class="btn text-xs">Save</button>
+        <button type="button" class="text-xs text-gray-500 hover:text-gray-300"
+                onclick="location.reload()">Cancel</button>
+      </form>
+    </td>
+  `;
+  htmx.process(row);
+}
+</script>
 {% endblock %}

@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Continuously operating autonomous intelligence platform.*
-*Last updated: 2026-03-10 | Research cycles, tool loop resilience, GUID dedup, self-modification guidance*
+*Last updated: 2026-03-10 | V2 cycle architecture, watchlists, situations, data pipeline hardening*
 
 ---
 
@@ -13,7 +13,7 @@ The operator provides a seed goal. The agent then operates indefinitely: ingesti
 
 **Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events, producing structured briefings, detecting patterns, and flagging significant developments.
 
-**Key numbers:** 86 Python source files, 241 tests, **50 built-in tools** across 15 builtin modules, 7 platform services, 10 Docker containers.
+**Key numbers:** 100+ Python source files, 241 tests, **57 built-in tools** across 17 builtin modules, 7 platform services, 10 Docker containers.
 
 ---
 
@@ -36,7 +36,8 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   +-- Agent Container (ephemeral, one per cycle)
 |   |   - PYTHONPATH=/agent/src (self-modifiable)
 |   |   - Cycle: WAKE > ORIENT > [MISSION REVIEW] > PLAN > REASON+ACT > REFLECT > NARRATE > PERSIST
-|   |   - 43 built-in tools + cycle_complete pseudo-tool
+|   |   - cycle.py orchestrator + 10 phase mixins (phases/ directory)
+|   |   - 57 built-in tools + cycle_complete pseudo-tool
 |   |
 |   +-- Platform Services (long-lived)
 |   |   - Redis :6379         -- Transient state (counters, flags, registers)
@@ -148,20 +149,23 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 
 ### Agent Cycle
 
-```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register tools, drain inbox
-2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, query facts, graph summary, journal context
-3. MISSION   -- Every 15 cycles: strategic review of goal tree, defer/abandon stuck goals
-4. PLAN      -- LLM selects goal focus, decides approach. Priority order: event ingestion > entity enrichment > analysis > source discovery
-5. ACT       -- Tool loop (up to 20 steps): LLM reasons > calls tools > feeds results > repeats
-6. REFLECT   -- LLM evaluates: significance (calibrated 0-1 scale), facts learned, entities, goal progress, memories to promote
-7. NARRATE   -- LLM writes 1-3 short journal entries (personal stream of consciousness)
-8. PERSIST   -- Store episode, publish outbox, auto-complete goals at 100%, promote memories, heartbeat, exit
+The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 12 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
-Special cycles:
-- Every 5 cycles (non-introspection):  RESEARCH — entity enrichment, gap-filling, conflict resolution
-- Every 15 cycles:                     INTROSPECTION — deep audit, journal consolidation, world assessment
 ```
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 57 tools, drain inbox
+2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
+3. Route to cycle type (priority order):
+   a. INTROSPECTION (every 15) -- mission review, deep audit, journal consolidation, analysis report
+   b. ANALYSIS (every 10)      -- pattern detection, graph mining, anomaly detection, trend analysis
+   c. RESEARCH (every 5)       -- entity enrichment via Wikipedia/reference, gap-filling
+   d. ACQUIRE (every 3)        -- dedicated source fetching, event ingestion, entity resolution
+   e. NORMAL                   -- goal-directed PLAN → REASON+ACT
+4. REFLECT   -- LLM evaluates: significance (calibrated 0-1 scale), facts learned, entities, goal progress
+5. NARRATE   -- LLM writes 1-3 journal entries + extracts investigation leads
+6. PERSIST   -- Store episode, track ingestion, auto-complete goals, promote memories, heartbeat, exit
+```
+
+**Cycle type distribution (per 15-cycle window):** ~27% acquire, ~53% normal, ~7% each for research/analysis/introspection. Each specialized cycle type uses a filtered tool set — only tools relevant to that cycle's purpose are available.
 
 Each step in the REASON+ACT loop rebuilds the full [system, user] message pair (no multi-turn growth). A sliding window keeps the 8 most recent tool results in full, condensing older ones to one-line summaries. Re-grounding prompts inject every 8 steps to keep the LLM on track.
 
@@ -188,6 +192,43 @@ The research prompt includes an **entity health summary** — a SQL-generated ta
 5. **Resolve conflicts** — fix contradictory facts, merge near-duplicates
 
 Research cycles use a restricted tool set (no feed ingestion): `http_request`, graph tools, memory tools, entity tools, `os_search`, event query tools, `cycle_complete`.
+
+### Acquire Cycles (every 3 cycles)
+
+Every 3 cycles (when not research/analysis/introspection), the agent runs a dedicated data ingestion phase:
+
+```
+WAKE → ORIENT → ACQUIRE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
+```
+
+The acquire prompt includes a **source status summary** — a SQL-generated list of active sources sorted by never-fetched first, then least-recently-fetched. The agent:
+1. Fetches unfetched sources first (highest priority)
+2. Stores events with proper dedup (source_url, title similarity)
+3. Resolves entities from newly ingested events
+4. Updates source metadata after fetch (success/failure)
+
+Acquire cycles use a restricted tool set (data ingestion focus): `feed_parse`, `http_request`, event tools, `entity_resolve`, `entity_profile`, source tools, `graph_store`, watchlist/situation query tools.
+
+**Ingestion gap tracking:** Redis tracks `last_ingestion_cycle`. When no events have been stored for >5 cycles, a warning is injected into the PLAN context via ORIENT.
+
+### Analysis Cycles (every 10 cycles)
+
+Every 10 cycles (when not introspection), the agent runs a dedicated analysis phase:
+
+```
+WAKE → ORIENT → ANALYZE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
+```
+
+The analysis prompt includes **data context**: event distribution by category, top entities by event involvement, data thresholds for analytical tools (30+ events for anomaly_detect, 20+ relationships for graph_analyze), and active situations.
+
+The agent:
+1. Runs graph analysis (centrality, clustering, paths) for structural insights
+2. Detects event patterns (temporal, categorical, geographic)
+3. Uses anomaly detection when enough data exists
+4. Identifies gaps and under-covered areas
+5. Stores analytical insights as high-significance memories
+
+Analysis cycles use: graph tools, memory tools, entity tools, event query tools, analytics tools (`anomaly_detect`, `temporal_query`), watchlist/situation tools (can create new watches/situations based on findings).
 
 ### Introspection Cycles (every 15 cycles)
 
@@ -385,7 +426,7 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 ---
 
-## 5. Tool System (50 Tools)
+## 5. Tool System (57 Tools)
 
 ### Core (17 tools)
 | Tool | Category |
@@ -426,6 +467,12 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 ### SA: Entity Intelligence Tools (3 tools)
 `entity_profile` (with tags), `entity_inspect`, `entity_resolve`
 
+### SA: Watchlist Tools (3 tools)
+`watchlist_add`, `watchlist_list`, `watchlist_remove` — persistent alerting patterns that trigger on matching events (entities, keywords, categories, regions). Watch triggers stored in `watch_triggers` table with event references.
+
+### SA: Situation Tracking Tools (4 tools)
+`situation_create`, `situation_update`, `situation_list`, `situation_link_event` — persistent tracked narratives (e.g., "Iran Nuclear Crisis") that accumulate events, track status (active/escalating/de_escalating/dormant/resolved), and measure intensity over time.
+
 ### Inline Cycle Tools (3 tools)
 | Tool | Purpose |
 |------|---------|
@@ -454,7 +501,10 @@ Sources > `feed_parse` > `event_store` (dual Postgres + OpenSearch) > `entity_re
 
 Events have: title, summary, full_content, event_timestamp, source_id, source_url, guid, category (conflict/political/economic/technology/health/environment/social/disaster/other), actors[], locations[], tags[], confidence, language.
 
-**Deduplication pipeline:** RSS GUID fast-path (exact match on `guid` column) → title similarity (≥50% word overlap within ±1 day window, or last 100 events when no timestamp provided).
+**Deduplication pipeline (3-tier):**
+1. RSS GUID fast-path (exact match on `guid` column)
+2. Source URL exact match (same article from same source)
+3. Title similarity — adaptive threshold (40% for short titles ≤5 words, 50% otherwise) within ±1 day window (200 events) or last 300 events when no timestamp
 
 Time-partitioned OpenSearch indices: `legba-events-YYYY.MM`.
 
@@ -480,24 +530,50 @@ event_store("Russia launches missile at Ukraine")
 
 ## 7. Operator Console UI
 
-Server-rendered web interface for inspecting system state. Read-only.
+Server-rendered web interface for inspecting and managing system state.
 
 **Stack:** FastAPI + Jinja2 + htmx + Tailwind CSS (CDN). No npm, no JS build step.
 
 **Access:** `ssh -L 8501:localhost:8501 user@<your-host>` then `http://localhost:8501`
 
-| Page | URL | Data Source |
-|------|-----|-------------|
-| Dashboard | `/` | Redis, Postgres, response.json. Auto-refreshes 30s. |
-| Entity Explorer | `/entities` | Postgres entity profiles with search + type filter |
-| Event Explorer | `/events` | Postgres + OpenSearch full-text search |
-| Source Registry | `/sources` | Postgres source table with status/type filters |
-| Goals | `/goals` | Postgres goal tree with status/progress |
-| Cycle Monitor | `/cycles` | Audit OpenSearch (cycle aggregation, tool calls, LLM calls) |
-| Messages | `/messages` | NATS outbound (status reports, alerts, analysis reports). Markdown rendered. |
-| Journal | `/journal` | Redis — latest journal consolidation (Legba's inner voice, read-only) |
-| Reports | `/reports`, `/reports/{n}` | Redis — analysis report list + detail view, full markdown rendering |
-| Graph | `/graph` | Apache AGE — interactive knowledge graph visualization |
+| Page | URL | Data Source | CRUD |
+|------|-----|-------------|------|
+| Dashboard | `/` | Redis, Postgres, response.json. Auto-refreshes 30s. | Read |
+| Entity Explorer | `/entities`, `/entities/{id}` | Postgres entity profiles with search + type filter | Read, add/remove assertions |
+| Event Explorer | `/events`, `/events/{id}` | Postgres + OpenSearch full-text search | Read, edit metadata, delete |
+| Source Registry | `/sources`, `/sources/{id}` | Postgres source table with status/type filters | Read, full edit |
+| Facts | `/facts` | Postgres structured facts | Read, inline edit, delete |
+| Goals | `/goals` | Postgres goal tree with status/progress | Read |
+| Watchlist | `/watchlist` | Postgres watchlist + watch_triggers tables | Read, create, delete |
+| Situations | `/situations`, `/situations/{id}` | Postgres situations + situation_events tables | Read, create, update status, delete |
+| Cycle Monitor | `/cycles` | Audit OpenSearch (cycle aggregation, tool calls, LLM calls) | Read |
+| Messages | `/messages` | NATS outbound (status reports, alerts, analysis reports). Markdown rendered. | Read |
+| Memory | `/memory` | Qdrant episodic + long-term vectors | Read, delete |
+| Journal | `/journal` | Redis — latest journal consolidation (Legba's inner voice) | Read |
+| Reports | `/reports`, `/reports/{n}` | Redis — analysis report list + detail view, full markdown rendering | Read |
+| Graph | `/graph` | Apache AGE — interactive knowledge graph visualization | Read, add/remove edges |
+
+### CRUD Operations (htmx)
+
+All mutations use htmx for inline updates without full page reloads:
+
+| Operation | Endpoint | Method | UI Pattern |
+|-----------|----------|--------|------------|
+| Delete fact | `/api/facts/{id}` | DELETE | Confirm → row fade out |
+| Edit fact | `/api/facts/{id}` | PUT | Inline edit → row replace |
+| Delete memory | `/api/memory/{collection}/{id}` | DELETE | Confirm → card fade out |
+| Add entity assertion | `/api/entities/{id}/assertions` | POST | Form → row append |
+| Remove entity assertion | `/api/entities/{id}/assertions` | DELETE | Confirm → row remove |
+| Delete event | `/api/events/{id}` | DELETE | Confirm → cascade delete (entity links + OpenSearch) |
+| Edit event metadata | `/api/events/{id}` | PUT | Collapsible form → category, tags, confidence |
+| Add graph edge | `/api/graph/edges` | POST | Form with entity datalist + relationship type dropdown |
+| Remove graph edge | `/api/graph/edges` | DELETE | Confirm → edge remove + graph refresh |
+| Edit source | `/api/sources/{id}` | PUT | Collapsible form → name, url, type, reliability, bias, tags, description |
+| Create watch | `/api/watchlist` | POST | Inline form → name, entities, keywords, categories, regions, priority |
+| Delete watch | `/api/watchlist/{id}` | DELETE | Confirm → row remove (cascades triggers) |
+| Create situation | `/api/situations` | POST | Inline form → name, description, category, entities, regions, tags |
+| Update situation status | `/api/situations/{id}` | PUT | Status dropdown → badge update |
+| Delete situation | `/api/situations/{id}` | DELETE | Confirm → cascade delete (event links) |
 
 ---
 
@@ -643,13 +719,20 @@ for f in sorted(os.listdir('/logs/archive/cycle_000NNN')):
 | Agent Quality | Tool loop resilience (API retry with backoff, format retry), self-modification guidance (system prompt section + introspection nudge), introspection data quality audit + self-review steps |
 | Data Pipeline | RSS GUID tracking (fast-path dedup), event dedup without timestamp (last 100 fallback), goal dedup in goal_create, source cleanup (81→38), fact predicate normalization (100+ aliases), fact triple unique index, journal archiving to OpenSearch |
 | Research Cycles | Dedicated research phase every 5 cycles — entity enrichment via Wikipedia/reference sources, entity health summary, gap-filling, conflict resolution |
+| UI CRUD | Operator console CRUD: fact delete/edit, memory delete, entity assertion add/remove, event delete/edit, graph edge add/remove, source full edit (htmx inline) |
+| Cycle Decomposition | cycle.py split from 2005 lines to 192-line orchestrator + 10 phase mixin modules (phases/ directory) |
+| V2 Cycle Architecture | 5 cycle types (INTROSPECTION/ANALYSIS/RESEARCH/ACQUIRE/NORMAL) with filtered tool sets. 12 phase mixins. Dedicated data ingestion (ACQUIRE, every 3 cycles) and analytics (ANALYSIS, every 10 cycles). Ingestion gap tracking, journal lead extraction, investigation feed-forward. |
+| Data Pipeline Hardening | 3-tier event dedup (GUID → source_url → adaptive Jaccard), source domain dedup relaxed (path-prefix instead of domain-level), entity completeness depth-weighted (assertions/3 per section), graph fuzzy match limit 100→500 |
+| Watchlists & Situations | Persistent watch patterns (entities, keywords, categories, regions) with trigger tracking. Situation tracking (persistent narratives with status, event accumulation, intensity scoring). Both with full agent tools + operator UI CRUD. |
 
 ### Planned
 
 | Phase | What |
 |-------|------|
-| SA-3 | Analysis, Alerting & Output (anomaly detection, briefings, alerts, trend analysis) |
-| UI CRUD | Entity edit/merge, event delete/edit, facts delete/edit, memory delete, graph edge management, source full edit |
+| Entity Merge | UI for merging duplicate entities (consolidate profiles, re-link events, merge graph nodes) |
+| Watchlist Auto-Matching | Post-event_store automatic watch pattern matching with trigger creation |
+| Differential Reporting | Compare analysis cycles to detect changes and surprises |
+| Surprise/Novelty Scoring | Score events by unexpectedness given existing graph structure |
 
 ---
 
@@ -670,7 +753,19 @@ legba/
 |   |   +-- config.py               -- LegbaConfig (temperature default 1.0)
 |   +-- agent/
 |   |   +-- main.py                  -- Entry point
-|   |   +-- cycle.py                 -- WAKE>ORIENT>PLAN>ACT>REFLECT>NARRATE>PERSIST + journal, reports, introspection
+|   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 12 phase mixins
+|   |   +-- phases/                  -- Phase mixin modules
+|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (57 tools)
+|   |   |   +-- orient.py           -- OrientMixin: memory/context + ingestion gap tracking + journal leads
+|   |   |   +-- plan.py             -- PlanMixin: LLM planning + tool selection
+|   |   |   +-- act.py              -- ActMixin: tool loop execution
+|   |   |   +-- reflect.py          -- ReflectMixin: significance, facts, graph
+|   |   |   +-- narrate.py          -- NarrateMixin: journal + consolidation + lead extraction
+|   |   |   +-- persist.py          -- PersistMixin: storage, goals, ingestion tracking, heartbeat
+|   |   |   +-- introspect.py       -- IntrospectMixin: mission review, reports
+|   |   |   +-- research.py         -- ResearchMixin: entity enrichment
+|   |   |   +-- acquire.py          -- AcquireMixin: dedicated source fetching + event ingestion
+|   |   |   +-- analyze.py          -- AnalyzeMixin: pattern detection, graph mining, anomaly detection
 |   |   +-- log.py                   -- CycleLogger (JSONL structured logging)
 |   |   +-- llm/                     -- format.py, provider.py, client.py, tool_parser.py
 |   |   +-- memory/                  -- manager.py, registers.py, episodic.py, structured.py, graph.py, opensearch.py
@@ -678,7 +773,7 @@ legba/
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 15 modules (50 tools) + geo.py utility
+|   |   |   +-- builtins/            -- 17 modules (57 tools) + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/
@@ -688,7 +783,7 @@ legba/
 |   |   +-- main.py, lifecycle.py, heartbeat.py, comms.py, cli.py, audit.py, drain.py
 |   +-- ui/
 |       +-- app.py, stores.py, messages.py, static/
-|       +-- routes/                    -- dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph
+|       +-- routes/                    -- dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph, facts, memory, watchlist, situations
 |       +-- templates/                 -- Jinja2 (base.html + per-page dirs)
 +-- tests/                           -- 241 tests (unit + integration + graph)
 +-- docs/
