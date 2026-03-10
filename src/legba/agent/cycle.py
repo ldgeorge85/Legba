@@ -503,6 +503,7 @@ class AgentCycle:
             pass
 
         # Build introspection prompt with tool definitions for allowed tools only
+        inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
         review_messages = self.assembler.assemble_introspection_prompt(
             cycle_number=self.state.cycle_number,
             seed_goal=self.state.seed_goal,
@@ -510,6 +511,7 @@ class AgentCycle:
             deferred_goals=deferred_goals_data,
             recent_work_pattern=recent_work_pattern,
             allowed_tools=self.INTROSPECTION_TOOLS,
+            inbox_messages=inbox_messages if inbox_messages else None,
         )
 
         # Create a filtered executor that only allows introspection tools
@@ -591,12 +593,14 @@ class AgentCycle:
         allowed_tools = _tpl.RESEARCH_TOOLS
 
         # Build research prompt
+        inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
         research_messages = self.assembler.assemble_research_prompt(
             cycle_number=self.state.cycle_number,
             seed_goal=self.state.seed_goal,
             active_goals=[g.model_dump() for g in self._active_goals],
             entity_health=entity_health,
             allowed_tools=allowed_tools,
+            inbox_messages=inbox_messages if inbox_messages else None,
         )
 
         # Create a filtered executor
@@ -882,12 +886,14 @@ class AgentCycle:
         working_memory_text = self.llm.working_memory.full_text()
         results_summary = self._final_response[:3000] if self._final_response else "(no response)"
 
+        inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
         reflect_messages = self.assembler.assemble_reflect_prompt(
             cycle_plan=self._cycle_plan,
             working_memory=working_memory_text,
             results_summary=results_summary,
             seed_goal=self.state.seed_goal,
             cycle_number=self.state.cycle_number,
+            inbox_messages=inbox_messages if inbox_messages else None,
         )
 
         try:
@@ -1055,7 +1061,6 @@ class AgentCycle:
                 response = await self.llm.complete(
                     messages,
                     purpose="liveness",
-                    max_tokens=512,
                     temperature=0.0 if attempt > 0 else None,
                 )
                 raw = response.content.strip()
@@ -1110,15 +1115,16 @@ class AgentCycle:
                 self._final_response[:500] if self._final_response else "empty cycle",
             )
 
+            inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
             narrate_messages = self.assembler.assemble_narrate_prompt(
                 cycle_summary=cycle_summary,
                 journal_context=self._journal_context,
+                inbox_messages=inbox_messages if inbox_messages else None,
             )
 
             response = await self.llm.complete(
                 narrate_messages,
                 purpose="narrate",
-                max_tokens=512,
             )
 
             # Parse JSON array of strings

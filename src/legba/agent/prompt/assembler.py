@@ -185,6 +185,7 @@ class PromptAssembler:
         deferred_goals: list[dict],
         recent_work_pattern: str,
         allowed_tools: frozenset[str],
+        inbox_messages: list[InboxMessage] | None = None,
     ) -> list[Message]:
         """Build the message list for the deep introspection cycle.
 
@@ -222,6 +223,10 @@ class PromptAssembler:
             recent_work_pattern=recent_work_pattern or "unknown",
         )
 
+        # Inject operator messages if present
+        if inbox_messages:
+            user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+
         return [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
@@ -234,6 +239,7 @@ class PromptAssembler:
         active_goals: list[dict],
         entity_health: str,
         allowed_tools: frozenset[str],
+        inbox_messages: list[InboxMessage] | None = None,
     ) -> list[Message]:
         """Build the message list for the research/enrichment cycle.
 
@@ -258,6 +264,10 @@ class PromptAssembler:
             active_goals=goals_text,
             entity_health=entity_health,
         )
+
+        # Inject operator messages if present
+        if inbox_messages:
+            user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
         return [
             Message(role="system", content=system_text),
@@ -432,6 +442,7 @@ class PromptAssembler:
         results_summary: str,
         seed_goal: str = "",
         cycle_number: int = 0,
+        inbox_messages: list[InboxMessage] | None = None,
     ) -> list[Message]:
         """Build the message list for the REFLECT phase."""
         max_results = min(self._max_context_tokens // 2, 50000) if self._max_context_tokens > 0 else 50000
@@ -443,6 +454,10 @@ class PromptAssembler:
             working_memory=working_memory or "(no observations recorded)",
             results_summary=results_summary,
         )
+
+        # Inject operator messages so reflection accounts for them
+        if inbox_messages:
+            reflect_text = self._format_inbox(inbox_messages) + "\n\n" + reflect_text
 
         system_text = (
             "reasoning: high\n\n"
@@ -470,12 +485,18 @@ class PromptAssembler:
         self,
         cycle_summary: str,
         journal_context: str,
+        inbox_messages: list[InboxMessage] | None = None,
     ) -> list[Message]:
         """Build the message list for the NARRATE phase (journal entry)."""
         narrate_text = templates.NARRATE_PROMPT.format(
             cycle_summary=cycle_summary[:1000],
             journal_context=journal_context or "(no prior journal entries)",
         )
+
+        # Inject operator messages so journal entries can reflect on them
+        if inbox_messages:
+            narrate_text = self._format_inbox(inbox_messages) + "\n\n" + narrate_text
+
         return [
             Message(role="system", content="reasoning: high\n\nYou are Legba. Write your journal entries. Output ONLY a JSON array of strings."),
             Message(role="user", content=narrate_text),
