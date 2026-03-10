@@ -64,6 +64,9 @@ class Event(BaseModel):
     geo_regions: list[str] = Field(default_factory=list)    # Resolved region/state names
     geo_coordinates: list[dict] = Field(default_factory=list)  # [{"name": ..., "lat": ..., "lon": ...}]
 
+    # Feed dedup
+    guid: str = ""  # RSS <guid> or Atom <id> — fast-path dedup
+
     # Metadata
     language: str = "en"
 
@@ -86,6 +89,7 @@ def create_event(
     locations: list[str] | None = None,
     tags: list[str] | None = None,
     language: str = "en",
+    guid: str = "",
 ) -> Event:
     return Event(
         title=title,
@@ -101,4 +105,5 @@ def create_event(
         locations=locations or [],
         tags=tags or [],
         language=language,
+        guid=guid,
     )

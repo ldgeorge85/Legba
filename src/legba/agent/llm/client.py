@@ -270,7 +270,11 @@ class LLMClient:
 
         step = 0
         consecutive_empty = 0  # track consecutive no-tool-call responses
+        consecutive_api_errors = 0  # track consecutive LLM API failures
         override_prompt: str | None = None  # set when a retry needs a custom prompt
+
+        MAX_FORMAT_RETRIES = 2   # re-prompt attempts on unparseable responses
+        MAX_API_RETRIES = 2      # retry attempts on transient LLM API errors
 
         while step < max_steps:
             if stop_check and stop_check():
@@ -303,19 +307,33 @@ class LLMClient:
                 )
                 step_msgs = [system_msg, Message(role="user", content=user_content)]
 
-            # Get completion — catch API errors so cycle can still REFLECT/PERSIST
+            # Get completion — retry transient API errors before giving up
             try:
                 response = await self.complete(
                     step_msgs,
                     purpose=f"{purpose}_step_{step}",
                 )
+                consecutive_api_errors = 0  # reset on success
             except LLMApiError as e:
-                self.working_memory.add_note(
-                    f"LLM API error at step {step}: {e}. "
-                    "Exiting tool loop to proceed to REFLECT and PERSIST."
-                )
-                log.warning("LLM API error at step %d, breaking tool loop: %s", step, e)
-                break
+                consecutive_api_errors += 1
+                if consecutive_api_errors <= MAX_API_RETRIES:
+                    log.warning(
+                        "LLM API error at step %d (attempt %d/%d): %s. Retrying.",
+                        step, consecutive_api_errors, MAX_API_RETRIES, e,
+                    )
+                    self.working_memory.add_note(
+                        f"LLM API error at step {step} (attempt {consecutive_api_errors}): {e}. Retrying."
+                    )
+                    step -= 1  # don't count the failed attempt against step budget
+                    await asyncio.sleep(min(2 ** consecutive_api_errors, 10))
+                    continue
+                else:
+                    self.working_memory.add_note(
+                        f"LLM API error at step {step} after {MAX_API_RETRIES} retries: {e}. "
+                        "Exiting tool loop to proceed to REFLECT and PERSIST."
+                    )
+                    log.warning("LLM API error at step %d, retries exhausted, breaking tool loop: %s", step, e)
+                    break
 
             raw = response.content
 
@@ -327,25 +345,26 @@ class LLMClient:
 
                 if has_tool_call(raw):
                     # Response looks like it intended a tool call but JSON
-                    # didn't parse — retry once with format correction
+                    # didn't parse — re-prompt with format correction
                     log.warning(
-                        "Step %d: unparseable tool call detected (attempt %d). "
+                        "Step %d: unparseable tool call detected (attempt %d/%d). "
                         "Raw (first 500 chars): %s",
-                        step, consecutive_empty, raw[:500],
+                        step, consecutive_empty, MAX_FORMAT_RETRIES, raw[:500],
                     )
-                    if consecutive_empty <= 1:
+                    if consecutive_empty <= MAX_FORMAT_RETRIES:
                         override_prompt = templates.FORMAT_RETRY_PROMPT
                         continue  # costs one step for the retry
                     else:
-                        log.warning("Step %d: format retry exhausted, exiting tool loop", step)
+                        log.warning("Step %d: format retries exhausted after %d attempts, exiting tool loop",
+                                    step, MAX_FORMAT_RETRIES)
                         break
                 else:
-                    # No tool-like content at all — nudge once with reground
+                    # No tool-like content at all — nudge with reground
                     log.info(
                         "Step %d: no tool call in response (attempt %d, first 300 chars): %s",
                         step, consecutive_empty, raw[:300],
                     )
-                    if consecutive_empty <= 1:
+                    if consecutive_empty <= MAX_FORMAT_RETRIES:
                         override_prompt = (
                             "You did not produce a tool call. Continue executing your plan. "
                             'Output one JSON object: {"actions": [...]}. '
@@ -353,8 +372,9 @@ class LLMClient:
                         )
                         continue  # costs one step for the nudge
                     else:
-                        # Two consecutive empty responses — model genuinely done
-                        log.info("Step %d: model produced no tool calls twice, exiting loop", step)
+                        # Multiple consecutive empty responses — model genuinely done
+                        log.info("Step %d: model produced no tool calls %d times, exiting loop",
+                                 step, consecutive_empty)
                         history_messages.append(Message(role="assistant", content=raw))
                         return raw, history_messages
             else:

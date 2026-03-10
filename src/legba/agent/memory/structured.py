@@ -123,11 +123,14 @@ class StructuredStore:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
 
+                ALTER TABLE events ADD COLUMN IF NOT EXISTS guid TEXT NOT NULL DEFAULT '';
+
                 CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_id);
                 CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
                 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(event_timestamp);
                 CREATE INDEX IF NOT EXISTS idx_events_language ON events(language);
                 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+                CREATE INDEX IF NOT EXISTS idx_events_guid ON events(guid) WHERE guid != '';
 
                 CREATE TABLE IF NOT EXISTS entity_profiles (
                     id UUID PRIMARY KEY,
@@ -622,8 +625,8 @@ class StructuredStore:
                 await conn.execute(
                     """
                     INSERT INTO events (id, data, title, source_id, source_url, category,
-                                        event_timestamp, language, confidence, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+                                        event_timestamp, language, confidence, guid, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
                     ON CONFLICT (id) DO UPDATE SET
                         data = EXCLUDED.data,
                         title = EXCLUDED.title,
@@ -641,6 +644,7 @@ class StructuredStore:
                     event.event_timestamp,
                     event.language,
                     event.confidence,
+                    getattr(event, 'guid', ''),
                     event.created_at,
                 )
             return True
@@ -655,8 +659,8 @@ class StructuredStore:
                     await conn.execute(
                         """
                         INSERT INTO events (id, data, title, source_id, source_url, category,
-                                            event_timestamp, language, confidence, created_at, updated_at)
-                        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, NOW())
+                                            event_timestamp, language, confidence, guid, created_at, updated_at)
+                        VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, NOW())
                         ON CONFLICT (id) DO UPDATE SET
                             data = EXCLUDED.data,
                             title = EXCLUDED.title,
@@ -673,6 +677,7 @@ class StructuredStore:
                         event.event_timestamp,
                         event.language,
                         event.confidence,
+                        getattr(event, 'guid', ''),
                         event.created_at,
                     )
                 return True
@@ -682,6 +687,37 @@ class StructuredStore:
         except Exception as e:
             logger.error("save_event failed for event %s: %s", event.id, e)
             return False
+
+    async def check_event_guid(self, guid: str) -> dict | None:
+        """Check if an event with this GUID already exists. Returns {id, title} or None."""
+        if not self._available or not guid:
+            return None
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id, title FROM events WHERE guid = $1 LIMIT 1",
+                    guid,
+                )
+                if row:
+                    return {"id": row["id"], "title": row["title"]}
+        except Exception:
+            pass
+        return None
+
+    async def get_recent_events_for_dedup(self, limit: int = 100) -> list:
+        """Get recent events (by created_at) for title-similarity dedup."""
+        if not self._available:
+            return []
+        try:
+            from ...shared.schemas.events import Event
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT data FROM events ORDER BY created_at DESC LIMIT $1",
+                    limit,
+                )
+            return [Event.model_validate_json(row["data"]) for row in rows]
+        except Exception:
+            return []
 
     async def query_events(
         self,

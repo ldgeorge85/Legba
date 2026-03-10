@@ -132,6 +132,9 @@ EVENT_STORE_DEF = ToolDefinition(
         ToolParameter(name="language", type="string",
                       description="ISO 639-1 language code (default: en)",
                       required=False),
+        ToolParameter(name="guid", type="string",
+                      description="RSS GUID or Atom ID for fast dedup (from feed_parse)",
+                      required=False),
     ],
 )
 
@@ -216,9 +219,24 @@ def register(
             return "Error: title is required"
 
         # --- Duplicate detection -------------------------------------------
-        # Check for existing events with similar titles on the same date.
+
+        # Fast path: GUID exact match
+        guid = args.get("guid", "")
+        if guid:
+            existing = await structured.check_event_guid(guid)
+            if existing:
+                return json.dumps({
+                    "status": "duplicate_detected",
+                    "existing_event_id": str(existing["id"]),
+                    "existing_title": existing["title"],
+                    "reason": "GUID match",
+                    "hint": "This feed item has already been ingested (same GUID).",
+                }, indent=2)
+
+        # Title similarity check
         event_ts_raw = args.get("event_timestamp")
         if event_ts_raw:
+            # With timestamp: check ±1 day window
             try:
                 check_dt = datetime.fromisoformat(event_ts_raw.replace("Z", "+00:00"))
                 from datetime import timedelta
@@ -242,6 +260,22 @@ def register(
                         }, indent=2)
             except (ValueError, Exception):
                 pass  # If date parsing or query fails, proceed with store
+        else:
+            # Without timestamp: check last 100 events by title similarity
+            try:
+                candidates = await structured.get_recent_events_for_dedup(limit=100)
+                for existing in candidates:
+                    sim = _title_similarity(title, existing.title)
+                    if sim >= 0.5:
+                        return json.dumps({
+                            "status": "duplicate_detected",
+                            "existing_event_id": str(existing.id),
+                            "existing_title": existing.title,
+                            "similarity": round(sim, 2),
+                            "hint": "An event with a very similar title already exists in recent events.",
+                        }, indent=2)
+            except Exception:
+                pass
         # -------------------------------------------------------------------
 
         from ....shared.schemas.events import create_event, EventCategory
@@ -295,6 +329,8 @@ def register(
                 kwargs["tags"] = [t.strip() for t in tags_val.split(",") if t.strip()]
         if args.get("language"):
             kwargs["language"] = args["language"]
+        if args.get("guid"):
+            kwargs["guid"] = args["guid"]
 
         event = create_event(**kwargs)
 

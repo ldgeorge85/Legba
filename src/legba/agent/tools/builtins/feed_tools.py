@@ -140,9 +140,13 @@ def register(registry: ToolRegistry, *, structured: StructuredStore | None = Non
             summary = _clean_html(entry.get("summary", ""))
             if len(summary) > _MAX_SUMMARY_CHARS:
                 summary = summary[:_MAX_SUMMARY_CHARS] + "..."
+            # Extract GUID: RSS <guid>, Atom <id>, or fall back to link
+            entry_guid = entry.get("id", "") or entry.get("guid", "") or entry.get("link", "")
+
             entries.append({
                 "title": entry.get("title", ""),
                 "link": entry.get("link", ""),
+                "guid": entry_guid,
                 "summary": summary,
                 "published": entry.get("published", ""),
                 "authors": [a.get("name", "") for a in entry.get("authors", [])],
