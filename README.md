@@ -42,7 +42,9 @@ WAKE → ORIENT → PLAN → REASON+ACT → REFLECT → NARRATE → PERSIST
 - **NARRATE**: LLM writes personal journal entries (self-continuity)
 - **PERSIST**: Store episode, auto-complete goals, promote memories, heartbeat, exit
 
-Every 15 cycles: **introspection** — deep graph audit, entity review, journal consolidation, full world assessment report.
+Every 5 cycles: **research** — entity enrichment via Wikipedia/reference sources, filling profile gaps, resolving data conflicts.
+
+Every 15 cycles: **introspection** — deep graph audit, entity review, data quality audit, self-review, journal consolidation, full world assessment report.
 
 ## Quick Start
 

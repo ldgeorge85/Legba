@@ -1,7 +1,7 @@
 # Legba — Implementation Design
 
 *Key design decisions, data flows, and component interactions.*
-*Last updated: 2026-03-08*
+*Last updated: 2026-03-10*
 
 ---
 
@@ -35,6 +35,12 @@ The tool loop (REASON+ACT) can run up to 20 steps. Each step rebuilds the full p
 - The 8 most recent tool results are included in full
 - Older results are condensed to one-line summaries
 - A working memory (key observations noted by the LLM via `note_to_self`) persists across all steps
+
+### Tool Loop Resilience
+
+Two retry mechanisms prevent premature loop exits:
+- **API error retry**: On transient LLM API errors (timeouts, 500s, rate limits), retries up to 2 times with exponential backoff. Failed attempts don't count against the step budget.
+- **Format retry**: When the LLM returns an unparseable response (no valid `{"actions": [...]}` found), re-prompts up to 2 times with explicit format instructions before falling through to forced-final.
 
 ### Planned-Tool Filtering
 
@@ -148,6 +154,24 @@ main.py:main()
               └── Liveness check (nonce echo — dedicated LLM call, reasoning: low)
 ```
 
+### Research Cycle (every 5, non-introspection)
+
+Replaces PLAN → ACT with entity enrichment using a restricted tool set:
+
+```
+_wake() → _orient() →
+  _research()
+    ├── _build_entity_health_summary()
+    │   └── SQL: entity completeness scores, event counts, assertion counts
+    ├── assemble_research_prompt(entity_health=..., allowed_tools=RESEARCH_TOOLS)
+    ├── reason_with_tools() → full tool loop (http_request, entity/graph/memory tools, os_search)
+    ├── _reflect()
+    ├── _narrate()
+    └── _persist()
+```
+
+Research targets: entities with low completeness but high event involvement. Primary sources: Wikipedia API, official references, cross-referencing existing data.
+
 ### Introspection Cycle (every 15)
 
 Replaces PLAN → ACT with a deep self-assessment using internal-only tools:
@@ -182,7 +206,8 @@ RSS Feed → feed_parse(source_id) → structured entries
                 ├── Record source fetch (success/failure tracking)
                 │
                 └── event_store(title, summary, actors, locations, ...)
-                      ├── Dedup check (50% word overlap within ±1 day)
+                      ├── GUID fast-path dedup (exact match on RSS guid/Atom id)
+                      ├── Title dedup (50% word overlap within ±1 day, or last 100 events if no timestamp)
                       ├── Geo resolution (pycountry + GeoNames → ISO codes + coordinates)
                       ├── Store in Postgres (structured queries)
                       ├── Store in OpenSearch (full-text, time-partitioned: legba-events-YYYY.MM)
@@ -243,6 +268,7 @@ Six guidance modules are appended to the system prompt in PLAN, REASON, and INTR
 | REASON | Full identity + all guidance + filtered tool defs + calling instructions | Context data (bracketed) + plan + working memory + act instruction |
 | REFLECT | Lightweight identity | Plan + working memory + results summary |
 | NARRATE | Minimal ("Write your journal entries") | Cycle summary + prior journal |
+| Research | Full identity + all guidance + research tool defs | Entity health summary + research tasks |
 | Introspection | Full identity + all guidance + internal tool defs | Mission review task + goals + work pattern |
 | Journal Consolidation | Narrative voice identity | All entries since last consolidation |
 | Analysis Report | Analyst identity | Queried data: graph, entities, events, coverage |

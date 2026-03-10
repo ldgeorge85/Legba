@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Continuously operating autonomous intelligence platform.*
-*Last updated: 2026-03-09 | Multi-provider LLM (Anthropic + vLLM), parallel instances, Graph UI fix*
+*Last updated: 2026-03-10 | Research cycles, tool loop resilience, GUID dedup, self-modification guidance*
 
 ---
 
@@ -114,8 +114,9 @@ Each instance has fully isolated data stores (separate Docker volumes), shifted 
 - `LEGBA_AGENT_CONTAINER` — agent container name
 - `LEGBA_VOLUME_PREFIX` — volume name prefix (e.g., `legba_claude`)
 
-**Mitigations still in place:**
-- Tool loop catches `LLMApiError` gracefully — breaks to REFLECT/PERSIST instead of crashing
+**Tool loop resilience:**
+- API error retry with exponential backoff (up to 2 attempts) before breaking to REFLECT/PERSIST
+- Format retry: re-prompts up to 2 times on unparseable LLM responses instead of silently exiting
 - Sliding window condensation (size 8) keeps context growth in check
 - Context budget enforcement in the assembler (120K token max)
 
@@ -156,6 +157,10 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 6. REFLECT   -- LLM evaluates: significance (calibrated 0-1 scale), facts learned, entities, goal progress, memories to promote
 7. NARRATE   -- LLM writes 1-3 short journal entries (personal stream of consciousness)
 8. PERSIST   -- Store episode, publish outbox, auto-complete goals at 100%, promote memories, heartbeat, exit
+
+Special cycles:
+- Every 5 cycles (non-introspection):  RESEARCH — entity enrichment, gap-filling, conflict resolution
+- Every 15 cycles:                     INTROSPECTION — deep audit, journal consolidation, world assessment
 ```
 
 Each step in the REASON+ACT loop rebuilds the full [system, user] message pair (no multi-turn growth). A sliding window keeps the 8 most recent tool results in full, condensing older ones to one-line summaries. Re-grounding prompts inject every 8 steps to keep the LLM on track.
@@ -166,6 +171,24 @@ Each step in the REASON+ACT loop rebuilds the full [system, user] message pair (
 
 **Reporting reminders:** Every 5 cycles, a reminder is injected prompting the agent to produce a structured intelligence brief (published to NATS outbound / messages page).
 
+### Research Cycles (every 5 cycles)
+
+Every 5 cycles (when not an introspection cycle), the agent runs a dedicated research phase instead of the normal PLAN → ACT flow. Research cycles focus on deepening the knowledge base rather than ingesting new events.
+
+```
+WAKE → ORIENT → RESEARCH (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
+```
+
+The research prompt includes an **entity health summary** — a SQL-generated table showing each entity's completeness score, event involvement count, and assertion count. The agent picks 3-5 high-priority targets and researches them:
+
+1. **Identify targets** — entities with low completeness but high event involvement (many events, thin profiles)
+2. **Research** — Wikipedia API (`/api/rest_v1/page/summary/`), official sources, news profiles
+3. **Update profiles** — fill gaps in entity profiles with sourced assertions
+4. **Strengthen graph** — add missing relationships discovered during research
+5. **Resolve conflicts** — fix contradictory facts, merge near-duplicates
+
+Research cycles use a restricted tool set (no feed ingestion): `http_request`, graph tools, memory tools, entity tools, `os_search`, event query tools, `cycle_complete`.
+
 ### Introspection Cycles (every 15 cycles)
 
 Instead of the normal PLAN > ACT > REFLECT flow, introspection cycles run a deep self-assessment:
@@ -175,8 +198,10 @@ Instead of the normal PLAN > ACT > REFLECT flow, introspection cycles run a deep
 2. Cross-Domain Pattern Analysis -- Connections between regions/domains
 3. Entity Completeness           -- Profile gap detection
 4. Goal Health Assessment        -- Stuck/stale goal identification
-5. Journal Consolidation         -- Weave recent journal entries into a single narrative
-6. World Assessment Report       -- Full intelligence assessment ("presidential daily brief")
+5. Data Quality Audit            -- Check for duplicate/contradictory facts, use memory_supersede to fix
+6. Self-Review                   -- Review own code/prompts, implement concrete improvements
+7. Journal Consolidation         -- Weave recent journal entries into a single narrative
+8. World Assessment Report       -- Full intelligence assessment ("presidential daily brief")
 ```
 
 ### Journal / Narrative System
@@ -310,6 +335,7 @@ Note: System and user messages are combined into a single `{"role": "user"}` mes
 | Memory context | `MEMORY_CONTEXT_TEMPLATE` | PLAN + REASON |
 | Reflect | `REFLECT_PROMPT` | REFLECT phase |
 | Mission review | `MISSION_REVIEW_PROMPT` | Every 15 cycles |
+| Research | `RESEARCH_PROMPT` | Every 5 cycles (non-introspection) |
 | SA guidance | `SA_GUIDANCE` | System addon |
 | Entity guidance | `ENTITY_GUIDANCE` | System addon |
 | Re-grounding | `REGROUND_PROMPT` | Every 8 tool steps |
@@ -426,7 +452,9 @@ The PLAN phase outputs a `Tools:` line listing which tools the agent expects to 
 ### Event Pipeline
 Sources > `feed_parse` > `event_store` (dual Postgres + OpenSearch) > `entity_resolve` (link actors/locations) > `graph_store` (relationship topology).
 
-Events have: title, summary, full_content, event_timestamp, source_id, source_url, category (conflict/political/economic/technology/health/environment/social/disaster/other), actors[], locations[], tags[], confidence, language.
+Events have: title, summary, full_content, event_timestamp, source_id, source_url, guid, category (conflict/political/economic/technology/health/environment/social/disaster/other), actors[], locations[], tags[], confidence, language.
+
+**Deduplication pipeline:** RSS GUID fast-path (exact match on `guid` column) → title similarity (≥50% word overlap within ±1 day window, or last 100 events when no timestamp provided).
 
 Time-partitioned OpenSearch indices: `legba-events-YYYY.MM`.
 
@@ -612,12 +640,16 @@ for f in sorted(os.listdir('/logs/archive/cycle_000NNN')):
 
 | SA-2 | Source reliability tracking, geo-resolution (pycountry + GeoNames), entity tags, event dedup (50% word overlap), temporal OpenSearch indexing, audit mapping fix, AGE Cypher syntax guidance |
 | Multi-Provider | Modular LLM provider system (vLLM + Anthropic), parallel instances, supervisor configurability, embedding decoupling, Graph UI edge fix |
+| Agent Quality | Tool loop resilience (API retry with backoff, format retry), self-modification guidance (system prompt section + introspection nudge), introspection data quality audit + self-review steps |
+| Data Pipeline | RSS GUID tracking (fast-path dedup), event dedup without timestamp (last 100 fallback), goal dedup in goal_create, source cleanup (81→38), fact predicate normalization (100+ aliases), fact triple unique index, journal archiving to OpenSearch |
+| Research Cycles | Dedicated research phase every 5 cycles — entity enrichment via Wikipedia/reference sources, entity health summary, gap-filling, conflict resolution |
 
 ### Planned
 
 | Phase | What |
 |-------|------|
 | SA-3 | Analysis, Alerting & Output (anomaly detection, briefings, alerts, trend analysis) |
+| UI CRUD | Entity edit/merge, event delete/edit, facts delete/edit, memory delete, graph edge management, source full edit |
 
 ---
 
