@@ -227,6 +227,43 @@ class PromptAssembler:
             Message(role="user", content=user_text),
         ]
 
+    def assemble_research_prompt(
+        self,
+        cycle_number: int,
+        seed_goal: str,
+        active_goals: list[dict],
+        entity_health: str,
+        allowed_tools: frozenset[str],
+    ) -> list[Message]:
+        """Build the message list for the research/enrichment cycle.
+
+        Uses a REASON+ACT prompt with tool definitions including external
+        tools (http_request) for entity research and enrichment.
+        """
+        goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
+
+        # Build system: identity + research tool definitions + calling instructions
+        from ..llm.format import format_tool_definitions
+        research_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
+        system_text = templates.SYSTEM_PROMPT.format(
+            cycle_number=cycle_number,
+            context_tokens="research",
+        )
+        system_text += "\n\n" + format_tool_definitions(research_tool_data)
+        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+
+        # Build user: the research task with entity health data
+        user_text = templates.RESEARCH_PROMPT.format(
+            seed_goal=seed_goal,
+            active_goals=goals_text,
+            entity_health=entity_health,
+        )
+
+        return [
+            Message(role="system", content=system_text),
+            Message(role="user", content=user_text),
+        ]
+
     def assemble_reason_prompt(
         self,
         cycle_number: int,
