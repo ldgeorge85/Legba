@@ -57,12 +57,12 @@ async def cycle_list(request: Request):
                             "order": {"_key": "desc"},
                         },
                         "aggs": {
-                            "event_count": {"value_count": {"field": "event_type"}},
+                            "event_count": {"value_count": {"field": "event"}},
                             "tool_count": {
-                                "filter": {"term": {"event_type": "tool_call"}}
+                                "filter": {"term": {"event": "tool_call"}}
                             },
                             "error_count": {
-                                "filter": {"term": {"level": "error"}}
+                                "filter": {"term": {"event": "error"}}
                             },
                             "min_ts": {"min": {"field": "timestamp"}},
                             "max_ts": {"max": {"field": "timestamp"}},
@@ -139,7 +139,7 @@ async def cycle_detail(request: Request, cycle_number: int):
 
             for hit in result.get("hits", []):
                 audit_entries.append(hit)
-                event_type = hit.get("event_type", "")
+                event_type = hit.get("event", "")
                 ts = _parse_dt(hit.get("timestamp"))
 
                 if event_type == "tool_call":
@@ -156,12 +156,12 @@ async def cycle_detail(request: Request, cycle_number: int):
                         "latency_ms": hit.get("latency_ms"),
                         "timestamp": ts,
                     })
-                elif event_type == "phase_change":
+                elif event_type == "phase":
                     phases.append({
                         "phase": hit.get("phase", hit.get("new_phase", "")),
                         "timestamp": ts,
                     })
-                elif hit.get("level") == "error" or event_type == "error":
+                elif event_type == "error":
                     errors.append({
                         "message": hit.get("message", hit.get("error", "")),
                         "timestamp": ts,

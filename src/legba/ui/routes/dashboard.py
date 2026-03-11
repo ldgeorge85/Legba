@@ -15,15 +15,28 @@ router = APIRouter()
 
 async def _fetch_stats(request: Request) -> dict:
     stores = get_stores(request)
-    cycle_number, entity_count, event_count, source_count, goal_count, rel_count = (
-        await asyncio.gather(
-            stores.registers.get_int("cycle_number", 0),
-            stores.count_entities(),
-            stores.count_events(),
-            stores.count_sources(),
-            stores.count_goals(),
-            stores.count_relationships(),
-        )
+    (
+        cycle_number,
+        entity_count,
+        event_count,
+        source_count,
+        goal_count,
+        rel_count,
+        fact_count,
+        situation_count,
+        watchlist_count,
+        last_ingestion_cycle,
+    ) = await asyncio.gather(
+        stores.registers.get_int("cycle_number", 0),
+        stores.count_entities(),
+        stores.count_events(),
+        stores.count_sources(),
+        stores.count_goals(),
+        stores.count_relationships(),
+        stores.count_facts(),
+        stores.count_situations(statuses=("active", "escalating")),
+        stores.count_watchlist(),
+        stores.registers.get_int("last_ingestion_cycle", 0),
     )
     return {
         "cycle_number": cycle_number,
@@ -32,6 +45,10 @@ async def _fetch_stats(request: Request) -> dict:
         "source_count": source_count,
         "goal_count": goal_count,
         "relationship_count": rel_count,
+        "fact_count": fact_count,
+        "situation_count": situation_count,
+        "watchlist_count": watchlist_count,
+        "last_ingestion_cycle": last_ingestion_cycle,
     }
 
 
@@ -49,7 +66,11 @@ def _load_cycle_response():
 
 @router.get("/")
 async def dashboard(request: Request):
-    stats = await _fetch_stats(request)
+    stores = get_stores(request)
+    stats, active_situations = await asyncio.gather(
+        _fetch_stats(request),
+        stores.fetch_active_situations(limit=5),
+    )
     cycle_response = _load_cycle_response()
     return templates.TemplateResponse(
         "dashboard.html",
@@ -57,6 +78,7 @@ async def dashboard(request: Request):
             "request": request,
             "active_page": "dashboard",
             "cycle_response": cycle_response,
+            "active_situations": active_situations,
             **stats,
         },
     )

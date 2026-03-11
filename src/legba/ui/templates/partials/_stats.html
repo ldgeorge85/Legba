@@ -1,4 +1,4 @@
-<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+<div class="grid grid-cols-3 md:grid-cols-3 lg:grid-cols-3 gap-4">
   <div class="card text-center">
     <div class="text-3xl font-bold text-cyan-400">{{ cycle_number }}</div>
     <div class="text-xs text-gray-400 mt-1">Current Cycle</div>
@@ -23,4 +23,21 @@
     <div class="text-3xl font-bold text-orange-400">{{ relationship_count }}</div>
     <div class="text-xs text-gray-400 mt-1">Relationships</div>
   </div>
+  <div class="card text-center">
+    <div class="text-3xl font-bold text-teal-400">{{ fact_count }}</div>
+    <div class="text-xs text-gray-400 mt-1">Facts</div>
+  </div>
+  <div class="card text-center">
+    <div class="text-3xl font-bold text-red-400">{{ situation_count }}</div>
+    <div class="text-xs text-gray-400 mt-1">Active Situations</div>
+  </div>
+  <div class="card text-center">
+    <div class="text-3xl font-bold text-indigo-400">{{ watchlist_count }}</div>
+    <div class="text-xs text-gray-400 mt-1">Watchlist Patterns</div>
+  </div>
 </div>
+{% if last_ingestion_cycle %}
+<div class="mt-3 text-xs text-gray-500">
+  Last ingestion: cycle #{{ last_ingestion_cycle }}{% if cycle_number and last_ingestion_cycle %} ({{ cycle_number - last_ingestion_cycle }} cycles ago){% endif %}
+</div>
+{% endif %}

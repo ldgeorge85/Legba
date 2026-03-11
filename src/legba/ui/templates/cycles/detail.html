@@ -162,8 +162,21 @@
       {% for entry in audit_entries %}
       <div class="border-b border-gray-800 py-2 text-xs">
         <span class="text-gray-500 font-mono">{{ entry.get('timestamp', '') }}</span>
-        <span class="text-gray-400 ml-2">{{ entry.get('event_type', '') }}</span>
-        <span class="text-gray-500 ml-2">{{ entry.get('message', '') }}</span>
+        <span class="text-cyan-400 ml-2 font-medium">{{ entry.get('event', '') }}</span>
+        <span class="text-gray-400 ml-2">
+          {%- set ev = entry.get('event', '') -%}
+          {%- if ev == 'tool_call' -%}
+            {{ entry.get('tool_name', '') }}{% if entry.get('result') %}: {{ entry.get('result', '')[:100] }}{% if entry.get('result', '')|length > 100 %}…{% endif %}{% endif %}
+          {%- elif ev == 'llm_call' -%}
+            {{ entry.get('purpose', '') }}{% if entry.get('usage') and entry.get('usage').get('total_tokens') %}, tokens: {{ entry.get('usage').get('total_tokens') }}{% endif %}
+          {%- elif ev == 'phase' -%}
+            {{ entry.get('phase', '') }}
+          {%- elif ev == 'error' -%}
+            {{ entry.get('error', '')[:200] }}{% if entry.get('error', '')|length > 200 %}…{% endif %}
+          {%- else -%}
+            {{ entry.get('tool_name', '') or entry.get('purpose', '') or entry.get('phase', '') or '(no details)' }}
+          {%- endif -%}
+        </span>
       </div>
       {% endfor %}
     </div>

@@ -240,6 +240,69 @@ class StoreHolder:
         except Exception:
             return 0
 
+    async def count_facts(self) -> int:
+        if not self.structured._available:
+            return 0
+        try:
+            async with self.structured._pool.acquire() as conn:
+                return await conn.fetchval("SELECT count(*) FROM facts")
+        except Exception:
+            return 0
+
+    async def count_situations(self, statuses: tuple[str, ...] | None = None) -> int:
+        if not self.structured._available:
+            return 0
+        try:
+            async with self.structured._pool.acquire() as conn:
+                if statuses:
+                    placeholders = ", ".join(f"${i+1}" for i in range(len(statuses)))
+                    return await conn.fetchval(
+                        f"SELECT count(*) FROM situations WHERE status IN ({placeholders})",
+                        *statuses,
+                    )
+                return await conn.fetchval("SELECT count(*) FROM situations")
+        except Exception:
+            return 0
+
+    async def count_watchlist(self) -> int:
+        if not self.structured._available:
+            return 0
+        try:
+            async with self.structured._pool.acquire() as conn:
+                return await conn.fetchval(
+                    "SELECT count(*) FROM watchlist WHERE active = true"
+                )
+        except Exception:
+            return 0
+
+    async def fetch_active_situations(self, limit: int = 5) -> list[dict]:
+        """Fetch active/escalating situations for dashboard display."""
+        if not self.structured._available:
+            return []
+        try:
+            async with self.structured._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, name, status, category, intensity_score, updated_at "
+                    "FROM situations "
+                    "WHERE status IN ('active', 'escalating') "
+                    "ORDER BY intensity_score DESC, updated_at DESC "
+                    "LIMIT $1",
+                    limit,
+                )
+                return [
+                    {
+                        "id": str(row["id"]),
+                        "name": row["name"],
+                        "status": row["status"],
+                        "category": row["category"],
+                        "intensity_score": row["intensity_score"] or 0.0,
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+        except Exception:
+            return []
+
     async def count_relationships(self) -> int:
         if not self.graph.available:
             return 0

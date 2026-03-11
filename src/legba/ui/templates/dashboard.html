@@ -21,7 +21,7 @@
   <div class="card">
     {% if cycle_response %}
     <div class="flex items-center gap-3 mb-3">
-      <span class="text-sm font-mono text-gray-400">Cycle #{{ cycle_response.cycle_number }}</span>
+      <a href="/cycles/{{ cycle_response.cycle_number }}" class="text-sm font-mono text-cyan-400 hover:text-cyan-300 hover:underline">Cycle #{{ cycle_response.cycle_number }}</a>
       {% if cycle_response.status == "completed" %}
         <span class="badge badge-green">completed</span>
       {% elif cycle_response.status == "error" %}
@@ -43,6 +43,69 @@
     {% else %}
     <p class="text-sm text-gray-500">No cycle response available yet.</p>
     {% endif %}
+  </div>
+</div>
+
+<!-- Active situations -->
+<div class="mt-6">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-lg font-semibold text-gray-100">Active Situations</h2>
+    <a href="/situations" class="text-xs text-cyan-400 hover:text-cyan-300 hover:underline">View all</a>
+  </div>
+  {% if active_situations %}
+  <div class="space-y-2">
+    {% for sit in active_situations %}
+    <a href="/situations/{{ sit.id }}" class="card flex items-center justify-between hover:border-gray-600 transition-colors block">
+      <div class="flex items-center gap-3">
+        {% if sit.status == "escalating" %}
+          <span class="badge badge-red">escalating</span>
+        {% else %}
+          <span class="badge badge-blue">active</span>
+        {% endif %}
+        <span class="text-sm text-gray-200">{{ sit.name }}</span>
+        {% if sit.category %}
+          <span class="text-xs text-gray-500">{{ sit.category }}</span>
+        {% endif %}
+      </div>
+      <div class="flex items-center gap-4">
+        <div class="text-right">
+          <div class="text-sm font-mono {% if sit.intensity_score >= 7 %}text-red-400{% elif sit.intensity_score >= 4 %}text-yellow-400{% else %}text-gray-400{% endif %}">{{ "%.1f" | format(sit.intensity_score) }}</div>
+          <div class="text-xs text-gray-500">intensity</div>
+        </div>
+        {% if sit.updated_at %}
+        <span class="text-xs text-gray-500">{{ sit.updated_at | timeago }}</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card">
+    <p class="text-sm text-gray-500">No active or escalating situations.</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Quick links -->
+<div class="mt-6">
+  <h2 class="text-lg font-semibold text-gray-100 mb-3">Quick Links</h2>
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <a href="/events" class="card text-center hover:border-gray-600 transition-colors">
+      <div class="text-sm text-green-400">Events</div>
+      <div class="text-xs text-gray-500 mt-1">Browse all events</div>
+    </a>
+    <a href="/entities" class="card text-center hover:border-gray-600 transition-colors">
+      <div class="text-sm text-blue-400">Entities</div>
+      <div class="text-xs text-gray-500 mt-1">Entity profiles</div>
+    </a>
+    <a href="/graph" hx-boost="false" class="card text-center hover:border-gray-600 transition-colors">
+      <div class="text-sm text-orange-400">Graph</div>
+      <div class="text-xs text-gray-500 mt-1">Knowledge graph</div>
+    </a>
+    <a href="/consult" hx-boost="false" class="card text-center hover:border-gray-600 transition-colors">
+      <div class="text-sm text-purple-400">Consult</div>
+      <div class="text-xs text-gray-500 mt-1">Ask the agent</div>
+    </a>
   </div>
 </div>
 {% endblock %}
