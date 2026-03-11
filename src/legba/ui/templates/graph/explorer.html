@@ -9,6 +9,15 @@
 
 <!-- Controls -->
 <div class="flex flex-wrap items-center gap-3 mb-4">
+  <!-- Node type filter -->
+  <div class="flex items-center gap-2">
+    <span class="text-xs text-gray-500 uppercase">Nodes:</span>
+    <button class="btn text-xs node-filter active" data-type="all" onclick="filterNodes('all')">All</button>
+    {% for ntype in graph_data.node_types %}
+    <button class="btn text-xs node-filter" data-type="{{ ntype }}" onclick="filterNodes('{{ ntype }}')">{{ ntype }}</button>
+    {% endfor %}
+  </div>
+
   <!-- Relationship type filter -->
   <div class="flex items-center gap-2">
     <span class="text-xs text-gray-500 uppercase">Edges:</span>
@@ -278,21 +287,55 @@ function focusNode(name) {
   }
 }
 
+let activeNodeFilter = 'all';
+let activeEdgeFilter = 'all';
+
+function applyFilters() {
+  cy.batch(function() {
+    // Start by showing everything
+    cy.elements().show();
+
+    // Apply node filter
+    if (activeNodeFilter !== 'all') {
+      cy.nodes().hide();
+      cy.nodes('[type="' + activeNodeFilter + '"]').show();
+      // Only show edges where both endpoints are visible
+      cy.edges().forEach(e => {
+        if (!e.source().visible() || !e.target().visible()) e.hide();
+      });
+    }
+
+    // Apply edge filter on top
+    if (activeEdgeFilter !== 'all') {
+      cy.edges().hide();
+      cy.edges('[type="' + activeEdgeFilter + '"]').show();
+      // Hide edges where endpoints are hidden by node filter
+      if (activeNodeFilter !== 'all') {
+        cy.edges().forEach(e => {
+          if (!e.source().data('type') || e.source().data('type') !== activeNodeFilter) return;
+          if (!e.target().data('type') || e.target().data('type') !== activeNodeFilter) return;
+        });
+      }
+    }
+  });
+}
+
+function filterNodes(type) {
+  document.querySelectorAll('.node-filter').forEach(b => b.classList.remove('active'));
+  document.querySelector('.node-filter[data-type="' + type + '"]').classList.add('active');
+  activeNodeFilter = type;
+  applyFilters();
+  // Also update map if in map mode
+  if (leafletMap && !document.getElementById('map-container').classList.contains('hidden')) {
+    renderMapMarkers(mapGeoData, type);
+  }
+}
+
 function filterEdges(type) {
-  // Update button states
   document.querySelectorAll('.edge-filter').forEach(b => b.classList.remove('active'));
   document.querySelector('.edge-filter[data-type="' + type + '"]').classList.add('active');
-
-  if (type === 'all') {
-    cy.edges().show();
-    cy.nodes().show();
-  } else {
-    cy.edges().hide();
-    cy.edges('[type="' + type + '"]').show();
-    // Show only nodes connected to visible edges
-    cy.nodes().hide();
-    cy.edges('[type="' + type + '"]').connectedNodes().show();
-  }
+  activeEdgeFilter = type;
+  applyFilters();
 }
 
 function setLayout(name) {
@@ -420,14 +463,18 @@ async function showMap() {
   }
 }
 
-function renderMapMarkers(data) {
+function renderMapMarkers(data, nodeTypeFilter) {
   if (!mapLayerGroup) return;
   mapLayerGroup.clearLayers();
 
+  const filteredNodes = (!nodeTypeFilter || nodeTypeFilter === 'all')
+    ? data.nodes
+    : data.nodes.filter(n => n.type === nodeTypeFilter);
+  const nodeIds = new Set(filteredNodes.map(n => n.id));
   const markerIndex = {};
 
   // Place circle markers for each geo node
-  data.nodes.forEach(node => {
+  filteredNodes.forEach(node => {
     const color = mapColor(node.type);
     const marker = L.circleMarker([node.lat, node.lon], {
       radius: Math.max(6, Math.min(16, 6 + (node.degree || 0) * 1.5)),
@@ -454,22 +501,27 @@ function renderMapMarkers(data) {
   });
 
   // Draw polylines between connected entities
+  const EDGE_COLORS = {
+    LeaderOf: '#60a5fa', AlliedWith: '#4ade80', HostileTo: '#f87171',
+    EconomicTie: '#fbbf24', MemberOf: '#818cf8', LocatedIn: '#2dd4bf',
+    OperatesIn: '#2dd4bf', PartOf: '#818cf8', BordersWith: '#94a3b8',
+  };
   data.edges.forEach(edge => {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
     const srcCoords = markerIndex[edge.source];
     const tgtCoords = markerIndex[edge.target];
     if (srcCoords && tgtCoords) {
       L.polyline([srcCoords, tgtCoords], {
-        color: '#475569',
-        weight: 1,
-        opacity: 0.35,
-        dashArray: '4 4',
+        color: EDGE_COLORS[edge.type] || '#64748b',
+        weight: 1.5,
+        opacity: 0.6,
       }).addTo(mapLayerGroup);
     }
   });
 
   // Fit bounds if we have markers
-  if (data.nodes.length > 0) {
-    const bounds = data.nodes.map(n => [n.lat, n.lon]);
+  if (filteredNodes.length > 0) {
+    const bounds = filteredNodes.map(n => [n.lat, n.lon]);
     leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 6 });
   }
 }
@@ -500,6 +552,7 @@ function showMapNodeDetail(node, data) {
 
 <style>
   /* Active filter button */
+  .node-filter.active,
   .edge-filter.active,
   .layout-btn.active {
     background: rgba(56, 189, 248, 0.15);
