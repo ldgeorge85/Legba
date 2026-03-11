@@ -171,6 +171,12 @@ services:
       NATS_URL: nats://nats:4222
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
+      # Consultation engine — uses Anthropic by default (override in .env)
+      CONSULT_LLM_PROVIDER: ${CONSULT_LLM_PROVIDER:-anthropic}
+      CONSULT_API_KEY: ${CONSULT_API_KEY:-}
+      CONSULT_MODEL: ${CONSULT_MODEL:-claude-sonnet-4-20250514}
+      CONSULT_TEMPERATURE: ${CONSULT_TEMPERATURE:-0.7}
+      CONSULT_TIMEOUT: ${CONSULT_TIMEOUT:-300}
     ports:
       - "8501:8501"
     volumes:
