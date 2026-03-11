@@ -214,7 +214,7 @@ CRITICAL — before choosing:
 1. Review the Knowledge Graph Summary above. Check entity counts and relationship coverage to identify gaps. If the relationship count is low relative to entities, prioritize adding edges with graph_store.
 2. Review your Known Facts above. If data already exists for an item, skip it.
 3. Review Source Health (if shown). If source utilization is low (many sources, few producing events), do NOT add new sources. Work existing sources: parse their feeds, ingest events, enrich entities.
-4. Prioritize: event ingestion > **entity research & enrichment** > relationship building > analysis + pattern detection > source discovery. Source discovery is the LOWEST priority — you need depth before breadth.
+4. Prioritize: event ingestion > **entity research & enrichment** > relationship building > analysis + pattern detection > source discovery. Source discovery should be done periodically during RESEARCH cycles. Prioritize depth over breadth, but actively seek sources for underrepresented categories (health, environment, disaster, technology) and underrepresented regions (Africa, South Asia, Southeast Asia, Latin America).
 5. If any active goal is at 100% progress, your first action should be completing it (goal_update action=complete), then pick or create the next goal.
 6. When ingesting events, ALWAYS extract and store relationships between the entities involved. entity_resolve creates nodes; graph_store with relate_to creates edges. Both are needed.
 7. **If entity profiles have low completeness, research them.** Use http_request to fetch reference data — Wikipedia (`https://en.wikipedia.org/api/rest_v1/page/summary/ENTITY_NAME`), government sites, organizational pages. Then update profiles with entity_profile (add summaries, assertions, type). Empty entity stubs are wasted nodes.
@@ -379,6 +379,21 @@ For each target entity:
 - If two entities turn out to be the same thing (variant names), note this for operator cleanup
 - If graph relationships contradict researched facts, fix the graph
 
+## Data Source APIs (use with http_request)
+
+These free APIs provide structured data. Use http_request to query them:
+
+- **GDELT DOC API** (global news, no key): `https://api.gdeltproject.org/api/v2/doc/doc?query=TOPIC&mode=artlist&maxrecords=250&format=json&timespan=24h`
+- **USGS Earthquakes** (real-time, no key): `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson`
+- **GDACS Disasters** (global alerts, no key): `https://www.gdacs.org/xml/rss.xml`
+- **NASA EONET** (natural events, no key): `https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=20`
+- **WHO Outbreaks** (disease alerts, no key): `https://www.who.int/api/news/diseaseoutbreaknews`
+- **ReliefWeb** (humanitarian, no key): `https://api.reliefweb.int/v1/reports?appname=legba&limit=50`
+- **NVD CVEs** (cyber vulns, no key): `https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=20`
+- **World Bank** (economic indicators, no key): `https://api.worldbank.org/v2/country/all/indicator/NY.GDP.MKTP.CD?format=json&date=2020:2026`
+
+Register valuable feeds as sources (source_add) and use http_request for JSON API lookups during research.
+
 After completing your research, call cycle_complete.
 
 Your final action before cycle_complete should be a note_to_self summarizing what you researched, what you learned, and what gaps remain for next time.
@@ -455,6 +470,10 @@ This is a focused data ingestion cycle. Your job is to:
 ### 4. Update Source Metadata
 - After fetching, use source_update to record success/failure
 - If a source consistently fails, set its status to "error" with last_error
+
+### API Sources
+- For sources with source_type "api", use http_request to fetch JSON data — feed_parse only handles RSS/Atom feeds.
+- Parse the JSON response and extract events manually, then store with event_store.
 
 ### DO NOT:
 - Do NOT spend time on graph enrichment or deep research — that's for research cycles
@@ -914,7 +933,8 @@ Use it to orient yourself — do NOT waste cycles discovering facts already in t
 - Build graph relationships between key entities (graph_store with since/until dates)
 - Register diverse news sources (source_add) for ongoing monitoring
 - Fetch summary/overview articles to deepen understanding beyond the briefing:
-  - Major wire service RSS feeds (Reuters, AP, Al Jazeera, BBC)
+  - Diverse news RSS feeds: Al Jazeera, BBC, NHK World, AllAfrica, Times of India, France24, DW News
+  - Data APIs: GDELT DOC API, USGS Earthquakes, GDACS, ReliefWeb
 
 **Cycle 4-5: Begin Live Operations**
 - Start ingesting live news feeds (feed_parse) and storing events (event_store)

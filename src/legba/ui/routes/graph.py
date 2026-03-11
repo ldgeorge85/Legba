@@ -159,6 +159,36 @@ async def graph_api(request: Request):
     return JSONResponse(graph_data)
 
 
+@router.get("/api/graph/geo")
+async def graph_geo_api(request: Request):
+    """Return graph nodes with resolved geo coordinates."""
+    from ...agent.tools.builtins.geo import resolve_locations
+
+    stores = get_stores(request)
+    graph_data = await _fetch_full_graph(stores)
+
+    geo_nodes = []
+    for node in graph_data["nodes"]:
+        name = node["data"]["name"]
+        result = resolve_locations([name])
+        if result.get("coordinates"):
+            coord = result["coordinates"][0]
+            geo_nodes.append({
+                **node["data"],
+                "lat": coord["lat"],
+                "lon": coord["lon"],
+            })
+
+    # Only include edges where both endpoints have geo data
+    geo_node_ids = {n["id"] for n in geo_nodes}
+    geo_edges = [
+        e for e in graph_data["edges"]
+        if e["data"]["source"] in geo_node_ids and e["data"]["target"] in geo_node_ids
+    ]
+
+    return JSONResponse({"nodes": geo_nodes, "edges": [e["data"] for e in geo_edges]})
+
+
 # ------------------------------------------------------------------
 # Write operations (U13: add/remove edges)
 # ------------------------------------------------------------------

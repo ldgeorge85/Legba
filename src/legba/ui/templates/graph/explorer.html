@@ -24,10 +24,11 @@
   <input type="text" id="graph-search" placeholder="Search nodes..." class="input text-xs w-48" oninput="searchNodes(this.value)">
 
   <!-- Layout controls -->
-  <button class="btn text-xs" onclick="setLayout('cose')">Force Layout</button>
-  <button class="btn text-xs" onclick="setLayout('cose-bilkent')">Clustered</button>
-  <button class="btn text-xs" onclick="setLayout('circle')">Circle</button>
-  <button class="btn text-xs" onclick="setLayout('grid')">Grid</button>
+  <button class="btn text-xs layout-btn active" data-layout="cose" onclick="setLayout('cose')">Force Layout</button>
+  <button class="btn text-xs layout-btn" data-layout="cose-bilkent" onclick="setLayout('cose-bilkent')">Clustered</button>
+  <button class="btn text-xs layout-btn" data-layout="circle" onclick="setLayout('circle')">Circle</button>
+  <button class="btn text-xs layout-btn" data-layout="grid" onclick="setLayout('grid')">Grid</button>
+  <button class="btn text-xs layout-btn" data-layout="map" onclick="showMap()">Map</button>
   <button class="btn text-xs" onclick="cy.fit(undefined, 30)">Fit</button>
   <button class="btn text-xs" onclick="refreshGraph()">Reload</button>
 </div>
@@ -75,6 +76,8 @@
 <div class="flex gap-4" style="height: calc(100vh - 260px);">
   <!-- Cytoscape container -->
   <div id="cy" class="flex-1 card" style="min-height: 400px;"></div>
+  <!-- Leaflet map container (hidden by default) -->
+  <div id="map-container" class="flex-1 card hidden" style="min-height: 400px;"></div>
 
   <!-- Detail panel (hidden until node clicked) -->
   <div id="detail-panel" class="w-72 card overflow-y-auto hidden">
@@ -104,6 +107,10 @@
   </span>
   {% endfor %}
 </div>
+
+<!-- Leaflet.js for map view -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 
 <!-- Cytoscape.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
@@ -289,6 +296,14 @@ function filterEdges(type) {
 }
 
 function setLayout(name) {
+  // Switch back to graph view if in map mode
+  document.getElementById('cy').classList.remove('hidden');
+  document.getElementById('map-container').classList.add('hidden');
+  // Update active button
+  document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector('.layout-btn[data-layout="' + name + '"]');
+  if (btn) btn.classList.add('active');
+
   const opts = { name: name, animate: true, animationDuration: 500, padding: 30 };
   if (name === 'cose') {
     opts.nodeRepulsion = function() { return 50000; };
@@ -349,11 +364,144 @@ async function deleteEdge() {
   document.getElementById('edge-result').innerHTML = html;
   if (resp.ok) setTimeout(() => refreshGraph(), 500);
 }
+
+// -- Map view --
+const MAP_TYPE_COLORS = {
+  Country: '#3b82f6',
+  Location: '#22c55e',
+  Person: '#f59e0b',
+  Organization: '#8b5cf6',
+  Armed_Group: '#ef4444',
+  Unknown: '#6b7280',
+};
+function mapColor(ntype) {
+  return MAP_TYPE_COLORS[ntype] || '#6b7280';
+}
+
+let leafletMap = null;
+let mapLayerGroup = null;
+let mapGeoData = null;
+
+async function showMap() {
+  // Toggle: hide cytoscape, show map
+  document.getElementById('cy').classList.add('hidden');
+  document.getElementById('map-container').classList.remove('hidden');
+
+  // Update active button
+  document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.layout-btn[data-layout="map"]').classList.add('active');
+
+  // Initialize Leaflet map once
+  if (!leafletMap) {
+    leafletMap = L.map('map-container', {
+      center: [20, 0],
+      zoom: 2,
+      zoomControl: true,
+      attributionControl: true,
+    });
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19,
+    }).addTo(leafletMap);
+    mapLayerGroup = L.layerGroup().addTo(leafletMap);
+  }
+
+  // Force Leaflet to recalculate container size after visibility change
+  setTimeout(() => { leafletMap.invalidateSize(); }, 100);
+
+  // Fetch geo data and populate markers
+  try {
+    const resp = await fetch('/api/graph/geo');
+    mapGeoData = await resp.json();
+    renderMapMarkers(mapGeoData);
+  } catch (e) {
+    console.error('Failed to load geo data:', e);
+  }
+}
+
+function renderMapMarkers(data) {
+  if (!mapLayerGroup) return;
+  mapLayerGroup.clearLayers();
+
+  const markerIndex = {};
+
+  // Place circle markers for each geo node
+  data.nodes.forEach(node => {
+    const color = mapColor(node.type);
+    const marker = L.circleMarker([node.lat, node.lon], {
+      radius: Math.max(6, Math.min(16, 6 + (node.degree || 0) * 1.5)),
+      fillColor: color,
+      color: '#1e293b',
+      weight: 1.5,
+      fillOpacity: 0.85,
+    }).addTo(mapLayerGroup);
+
+    marker.bindPopup(
+      '<div style="font-family: sans-serif;">' +
+        '<div style="font-weight: 600; font-size: 13px; color: #f1f5f9;">' + node.name + '</div>' +
+        '<div style="font-size: 11px; color: ' + color + ';">' + node.type + '</div>' +
+        (node.degree ? '<div style="font-size: 10px; color: #94a3b8;">' + node.degree + ' connection(s)</div>' : '') +
+      '</div>',
+      { className: 'dark-popup' }
+    );
+
+    marker.on('click', function() {
+      showMapNodeDetail(node, data);
+    });
+
+    markerIndex[node.id] = [node.lat, node.lon];
+  });
+
+  // Draw polylines between connected entities
+  data.edges.forEach(edge => {
+    const srcCoords = markerIndex[edge.source];
+    const tgtCoords = markerIndex[edge.target];
+    if (srcCoords && tgtCoords) {
+      L.polyline([srcCoords, tgtCoords], {
+        color: '#475569',
+        weight: 1,
+        opacity: 0.35,
+        dashArray: '4 4',
+      }).addTo(mapLayerGroup);
+    }
+  });
+
+  // Fit bounds if we have markers
+  if (data.nodes.length > 0) {
+    const bounds = data.nodes.map(n => [n.lat, n.lon]);
+    leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 6 });
+  }
+}
+
+function showMapNodeDetail(node, data) {
+  // Populate the same detail panel used by Cytoscape
+  document.getElementById('detail-name').textContent = node.name;
+  document.getElementById('detail-type').innerHTML =
+    '<span class="badge badge-blue">' + node.type + '</span>' +
+    '<span class="text-xs text-gray-500 ml-2">' + node.lat + ', ' + node.lon + '</span>';
+
+  // Find connected edges
+  const connected = data.edges.filter(e => e.source === node.id || e.target === node.id);
+  const relsDiv = document.getElementById('detail-rels');
+  let html = '<div class="text-xs text-gray-400 mb-1">' + connected.length + ' relationship(s)</div>';
+  connected.forEach(edge => {
+    const other = (edge.source === node.id) ? edge.target : edge.source;
+    const dir = (edge.source === node.id) ? '\u2192' : '\u2190';
+    html += '<div class="flex items-center gap-1 text-xs text-gray-300 py-0.5">' +
+      '<span class="text-gray-500">' + dir + '</span> ' +
+      '<span class="text-cyan-400">' + other + '</span> ' +
+      '<span class="text-gray-500">(' + edge.type + ')</span></div>';
+  });
+  relsDiv.innerHTML = html;
+  document.getElementById('detail-panel').classList.remove('hidden');
+}
 </script>
 
 <style>
   /* Active filter button */
-  .edge-filter.active {
+  .edge-filter.active,
+  .layout-btn.active {
     background: rgba(56, 189, 248, 0.15);
     border-color: #38bdf8;
     color: #38bdf8;
@@ -361,6 +509,36 @@ async function deleteEdge() {
   /* Override card background for graph container */
   #cy {
     background: #0f172a;
+  }
+  /* Map container styling */
+  #map-container {
+    background: #0f172a;
+    padding: 0;
+    overflow: hidden;
+  }
+  #map-container .leaflet-container {
+    background: #0f172a;
+    height: 100%;
+    width: 100%;
+  }
+  /* Dark-themed Leaflet popups */
+  .dark-popup .leaflet-popup-content-wrapper {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #e2e8f0;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  }
+  .dark-popup .leaflet-popup-tip {
+    background: #1e293b;
+    border-right: 1px solid #334155;
+    border-bottom: 1px solid #334155;
+  }
+  .dark-popup .leaflet-popup-close-button {
+    color: #94a3b8;
+  }
+  .dark-popup .leaflet-popup-close-button:hover {
+    color: #e2e8f0;
   }
 </style>
 {% endblock %}

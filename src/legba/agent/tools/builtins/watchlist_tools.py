@@ -39,8 +39,11 @@ CREATE TABLE IF NOT EXISTS watchlist (
 CREATE TABLE IF NOT EXISTS watch_triggers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     watch_id UUID NOT NULL REFERENCES watchlist(id) ON DELETE CASCADE,
-    event_id UUID NOT NULL,
-    data JSONB NOT NULL,
+    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    watch_name TEXT NOT NULL DEFAULT '',
+    event_title TEXT NOT NULL DEFAULT '',
+    match_reasons JSONB NOT NULL DEFAULT '[]',
+    priority TEXT NOT NULL DEFAULT 'normal',
     triggered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

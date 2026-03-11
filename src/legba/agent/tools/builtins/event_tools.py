@@ -171,15 +171,13 @@ async def _check_watchlist_matches(structured: StructuredStore, event) -> list[d
 
                 if not failed and matched_criteria:
                     from uuid import uuid4
-                    trigger_data = {
-                        "matched_criteria": matched_criteria,
-                        "event_title": event.title,
-                        "event_category": event.category.value,
-                    }
                     await conn.execute(
-                        "INSERT INTO watch_triggers (id, watch_id, event_id, data) "
-                        "VALUES ($1, $2, $3, $4::jsonb)",
-                        uuid4(), row["id"], event.id, json.dumps(trigger_data),
+                        "INSERT INTO watch_triggers "
+                        "(id, watch_id, event_id, watch_name, event_title, match_reasons, priority) "
+                        "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
+                        uuid4(), row["id"], event.id,
+                        row["name"], event.title,
+                        json.dumps(matched_criteria), row["priority"],
                     )
                     await conn.execute(
                         "UPDATE watchlist SET trigger_count = trigger_count + 1, "
@@ -468,6 +466,26 @@ def register(
                     "reason": "source_url match",
                     "hint": "An event from this exact URL already exists.",
                 }, indent=2)
+
+        # Fast path 3: exact title match (case-insensitive) within last 7 days
+        try:
+            async with structured._pool.acquire() as conn:
+                from datetime import timedelta
+                cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+                existing = await conn.fetchrow(
+                    "SELECT id, title FROM events WHERE lower(title) = $1 AND created_at >= $2 LIMIT 1",
+                    title.lower(), cutoff,
+                )
+                if existing:
+                    return json.dumps({
+                        "status": "duplicate_detected",
+                        "existing_event_id": str(existing["id"]),
+                        "existing_title": existing["title"],
+                        "reason": "exact_title_match",
+                        "hint": "An event with this exact title already exists within the last 7 days.",
+                    }, indent=2)
+        except Exception:
+            pass
 
         # Title similarity check — adaptive threshold for short titles
         title_words = _title_words(title)

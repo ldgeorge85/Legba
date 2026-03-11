@@ -310,6 +310,15 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
 
                 data["updated_at"] = now.isoformat()
 
+                current_row = await conn.fetchrow(
+                    "SELECT intensity_score, event_count FROM situations WHERE id = $1", sit_id
+                )
+                if current_row:
+                    if "intensity_score" not in updated_fields:
+                        data["intensity_score"] = float(current_row["intensity_score"])
+                    if "event_count" not in updated_fields:
+                        data["event_count"] = current_row["event_count"]
+
                 # Update denormalized columns + JSONB
                 await conn.execute(
                     "UPDATE situations SET data = $1::jsonb, "
@@ -439,12 +448,20 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
 
                 # Update situation counters
                 now = datetime.now(timezone.utc)
+                actual_count = await conn.fetchval(
+                    "SELECT count(*) FROM situation_events WHERE situation_id = $1",
+                    sit_id,
+                )
                 await conn.execute(
                     "UPDATE situations SET "
-                    "event_count = (SELECT count(*) FROM situation_events WHERE situation_id = $1), "
-                    "last_event_at = $2, updated_at = $2 "
+                    "event_count = $2, "
+                    "last_event_at = $3, updated_at = $3, "
+                    "data = jsonb_set(jsonb_set(data, '{event_count}', $4::jsonb), "
+                    "'{last_event_at}', $5::jsonb) "
                     "WHERE id = $1",
-                    sit_id, now,
+                    sit_id, actual_count, now,
+                    json.dumps(actual_count),
+                    json.dumps(now.isoformat()),
                 )
 
         except Exception as e:

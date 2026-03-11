@@ -40,7 +40,7 @@
     },
     {
       "name": "GDELT Project Events",
-      "url": "http://data.gdeltproject.org/gdeltv2/lastupdate.txt",
+      "url": "https://api.gdeltproject.org/api/v2/doc/doc?query=&mode=artlist&maxrecords=250&format=json&timespan=24h",
       "source_type": "api",
       "reliability": 0.70,
       "bias_label": "center",
@@ -48,7 +48,7 @@
       "geo_origin": "US",
       "coverage_scope": "global",
       "tags": "events,conflict,geopolitical,automated",
-      "description": "GDELT 2.0 event database last update pointer"
+      "description": "GDELT DOC API — returns JSON article list. Use query param to filter by topic. No key required."
     },
     {
       "name": "NPR World News",
@@ -88,15 +88,15 @@
     },
     {
       "name": "ACLED Conflict Data",
-      "url": "https://acleddata.com/acleddatanew/wp-content/uploads/dlm_uploads/last10.rss",
-      "source_type": "rss",
+      "url": "https://acleddata.com/api/acled/read",
+      "source_type": "api",
       "reliability": 0.85,
       "bias_label": "center",
       "ownership_type": "nonprofit",
       "geo_origin": "US",
       "coverage_scope": "global",
       "tags": "conflict,violence,data,research",
-      "description": "Armed Conflict Location & Event Data project updates"
+      "description": "ACLED REST API — structured conflict event data. Requires free API key (register at acleddata.com)."
     },
     {
       "name": "ICG CrisisWatch",
