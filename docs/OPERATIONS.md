@@ -270,6 +270,13 @@ docker volume ls --format '{{.Name}}' | grep legba | xargs -r docker volume rm
 | AGENT_MAX_REASONING_STEPS | 20 | Max tool calls per cycle |
 | AGENT_MISSION_REVIEW_INTERVAL | 15 | Introspection every N cycles |
 | SUPERVISOR_HEARTBEAT_TIMEOUT | 600 | Cycle timeout (seconds) |
+| CONSULT_LLM_PROVIDER | *(agent's provider)* | Consultation engine LLM provider (`anthropic` or `vllm`) |
+| CONSULT_API_KEY | *(agent's key)* | Consultation engine API key. Must be set to enable `/consult`. |
+| CONSULT_API_BASE | *(agent's base)* | Consultation engine API base URL (vLLM only) |
+| CONSULT_MODEL | *(agent's model)* | Consultation engine model name |
+| CONSULT_TEMPERATURE | *(agent's temp)* | Consultation engine temperature |
+| CONSULT_MAX_TOKENS | *(agent's max)* | Consultation engine max output tokens |
+| CONSULT_TIMEOUT | *(agent's timeout)* | Consultation engine request timeout (seconds) |
 
 ### Key Cycle Constants
 | Constant | Location | Value | Purpose |

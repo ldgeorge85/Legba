@@ -62,6 +62,29 @@ class LLMConfig:
             embedding_dimensions=int(os.getenv("MEMORY_VECTOR_DIMENSIONS", "1024")),
         )
 
+    @classmethod
+    def consult_from_env(cls) -> LLMConfig:
+        """Build LLM config for the consultation engine.
+
+        Reads CONSULT_* env vars, falling back to the main LLM config.
+        """
+        base = cls.from_env()
+        return cls(
+            provider=os.getenv("CONSULT_LLM_PROVIDER", base.provider),
+            api_base=os.getenv("CONSULT_API_BASE", base.api_base),
+            api_key=os.getenv("CONSULT_API_KEY", base.api_key),
+            model=os.getenv("CONSULT_MODEL", base.model),
+            max_tokens=int(os.getenv("CONSULT_MAX_TOKENS", str(base.max_tokens))),
+            temperature=float(os.getenv("CONSULT_TEMPERATURE", str(base.temperature))),
+            top_p=base.top_p,
+            timeout=int(os.getenv("CONSULT_TIMEOUT", str(base.timeout))),
+            max_context_tokens=base.max_context_tokens,
+            embedding_api_base=base.embedding_api_base,
+            embedding_api_key=base.embedding_api_key,
+            embedding_model=base.embedding_model,
+            embedding_dimensions=base.embedding_dimensions,
+        )
+
 
 @dataclass(frozen=True)
 class RedisConfig:

@@ -590,9 +590,13 @@ All mutations use htmx for inline updates without full page reloads:
 Interactive agentic chat interface at `/consult`. The operator converses directly with Legba, which has tool access to the same data stores the UI provides.
 
 **How it works:**
-- Lightweight LLM tool-calling loop (up to 10 tool steps per exchange) using the same provider as the agent
+- Lightweight LLM tool-calling loop (up to 10 tool steps per exchange)
+- Own LLM config via `CONSULT_*` env vars — defaults to Anthropic (Claude Sonnet), independent of the agent's vLLM/GPT-OSS provider
+- Does NOT reuse `LLMClient` (too coupled to cycles) — uses providers directly
 - System prompt includes Legba's identity, live data context (entity/event/fact counts, latest journal, active situations)
 - Redis-backed session management (1-hour TTL per session)
+- `respond` tool pattern: LLM calls `respond` to emit its final answer, ending the tool loop
+- Empty response recovery (re-prompts on empty content) and 400 retry for GPT-OSS Harmony multi-message errors
 - Separate from the main agent cycle — does not interfere with autonomous operations
 
 **13 consultation tools:**
@@ -613,7 +617,7 @@ Interactive agentic chat interface at `/consult`. The operator converses directl
 | `update_goal` | Update goal status/progress | Write |
 | `send_message` | Send message to agent via NATS | Write |
 
-**Provider handling:** vLLM gets a single combined user message; Anthropic gets proper multi-turn with system role — same branching as the agent.
+**Provider handling:** vLLM gets a single combined user message; Anthropic gets proper system field + multi-turn messages — same branching logic as the agent but using providers directly.
 
 ---
 

@@ -21,10 +21,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Awaitable
 from uuid import uuid4
 
-from ..agent.llm.provider import VLLMProvider, LLMResponse
+from ..agent.llm.provider import VLLMProvider, LLMResponse, LLMApiError
 from ..agent.llm.anthropic_provider import AnthropicProvider
 from ..agent.llm.tool_parser import parse_tool_calls, has_tool_call
-from ..agent.llm.format import strip_harmony_response
 from ..shared.config import LLMConfig
 from .stores import StoreHolder
 
@@ -182,47 +181,39 @@ def _format_tool_defs_json() -> str:
 # System prompt builder
 # ======================================================================
 
-_SYSTEM_TEMPLATE = """\
-You are Legba — a continuously operating autonomous intelligence platform. \
-You run indefinitely, ingesting global event data, building a knowledge graph, \
-and producing analytical products.
+# System content: identity + tools + format rules (instructions-first, like the agent)
+_SYSTEM_CONTENT = """\
+reasoning: high
 
-Your operator is consulting you directly. This is a conversation — answer their \
-questions using your knowledge base, look things up with your tools, and help \
-them understand the world as you see it.
+You are Legba — a persistent autonomous intelligence analyst. The operator is consulting you. Answer using your tools, then use the respond tool to deliver your answer.
 
-## Current State
-- Cycle: {cycle_number}
-- Events: {event_count} | Entities: {entity_count} | Relationships: {rel_count}
-- Sources: {source_count} active | Goals: {goal_count} active
+# Tools
 
-## Recent Journal
-{journal}
-
-## Active Situations
-{situations}
-
-## Tools
 ```json
 {tool_defs}
 ```
 
-## Tool Calling
-To use a tool, output exactly:
-{{"actions": [{{"tool": "tool_name", "args": {{"param": "value"}}}}]}}
+Respond with a SINGLE JSON object: {{"actions": [{{"tool": "name", "args": {{...}}}}]}}
+Use the respond tool for your final answer: {{"actions": [{{"tool": "respond", "args": {{"message": "..."}}}}]}}
+Output ONLY valid JSON. After the closing }}, STOP."""
 
-You can call multiple tools at once in the actions array.
-After receiving tool results, continue reasoning. When you have your answer, respond in plain text (no tool call).
+# User content: data sections + task (data-last, like the agent)
+_USER_TEMPLATE = """\
+--- CONTEXT DATA ---
 
-## Guidelines
-- Look things up rather than guessing — ground your answers in data
-- Be analytical and insightful
-- If you don't have data on something, say so
-- Speak as yourself — you are Legba, the intelligence at the crossroads"""
+Cycle: {cycle_number} | Events: {event_count} | Entities: {entity_count} | Relationships: {rel_count} | Sources: {source_count} | Goals: {goal_count}
+
+## Journal
+{journal}
+
+## Situations
+{situations}
+
+--- END CONTEXT ---"""
 
 
-async def _build_system_prompt(stores: StoreHolder) -> str:
-    """Assemble the system prompt with live data from stores."""
+async def _build_prompts(stores: StoreHolder) -> tuple[str, str]:
+    """Build system content and user context from stores. Returns (system, user_context)."""
     # Gather counts
     event_count = await stores.count_events()
     entity_count = await stores.count_entities()
@@ -239,19 +230,19 @@ async def _build_system_prompt(stores: StoreHolder) -> str:
     except Exception:
         pass
 
-    # Journal consolidation
-    journal = "No journal consolidation available yet."
+    # Journal consolidation (truncated to avoid overwhelming the model)
+    journal = "(none)"
     try:
         journal_data = await stores.registers.get_json("journal")
         if journal_data:
             consolidation = journal_data.get("consolidation", "")
             if consolidation:
-                journal = consolidation
+                journal = consolidation[:1500]
     except Exception:
         pass
 
     # Active situations summary
-    situations = "No active situations tracked."
+    situations = "(none)"
     try:
         if stores.structured._available:
             async with stores.structured._pool.acquire() as conn:
@@ -271,7 +262,8 @@ async def _build_system_prompt(stores: StoreHolder) -> str:
     except Exception:
         pass
 
-    return _SYSTEM_TEMPLATE.format(
+    system = _SYSTEM_CONTENT.format(tool_defs=_format_tool_defs_json())
+    user_context = _USER_TEMPLATE.format(
         cycle_number=cycle_number,
         event_count=event_count,
         entity_count=entity_count,
@@ -280,8 +272,8 @@ async def _build_system_prompt(stores: StoreHolder) -> str:
         goal_count=goal_count,
         journal=journal,
         situations=situations,
-        tool_defs=_format_tool_defs_json(),
     )
+    return system, user_context
 
 
 # ======================================================================
@@ -1038,15 +1030,30 @@ class ConsultationEngine:
         # Load existing session
         messages = await self.load_session(session_id)
 
-        # Build system prompt
-        system_prompt = await _build_system_prompt(self.stores)
+        # Build prompts (system instructions + user context)
+        system_content, user_context = await _build_prompts(self.stores)
 
         # Append user message
         messages.append({"role": "user", "content": user_message})
 
         # Tool-calling loop
         for step in range(MAX_TOOL_STEPS):
-            response = await self._call_llm(provider, system_prompt, messages)
+            # Retry on stochastic multi-message 400s (inherent to GPT-OSS
+            # reasoning mode — same retry pattern as agent client.py:317)
+            response = None
+            for attempt in range(3):
+                try:
+                    response = await self._call_llm(
+                        provider, system_content, user_context, messages,
+                    )
+                    break
+                except LLMApiError as e:
+                    if e.status_code == 400 and attempt < 2:
+                        log.warning("Consult 400 attempt %d: %s", attempt + 1, e.body[:120])
+                        import asyncio
+                        await asyncio.sleep(1)
+                        continue
+                    raise
             content = response.content.strip()
 
             log.info(
@@ -1055,8 +1062,19 @@ class ConsultationEngine:
                 response.usage, has_tool_call(content),
             )
 
+            # Empty content — model dumped everything into reasoning channel.
+            # Re-prompt once before giving up.
+            if not content:
+                log.warning("Consult step %d: empty content (%s tokens), re-prompting",
+                            step + 1, response.usage.get("completion_tokens", "?"))
+                messages.append({
+                    "role": "user",
+                    "content": 'Your previous response was empty. Respond now: {"actions": [...]}',
+                })
+                continue
+
             if not has_tool_call(content):
-                # Final response — no tool call
+                # Final response — no tool call (plain text)
                 messages.append({"role": "assistant", "content": content})
                 await self.save_session(session_id, messages)
                 return content, messages
@@ -1068,6 +1086,14 @@ class ConsultationEngine:
                 messages.append({"role": "assistant", "content": content})
                 await self.save_session(session_id, messages)
                 return content, messages
+
+            # Intercept respond tool — this is the model's final answer
+            for tc in tool_calls:
+                if tc.tool_name == "respond":
+                    final_text = tc.arguments.get("message", "")
+                    messages.append({"role": "assistant", "content": final_text})
+                    await self.save_session(session_id, messages)
+                    return final_text, messages
 
             # Record the assistant's tool-calling message
             messages.append({"role": "assistant", "content": content})
@@ -1089,7 +1115,7 @@ class ConsultationEngine:
                 "Please provide your final answer now based on the results so far."
             ),
         })
-        response = await self._call_llm(provider, system_prompt, messages)
+        response = await self._call_llm(provider, system_content, user_context, messages)
         content = response.content.strip()
         messages.append({"role": "assistant", "content": content})
         await self.save_session(session_id, messages)
@@ -1099,34 +1125,46 @@ class ConsultationEngine:
         self,
         provider: VLLMProvider | AnthropicProvider,
         system_prompt: str,
+        user_context: str,
         messages: list[dict[str, str]],
     ) -> LLMResponse:
         """
         Call the LLM provider with the system prompt + conversation.
 
-        For vLLM: combine system + conversation into a single user message.
-        For Anthropic: use proper system + multi-turn messages.
+        For vLLM: single {"role": "user"} message (system+conversation joined).
+                  No max_tokens — let the model/server handle the budget.
+        For Anthropic: proper system field + multi-turn messages.
         """
         if isinstance(provider, AnthropicProvider):
-            # Anthropic: system is top-level, messages are user/assistant turns
-            # Ensure first message is user role
-            conv = list(messages)
-            if not conv or conv[0]["role"] != "user":
-                conv.insert(0, {"role": "user", "content": "(context follows)"})
+            # Strip GPT-OSS reasoning directive from system prompt
+            import re
+            clean_system = re.sub(r'^reasoning:\s*(high|medium|low)\s*\n*', '', system_prompt).lstrip()
+            # Prepend context as the first user message
+            conv = [{"role": "user", "content": user_context}] + list(messages)
             return await provider.chat_complete(
                 messages=conv,
-                system=system_prompt,
+                system=clean_system,
             )
         else:
-            # vLLM / GPT-OSS: combine everything into a single user message
-            parts = [system_prompt]
+            # vLLM / GPT-OSS: combine into single user message.
+            # Same as format.py:to_chat_messages() — the agent's proven pattern.
+            # system_prompt already contains "reasoning: high" at the top.
+            parts = [system_prompt, user_context]
             for m in messages:
-                role_label = "OPERATOR" if m["role"] == "user" else "LEGBA"
-                parts.append(f"[{role_label}]\n{m['content']}")
+                parts.append(m["content"])
+            parts.append('Output one JSON object: {"actions": [...]}')
             combined = "\n\n".join(parts)
+
+            payload_msgs = [{"role": "user", "content": combined}]
+            log.info("Consult LLM request: chars=%d, messages=%d", len(combined), len(payload_msgs))
+
             response = await provider.chat_complete(
-                messages=[{"role": "user", "content": combined}],
+                messages=payload_msgs,
             )
-            # Strip Harmony artifacts from vLLM responses
-            response.content = strip_harmony_response(response.content)
+
+            log.info(
+                "Consult LLM response: finish=%s, usage=%s, content_len=%d",
+                response.finish_reason, response.usage, len(response.content),
+            )
+
             return response

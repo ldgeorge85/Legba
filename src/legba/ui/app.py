@@ -50,9 +50,10 @@ async def lifespan(app: FastAPI):
     app.state.msg_store = msg_store
 
     # Consultation engine — interactive LLM-backed operator interface
-    llm_cfg = LLMConfig.from_env()
+    # Uses CONSULT_* env vars if set, otherwise falls back to main LLM config
+    consult_cfg = LLMConfig.consult_from_env()
     consult_engine = None
-    if llm_cfg.api_key:
+    if consult_cfg.api_key:
         async def _send_msg(subject: str, body: str) -> bool:
             try:
                 await ui_nats.publish(subject, body.encode())
@@ -62,7 +63,7 @@ async def lifespan(app: FastAPI):
 
         consult_engine = ConsultationEngine(
             stores=stores,
-            llm_config=llm_cfg,
+            llm_config=consult_cfg,
             send_message_callback=_send_msg,
         )
     app.state.consult_engine = consult_engine

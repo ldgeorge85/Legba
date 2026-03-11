@@ -132,6 +132,13 @@ class VLLMProvider:
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
+        # Log outbound payload (sans message content) for debugging
+        log.info("vLLM request: model=%s, temperature=%s, max_tokens=%s, msg_count=%d, total_chars=%d",
+                 payload.get("model"), payload.get("temperature"),
+                 payload.get("max_tokens", "(not set)"),
+                 len(messages),
+                 sum(len(m.get("content", "")) for m in messages))
+
         retryable_codes = {429, 500, 502, 503}
         last_error: Exception | None = None
         total_chars = sum(len(m.get("content", "")) for m in messages)

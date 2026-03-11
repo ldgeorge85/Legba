@@ -1,7 +1,7 @@
 # Legba — Implementation Design
 
 *Key design decisions, data flows, and component interactions.*
-*Last updated: 2026-03-10*
+*Last updated: 2026-03-11*
 
 ---
 
@@ -365,3 +365,35 @@ Only ~40% of registered tools have been used (20 of 50). Entire modules untouche
 
 ### Context Pressure
 The full system prompt with all guidance addons is ~20k tokens. With tool definitions, goals, memories, and world briefing, REASON calls regularly hit 40-60k tokens — half the budget used before the LLM generates anything. The planned-tool filtering helps, but long-running tool loops with many results still approach the 120k budget.
+
+---
+
+## 10. Consultation Engine
+
+### Why Not Reuse LLMClient
+
+`LLMClient` is deeply coupled to the agent cycle — it manages sliding windows, working memory, phase-aware prompt assembly, forced-final fallback, and step budgets. The consultation engine needs none of this. It uses providers (`VLLMProvider` / `AnthropicProvider`) directly with its own lightweight tool-calling loop.
+
+### Architecture
+
+The engine (`src/legba/ui/consult.py`) runs inside the UI container, not the agent container. It has:
+
+- **Own LLM config** via `CONSULT_*` env vars, defaulting to Anthropic (Claude Sonnet). This keeps the operator's interactive queries on a fast, reliable model even when the agent runs on vLLM/GPT-OSS.
+- **13 read-mostly tools** wired to the same Postgres, OpenSearch, Qdrant, Redis, and AGE stores that the agent writes to. Three write tools (`update_situation`, `update_goal`, `send_message`) allow lightweight operator actions.
+- **`respond` tool pattern**: The LLM signals it is done by calling `respond(answer=...)`. The loop terminates and the answer is returned. If the LLM never calls `respond` within 10 steps, the last assistant content is used as a fallback.
+
+### Session Management
+
+Multi-turn conversation state is stored in Redis under `legba:consult:session:{id}` with a 1-hour TTL. Each exchange appends the user message, any tool call/result pairs, and the final assistant response. The session key is tracked via a browser cookie.
+
+### Provider Branching
+
+Same branching logic as the agent, applied locally:
+- **Anthropic**: proper `system` field + multi-turn `messages` array with role alternation.
+- **vLLM**: single combined user message (system + history concatenated), matching GPT-OSS's expected format.
+
+### Error Recovery
+
+- **Empty responses**: If the provider returns empty content, the engine re-prompts once ("You returned an empty response — please try again").
+- **400 retry**: For vLLM, 400 errors (typically GPT-OSS Harmony multi-message issues) trigger a single retry.
+- **Timeout / 5xx**: Surfaced to the operator as an error message in the chat UI.
