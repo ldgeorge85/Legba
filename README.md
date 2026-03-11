@@ -160,3 +160,7 @@ docker compose -p legba --profile test run --rm --no-deps test python -m pytest 
 ## Technology Stack
 
 Python 3.12 (async) | Docker Compose | GPT-OSS 120B via vLLM | PostgreSQL 18 + Apache AGE | Qdrant | OpenSearch 2.x | NATS + JetStream | Apache Airflow | FastAPI + htmx | Pydantic v2 | PyOD | spaCy | NetworkX | feedparser | pycountry
+
+## Contact
+
+Want to talk shop? Reach out at legba@civislux.us.
