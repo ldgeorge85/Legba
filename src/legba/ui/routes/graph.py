@@ -1,11 +1,15 @@
-"""Graph Explorer route — GET /graph + GET /api/graph + edge CRUD."""
+"""Graph Explorer route -- GET /graph + GET /api/graph + ego/path APIs + edge CRUD."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Form
+import logging
+
+from fastapi import APIRouter, Request, Form, Query
 from fastapi.responses import JSONResponse, HTMLResponse
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,29 +48,12 @@ RELATIONSHIP_TYPES = [
 ]
 
 
-async def _fetch_full_graph(stores) -> dict:
-    """Fetch all nodes and edges from the graph."""
-    graph = stores.graph
-    if not graph.available:
-        return {"nodes": [], "edges": [], "rel_types": [], "node_types": []}
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
 
-    try:
-        async with graph._pool.acquire() as conn:
-            # Fetch all nodes
-            node_rows = await graph._cypher(conn,
-                "MATCH (n) RETURN n",
-                cols="n agtype",
-            )
-
-            # Fetch all edges
-            edge_rows = await graph._cypher(conn,
-                "MATCH (a)-[r]->(b) RETURN a.name, r, b.name",
-                cols="src agtype, r agtype, tgt agtype",
-            )
-    except Exception:
-        return {"nodes": [], "edges": [], "rel_types": [], "node_types": []}
-
-    # Build Cytoscape-format elements
+def _build_cytoscape_data(node_rows, edge_rows) -> dict:
+    """Convert raw AGE rows into Cytoscape-format {nodes, edges, rel_types, node_types}."""
     nodes = []
     seen_nodes = set()
     node_types = set()
@@ -79,12 +66,14 @@ async def _fetch_full_graph(stores) -> dict:
         seen_nodes.add(name)
         ntype = v.get("label", "Unknown")
         node_types.add(ntype)
+        entity_id = props.get("entity_id", "")
         nodes.append({
             "data": {
                 "id": name,
                 "name": name,
                 "type": ntype,
                 "color": NODE_COLORS.get(ntype, DEFAULT_NODE_COLOR),
+                "entity_id": entity_id,
             }
         })
 
@@ -134,9 +123,145 @@ async def _fetch_full_graph(stores) -> dict:
     }
 
 
+async def _fetch_full_graph(stores) -> dict:
+    """Fetch all nodes and edges from the graph."""
+    graph = stores.graph
+    if not graph.available:
+        return {"nodes": [], "edges": [], "rel_types": [], "node_types": []}
+
+    try:
+        async with graph._pool.acquire() as conn:
+            node_rows = await graph._cypher(conn,
+                "MATCH (n) RETURN n",
+                cols="n agtype",
+            )
+            edge_rows = await graph._cypher(conn,
+                "MATCH (a)-[r]->(b) RETURN a.name, r, b.name",
+                cols="src agtype, r agtype, tgt agtype",
+            )
+    except Exception:
+        return {"nodes": [], "edges": [], "rel_types": [], "node_types": []}
+
+    return _build_cytoscape_data(node_rows, edge_rows)
+
+
+async def _fetch_ego_graph(stores, entity_name: str, depth: int = 1) -> dict:
+    """Fetch the ego-graph (subgraph) around a named entity within N hops."""
+    graph = stores.graph
+    if not graph.available:
+        return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "center": entity_name}
+
+    depth = max(1, min(depth, 5))  # clamp 1..5
+    name_esc = graph._escape(entity_name)
+
+    try:
+        async with graph._pool.acquire() as conn:
+            # Get all nodes within N hops (including the start node via *0..N)
+            node_rows = await graph._cypher(conn, f"""
+                MATCH (start {{name: '{name_esc}'}})-[*0..{depth}]-(n)
+                RETURN DISTINCT n
+            """, cols="n agtype")
+
+            if not node_rows:
+                return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "center": entity_name}
+
+            # Collect names for edge filtering
+            name_set = set()
+            for row in node_rows:
+                v = row["n"]
+                props = v.get("properties", {})
+                name = props.get("name", "")
+                if name:
+                    name_set.add(name)
+
+            # Get all edges between those nodes
+            name_list = ", ".join(f"'{graph._escape(n)}'" for n in name_set)
+            edge_rows = await graph._cypher(conn, f"""
+                MATCH (a)-[r]->(b)
+                WHERE a.name IN [{name_list}] AND b.name IN [{name_list}]
+                RETURN a.name, r, b.name
+            """, cols="src agtype, r agtype, tgt agtype")
+
+    except Exception as exc:
+        logger.warning("ego graph query failed: %s", exc)
+        return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "center": entity_name}
+
+    result = _build_cytoscape_data(node_rows, edge_rows)
+    result["center"] = entity_name
+    return result
+
+
+async def _fetch_path(stores, from_name: str, to_name: str) -> dict:
+    """Find shortest path between two entities, return as Cytoscape data."""
+    graph = stores.graph
+    if not graph.available:
+        return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "path_found": False}
+
+    from_esc = graph._escape(from_name)
+    to_esc = graph._escape(to_name)
+
+    try:
+        async with graph._pool.acquire() as conn:
+            # Get shortest path (AGE supports variable-length paths)
+            path_rows = await graph._cypher(conn, f"""
+                MATCH p = (a {{name: '{from_esc}'}})-[*1..10]-(b {{name: '{to_esc}'}})
+                RETURN p
+                LIMIT 1
+            """, cols="p agtype")
+
+            if not path_rows:
+                return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "path_found": False}
+
+            # Parse the path: [vertex, edge, vertex, edge, vertex, ...]
+            path_data = path_rows[0]["p"]
+            if not isinstance(path_data, list):
+                return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "path_found": False}
+
+            # Extract node names from path
+            path_names = set()
+            for item in path_data:
+                if isinstance(item, dict) and "properties" in item:
+                    name = item["properties"].get("name", "")
+                    if name:
+                        path_names.add(name)
+
+            if not path_names:
+                return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "path_found": False}
+
+            # Fetch full node data
+            name_list = ", ".join(f"'{graph._escape(n)}'" for n in path_names)
+            node_rows = await graph._cypher(conn, f"""
+                MATCH (n) WHERE n.name IN [{name_list}]
+                RETURN DISTINCT n
+            """, cols="n agtype")
+
+            # Fetch edges between path nodes
+            edge_rows = await graph._cypher(conn, f"""
+                MATCH (a)-[r]->(b)
+                WHERE a.name IN [{name_list}] AND b.name IN [{name_list}]
+                RETURN a.name, r, b.name
+            """, cols="src agtype, r agtype, tgt agtype")
+
+    except Exception as exc:
+        logger.warning("path query failed: %s", exc)
+        return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "path_found": False}
+
+    result = _build_cytoscape_data(node_rows, edge_rows)
+    result["path_found"] = True
+    # Mark path node names so the frontend can highlight them
+    result["path_nodes"] = list(path_names)
+    return result
+
+
+# ------------------------------------------------------------------
+# Page and API routes
+# ------------------------------------------------------------------
+
 @router.get("/graph")
 async def graph_page(request: Request):
     stores = get_stores(request)
+    # Pre-fetch the full graph node list (lightweight -- just names/types for autocomplete)
+    # but don't embed the full graph data since we default to ego-graph mode
     graph_data = await _fetch_full_graph(stores)
     return templates.TemplateResponse(
         "graph/explorer.html",
@@ -147,16 +272,42 @@ async def graph_page(request: Request):
             "node_count": len(graph_data["nodes"]),
             "edge_count": len(graph_data["edges"]),
             "relationship_types": RELATIONSHIP_TYPES,
+            "node_colors": NODE_COLORS,
+            "edge_colors": EDGE_COLORS,
         },
     )
 
 
 @router.get("/api/graph")
 async def graph_api(request: Request):
-    """JSON endpoint for dynamic graph reloads."""
+    """JSON endpoint for full graph."""
     stores = get_stores(request)
     graph_data = await _fetch_full_graph(stores)
     return JSONResponse(graph_data)
+
+
+@router.get("/api/graph/ego")
+async def graph_ego_api(
+    request: Request,
+    entity: str = Query(..., description="Entity name to center on"),
+    depth: int = Query(1, ge=1, le=5, description="Number of hops"),
+):
+    """JSON endpoint for ego-graph around an entity."""
+    stores = get_stores(request)
+    data = await _fetch_ego_graph(stores, entity, depth)
+    return JSONResponse(data)
+
+
+@router.get("/api/graph/path")
+async def graph_path_api(
+    request: Request,
+    from_entity: str = Query(..., alias="from", description="Source entity name"),
+    to_entity: str = Query(..., alias="to", description="Target entity name"),
+):
+    """JSON endpoint for shortest path between two entities."""
+    stores = get_stores(request)
+    data = await _fetch_path(stores, from_entity, to_entity)
+    return JSONResponse(data)
 
 
 @router.get("/api/graph/geo")

@@ -79,40 +79,53 @@
 
 <!-- Situation Cards -->
 {% if situations %}
-  <div class="space-y-3">
+  <div class="grid grid-cols-1 gap-4">
     {% for s in situations %}
-      <a href="/situations/{{ s.id }}" class="card block hover:border-gray-600 transition-colors">
-        <div class="flex items-start justify-between gap-4">
+      <a href="/situations/{{ s.id }}" hx-boost="false" class="card block hover:border-gray-500 transition-colors group">
+        <div class="flex items-start gap-4">
+          <!-- Left: status indicator stripe -->
+          <div class="flex-shrink-0 w-1.5 self-stretch rounded-full
+            {% if s.status == 'escalating' %}bg-red-500
+            {% elif s.status == 'active' %}bg-blue-500
+            {% elif s.status == 'de_escalating' %}bg-cyan-500
+            {% elif s.status == 'dormant' %}bg-gray-600
+            {% elif s.status == 'resolved' %}bg-green-500
+            {% else %}bg-gray-600{% endif %}">
+          </div>
+
+          <!-- Center: main content -->
           <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
-              <h3 class="text-base font-bold text-gray-100 truncate">{{ s.name }}</h3>
+            <!-- Title row -->
+            <div class="flex items-center gap-2 mb-1.5">
               {% if s.status == 'escalating' %}
                 <span class="badge badge-red">escalating</span>
               {% elif s.status == 'de_escalating' %}
-                <span class="badge badge-green">de-escalating</span>
+                <span class="badge badge-cyan">de-escalating</span>
               {% elif s.status == 'active' %}
                 <span class="badge badge-blue">active</span>
               {% elif s.status == 'dormant' %}
                 <span class="badge badge-gray">dormant</span>
               {% elif s.status == 'resolved' %}
-                <span class="badge badge-gray">resolved</span>
+                <span class="badge badge-green">resolved</span>
               {% else %}
                 <span class="badge badge-gray">{{ s.status }}</span>
               {% endif %}
+              <h3 class="text-base font-bold text-gray-100 truncate group-hover:text-cyan-300 transition-colors">{{ s.name }}</h3>
               {% if s.category %}
                 <span class="badge badge-purple">{{ s.category }}</span>
               {% endif %}
             </div>
 
+            <!-- Description -->
             {% if s.description %}
-              <p class="text-xs text-gray-400 mb-2 line-clamp-2">{{ s.description[:200] }}</p>
+              <p class="text-xs text-gray-400 mb-2 line-clamp-2">{{ s.description[:150] }}{% if s.description|length > 150 %}...{% endif %}</p>
             {% endif %}
 
-            <!-- Key entities -->
+            <!-- Entity chips -->
             {% if s.key_entities %}
-              <div class="flex flex-wrap gap-1 mb-2">
+              <div class="flex flex-wrap gap-1">
                 {% for ent in s.key_entities[:8] %}
-                  <span class="badge badge-cyan">{{ ent }}</span>
+                  <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-gray-700/60 text-gray-300 border border-gray-600/40">{{ ent }}</span>
                 {% endfor %}
                 {% if s.key_entities|length > 8 %}
                   <span class="text-xs text-gray-500">+{{ s.key_entities|length - 8 }} more</span>
@@ -121,31 +134,40 @@
             {% endif %}
           </div>
 
-          <!-- Stats column -->
-          <div class="flex-shrink-0 text-right space-y-1">
-            <div class="text-sm font-bold text-gray-200">{{ s.event_count }}</div>
-            <div class="text-xs text-gray-500">events</div>
+          <!-- Right: stats column -->
+          <div class="flex-shrink-0 text-right space-y-2 min-w-[7rem]">
+            <!-- Event count -->
+            <div>
+              <span class="text-lg font-bold text-gray-200">{{ s.event_count }}</span>
+              <span class="text-xs text-gray-500 ml-1">events</span>
+            </div>
 
-            <!-- Intensity bar -->
-            <div class="w-24 mt-1">
-              <div class="flex items-center gap-1">
-                <div class="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                  {% set pct = (s.intensity_score * 100)|int %}
-                  {% if s.intensity_score > 0.7 %}
-                    <div class="bar-fill h-full bg-red-500 rounded-full" style="width: {{ pct }}%"></div>
-                  {% elif s.intensity_score > 0.4 %}
-                    <div class="bar-fill h-full bg-yellow-500 rounded-full" style="width: {{ pct }}%"></div>
-                  {% else %}
-                    <div class="bar-fill h-full bg-cyan-500 rounded-full" style="width: {{ pct }}%"></div>
-                  {% endif %}
+            <!-- Intensity gauge -->
+            <div>
+              {% set score = s.intensity_score or 0 %}
+              {% set pct = (score * 10)|round(1) %}
+              <div class="flex items-center gap-1.5 justify-end">
+                <span class="text-sm font-mono font-bold
+                  {% if score >= 7 %}text-red-400
+                  {% elif score >= 4 %}text-yellow-400
+                  {% else %}text-gray-400{% endif %}">{{ "%.1f"|format(score) }}</span>
+                <div class="w-16 h-2 bg-gray-700 rounded-full overflow-hidden">
+                  {% set bar_pct = [(score / 10 * 100)|int, 100]|min %}
+                  <div class="h-full rounded-full transition-all
+                    {% if score >= 7 %}bg-red-500
+                    {% elif score >= 4 %}bg-yellow-500
+                    {% else %}bg-gray-500{% endif %}"
+                    style="width: {{ bar_pct }}%"></div>
                 </div>
-                <span class="text-xs text-gray-500 w-8 text-right">{{ "%.0f"|format(s.intensity_score * 100) }}%</span>
               </div>
               <div class="text-xs text-gray-500 text-right">intensity</div>
             </div>
 
+            <!-- Last updated -->
             {% if s.last_event_at %}
-              <div class="text-xs text-gray-500 mt-1">{{ s.last_event_at|timeago }}</div>
+              <div class="text-xs text-gray-500">{{ s.last_event_at|timeago }}</div>
+            {% elif s.updated_at %}
+              <div class="text-xs text-gray-500">{{ s.updated_at|timeago }}</div>
             {% endif %}
           </div>
         </div>

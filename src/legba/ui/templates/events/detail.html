@@ -7,179 +7,421 @@
 </div>
 
 {% if event %}
-<!-- Header -->
-<div class="card mb-6">
-  <div class="flex items-start justify-between">
-    <div>
-      <h1 class="text-xl font-bold text-gray-100">{{ event.title }}</h1>
-      <div class="flex flex-wrap items-center gap-3 mt-2">
-        {% set cat_colors = {
-          'conflict': 'badge-red',
-          'political': 'badge-blue',
-          'economic': 'badge-green',
-          'technology': 'badge-cyan',
-          'health': 'badge-purple',
-          'environment': 'badge-green',
-          'social': 'badge-yellow',
-          'disaster': 'badge-red',
-          'other': 'badge-gray'
-        } %}
+
+{# ---- Category color map ---- #}
+{% set cat_colors = {
+  'conflict': 'badge-red',
+  'political': 'badge-blue',
+  'economic': 'badge-yellow',
+  'technology': 'badge-purple',
+  'health': 'badge-green',
+  'environment': 'badge-cyan',
+  'social': 'badge-yellow',
+  'disaster': 'badge-red',
+  'other': 'badge-gray'
+} %}
+{% set cat_border_colors = {
+  'conflict': 'border-red-500/40',
+  'political': 'border-blue-500/40',
+  'economic': 'border-yellow-500/40',
+  'technology': 'border-purple-500/40',
+  'health': 'border-green-500/40',
+  'environment': 'border-cyan-500/40',
+  'social': 'border-yellow-500/40',
+  'disaster': 'border-red-500/40',
+  'other': 'border-gray-500/40'
+} %}
+
+<!-- ============================================================ -->
+<!-- HEADER                                                        -->
+<!-- ============================================================ -->
+<div class="card mb-6 border-t-2 {{ cat_border_colors.get(event.category.value, 'border-gray-500/40') }}">
+  <div class="flex items-start justify-between gap-4">
+    <div class="flex-1 min-w-0">
+      <h1 class="text-2xl font-bold text-gray-100 leading-tight">{{ event.title }}</h1>
+
+      <div class="flex flex-wrap items-center gap-3 mt-3">
+        {# Category badge #}
         <span class="badge {{ cat_colors.get(event.category.value, 'badge-gray') }}">{{ event.category.value }}</span>
-        <span class="text-xs text-gray-500">ID: {{ event.id | truncate_uuid }}</span>
-        {% if event.event_timestamp %}
-          <span class="text-xs text-gray-500">Event: {{ event.event_timestamp | timeago }}</span>
+
+        {# Confidence indicator #}
+        {% if event.confidence is not none %}
+          {% if event.confidence > 0.8 %}
+            <span class="inline-flex items-center gap-1 text-xs font-medium text-green-400">
+              <span class="w-2 h-2 rounded-full bg-green-400"></span>
+              {{ event.confidence | format_confidence }} confidence
+            </span>
+          {% elif event.confidence > 0.5 %}
+            <span class="inline-flex items-center gap-1 text-xs font-medium text-yellow-400">
+              <span class="w-2 h-2 rounded-full bg-yellow-400"></span>
+              {{ event.confidence | format_confidence }} confidence
+            </span>
+          {% else %}
+            <span class="inline-flex items-center gap-1 text-xs font-medium text-red-400">
+              <span class="w-2 h-2 rounded-full bg-red-400"></span>
+              {{ event.confidence | format_confidence }} confidence
+            </span>
+          {% endif %}
         {% endif %}
-        <span class="text-xs text-gray-500">Ingested: {{ event.created_at | timeago }}</span>
-        <span class="text-xs text-gray-400">Confidence: {{ event.confidence | format_confidence }}</span>
-        <span class="text-xs text-gray-500">Language: {{ event.language }}</span>
+
+        {# Timestamp #}
+        {% if event.event_timestamp %}
+          <span class="text-xs text-gray-400" title="{{ event.event_timestamp }}">
+            <svg class="w-3.5 h-3.5 inline-block mr-0.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            {{ event.event_timestamp | timeago }}
+          </span>
+        {% endif %}
+
+        {# Source link #}
+        {% if event.source_id %}
+          <span class="text-xs text-gray-500">
+            <svg class="w-3.5 h-3.5 inline-block mr-0.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+            <a href="/sources/{{ event.source_id }}" class="text-cyan-400 hover:text-cyan-300">{{ source_name or event.source_id | truncate_uuid }}</a>
+          </span>
+        {% endif %}
       </div>
     </div>
-    <div id="event-actions">
+
+    {# Actions #}
+    <div id="event-actions" class="flex-shrink-0">
       <button class="text-xs text-red-400 hover:text-red-300 border border-red-400/30 rounded px-2 py-1"
               hx-delete="/api/events/{{ event.id }}"
               hx-confirm="Delete this event and its entity links?"
               hx-target="#event-actions"
-              hx-swap="innerHTML">Delete Event</button>
+              hx-swap="innerHTML">Delete</button>
     </div>
   </div>
-
-  <!-- Source -->
-  {% if event.source_id or event.source_url %}
-  <div class="mt-3 text-sm">
-    <span class="text-gray-500">Source:</span>
-    {% if event.source_id %}
-      <a href="/sources/{{ event.source_id }}" class="text-cyan-400 hover:text-cyan-300">{{ source_name or event.source_id | truncate_uuid }}</a>
-    {% endif %}
-    {% if event.source_url %}
-      <span class="text-xs text-gray-500 ml-2">({{ event.source_url[:60] }}{% if event.source_url | length > 60 %}...{% endif %})</span>
-    {% endif %}
-  </div>
-  {% endif %}
-
-  <!-- Actors & locations -->
-  {% if event.actors %}
-  <div class="mt-2 text-sm">
-    <span class="text-gray-500">Actors:</span>
-    {% for actor in event.actors %}
-      <span class="badge badge-gray ml-1">{{ actor }}</span>
-    {% endfor %}
-  </div>
-  {% endif %}
-  {% if event.locations %}
-  <div class="mt-1 text-sm">
-    <span class="text-gray-500">Locations:</span>
-    {% for loc in event.locations %}
-      <span class="badge badge-gray ml-1">{{ loc }}</span>
-    {% endfor %}
-  </div>
-  {% endif %}
-  {% if event.tags %}
-  <div class="mt-1 text-sm">
-    <span class="text-gray-500">Tags:</span>
-    {% for tag in event.tags %}
-      <span class="badge badge-cyan ml-1">{{ tag }}</span>
-    {% endfor %}
-  </div>
-  {% endif %}
 </div>
 
-<!-- Summary -->
+<!-- ============================================================ -->
+<!-- SUMMARY                                                       -->
+<!-- ============================================================ -->
 {% if event.summary %}
 <div class="card mb-6">
-  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Summary</h2>
-  <p class="text-sm text-gray-300 whitespace-pre-wrap">{{ event.summary }}</p>
+  <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Summary</h2>
+  <p class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">{{ event.summary }}</p>
 </div>
 {% endif %}
 
-<!-- Full content -->
+<!-- ============================================================ -->
+<!-- FULL CONTENT (collapsible)                                    -->
+<!-- ============================================================ -->
 {% if event.full_content %}
 <div class="card mb-6">
-  <details>
-    <summary class="text-sm font-semibold text-gray-400 uppercase tracking-wide cursor-pointer hover:text-gray-300">
-      Full Content
+  <details id="full-content-toggle">
+    <summary class="text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-300 select-none flex items-center gap-2">
+      <svg class="w-4 h-4 transition-transform duration-200" id="full-content-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      Show full content
     </summary>
-    <p class="text-sm text-gray-300 whitespace-pre-wrap mt-2">{{ event.full_content }}</p>
+    <p class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap mt-3 pt-3 border-t border-gray-700">{{ event.full_content }}</p>
   </details>
 </div>
 {% endif %}
 
-<!-- Raw content -->
+<!-- ============================================================ -->
+<!-- RAW CONTENT (collapsible)                                     -->
+<!-- ============================================================ -->
 {% if event.raw_content %}
 <div class="card mb-6">
   <details>
-    <summary class="text-sm font-semibold text-gray-400 uppercase tracking-wide cursor-pointer hover:text-gray-300">
-      Raw Content
+    <summary class="text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-300 select-none flex items-center gap-2">
+      <svg class="w-4 h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      Raw content
     </summary>
-    <pre class="text-xs text-gray-400 whitespace-pre-wrap mt-2 font-mono">{{ event.raw_content }}</pre>
+    <pre class="text-xs text-gray-400 whitespace-pre-wrap mt-3 pt-3 border-t border-gray-700 font-mono leading-relaxed">{{ event.raw_content }}</pre>
   </details>
 </div>
 {% endif %}
 
-<!-- Edit metadata (U12) -->
+<!-- ============================================================ -->
+<!-- ENTITY CARDS ROW                                              -->
+<!-- ============================================================ -->
+{% if linked_entities %}
+<div class="mb-6">
+  <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Linked Entities ({{ linked_entities | length }})</h2>
+  <div class="flex flex-wrap gap-3">
+    {% for link in linked_entities %}
+    <a href="/entities/{{ link.profile.id }}"
+       class="card flex items-center gap-3 px-4 py-3 hover:bg-gray-700/50 transition-colors group min-w-0" style="flex: 0 1 auto;">
+      {# Type icon circle #}
+      {% set type_colors = {
+        'person': 'bg-blue-500/20 text-blue-400',
+        'organization': 'bg-purple-500/20 text-purple-400',
+        'country': 'bg-green-500/20 text-green-400',
+        'location': 'bg-teal-500/20 text-teal-400',
+        'group': 'bg-orange-500/20 text-orange-400',
+        'event': 'bg-red-500/20 text-red-400',
+        'concept': 'bg-cyan-500/20 text-cyan-400',
+      } %}
+      <div class="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 {{ type_colors.get(link.profile.entity_type, 'bg-gray-600/30 text-gray-400') }}">
+        {{ link.profile.entity_type[:2] | upper }}
+      </div>
+      <div class="min-w-0">
+        <div class="text-sm font-medium text-gray-200 group-hover:text-cyan-300 truncate">{{ link.profile.canonical_name }}</div>
+        <div class="flex items-center gap-2 mt-0.5">
+          <span class="text-xs text-gray-500">{{ link.profile.entity_type }}</span>
+          <span class="text-xs text-gray-600">|</span>
+          <span class="text-xs text-gray-500">{{ link.role }}</span>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ============================================================ -->
+<!-- METADATA GRID                                                 -->
+<!-- ============================================================ -->
+<div class="card mb-6">
+  <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-4">Metadata</h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+
+    {# Locations #}
+    {% if event.locations %}
+    <div class="flex items-start gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Locations</span>
+      <div class="flex flex-wrap gap-1">
+        {% for loc in event.locations %}
+          <span class="badge badge-cyan">{{ loc }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Tags #}
+    {% if event.tags %}
+    <div class="flex items-start gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Tags</span>
+      <div class="flex flex-wrap gap-1">
+        {% for tag in event.tags %}
+          <span class="badge badge-purple">{{ tag }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Actors (text list) #}
+    {% if event.actors %}
+    <div class="flex items-start gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Actors</span>
+      <div class="flex flex-wrap gap-1">
+        {% for actor in event.actors %}
+          <span class="badge badge-gray">{{ actor }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Language #}
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Language</span>
+      <span class="text-gray-300">{{ event.language | upper }}</span>
+    </div>
+
+    {# Source URL #}
+    {% if event.source_url %}
+    <div class="flex items-start gap-2 md:col-span-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Source URL</span>
+      <a href="{{ event.source_url }}" target="_blank" rel="noopener noreferrer"
+         class="text-cyan-400 hover:text-cyan-300 break-all text-xs">
+        {{ event.source_url }}
+        <svg class="w-3 h-3 inline-block ml-0.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+      </a>
+    </div>
+    {% endif %}
+
+    {# GUID #}
+    {% if event.guid %}
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">GUID</span>
+      <span class="text-gray-400 font-mono text-xs truncate max-w-xs" title="{{ event.guid }}">{{ event.guid[:48] }}{% if event.guid | length > 48 %}...{% endif %}</span>
+    </div>
+    {% endif %}
+
+    {# Event ID #}
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Event ID</span>
+      <span class="text-gray-400 font-mono text-xs">{{ event.id }}</span>
+    </div>
+
+    {# Timestamps #}
+    {% if event.event_timestamp %}
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Occurred</span>
+      <span class="text-gray-300" title="{{ event.event_timestamp }}">{{ event.event_timestamp | timeago }}</span>
+    </div>
+    {% endif %}
+
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Ingested</span>
+      <span class="text-gray-300" title="{{ event.created_at }}">{{ event.created_at | timeago }}</span>
+    </div>
+
+    {% if event.updated_at and event.updated_at != event.created_at %}
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Updated</span>
+      <span class="text-gray-300" title="{{ event.updated_at }}">{{ event.updated_at | timeago }}</span>
+    </div>
+    {% endif %}
+
+    {# Geo coordinates #}
+    {% if event.geo_coordinates %}
+    <div class="flex items-start gap-2 md:col-span-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Coordinates</span>
+      <div class="flex flex-wrap gap-2">
+        {% for geo in event.geo_coordinates %}
+          <span class="text-xs text-gray-400 font-mono bg-gray-900 rounded px-2 py-0.5">
+            {{ geo.name if geo.name else '' }} {{ geo.lat }}, {{ geo.lon }}
+          </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Geo countries #}
+    {% if event.geo_countries %}
+    <div class="flex items-start gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Countries</span>
+      <div class="flex flex-wrap gap-1">
+        {% for cc in event.geo_countries %}
+          <span class="badge badge-green">{{ cc }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# Geo regions #}
+    {% if event.geo_regions %}
+    <div class="flex items-start gap-2">
+      <span class="text-gray-500 flex-shrink-0 w-24">Regions</span>
+      <div class="flex flex-wrap gap-1">
+        {% for reg in event.geo_regions %}
+          <span class="badge badge-cyan">{{ reg }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- LINKED SITUATIONS                                             -->
+<!-- ============================================================ -->
+{% if linked_situations %}
+<div class="mb-6">
+  <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+    Linked Situations ({{ linked_situations | length }})
+  </h2>
+  <div class="space-y-2">
+    {% set status_colors = {
+      'active': 'badge-green',
+      'escalating': 'badge-red',
+      'de_escalating': 'badge-yellow',
+      'dormant': 'badge-gray',
+      'resolved': 'badge-blue',
+    } %}
+    {% for sit in linked_situations %}
+    <a href="/situations/{{ sit.id }}" class="card flex items-center justify-between gap-4 hover:bg-gray-700/50 transition-colors group">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="badge {{ status_colors.get(sit.status, 'badge-gray') }}">{{ sit.status }}</span>
+        <span class="text-sm font-medium text-gray-200 group-hover:text-cyan-300 truncate">{{ sit.name }}</span>
+        {% if sit.category %}
+          <span class="text-xs text-gray-500">{{ sit.category }}</span>
+        {% endif %}
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        {% if sit.intensity_score %}
+          <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+            <div class="h-full rounded-full bar-fill
+              {% if sit.intensity_score > 0.7 %}bg-red-400{% elif sit.intensity_score > 0.4 %}bg-yellow-400{% else %}bg-green-400{% endif %}"
+              style="width: {{ (sit.intensity_score * 100) | int }}%"></div>
+          </div>
+          <span class="text-xs text-gray-500 w-8 text-right">{{ '%.0f' | format(sit.intensity_score * 100) }}%</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ============================================================ -->
+<!-- RELATED EVENTS                                                -->
+<!-- ============================================================ -->
+{% if related_events %}
+<div class="mb-6">
+  <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+    Related Events ({{ related_events | length }})
+  </h2>
+  <div class="card overflow-hidden p-0">
+    <div class="divide-y divide-gray-700/50">
+      {% for rel in related_events %}
+      <a href="/events/{{ rel.id }}" class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-700/30 transition-colors group">
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="badge {{ cat_colors.get(rel.category, 'badge-gray') }} flex-shrink-0">{{ rel.category }}</span>
+          <span class="text-sm text-gray-300 group-hover:text-cyan-300 truncate">{{ rel.title }}</span>
+        </div>
+        <div class="flex items-center gap-3 flex-shrink-0">
+          <span class="text-xs text-gray-600 bg-gray-800 rounded px-1.5 py-0.5">{{ rel.relation }}</span>
+          {% if rel.event_timestamp %}
+            <span class="text-xs text-gray-500">{{ rel.event_timestamp | timeago }}</span>
+          {% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ============================================================ -->
+<!-- EDIT METADATA                                                 -->
+<!-- ============================================================ -->
 <div class="card mb-6" id="edit-meta-result">
   <details>
-    <summary class="text-sm font-semibold text-gray-400 uppercase tracking-wide cursor-pointer hover:text-gray-300">
+    <summary class="text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-300 select-none flex items-center gap-2">
+      <svg class="w-4 h-4 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
       Edit Metadata
     </summary>
     <form hx-put="/api/events/{{ event.id }}" hx-target="#edit-meta-result" hx-swap="innerHTML"
-          class="mt-3 flex flex-wrap items-end gap-3">
+          class="mt-4 pt-4 border-t border-gray-700 flex flex-wrap items-end gap-4">
       <div>
-        <label class="text-xs text-gray-500">Category</label>
-        <select name="category" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 block">
+        <label class="text-xs text-gray-500 block mb-1">Category</label>
+        <select name="category" class="bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200">
           {% for cat in categories %}
             <option value="{{ cat }}" {% if event.category.value == cat %}selected{% endif %}>{{ cat }}</option>
           {% endfor %}
         </select>
       </div>
       <div>
-        <label class="text-xs text-gray-500">Tags (comma-separated)</label>
+        <label class="text-xs text-gray-500 block mb-1">Tags (comma-separated)</label>
         <input name="tags" value="{{ event.tags | join(', ') if event.tags else '' }}"
-               class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-48 block">
+               class="bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 w-56">
       </div>
       <div>
-        <label class="text-xs text-gray-500">Confidence</label>
+        <label class="text-xs text-gray-500 block mb-1">Confidence</label>
         <input name="confidence" type="number" step="0.01" min="0" max="1" value="{{ event.confidence }}"
-               class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-20 block">
+               class="bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 w-24">
       </div>
       <button type="submit" class="btn text-xs">Save</button>
     </form>
   </details>
 </div>
 
-<!-- Linked entities -->
-<div class="mb-6">
-  <h2 class="text-lg font-semibold text-gray-100 mb-3">Linked Entities ({{ linked_entities | length }})</h2>
-  <div class="card overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
-          <th class="pb-2 pr-3">Entity</th>
-          <th class="pb-2 pr-3">Type</th>
-          <th class="pb-2 pr-3">Role</th>
-          <th class="pb-2">Confidence</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for link in linked_entities %}
-        <tr class="border-b border-gray-800 hover:bg-gray-800/50">
-          <td class="py-2 pr-3">
-            <a href="/entities/{{ link.profile.id }}" class="text-cyan-400 hover:text-cyan-300">{{ link.profile.canonical_name }}</a>
-          </td>
-          <td class="py-2 pr-3"><span class="badge badge-blue">{{ link.profile.entity_type }}</span></td>
-          <td class="py-2 pr-3"><span class="badge badge-gray">{{ link.role }}</span></td>
-          <td class="py-2 text-xs text-gray-400">{{ link.confidence | format_confidence }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="4" class="py-4 text-center text-gray-500">No linked entities.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
 {% else %}
+{# ---- Event not found ---- #}
 <div class="card">
   <p class="text-sm text-gray-500">Event not found.</p>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+  /* Rotate chevron when details is open */
+  details[open] > summary svg:first-child {
+    transform: rotate(90deg);
+  }
+</style>
 {% endblock %}

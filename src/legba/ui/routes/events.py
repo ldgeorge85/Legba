@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Request, Form
@@ -69,28 +71,63 @@ async def event_detail(request: Request, event_id: UUID):
     event = await stores.get_event(event_id)
 
     source_name = None
+    source = None
     linked_entities = []
+    linked_situations = []
+    related_events = []
 
     if event:
-        # Fetch source name
+        # Parallel fetches for source, entities, situations, related events
+        tasks = {}
+
+        # Source name
         if event.source_id:
-            source = await stores.structured.get_source(event.source_id)
+            tasks["source"] = stores.structured.get_source(event.source_id)
+
+        # Linked entities
+        tasks["entities"] = stores.structured.get_event_entities(event_id)
+
+        # Linked situations (via situation_events join table)
+        tasks["situations"] = _fetch_linked_situations(stores, event_id)
+
+        # Related events (same source or overlapping actors)
+        tasks["related"] = _fetch_related_events(
+            stores, event_id, event.source_id, event.actors
+        )
+
+        results = await asyncio.gather(
+            *tasks.values(), return_exceptions=True
+        )
+        result_map = dict(zip(tasks.keys(), results))
+
+        # Process source
+        if "source" in result_map and not isinstance(result_map["source"], Exception):
+            source = result_map["source"]
             if source:
                 source_name = source.name
 
-        # Fetch linked entities
-        raw_links = await stores.structured.get_event_entities(event_id)
-        from ...shared.schemas.entity_profiles import EntityProfile
-        for raw in raw_links:
-            try:
-                profile = EntityProfile.model_validate(raw["profile"])
-                linked_entities.append({
-                    "profile": profile,
-                    "role": raw.get("role", "mentioned"),
-                    "confidence": raw.get("confidence", 0.0),
-                })
-            except Exception:
-                continue
+        # Process entities
+        if not isinstance(result_map.get("entities"), Exception):
+            raw_links = result_map.get("entities", [])
+            from ...shared.schemas.entity_profiles import EntityProfile
+            for raw in raw_links:
+                try:
+                    profile = EntityProfile.model_validate(raw["profile"])
+                    linked_entities.append({
+                        "profile": profile,
+                        "role": raw.get("role", "mentioned"),
+                        "confidence": raw.get("confidence", 0.0),
+                    })
+                except Exception:
+                    continue
+
+        # Process situations
+        if not isinstance(result_map.get("situations"), Exception):
+            linked_situations = result_map.get("situations", [])
+
+        # Process related events
+        if not isinstance(result_map.get("related"), Exception):
+            related_events = result_map.get("related", [])
 
     return templates.TemplateResponse(
         "events/detail.html",
@@ -99,10 +136,125 @@ async def event_detail(request: Request, event_id: UUID):
             "active_page": "events",
             "event": event,
             "source_name": source_name,
+            "source": source,
             "linked_entities": linked_entities,
+            "linked_situations": linked_situations,
+            "related_events": related_events,
             "categories": CATEGORIES,
         },
     )
+
+
+async def _fetch_linked_situations(stores, event_id: UUID) -> list[dict]:
+    """Fetch situations linked to this event via situation_events."""
+    if not stores.structured._available:
+        return []
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT s.id, s.name, s.status, s.category, s.intensity_score "
+                "FROM situations s "
+                "JOIN situation_events se ON s.id = se.situation_id "
+                "WHERE se.event_id = $1 "
+                "ORDER BY s.intensity_score DESC",
+                event_id,
+            )
+            return [
+                {
+                    "id": str(row["id"]),
+                    "name": row["name"],
+                    "status": row["status"],
+                    "category": row["category"] or "",
+                    "intensity_score": row["intensity_score"] or 0.0,
+                }
+                for row in rows
+            ]
+    except Exception:
+        return []
+
+
+def _parse_ts(val) -> datetime | None:
+    """Best-effort parse of an ISO timestamp string to datetime."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    try:
+        s = str(val).replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+
+async def _fetch_related_events(
+    stores, event_id: UUID, source_id: UUID | None, actors: list[str]
+) -> list[dict]:
+    """Fetch related events — same source or overlapping actors."""
+    if not stores.structured._available:
+        return []
+    try:
+        from ...shared.schemas.events import Event
+        results = []
+        seen_ids = set()
+
+        async with stores.structured._pool.acquire() as conn:
+            # Same source events
+            if source_id:
+                rows = await conn.fetch(
+                    "SELECT id, data FROM events "
+                    "WHERE source_id = $1 AND id != $2 "
+                    "ORDER BY created_at DESC LIMIT 5",
+                    source_id, event_id,
+                )
+                for row in rows:
+                    eid = row["id"]
+                    if eid in seen_ids:
+                        continue
+                    seen_ids.add(eid)
+                    try:
+                        data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+                        results.append({
+                            "id": str(eid),
+                            "title": data.get("title", "Untitled"),
+                            "category": data.get("category", "other"),
+                            "event_timestamp": _parse_ts(data.get("event_timestamp")),
+                            "relation": "same source",
+                        })
+                    except Exception:
+                        continue
+
+            # Overlapping actors (if we have room and actors exist)
+            if len(results) < 5 and actors:
+                remaining = 5 - len(results)
+                # Use ANY to find events sharing at least one actor
+                actor_rows = await conn.fetch(
+                    "SELECT id, data FROM events "
+                    "WHERE data->'actors' ?| $1 AND id != $2 "
+                    "ORDER BY created_at DESC LIMIT $3",
+                    actors, event_id, remaining + len(results),
+                )
+                for row in actor_rows:
+                    eid = row["id"]
+                    if eid in seen_ids:
+                        continue
+                    if len(results) >= 5:
+                        break
+                    seen_ids.add(eid)
+                    try:
+                        data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+                        results.append({
+                            "id": str(eid),
+                            "title": data.get("title", "Untitled"),
+                            "category": data.get("category", "other"),
+                            "event_timestamp": _parse_ts(data.get("event_timestamp")),
+                            "relation": "shared actors",
+                        })
+                    except Exception:
+                        continue
+
+        return results[:5]
+    except Exception:
+        return []
 
 
 # ------------------------------------------------------------------

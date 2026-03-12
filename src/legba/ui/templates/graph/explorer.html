@@ -2,134 +2,266 @@
 {% block title %}Graph Explorer — Legba Console{% endblock %}
 
 {% block content %}
-<div class="mb-4">
-  <h1 class="text-2xl font-bold text-gray-100">Knowledge Graph</h1>
-  <p class="text-sm text-gray-400 mt-1">{{ node_count }} entities, {{ edge_count }} relationships</p>
+<!-- Search bar -->
+<div class="mb-3">
+  <div class="relative">
+    <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+    </svg>
+    <input type="text" id="entity-search" autocomplete="off" spellcheck="false"
+           placeholder="Search for an entity to explore..."
+           class="w-full pl-10 pr-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 text-base placeholder-gray-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500">
+    <!-- Autocomplete dropdown -->
+    <div id="search-dropdown" class="absolute z-50 left-0 right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-64 overflow-y-auto hidden">
+    </div>
+  </div>
 </div>
 
-<!-- Controls -->
-<div class="flex flex-wrap items-center gap-3 mb-4">
-  <!-- Node type filter -->
-  <div class="flex items-center gap-2">
-    <span class="text-xs text-gray-500 uppercase">Nodes:</span>
-    <button class="btn text-xs node-filter active" data-type="all" onclick="filterNodes('all')">All</button>
-    {% for ntype in graph_data.node_types %}
-    <button class="btn text-xs node-filter" data-type="{{ ntype }}" onclick="filterNodes('{{ ntype }}')">{{ ntype }}</button>
-    {% endfor %}
+<!-- Entity type filter pills -->
+<div class="flex flex-wrap items-center gap-2 mb-3">
+  <span class="text-xs text-gray-500 uppercase tracking-wide mr-1">Types:</span>
+  <button class="pill-btn active" data-type="all" onclick="filterByType('all')">All</button>
+  {% for ntype, color in node_colors.items() %}
+  <button class="pill-btn" data-type="{{ ntype }}" onclick="filterByType('{{ ntype }}')"
+          style="--pill-color: {{ color }};">
+    <span class="w-2 h-2 rounded-full inline-block mr-1" style="background: {{ color }};"></span>
+    {{ ntype }}
+  </button>
+  {% endfor %}
+  <div class="flex-1"></div>
+  <span class="text-xs text-gray-500">{{ node_count }} entities, {{ edge_count }} relationships</span>
+</div>
+
+<!-- Controls bar -->
+<div class="flex flex-wrap items-center gap-2 mb-3">
+  <!-- View mode -->
+  <div class="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+    <button class="ctrl-btn active" data-view="graph" onclick="switchView('graph')" title="Graph View">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+      Graph
+    </button>
+    <button class="ctrl-btn" data-view="map" onclick="switchView('map')" title="Map View">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      Map
+    </button>
   </div>
 
-  <!-- Relationship type filter -->
-  <div class="flex items-center gap-2">
-    <span class="text-xs text-gray-500 uppercase">Edges:</span>
-    <button class="btn text-xs edge-filter active" data-type="all" onclick="filterEdges('all')">All</button>
-    {% for rt in graph_data.rel_types %}
-    <button class="btn text-xs edge-filter" data-type="{{ rt }}" onclick="filterEdges('{{ rt }}')">{{ rt }}</button>
-    {% endfor %}
+  <div class="h-5 w-px bg-gray-700"></div>
+
+  <!-- Layout buttons -->
+  <div class="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+    <button class="ctrl-btn layout-btn active" data-layout="cose" onclick="setLayout('cose')" title="Force-directed layout">Force</button>
+    <button class="ctrl-btn layout-btn" data-layout="circle" onclick="setLayout('circle')" title="Circle layout">Circle</button>
+    <button class="ctrl-btn layout-btn" data-layout="concentric" onclick="setLayout('concentric')" title="Concentric layout">Radial</button>
   </div>
+
+  <div class="h-5 w-px bg-gray-700"></div>
+
+  <!-- Depth selector -->
+  <div class="flex items-center gap-1">
+    <span class="text-xs text-gray-500">Depth:</span>
+    <div class="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+      <button class="ctrl-btn depth-btn active" data-depth="1" onclick="setDepth(1)">1 hop</button>
+      <button class="ctrl-btn depth-btn" data-depth="2" onclick="setDepth(2)">2 hops</button>
+      <button class="ctrl-btn depth-btn" data-depth="3" onclick="setDepth(3)">3 hops</button>
+    </div>
+  </div>
+
+  <div class="h-5 w-px bg-gray-700"></div>
+
+  <!-- Action buttons -->
+  <button class="btn text-xs" onclick="fitGraph()" title="Fit graph to viewport">Fit</button>
+  <button class="btn text-xs" id="btn-full-graph" onclick="loadFullGraph()" title="Load all entities">Full Graph</button>
 
   <div class="flex-1"></div>
 
-  <!-- Search -->
-  <input type="text" id="graph-search" placeholder="Search nodes..." class="input text-xs w-48" oninput="searchNodes(this.value)">
+  <!-- Path finder toggle -->
+  <button class="btn text-xs" onclick="togglePathFinder()" id="btn-pathfinder">
+    <svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+    Find Path
+  </button>
 
-  <!-- Layout controls -->
-  <button class="btn text-xs layout-btn active" data-layout="cose" onclick="setLayout('cose')">Force Layout</button>
-  <button class="btn text-xs layout-btn" data-layout="cose-bilkent" onclick="setLayout('cose-bilkent')">Clustered</button>
-  <button class="btn text-xs layout-btn" data-layout="circle" onclick="setLayout('circle')">Circle</button>
-  <button class="btn text-xs layout-btn" data-layout="grid" onclick="setLayout('grid')">Grid</button>
-  <button class="btn text-xs layout-btn" data-layout="map" onclick="showMap()">Map</button>
-  <button class="btn text-xs" onclick="cy.fit(undefined, 30)">Fit</button>
-  <button class="btn text-xs" onclick="refreshGraph()">Reload</button>
+  <!-- Add/Remove edge toggle -->
+  <button class="btn text-xs" onclick="toggleEdgeEditor()" id="btn-edgeeditor">
+    <svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    Edit Edges
+  </button>
 </div>
 
-<!-- Add edge form (U13) -->
-<details class="mb-4">
-  <summary class="text-sm text-gray-400 cursor-pointer hover:text-gray-300">Add/Remove Edge</summary>
-  <div class="card mt-2">
-    <div class="flex flex-wrap items-end gap-3">
-      <form id="edge-form" class="flex flex-wrap items-end gap-2" hx-post="/api/graph/edges" hx-target="#edge-result" hx-swap="innerHTML">
-        <div>
-          <label class="text-xs text-gray-500">From Entity</label>
-          <input name="from_entity" required list="node-list" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-36 block">
-        </div>
-        <div>
-          <label class="text-xs text-gray-500">Relation</label>
-          <select name="relation_type" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 block">
-            {% for rt in relationship_types %}
-              <option value="{{ rt }}">{{ rt }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500">To Entity</label>
-          <input name="to_entity" required list="node-list" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-36 block">
-        </div>
-        <div>
-          <label class="text-xs text-gray-500">Since</label>
-          <input name="since" placeholder="e.g. 2024" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-24 block">
-        </div>
-        <button type="submit" class="btn text-xs">Add Edge</button>
-        <button type="button" class="btn text-xs" onclick="deleteEdge()">Remove Edge</button>
-      </form>
-      <datalist id="node-list">
-        {% for node in graph_data.nodes %}
-          <option value="{{ node.data.name }}">
-        {% endfor %}
-      </datalist>
-      <div id="edge-result" class="text-sm"></div>
+<!-- Path finder (hidden by default) -->
+<div id="path-finder" class="card mb-3 hidden">
+  <div class="flex flex-wrap items-end gap-3">
+    <div>
+      <label class="text-xs text-gray-500 block mb-1">From Entity</label>
+      <input type="text" id="path-from" autocomplete="off" list="node-list"
+             class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 w-44">
     </div>
+    <div>
+      <label class="text-xs text-gray-500 block mb-1">To Entity</label>
+      <input type="text" id="path-to" autocomplete="off" list="node-list"
+             class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 w-44">
+    </div>
+    <button class="btn text-xs" onclick="findPath()">Find Path</button>
+    <button class="btn text-xs" onclick="clearPathHighlight()">Clear</button>
+    <div id="path-result" class="text-sm"></div>
   </div>
-</details>
+</div>
+
+<!-- Edge editor (hidden by default) -->
+<div id="edge-editor" class="card mb-3 hidden">
+  <div class="flex flex-wrap items-end gap-3">
+    <form id="edge-form" class="flex flex-wrap items-end gap-2" hx-post="/api/graph/edges" hx-target="#edge-result" hx-swap="innerHTML">
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">From Entity</label>
+        <input name="from_entity" required list="node-list" class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 w-36">
+      </div>
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">Relation</label>
+        <select name="relation_type" class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200">
+          {% for rt in relationship_types %}
+            <option value="{{ rt }}">{{ rt }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">To Entity</label>
+        <input name="to_entity" required list="node-list" class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 w-36">
+      </div>
+      <div>
+        <label class="text-xs text-gray-500 block mb-1">Since</label>
+        <input name="since" placeholder="e.g. 2024" class="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200 w-24">
+      </div>
+      <button type="submit" class="btn text-xs">Add</button>
+      <button type="button" class="btn text-xs" onclick="deleteEdge()">Remove</button>
+    </form>
+    <div id="edge-result" class="text-sm"></div>
+  </div>
+</div>
+
+<!-- Datalist for autocomplete in forms -->
+<datalist id="node-list">
+  {% for node in graph_data.nodes %}
+    <option value="{{ node.data.name }}">
+  {% endfor %}
+</datalist>
 
 <!-- Graph canvas + detail panel -->
-<div class="flex gap-4" style="height: calc(100vh - 260px);">
+<div class="flex gap-0" style="height: calc(100vh - 290px);">
   <!-- Cytoscape container -->
-  <div id="cy" class="flex-1 card" style="min-height: 400px;"></div>
+  <div id="cy" class="flex-1 rounded-lg border border-gray-700 relative" style="min-height: 350px;">
+    <!-- Loading overlay -->
+    <div id="graph-loading" class="absolute inset-0 flex items-center justify-center bg-gray-950/80 rounded-lg z-10 hidden">
+      <div class="text-gray-400 text-sm flex items-center gap-2">
+        <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        Loading graph...
+      </div>
+    </div>
+    <!-- Empty state -->
+    <div id="graph-empty" class="absolute inset-0 flex flex-col items-center justify-center text-gray-500 z-5">
+      <svg class="w-12 h-12 mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+      <p class="text-sm">Search for an entity above to explore the graph</p>
+      <p class="text-xs text-gray-600 mt-1">or click "Full Graph" to load everything</p>
+    </div>
+  </div>
+
   <!-- Leaflet map container (hidden by default) -->
-  <div id="map-container" class="flex-1 card hidden" style="min-height: 400px;"></div>
+  <div id="map-container" class="flex-1 rounded-lg border border-gray-700 hidden" style="min-height: 350px;"></div>
 
   <!-- Detail panel (hidden until node clicked) -->
-  <div id="detail-panel" class="w-72 card overflow-y-auto hidden">
-    <div class="flex items-center justify-between mb-3">
-      <h3 id="detail-name" class="text-sm font-semibold text-gray-100"></h3>
-      <button class="text-gray-500 hover:text-gray-300 text-xs" onclick="closeDetail()">close</button>
+  <div id="detail-panel" class="w-80 border-l border-gray-700 bg-gray-900 overflow-y-auto hidden transition-all duration-200" style="margin-left: -1px;">
+    <div class="p-4">
+      <!-- Header -->
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex-1 min-w-0">
+          <h3 id="detail-name" class="text-base font-semibold text-gray-100 truncate"></h3>
+          <div id="detail-type" class="mt-1"></div>
+        </div>
+        <button class="text-gray-500 hover:text-gray-300 ml-2 p-1" onclick="closeDetail()" title="Close">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Stats -->
+      <div id="detail-stats" class="flex gap-3 mb-4">
+        <div class="bg-gray-800 rounded px-3 py-1.5">
+          <div class="text-xs text-gray-500">Connections</div>
+          <div id="detail-degree" class="text-lg font-semibold text-gray-200"></div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex gap-2 mb-4">
+        <a id="detail-entity-link" href="#" class="btn text-xs flex-1 text-center">Open Entity</a>
+        <button class="btn text-xs flex-1" onclick="exploreFromHere()" id="detail-explore-btn">Explore from Here</button>
+      </div>
+
+      <!-- Relationships grouped by type -->
+      <div id="detail-rels" class="space-y-3"></div>
     </div>
-    <div id="detail-type" class="mb-2"></div>
-    <div id="detail-rels" class="space-y-1"></div>
   </div>
 </div>
 
-<!-- Legend -->
-<div class="mt-3 flex flex-wrap gap-4 text-xs text-gray-500">
+<!-- Legend (compact) -->
+<div class="mt-2 flex flex-wrap gap-3 text-xs text-gray-500">
   <span class="font-medium text-gray-400">Nodes:</span>
-  {% for ntype in graph_data.node_types %}
+  {% for ntype, color in node_colors.items() %}
   <span class="flex items-center gap-1">
-    <span class="w-2.5 h-2.5 rounded-full inline-block" style="background: {{ {'Country':'#38bdf8','Person':'#a78bfa','Organization':'#fb923c','Location':'#4ade80'}.get(ntype, '#94a3b8') }};"></span>
-    {{ ntype }}
+    <span class="w-2 h-2 rounded-full inline-block" style="background: {{ color }};"></span>{{ ntype }}
   </span>
   {% endfor %}
-  <span class="ml-4 font-medium text-gray-400">Edges:</span>
-  {% for rt in graph_data.rel_types %}
+  <span class="ml-2 font-medium text-gray-400">Edges:</span>
+  {% for rt, color in edge_colors.items() %}
   <span class="flex items-center gap-1">
-    <span class="w-3 h-0.5 inline-block" style="background: {{ {'LeaderOf':'#60a5fa','AlliedWith':'#4ade80','HostileTo':'#f87171','EconomicTie':'#fbbf24','MemberOf':'#818cf8','LocatedIn':'#2dd4bf'}.get(rt, '#64748b') }};"></span>
-    {{ rt }}
+    <span class="w-3 h-0.5 inline-block" style="background: {{ color }};"></span>{{ rt }}
   </span>
   {% endfor %}
 </div>
 
-<!-- Leaflet.js for map view -->
+<!-- Map controls overlay (shown only in map view) -->
+<div id="map-controls-overlay" class="hidden absolute" style="bottom: 60px; left: 280px; z-index: 1000;">
+  <label class="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-300 cursor-pointer">
+    <input type="checkbox" id="map-show-edges" class="rounded border-gray-600" onchange="toggleMapEdges()">
+    Show Relationships
+  </label>
+</div>
+
+<!-- Leaflet CSS -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<!-- Leaflet JS -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-
 <!-- Cytoscape.js -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape-cose-bilkent/4.1.0/cytoscape-cose-bilkent.min.js"></script>
-<script>
-const graphData = {{ graph_data | tojson }};
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
 
+<script>
+// ============================================================
+// State
+// ============================================================
+const allNodes = {{ graph_data.nodes | tojson }};   // full node list for autocomplete
+const NODE_COLORS = {{ node_colors | tojson }};
+const EDGE_COLORS = {{ edge_colors | tojson }};
+const DEFAULT_NODE_COLOR = '#94a3b8';
+const DEFAULT_EDGE_COLOR = '#64748b';
+
+let currentDepth = 1;
+let currentCenter = null;      // name of ego-center entity
+let currentLayout = 'cose';
+let currentView = 'graph';     // 'graph' | 'map'
+let activeTypeFilter = 'all';
+let detailNodeName = null;     // currently selected node
+
+// Map state
+let leafletMap = null;
+let mapLayerGroup = null;
+let mapEdgeGroup = null;
+let mapGeoData = null;
+let mapShowEdges = false;
+
+// ============================================================
+// Cytoscape init
+// ============================================================
 const cy = cytoscape({
   container: document.getElementById('cy'),
-  elements: [...graphData.nodes, ...graphData.edges],
+  elements: [],
   style: [
     {
       selector: 'node',
@@ -137,15 +269,29 @@ const cy = cytoscape({
         'background-color': 'data(color)',
         'label': 'data(name)',
         'color': '#e2e8f0',
-        'font-size': '11px',
-        'text-outline-color': '#1e293b',
+        'font-size': '10px',
+        'text-outline-color': '#0f172a',
         'text-outline-width': 2,
         'text-valign': 'bottom',
-        'text-margin-y': 6,
-        'width': 28,
-        'height': 28,
+        'text-margin-y': 5,
+        'width': 'data(size)',
+        'height': 'data(size)',
         'border-width': 1,
         'border-color': '#475569',
+        'text-max-width': '90px',
+        'text-wrap': 'ellipsis',
+        'text-opacity': 1,
+      }
+    },
+    {
+      selector: 'node.center',
+      style: {
+        'border-width': 3,
+        'border-color': '#22d3ee',
+        'font-size': '12px',
+        'font-weight': 'bold',
+        'text-outline-width': 2.5,
+        'z-index': 10,
       }
     },
     {
@@ -161,16 +307,30 @@ const cy = cytoscape({
       style: {
         'border-width': 2,
         'border-color': '#fbbf24',
-        'width': 36,
-        'height': 36,
-        'font-size': '13px',
+        'font-size': '12px',
         'font-weight': 'bold',
+        'z-index': 5,
       }
     },
     {
       selector: 'node.dimmed',
       style: {
-        'opacity': 0.2,
+        'opacity': 0.15,
+        'text-opacity': 0,
+      }
+    },
+    {
+      selector: 'node.path-node',
+      style: {
+        'border-width': 3,
+        'border-color': '#f59e0b',
+        'z-index': 10,
+      }
+    },
+    {
+      selector: 'node.expandable',
+      style: {
+        'border-style': 'dashed',
       }
     },
     {
@@ -181,279 +341,626 @@ const cy = cytoscape({
         'target-arrow-shape': 'triangle',
         'curve-style': 'bezier',
         'width': 1.5,
-        'arrow-scale': 0.8,
-        'label': 'data(type)',
-        'font-size': '9px',
+        'arrow-scale': 0.7,
+        'label': '',
+        'font-size': '8px',
         'color': '#64748b',
         'text-rotation': 'autorotate',
-        'text-outline-color': '#1e293b',
+        'text-outline-color': '#0f172a',
         'text-outline-width': 1.5,
         'text-margin-y': -8,
+        'opacity': 0.7,
+      }
+    },
+    {
+      selector: 'edge.show-label',
+      style: {
+        'label': 'data(type)',
+        'font-size': '9px',
       }
     },
     {
       selector: 'edge.highlighted',
       style: {
         'width': 3,
-        'font-size': '11px',
+        'opacity': 1,
+        'label': 'data(type)',
+        'font-size': '10px',
         'color': '#e2e8f0',
+        'z-index': 5,
       }
     },
     {
       selector: 'edge.dimmed',
       style: {
-        'opacity': 0.15,
+        'opacity': 0.08,
+      }
+    },
+    {
+      selector: 'edge.path-edge',
+      style: {
+        'width': 3.5,
+        'opacity': 1,
+        'line-color': '#f59e0b',
+        'target-arrow-color': '#f59e0b',
+        'label': 'data(type)',
+        'color': '#fbbf24',
+        'font-size': '10px',
+        'z-index': 10,
       }
     },
   ],
-  layout: {
-    name: 'cose',
-    animate: true,
-    animationDuration: 500,
-    nodeRepulsion: function() { return 50000; },
-    idealEdgeLength: function() { return 250; },
-    gravity: 0.05,
-    numIter: 500,
-    padding: 30,
-  },
-  minZoom: 0.2,
-  maxZoom: 4,
+  layout: { name: 'preset' },
+  minZoom: 0.15,
+  maxZoom: 5,
   wheelSensitivity: 0.3,
 });
 
-// -- Scale node size by degree --
-cy.nodes().forEach(n => {
-  const deg = n.degree();
-  n.style('width', Math.max(20, Math.min(60, 20 + deg * 3)));
-  n.style('height', Math.max(20, Math.min(60, 20 + deg * 3)));
+// ============================================================
+// Show edge labels on hover
+// ============================================================
+cy.on('mouseover', 'edge', function(evt) {
+  evt.target.addClass('show-label');
+});
+cy.on('mouseout', 'edge', function(evt) {
+  if (!evt.target.hasClass('highlighted') && !evt.target.hasClass('path-edge')) {
+    evt.target.removeClass('show-label');
+  }
 });
 
-// -- Node click: show detail panel with relationships --
+// ============================================================
+// Dynamic label visibility based on zoom
+// ============================================================
+cy.on('zoom', function() {
+  const zoom = cy.zoom();
+  cy.batch(function() {
+    cy.nodes().forEach(function(n) {
+      const deg = n.data('degree') || 0;
+      // At low zoom: only show labels for high-degree nodes
+      // At high zoom: show all labels
+      if (zoom < 0.5) {
+        n.style('text-opacity', deg >= 8 ? 1 : 0);
+      } else if (zoom < 0.8) {
+        n.style('text-opacity', deg >= 3 ? 1 : 0);
+      } else {
+        n.style('text-opacity', 1);
+      }
+    });
+  });
+});
+
+// ============================================================
+// Search / Autocomplete
+// ============================================================
+const searchInput = document.getElementById('entity-search');
+const searchDropdown = document.getElementById('search-dropdown');
+let searchTimeout = null;
+
+// Build a name list for fast filtering
+const allNodeNames = allNodes.map(n => ({
+  name: n.data.name,
+  type: n.data.type,
+  color: n.data.color,
+  degree: n.data.degree || 0,
+})).sort((a, b) => b.degree - a.degree);
+
+searchInput.addEventListener('input', function() {
+  clearTimeout(searchTimeout);
+  const q = this.value.trim().toLowerCase();
+  if (!q) {
+    searchDropdown.classList.add('hidden');
+    return;
+  }
+  searchTimeout = setTimeout(function() {
+    const matches = allNodeNames.filter(n => n.name.toLowerCase().includes(q)).slice(0, 20);
+    if (matches.length === 0) {
+      searchDropdown.innerHTML = '<div class="px-3 py-2 text-sm text-gray-500">No matches</div>';
+    } else {
+      searchDropdown.innerHTML = matches.map(m =>
+        '<button class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2" onclick="selectEntity(\'' + m.name.replace(/'/g, "\\'") + '\')">' +
+          '<span class="w-2 h-2 rounded-full flex-shrink-0" style="background:' + m.color + ';"></span>' +
+          '<span class="truncate">' + m.name + '</span>' +
+          '<span class="text-xs text-gray-500 ml-auto flex-shrink-0">' + m.type + '</span>' +
+        '</button>'
+      ).join('');
+    }
+    searchDropdown.classList.remove('hidden');
+  }, 100);
+});
+
+searchInput.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const q = this.value.trim().toLowerCase();
+    const match = allNodeNames.find(n => n.name.toLowerCase() === q) ||
+                  allNodeNames.find(n => n.name.toLowerCase().includes(q));
+    if (match) selectEntity(match.name);
+  }
+  if (e.key === 'Escape') {
+    searchDropdown.classList.add('hidden');
+  }
+});
+
+// Close dropdown on outside click
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#entity-search') && !e.target.closest('#search-dropdown')) {
+    searchDropdown.classList.add('hidden');
+  }
+});
+
+function selectEntity(name) {
+  searchInput.value = name;
+  searchDropdown.classList.add('hidden');
+  loadEgoGraph(name);
+}
+
+// ============================================================
+// Graph loading
+// ============================================================
+function showLoading() {
+  document.getElementById('graph-loading').classList.remove('hidden');
+}
+function hideLoading() {
+  document.getElementById('graph-loading').classList.add('hidden');
+}
+function showEmpty() {
+  document.getElementById('graph-empty').classList.remove('hidden');
+}
+function hideEmpty() {
+  document.getElementById('graph-empty').classList.add('hidden');
+}
+
+async function loadEgoGraph(entityName, depth) {
+  depth = depth || currentDepth;
+  showLoading();
+  hideEmpty();
+  try {
+    const resp = await fetch('/api/graph/ego?entity=' + encodeURIComponent(entityName) + '&depth=' + depth);
+    const data = await resp.json();
+    if (data.nodes.length === 0) {
+      hideLoading();
+      showEmpty();
+      return;
+    }
+    renderGraph(data, entityName);
+    currentCenter = entityName;
+  } catch (e) {
+    console.error('Failed to load ego graph:', e);
+  }
+  hideLoading();
+}
+
+async function loadFullGraph() {
+  showLoading();
+  hideEmpty();
+  try {
+    const resp = await fetch('/api/graph');
+    const data = await resp.json();
+    if (data.nodes.length === 0) {
+      hideLoading();
+      showEmpty();
+      return;
+    }
+    renderGraph(data, null);
+    currentCenter = null;
+  } catch (e) {
+    console.error('Failed to load full graph:', e);
+  }
+  hideLoading();
+}
+
+function renderGraph(data, centerName) {
+  cy.elements().remove();
+
+  // Apply type filter before rendering
+  let nodes = data.nodes;
+  let edges = data.edges;
+  if (activeTypeFilter !== 'all') {
+    const visibleNames = new Set(nodes.filter(n => n.data.type === activeTypeFilter).map(n => n.data.id));
+    nodes = nodes.filter(n => visibleNames.has(n.data.id));
+    edges = edges.filter(e => visibleNames.has(e.data.source) && visibleNames.has(e.data.target));
+  }
+
+  // Calculate sizes based on degree
+  nodes.forEach(n => {
+    const deg = n.data.degree || 0;
+    n.data.size = Math.max(20, Math.min(60, 18 + deg * 4));
+  });
+
+  cy.add([...nodes, ...edges]);
+
+  // Mark center node
+  if (centerName) {
+    const centerNode = cy.getElementById(centerName);
+    if (centerNode.length) {
+      centerNode.addClass('center');
+    }
+  }
+
+  // Mark expandable nodes (edge nodes that might have more connections)
+  if (centerName) {
+    cy.nodes().forEach(n => {
+      if (n.data('name') !== centerName) {
+        // A node is "expandable" if its graph-wide degree > visible degree
+        const fullDeg = n.data('degree') || 0;
+        const visDeg = n.degree();
+        if (fullDeg > visDeg) {
+          n.addClass('expandable');
+        }
+      }
+    });
+  }
+
+  runLayout();
+}
+
+function runLayout(name) {
+  name = name || currentLayout;
+  const opts = { name: name, animate: true, animationDuration: 500, padding: 40 };
+
+  if (name === 'cose') {
+    opts.nodeRepulsion = function() { return 8000; };
+    opts.idealEdgeLength = function() { return 80; };
+    opts.gravity = 0.15;
+    opts.numIter = 2500;
+    opts.tile = true;
+  } else if (name === 'concentric') {
+    opts.concentric = function(node) { return node.degree(); };
+    opts.levelWidth = function() { return 2; };
+    opts.minNodeSpacing = 50;
+  }
+
+  cy.layout(opts).run();
+}
+
+// ============================================================
+// Node interaction
+// ============================================================
 cy.on('tap', 'node', function(evt) {
   const node = evt.target;
+  showNodeDetail(node);
+});
+
+// Double-click to expand (ego from this node)
+cy.on('dbltap', 'node', function(evt) {
+  const node = evt.target;
   const name = node.data('name');
-  const ntype = node.data('type');
-
-  // Highlight connected
-  cy.elements().removeClass('highlighted dimmed');
-  const neighborhood = node.neighborhood().add(node);
-  neighborhood.addClass('highlighted');
-  cy.elements().not(neighborhood).addClass('dimmed');
-
-  // Populate detail panel
-  document.getElementById('detail-name').textContent = name;
-  document.getElementById('detail-type').innerHTML =
-    '<span class="badge badge-blue">' + ntype + '</span>';
-
-  // List relationships
-  const relsDiv = document.getElementById('detail-rels');
-  const connected = node.connectedEdges();
-  let html = '<div class="text-xs text-gray-400 mb-1">' + connected.length + ' relationship(s)</div>';
-  connected.forEach(edge => {
-    const src = edge.data('source');
-    const tgt = edge.data('target');
-    const rel = edge.data('type');
-    const other = (src === name) ? tgt : src;
-    const dir = (src === name) ? '→' : '←';
-    html += '<div class="flex items-center gap-1 text-xs text-gray-300 py-0.5">' +
-      '<span class="text-gray-500">' + dir + '</span> ' +
-      '<span class="text-cyan-400 cursor-pointer" onclick="focusNode(\'' + other.replace(/'/g, "\\'") + '\')">' + other + '</span> ' +
-      '<span class="text-gray-500">(' + rel + ')</span></div>';
-  });
-  relsDiv.innerHTML = html;
-
-  document.getElementById('detail-panel').classList.remove('hidden');
+  expandFromNode(name);
 });
 
 // Click background: clear selection
 cy.on('tap', function(evt) {
   if (evt.target === cy) {
     cy.elements().removeClass('highlighted dimmed');
-    document.getElementById('detail-panel').classList.add('hidden');
+    closeDetail();
   }
 });
 
-// -- Functions --
-function closeDetail() {
+function showNodeDetail(node) {
+  const name = node.data('name');
+  const ntype = node.data('type');
+  const entityId = node.data('entity_id');
+  detailNodeName = name;
+
+  // Highlight neighborhood
   cy.elements().removeClass('highlighted dimmed');
+  const neighborhood = node.neighborhood().add(node);
+  neighborhood.addClass('highlighted');
+  cy.elements().not(neighborhood).addClass('dimmed');
+
+  // Detail panel: name + type badge
+  document.getElementById('detail-name').textContent = name;
+  const typeColor = NODE_COLORS[ntype] || DEFAULT_NODE_COLOR;
+  document.getElementById('detail-type').innerHTML =
+    '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium" style="background:' + typeColor + '20; color:' + typeColor + ';">' + ntype + '</span>';
+
+  // Degree
+  const connected = node.connectedEdges();
+  document.getElementById('detail-degree').textContent = connected.length;
+
+  // Entity link
+  const linkEl = document.getElementById('detail-entity-link');
+  if (entityId) {
+    linkEl.href = '/entities/' + entityId;
+    linkEl.classList.remove('opacity-50', 'pointer-events-none');
+  } else {
+    linkEl.href = '/entities?q=' + encodeURIComponent(name);
+    linkEl.classList.remove('opacity-50', 'pointer-events-none');
+  }
+
+  // Group relationships by type
+  const relGroups = {};
+  connected.forEach(edge => {
+    const src = edge.data('source');
+    const tgt = edge.data('target');
+    const rel = edge.data('type');
+    const other = (src === name) ? tgt : src;
+    const dir = (src === name) ? 'outgoing' : 'incoming';
+
+    if (!relGroups[rel]) relGroups[rel] = [];
+    relGroups[rel].push({ name: other, dir: dir });
+  });
+
+  // Render grouped relationships
+  const relsDiv = document.getElementById('detail-rels');
+  let html = '';
+  const relTypesSorted = Object.keys(relGroups).sort();
+  relTypesSorted.forEach(relType => {
+    const items = relGroups[relType];
+    const relColor = EDGE_COLORS[relType] || DEFAULT_EDGE_COLOR;
+    html += '<div class="mb-2">';
+    html += '<div class="flex items-center gap-1.5 mb-1">';
+    html += '<span class="w-2.5 h-0.5 inline-block rounded" style="background:' + relColor + ';"></span>';
+    html += '<span class="text-xs font-medium" style="color:' + relColor + ';">' + relType + '</span>';
+    html += '<span class="text-xs text-gray-600">(' + items.length + ')</span>';
+    html += '</div>';
+    items.forEach(item => {
+      const arrow = item.dir === 'outgoing' ? '&#8594;' : '&#8592;';
+      html += '<div class="flex items-center gap-1.5 text-xs text-gray-300 py-0.5 pl-3 hover:bg-gray-800 rounded cursor-pointer" onclick="focusNode(\'' + item.name.replace(/'/g, "\\'") + '\')">';
+      html += '<span class="text-gray-600 text-[10px]">' + arrow + '</span>';
+      html += '<span class="text-cyan-400 truncate">' + item.name + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  if (relTypesSorted.length === 0) {
+    html = '<div class="text-xs text-gray-500">No relationships</div>';
+  }
+
+  relsDiv.innerHTML = html;
+  document.getElementById('detail-panel').classList.remove('hidden');
+}
+
+function closeDetail() {
   document.getElementById('detail-panel').classList.add('hidden');
+  detailNodeName = null;
 }
 
 function focusNode(name) {
   const node = cy.getElementById(name);
   if (node.length) {
-    node.emit('tap');
-    cy.animate({ center: { eles: node }, zoom: 1.5, duration: 300 });
+    cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.2), duration: 300 });
+    setTimeout(function() { showNodeDetail(node); }, 350);
   }
 }
 
-let activeNodeFilter = 'all';
-let activeEdgeFilter = 'all';
+function exploreFromHere() {
+  if (detailNodeName) {
+    searchInput.value = detailNodeName;
+    loadEgoGraph(detailNodeName);
+  }
+}
 
-function applyFilters() {
-  cy.batch(function() {
-    // Start by showing everything
-    cy.elements().show();
+async function expandFromNode(name) {
+  // Fetch ego-graph for this node and merge into existing graph
+  showLoading();
+  try {
+    const resp = await fetch('/api/graph/ego?entity=' + encodeURIComponent(name) + '&depth=1');
+    const data = await resp.json();
+    if (data.nodes.length === 0) { hideLoading(); return; }
 
-    // Apply node filter
-    if (activeNodeFilter !== 'all') {
-      cy.nodes().hide();
-      cy.nodes('[type="' + activeNodeFilter + '"]').show();
-      // Only show edges where both endpoints are visible
-      cy.edges().forEach(e => {
-        if (!e.source().visible() || !e.target().visible()) e.hide();
-      });
-    }
+    // Add new nodes and edges that don't exist yet
+    const existingIds = new Set(cy.nodes().map(n => n.id()));
+    const existingEdgeIds = new Set(cy.edges().map(e => e.data('source') + '->' + e.data('type') + '->' + e.data('target')));
 
-    // Apply edge filter on top
-    if (activeEdgeFilter !== 'all') {
-      cy.edges().hide();
-      cy.edges('[type="' + activeEdgeFilter + '"]').show();
-      // Hide edges where endpoints are hidden by node filter
-      if (activeNodeFilter !== 'all') {
-        cy.edges().forEach(e => {
-          if (!e.source().data('type') || e.source().data('type') !== activeNodeFilter) return;
-          if (!e.target().data('type') || e.target().data('type') !== activeNodeFilter) return;
-        });
+    let newElements = [];
+    data.nodes.forEach(n => {
+      if (!existingIds.has(n.data.id)) {
+        n.data.size = Math.max(20, Math.min(60, 18 + (n.data.degree || 0) * 4));
+        newElements.push(n);
       }
+    });
+    data.edges.forEach(e => {
+      const key = e.data.source + '->' + e.data.type + '->' + e.data.target;
+      if (!existingEdgeIds.has(key)) {
+        // Check both endpoints exist (either already in graph or being added)
+        const srcExists = existingIds.has(e.data.source) || data.nodes.some(n => n.data.id === e.data.source);
+        const tgtExists = existingIds.has(e.data.target) || data.nodes.some(n => n.data.id === e.data.target);
+        if (srcExists && tgtExists) {
+          newElements.push(e);
+        }
+      }
+    });
+
+    if (newElements.length > 0) {
+      cy.add(newElements);
+      // Mark the expanded node
+      const expandedNode = cy.getElementById(name);
+      if (expandedNode.length) {
+        expandedNode.removeClass('expandable');
+      }
+      runLayout();
     }
-  });
-}
-
-function filterNodes(type) {
-  document.querySelectorAll('.node-filter').forEach(b => b.classList.remove('active'));
-  document.querySelector('.node-filter[data-type="' + type + '"]').classList.add('active');
-  activeNodeFilter = type;
-  applyFilters();
-  // Also update map if in map mode
-  if (leafletMap && !document.getElementById('map-container').classList.contains('hidden')) {
-    renderMapMarkers(mapGeoData, type);
+  } catch (e) {
+    console.error('Failed to expand node:', e);
   }
+  hideLoading();
 }
 
-function filterEdges(type) {
-  document.querySelectorAll('.edge-filter').forEach(b => b.classList.remove('active'));
-  document.querySelector('.edge-filter[data-type="' + type + '"]').classList.add('active');
-  activeEdgeFilter = type;
-  applyFilters();
-}
-
+// ============================================================
+// Controls
+// ============================================================
 function setLayout(name) {
-  // Switch back to graph view if in map mode
-  document.getElementById('cy').classList.remove('hidden');
-  document.getElementById('map-container').classList.add('hidden');
-  // Update active button
+  currentLayout = name;
   document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector('.layout-btn[data-layout="' + name + '"]');
   if (btn) btn.classList.add('active');
-
-  const opts = { name: name, animate: true, animationDuration: 500, padding: 30 };
-  if (name === 'cose') {
-    opts.nodeRepulsion = function() { return 50000; };
-    opts.idealEdgeLength = function() { return 250; };
-    opts.gravity = 0.05;
-    opts.numIter = 500;
-  } else if (name === 'cose-bilkent') {
-    opts.nodeRepulsion = 50000;
-    opts.idealEdgeLength = 250;
-    opts.gravity = 0.05;
-    opts.numIter = 2500;
-    opts.tile = true;
-  }
-  cy.layout(opts).run();
+  if (cy.elements().length > 0) runLayout(name);
 }
 
-async function refreshGraph() {
-  const resp = await fetch('/api/graph');
-  const data = await resp.json();
-  cy.elements().remove();
-  cy.add([...data.nodes, ...data.edges]);
-  cy.layout({ name: 'cose', animate: true, animationDuration: 500, padding: 30,
-    nodeRepulsion: function() { return 50000; }, idealEdgeLength: function() { return 250; }, gravity: 0.05, numIter: 500,
-  }).run();
-  // Rescale nodes by degree after reload
-  cy.nodes().forEach(n => {
-    const deg = n.degree();
-    n.style('width', Math.max(20, Math.min(60, 20 + deg * 3)));
-    n.style('height', Math.max(20, Math.min(60, 20 + deg * 3)));
-  });
+function setDepth(d) {
+  currentDepth = d;
+  document.querySelectorAll('.depth-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.depth-btn[data-depth="' + d + '"]').classList.add('active');
+  // Reload ego-graph if we have a center
+  if (currentCenter) loadEgoGraph(currentCenter, d);
 }
 
-function searchNodes(query) {
-  if (!query || !query.trim()) {
-    cy.elements().removeClass('highlighted dimmed');
-    return;
-  }
-  const q = query.toLowerCase();
-  cy.elements().removeClass('highlighted dimmed');
-  const matches = cy.nodes().filter(n => n.data('name').toLowerCase().includes(q));
-  if (matches.length === 0) {
-    return;
-  }
-  const neighborhood = matches.neighborhood().add(matches);
-  neighborhood.addClass('highlighted');
-  cy.elements().not(neighborhood).addClass('dimmed');
+function fitGraph() {
+  cy.fit(undefined, 40);
 }
 
+function filterByType(type) {
+  activeTypeFilter = type;
+  document.querySelectorAll('.pill-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.pill-btn[data-type="' + type + '"]').classList.add('active');
+
+  // Re-render current graph with filter
+  if (currentCenter) {
+    loadEgoGraph(currentCenter, currentDepth);
+  } else if (cy.elements().length > 0) {
+    // For full graph, just show/hide
+    cy.batch(function() {
+      if (type === 'all') {
+        cy.elements().show();
+      } else {
+        cy.nodes().forEach(n => {
+          if (n.data('type') === type) {
+            n.show();
+          } else {
+            n.hide();
+          }
+        });
+        cy.edges().forEach(e => {
+          if (!e.source().visible() || !e.target().visible()) e.hide(); else e.show();
+        });
+      }
+    });
+  }
+}
+
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll('[data-view]').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-view="' + view + '"]').classList.add('active');
+
+  if (view === 'graph') {
+    document.getElementById('cy').classList.remove('hidden');
+    document.getElementById('map-container').classList.add('hidden');
+    document.getElementById('map-controls-overlay').classList.add('hidden');
+  } else {
+    document.getElementById('cy').classList.add('hidden');
+    document.getElementById('map-container').classList.remove('hidden');
+    document.getElementById('map-controls-overlay').classList.remove('hidden');
+    initMap();
+  }
+}
+
+// ============================================================
+// Path finder
+// ============================================================
+function togglePathFinder() {
+  const el = document.getElementById('path-finder');
+  el.classList.toggle('hidden');
+  if (!el.classList.contains('hidden')) {
+    document.getElementById('edge-editor').classList.add('hidden');
+  }
+}
+
+function toggleEdgeEditor() {
+  const el = document.getElementById('edge-editor');
+  el.classList.toggle('hidden');
+  if (!el.classList.contains('hidden')) {
+    document.getElementById('path-finder').classList.add('hidden');
+  }
+}
+
+async function findPath() {
+  const fromName = document.getElementById('path-from').value.trim();
+  const toName = document.getElementById('path-to').value.trim();
+  if (!fromName || !toName) return;
+
+  document.getElementById('path-result').innerHTML =
+    '<span class="text-gray-400 text-xs">Searching...</span>';
+
+  try {
+    const resp = await fetch('/api/graph/path?from=' + encodeURIComponent(fromName) + '&to=' + encodeURIComponent(toName));
+    const data = await resp.json();
+
+    if (!data.path_found || data.nodes.length === 0) {
+      document.getElementById('path-result').innerHTML =
+        '<span class="text-yellow-400 text-xs">No path found between these entities.</span>';
+      return;
+    }
+
+    // Load the path nodes into the graph
+    renderGraph(data, null);
+
+    // Highlight path nodes
+    if (data.path_nodes) {
+      const pathSet = new Set(data.path_nodes);
+      cy.nodes().forEach(n => {
+        if (pathSet.has(n.data('name'))) {
+          n.addClass('path-node');
+        }
+      });
+      // Highlight edges between consecutive path nodes
+      cy.edges().forEach(e => {
+        if (pathSet.has(e.data('source')) && pathSet.has(e.data('target'))) {
+          e.addClass('path-edge');
+        }
+      });
+    }
+
+    document.getElementById('path-result').innerHTML =
+      '<span class="text-green-400 text-xs">Path found: ' + data.nodes.length + ' entities</span>';
+  } catch (e) {
+    document.getElementById('path-result').innerHTML =
+      '<span class="text-red-400 text-xs">Error: ' + e.message + '</span>';
+  }
+}
+
+function clearPathHighlight() {
+  cy.elements().removeClass('path-node path-edge highlighted dimmed');
+  document.getElementById('path-result').innerHTML = '';
+}
+
+// ============================================================
+// Edge editor
+// ============================================================
 async function deleteEdge() {
   const form = document.getElementById('edge-form');
   const from_entity = form.querySelector('[name="from_entity"]').value;
   const to_entity = form.querySelector('[name="to_entity"]').value;
   const relation_type = form.querySelector('[name="relation_type"]').value;
   if (!from_entity || !to_entity) { alert('Fill in From and To entities'); return; }
-  if (!confirm(`Remove edge: ${from_entity} --[${relation_type}]--> ${to_entity}?`)) return;
-  const resp = await fetch(`/api/graph/edges?from_entity=${encodeURIComponent(from_entity)}&to_entity=${encodeURIComponent(to_entity)}&relation_type=${encodeURIComponent(relation_type)}`, { method: 'DELETE' });
+  if (!confirm('Remove edge: ' + from_entity + ' --[' + relation_type + ']--> ' + to_entity + '?')) return;
+  const resp = await fetch('/api/graph/edges?from_entity=' + encodeURIComponent(from_entity) + '&to_entity=' + encodeURIComponent(to_entity) + '&relation_type=' + encodeURIComponent(relation_type), { method: 'DELETE' });
   const html = await resp.text();
   document.getElementById('edge-result').innerHTML = html;
-  if (resp.ok) setTimeout(() => refreshGraph(), 500);
+  if (resp.ok) {
+    // Refresh current view
+    setTimeout(function() {
+      if (currentCenter) loadEgoGraph(currentCenter, currentDepth);
+      else loadFullGraph();
+    }, 500);
+  }
 }
 
-// -- Map view --
+// ============================================================
+// Map view
+// ============================================================
 const MAP_TYPE_COLORS = {
-  Country: '#3b82f6',
-  Location: '#22c55e',
-  Person: '#f59e0b',
-  Organization: '#8b5cf6',
-  Armed_Group: '#ef4444',
-  Unknown: '#6b7280',
+  Country: '#3b82f6', Location: '#22c55e', Person: '#f59e0b',
+  Organization: '#8b5cf6', Armed_Group: '#ef4444', Unknown: '#6b7280',
 };
-function mapColor(ntype) {
-  return MAP_TYPE_COLORS[ntype] || '#6b7280';
-}
 
-let leafletMap = null;
-let mapLayerGroup = null;
-let mapGeoData = null;
-
-async function showMap() {
-  // Toggle: hide cytoscape, show map
-  document.getElementById('cy').classList.add('hidden');
-  document.getElementById('map-container').classList.remove('hidden');
-
-  // Update active button
-  document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector('.layout-btn[data-layout="map"]').classList.add('active');
-
-  // Initialize Leaflet map once
+async function initMap() {
   if (!leafletMap) {
     leafletMap = L.map('map-container', {
-      center: [20, 0],
-      zoom: 2,
-      zoomControl: true,
-      attributionControl: true,
+      center: [20, 0], zoom: 2,
+      zoomControl: true, attributionControl: true,
     });
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
-      subdomains: 'abcd',
-      maxZoom: 19,
+      attribution: '&copy; OSM &copy; CARTO',
+      subdomains: 'abcd', maxZoom: 19,
     }).addTo(leafletMap);
     mapLayerGroup = L.layerGroup().addTo(leafletMap);
+    mapEdgeGroup = L.layerGroup();  // Not added by default
   }
+  setTimeout(function() { leafletMap.invalidateSize(); }, 100);
 
-  // Force Leaflet to recalculate container size after visibility change
-  setTimeout(() => { leafletMap.invalidateSize(); }, 100);
-
-  // Fetch geo data and populate markers
   try {
     const resp = await fetch('/api/graph/geo');
     mapGeoData = await resp.json();
@@ -463,48 +970,40 @@ async function showMap() {
   }
 }
 
-function renderMapMarkers(data, nodeTypeFilter) {
+function renderMapMarkers(data) {
   if (!mapLayerGroup) return;
   mapLayerGroup.clearLayers();
+  mapEdgeGroup.clearLayers();
 
-  const filteredNodes = (!nodeTypeFilter || nodeTypeFilter === 'all')
+  const filteredNodes = (activeTypeFilter === 'all')
     ? data.nodes
-    : data.nodes.filter(n => n.type === nodeTypeFilter);
+    : data.nodes.filter(n => n.type === activeTypeFilter);
   const nodeIds = new Set(filteredNodes.map(n => n.id));
   const markerIndex = {};
 
-  // Place circle markers for each geo node
   filteredNodes.forEach(node => {
-    const color = mapColor(node.type);
+    const color = MAP_TYPE_COLORS[node.type] || '#6b7280';
     const marker = L.circleMarker([node.lat, node.lon], {
       radius: Math.max(6, Math.min(16, 6 + (node.degree || 0) * 1.5)),
-      fillColor: color,
-      color: '#1e293b',
-      weight: 1.5,
-      fillOpacity: 0.85,
+      fillColor: color, color: '#1e293b', weight: 1.5, fillOpacity: 0.85,
     }).addTo(mapLayerGroup);
 
     marker.bindPopup(
-      '<div style="font-family: sans-serif;">' +
-        '<div style="font-weight: 600; font-size: 13px; color: #f1f5f9;">' + node.name + '</div>' +
-        '<div style="font-size: 11px; color: ' + color + ';">' + node.type + '</div>' +
-        (node.degree ? '<div style="font-size: 10px; color: #94a3b8;">' + node.degree + ' connection(s)</div>' : '') +
+      '<div style="font-family:sans-serif;">' +
+        '<div style="font-weight:600;font-size:13px;color:#f1f5f9;">' + node.name + '</div>' +
+        '<div style="font-size:11px;color:' + color + ';">' + node.type + '</div>' +
+        (node.degree ? '<div style="font-size:10px;color:#94a3b8;">' + node.degree + ' connections</div>' : '') +
       '</div>',
       { className: 'dark-popup' }
     );
-
-    marker.on('click', function() {
-      showMapNodeDetail(node, data);
-    });
-
+    marker.on('click', function() { showMapNodeDetail(node, data); });
     markerIndex[node.id] = [node.lat, node.lon];
   });
 
-  // Draw polylines between connected entities
-  const EDGE_COLORS = {
+  // Prepare edge lines (but only show if toggled on)
+  const MAP_EDGE_COLORS = {
     LeaderOf: '#60a5fa', AlliedWith: '#4ade80', HostileTo: '#f87171',
     EconomicTie: '#fbbf24', MemberOf: '#818cf8', LocatedIn: '#2dd4bf',
-    OperatesIn: '#2dd4bf', PartOf: '#818cf8', BordersWith: '#94a3b8',
   };
   data.edges.forEach(edge => {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
@@ -512,58 +1011,142 @@ function renderMapMarkers(data, nodeTypeFilter) {
     const tgtCoords = markerIndex[edge.target];
     if (srcCoords && tgtCoords) {
       L.polyline([srcCoords, tgtCoords], {
-        color: EDGE_COLORS[edge.type] || '#64748b',
-        weight: 1.5,
-        opacity: 0.6,
-      }).addTo(mapLayerGroup);
+        color: MAP_EDGE_COLORS[edge.type] || '#64748b',
+        weight: 1.5, opacity: 0.5,
+      }).addTo(mapEdgeGroup);
     }
   });
 
-  // Fit bounds if we have markers
+  // Show edges only if checkbox is on
+  if (mapShowEdges && leafletMap) {
+    mapEdgeGroup.addTo(leafletMap);
+  }
+
   if (filteredNodes.length > 0) {
     const bounds = filteredNodes.map(n => [n.lat, n.lon]);
     leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 6 });
   }
 }
 
-function showMapNodeDetail(node, data) {
-  // Populate the same detail panel used by Cytoscape
-  document.getElementById('detail-name').textContent = node.name;
-  document.getElementById('detail-type').innerHTML =
-    '<span class="badge badge-blue">' + node.type + '</span>' +
-    '<span class="text-xs text-gray-500 ml-2">' + node.lat + ', ' + node.lon + '</span>';
+function toggleMapEdges() {
+  mapShowEdges = document.getElementById('map-show-edges').checked;
+  if (mapShowEdges && leafletMap) {
+    mapEdgeGroup.addTo(leafletMap);
+  } else if (leafletMap) {
+    leafletMap.removeLayer(mapEdgeGroup);
+  }
+}
 
-  // Find connected edges
+function showMapNodeDetail(node, data) {
+  document.getElementById('detail-name').textContent = node.name;
+  const typeColor = NODE_COLORS[node.type] || DEFAULT_NODE_COLOR;
+  document.getElementById('detail-type').innerHTML =
+    '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium" style="background:' + typeColor + '20; color:' + typeColor + ';">' + node.type + '</span>' +
+    '<span class="text-xs text-gray-500 ml-2">' + node.lat.toFixed(2) + ', ' + node.lon.toFixed(2) + '</span>';
+
   const connected = data.edges.filter(e => e.source === node.id || e.target === node.id);
-  const relsDiv = document.getElementById('detail-rels');
-  let html = '<div class="text-xs text-gray-400 mb-1">' + connected.length + ' relationship(s)</div>';
+  document.getElementById('detail-degree').textContent = connected.length;
+
+  const linkEl = document.getElementById('detail-entity-link');
+  linkEl.href = '/entities?q=' + encodeURIComponent(node.name);
+
+  // Group by type
+  const relGroups = {};
   connected.forEach(edge => {
     const other = (edge.source === node.id) ? edge.target : edge.source;
-    const dir = (edge.source === node.id) ? '\u2192' : '\u2190';
-    html += '<div class="flex items-center gap-1 text-xs text-gray-300 py-0.5">' +
-      '<span class="text-gray-500">' + dir + '</span> ' +
-      '<span class="text-cyan-400">' + other + '</span> ' +
-      '<span class="text-gray-500">(' + edge.type + ')</span></div>';
+    const dir = (edge.source === node.id) ? 'outgoing' : 'incoming';
+    if (!relGroups[edge.type]) relGroups[edge.type] = [];
+    relGroups[edge.type].push({ name: other, dir: dir });
   });
-  relsDiv.innerHTML = html;
+
+  const relsDiv = document.getElementById('detail-rels');
+  let html = '';
+  Object.keys(relGroups).sort().forEach(relType => {
+    const items = relGroups[relType];
+    const relColor = EDGE_COLORS[relType] || DEFAULT_EDGE_COLOR;
+    html += '<div class="mb-2">';
+    html += '<div class="flex items-center gap-1.5 mb-1">';
+    html += '<span class="w-2.5 h-0.5 inline-block rounded" style="background:' + relColor + ';"></span>';
+    html += '<span class="text-xs font-medium" style="color:' + relColor + ';">' + relType + '</span>';
+    html += '<span class="text-xs text-gray-600">(' + items.length + ')</span>';
+    html += '</div>';
+    items.forEach(item => {
+      const arrow = item.dir === 'outgoing' ? '&#8594;' : '&#8592;';
+      html += '<div class="flex items-center gap-1.5 text-xs text-gray-300 py-0.5 pl-3">';
+      html += '<span class="text-gray-600 text-[10px]">' + arrow + '</span>';
+      html += '<span class="text-cyan-400">' + item.name + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  relsDiv.innerHTML = html || '<div class="text-xs text-gray-500">No relationships</div>';
   document.getElementById('detail-panel').classList.remove('hidden');
 }
+
+// ============================================================
+// Focus search input on load
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+  searchInput.focus();
+});
 </script>
 
 <style>
-  /* Active filter button */
-  .node-filter.active,
-  .edge-filter.active,
-  .layout-btn.active {
-    background: rgba(56, 189, 248, 0.15);
-    border-color: #38bdf8;
-    color: #38bdf8;
+  /* Pill buttons for entity type filter */
+  .pill-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.625rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
+    border: 1px solid #374151;
+    color: #9ca3af;
+    background: transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+    cursor: pointer;
   }
-  /* Override card background for graph container */
+  .pill-btn:hover {
+    background: rgba(55, 65, 81, 0.5);
+    color: #d1d5db;
+  }
+  .pill-btn.active {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: var(--pill-color, #38bdf8);
+    color: var(--pill-color, #38bdf8);
+  }
+
+  /* Control bar buttons */
+  .ctrl-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.625rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    font-weight: 500;
+    color: #9ca3af;
+    background: transparent;
+    border: none;
+    transition: color 0.15s, background 0.15s;
+    cursor: pointer;
+  }
+  .ctrl-btn:hover {
+    background: rgba(55, 65, 81, 0.5);
+    color: #d1d5db;
+  }
+  .ctrl-btn.active {
+    background: rgba(56, 189, 248, 0.1);
+    color: #22d3ee;
+  }
+
+  /* Graph canvas */
   #cy {
     background: #0f172a;
   }
-  /* Map container styling */
+
+  /* Map container */
   #map-container {
     background: #0f172a;
     padding: 0;
@@ -574,6 +1157,7 @@ function showMapNodeDetail(node, data) {
     height: 100%;
     width: 100%;
   }
+
   /* Dark-themed Leaflet popups */
   .dark-popup .leaflet-popup-content-wrapper {
     background: #1e293b;
@@ -592,6 +1176,27 @@ function showMapNodeDetail(node, data) {
   }
   .dark-popup .leaflet-popup-close-button:hover {
     color: #e2e8f0;
+  }
+
+  /* Detail panel scrollbar */
+  #detail-panel::-webkit-scrollbar {
+    width: 4px;
+  }
+  #detail-panel::-webkit-scrollbar-track {
+    background: #1e293b;
+  }
+  #detail-panel::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 2px;
+  }
+
+  /* Search dropdown scrollbar */
+  #search-dropdown::-webkit-scrollbar {
+    width: 4px;
+  }
+  #search-dropdown::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 2px;
   }
 </style>
 {% endblock %}

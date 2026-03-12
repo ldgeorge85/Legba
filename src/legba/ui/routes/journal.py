@@ -18,7 +18,17 @@ async def journal_page(request: Request):
     consolidation = journal_data.get("consolidation", "")
     consolidation_cycle = journal_data.get("consolidation_cycle")
     consolidation_timestamp = journal_data.get("consolidation_timestamp", "")
-    entry_count = len(journal_data.get("entries", []))
+    entries = journal_data.get("entries", [])
+
+    # Reverse entries so newest first
+    entries_display = []
+    for e in reversed(entries):
+        entries_display.append({
+            "cycle": e.get("cycle"),
+            "timestamp": (e.get("timestamp") or "")[:19],
+            "text": e.get("text", ""),
+            "significance": e.get("significance", 0),
+        })
 
     return templates.TemplateResponse("journal/view.html", {
         "request": request,
@@ -26,5 +36,6 @@ async def journal_page(request: Request):
         "consolidation": consolidation,
         "consolidation_cycle": consolidation_cycle,
         "consolidation_timestamp": consolidation_timestamp[:19] if consolidation_timestamp else "",
-        "pending_entries": entry_count,
+        "entries": entries_display,
+        "pending_entries": len(entries),
     })

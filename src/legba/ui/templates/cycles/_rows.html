@@ -1,9 +1,24 @@
 {% for cycle in cycles %}
-<tr class="border-b border-gray-800 hover:bg-gray-800/50">
+<tr class="border-b border-gray-800 hover:bg-gray-800/50
+  {%- if cycle.error_count > 0 %} bg-red-950/20{% elif cycle.status == 'completed' %} bg-green-950/10{% endif %}">
   <td class="py-2 pr-4">
     <a href="/cycles/{{ cycle.cycle_number }}" class="text-cyan-400 hover:text-cyan-300 font-mono font-medium">
       #{{ cycle.cycle_number }}
     </a>
+  </td>
+  <td class="py-2 pr-4">
+    {% set ct = cycle.cycle_type | default('NORMAL') %}
+    {% if ct == 'INTROSPECTION' %}
+      <span class="badge badge-purple">INTROSPECT</span>
+    {% elif ct == 'ANALYSIS' %}
+      <span class="badge badge-blue">ANALYSIS</span>
+    {% elif ct == 'RESEARCH' %}
+      <span class="badge badge-cyan">RESEARCH</span>
+    {% elif ct == 'ACQUIRE' %}
+      <span class="badge badge-green">ACQUIRE</span>
+    {% else %}
+      <span class="badge badge-gray">NORMAL</span>
+    {% endif %}
   </td>
   <td class="py-2 pr-4">
     {% if cycle.status == 'completed' %}
@@ -16,14 +31,39 @@
       <span class="badge badge-gray">{{ cycle.status }}</span>
     {% endif %}
   </td>
-  <td class="py-2 pr-4 text-gray-400">{{ cycle.event_count }}</td>
-  <td class="py-2 pr-4 text-gray-400">{{ cycle.tool_count }}</td>
-  <td class="py-2 pr-4 {% if cycle.error_count > 0 %}text-red-400{% else %}text-gray-400{% endif %}">{{ cycle.error_count }}</td>
-  <td class="py-2 text-xs text-gray-500">{{ cycle.timestamp | timeago if cycle.timestamp else '—' }}</td>
+  <td class="py-2 pr-4 text-gray-400 font-mono text-xs">{{ cycle.tool_count }}</td>
+  <td class="py-2 pr-4 text-gray-400 font-mono text-xs">{{ cycle.llm_count }}</td>
+  <td class="py-2 pr-4">
+    {% if cycle.error_count > 0 %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-red-900/80 text-red-300">{{ cycle.error_count }}</span>
+    {% else %}
+      <span class="text-gray-600 text-xs">0</span>
+    {% endif %}
+  </td>
+  <td class="py-2 pr-4 text-xs text-gray-500 font-mono">
+    {% if cycle.duration_s is not none %}
+      {% if cycle.duration_s >= 3600 %}
+        {{ (cycle.duration_s // 3600) }}h {{ ((cycle.duration_s % 3600) // 60) }}m
+      {% elif cycle.duration_s >= 60 %}
+        {{ (cycle.duration_s // 60) }}m {{ (cycle.duration_s % 60) }}s
+      {% else %}
+        {{ cycle.duration_s }}s
+      {% endif %}
+    {% else %}
+      —
+    {% endif %}
+  </td>
+  <td class="py-2 text-xs text-gray-500">
+    {% if cycle.timestamp %}
+      <span title="{{ cycle.timestamp.isoformat() if cycle.timestamp else '' }}">{{ cycle.timestamp | timeago }}</span>
+    {% else %}
+      —
+    {% endif %}
+  </td>
 </tr>
 {% else %}
 <tr>
-  <td colspan="6" class="py-8 text-center text-gray-500">
+  <td colspan="8" class="py-8 text-center text-gray-500">
     {% if not audit_available %}
       Audit data not yet indexed. Cycles will appear here once the supervisor begins logging.
     {% else %}

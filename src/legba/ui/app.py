@@ -195,6 +195,7 @@ from .routes.memory import router as memory_router
 from .routes.watchlist import router as watchlist_router
 from .routes.situations import router as situations_router
 from .routes.consult import router as consult_router
+from .routes.analytics import router as analytics_router
 
 app.include_router(dashboard_router)
 app.include_router(entities_router)
@@ -211,3 +212,4 @@ app.include_router(memory_router)
 app.include_router(watchlist_router)
 app.include_router(situations_router)
 app.include_router(consult_router)
+app.include_router(analytics_router)

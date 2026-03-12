@@ -15,16 +15,15 @@
 </div>
 
 {% if consolidation %}
-  <div class="card">
+  <!-- Consolidation -->
+  <div class="card mb-6">
     <div class="flex items-center gap-3 mb-4 pb-3 border-b border-gray-700">
+      <span class="text-sm font-medium text-gray-200">Consolidated View</span>
       {% if consolidation_cycle %}
         <span class="badge badge-cyan">cycle {{ consolidation_cycle }}</span>
       {% endif %}
       {% if consolidation_timestamp %}
         <span class="text-xs text-gray-500">{{ consolidation_timestamp }}</span>
-      {% endif %}
-      {% if pending_entries > 0 %}
-        <span class="text-xs text-gray-500 ml-auto">{{ pending_entries }} entries pending consolidation</span>
       {% endif %}
     </div>
     <div class="journal-content text-sm text-gray-300 leading-relaxed">
@@ -32,22 +31,57 @@
     </div>
   </div>
 {% else %}
-  <div class="card">
-    <div class="flex items-center justify-center py-16 text-gray-500">
+  <div class="card mb-6">
+    <div class="flex items-center justify-center py-12 text-gray-500">
       <div class="text-center">
         <svg class="w-10 h-10 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
         </svg>
-        <p>No journal entries yet</p>
-        <p class="text-xs text-gray-600 mt-1">
-          {% if pending_entries > 0 %}
-            {{ pending_entries }} entries awaiting first consolidation at next introspection cycle
-          {% else %}
-            Journal entries will appear after the agent runs a few cycles
-          {% endif %}
-        </p>
+        <p>No consolidation yet</p>
+        <p class="text-xs text-gray-600 mt-1">Consolidation happens during introspection cycles</p>
       </div>
     </div>
   </div>
+{% endif %}
+
+<!-- Individual Entries -->
+{% if entries %}
+<div class="mt-6 pt-6 border-t border-gray-700/50">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-lg font-semibold text-gray-100">Recent Entries</h2>
+    <span class="text-xs text-gray-500">{{ entries | length }} entries pending consolidation</span>
+  </div>
+  <div class="space-y-3">
+    {% for entry in entries %}
+    <details class="group">
+      <summary class="card cursor-pointer list-none flex items-center justify-between hover:border-gray-600 transition-colors">
+        <div class="flex items-center gap-3">
+          {% if entry.cycle %}
+            <span class="text-xs font-mono text-cyan-400">Cycle #{{ entry.cycle }}</span>
+          {% endif %}
+          {% if entry.significance >= 0.7 %}
+            <span class="badge badge-yellow">high significance</span>
+          {% endif %}
+          <span class="text-sm text-gray-300 truncate max-w-xl">{{ entry.text[:120] }}{% if entry.text | length > 120 %}...{% endif %}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          {% if entry.timestamp %}
+            <span class="text-xs text-gray-500">{{ entry.timestamp }}</span>
+          {% endif %}
+          <svg class="w-4 h-4 text-gray-500 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </div>
+      </summary>
+      <div class="mt-2 ml-4 pl-4 border-l-2 border-gray-700">
+        <div class="journal-content text-sm text-gray-300 leading-relaxed py-2">
+          {{ entry.text | render_message | safe }}
+        </div>
+        {% if entry.significance %}
+          <div class="mt-2 text-xs text-gray-500">Significance: {{ "%.2f" | format(entry.significance) }}</div>
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+</div>
 {% endif %}
 {% endblock %}

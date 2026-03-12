@@ -154,13 +154,13 @@ async def situation_detail(request: Request, situation_id: UUID):
                     "updated_at": row["updated_at"],
                 }
 
-                # Fetch linked events
+                # Fetch linked events (ordered by event time for timeline consistency)
                 event_rows = await conn.fetch(
                     "SELECT e.id, e.data, se.relevance, se.added_at "
                     "FROM situation_events se "
                     "JOIN events e ON e.id = se.event_id "
                     "WHERE se.situation_id = $1 "
-                    "ORDER BY se.added_at DESC",
+                    "ORDER BY e.event_timestamp DESC NULLS LAST",
                     situation_id,
                 )
                 for erow in event_rows:
@@ -169,6 +169,7 @@ async def situation_detail(request: Request, situation_id: UUID):
                     linked_events.append({
                         "id": str(erow["id"]),
                         "title": edata.get("title", "Untitled"),
+                        "summary": edata.get("summary", ""),
                         "category": edata.get("category", "other"),
                         "event_timestamp": edata.get("event_timestamp"),
                         "relevance": erow["relevance"],

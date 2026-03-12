@@ -15,97 +15,292 @@
   {% include "partials/_stats.html" %}
 </div>
 
-<!-- Latest cycle summary -->
-<div class="mt-6 pt-6 border-t border-gray-700/50">
-  <h2 class="text-lg font-semibold text-gray-100 mb-3">Latest Cycle Summary</h2>
-  <div class="card">
-    {% if cycle_response %}
-    <div class="flex items-center gap-3 mb-3">
-      <a href="/cycles/{{ cycle_response.cycle_number }}" class="text-sm font-mono text-cyan-400 hover:text-cyan-300 hover:underline">Cycle #{{ cycle_response.cycle_number }}</a>
-      {% if cycle_response.status == "completed" %}
-        <span class="badge badge-green">completed</span>
-      {% elif cycle_response.status == "error" %}
-        <span class="badge badge-red">error</span>
-      {% else %}
-        <span class="badge badge-yellow">{{ cycle_response.status }}</span>
-      {% endif %}
-      <span class="text-xs text-gray-500">{{ cycle_response.completed_at | timeago }}</span>
-    </div>
-    <p class="text-sm text-gray-300 whitespace-pre-wrap">{{ cycle_response.cycle_summary }}</p>
-    <div class="mt-3 flex gap-4 text-xs text-gray-500">
-      <span>Actions: {{ cycle_response.actions_taken }}</span>
-      <span>Goals active: {{ cycle_response.goals_active }}</span>
-      <span>Self-mods: {{ cycle_response.self_modifications }}</span>
-      {% if cycle_response.error %}
-        <span class="text-red-400">Error: {{ cycle_response.error }}</span>
-      {% endif %}
-    </div>
-    {% else %}
-    <p class="text-sm text-gray-500">No cycle response available yet.</p>
-    {% endif %}
-  </div>
-</div>
+<!-- Two-column main area -->
+<div class="mt-6 pt-6 border-t border-gray-700/50 grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-<!-- Active situations -->
-<div class="mt-6 pt-6 border-t border-gray-700/50">
-  <div class="flex items-center justify-between mb-3">
-    <h2 class="text-lg font-semibold text-gray-100">Active Situations</h2>
-    <a href="/situations" class="text-xs text-cyan-400 hover:text-cyan-300 hover:underline">View all</a>
-  </div>
-  {% if active_situations %}
-  <div class="space-y-2">
-    {% for sit in active_situations %}
-    <a href="/situations/{{ sit.id }}" class="card flex items-center justify-between hover:border-gray-600 transition-colors block">
-      <div class="flex items-center gap-3">
-        {% if sit.status == "escalating" %}
-          <span class="badge badge-red">escalating</span>
-        {% else %}
-          <span class="badge badge-blue">active</span>
-        {% endif %}
-        <span class="text-sm text-gray-200">{{ sit.name }}</span>
-        {% if sit.category %}
-          <span class="text-xs text-gray-500">{{ sit.category }}</span>
-        {% endif %}
-      </div>
-      <div class="flex items-center gap-4">
-        <div class="text-right">
-          <div class="text-sm font-mono {% if sit.intensity_score >= 7 %}text-red-400{% elif sit.intensity_score >= 4 %}text-yellow-400{% else %}text-gray-400{% endif %}">{{ "%.1f" | format(sit.intensity_score) }}</div>
-          <div class="text-xs text-gray-500">intensity</div>
+  <!-- Left column (3/5) — Event timeline + Situations -->
+  <div class="lg:col-span-3 space-y-6">
+
+    <!-- Event Ingest Timeline -->
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Event Ingestion</h2>
+      <div class="card">
+        <div id="event-timeline" style="min-height: 220px;">
+          <div class="flex items-center justify-center h-48 text-gray-500 text-sm">Loading chart...</div>
         </div>
-        {% if sit.updated_at %}
-        <span class="text-xs text-gray-500">{{ sit.updated_at | timeago }}</span>
+      </div>
+    </div>
+
+    <!-- Active situations -->
+    <div>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold text-gray-100">Active Situations</h2>
+        <a href="/situations" class="text-xs text-cyan-400 hover:text-cyan-300 hover:underline">View all</a>
+      </div>
+      {% if active_situations %}
+      <div class="space-y-2">
+        {% for sit in active_situations %}
+        <a href="/situations/{{ sit.id }}" class="card flex items-center justify-between hover:border-gray-600 transition-colors block">
+          <div class="flex items-center gap-3">
+            {% if sit.status == "escalating" %}
+              <span class="badge badge-red">escalating</span>
+            {% else %}
+              <span class="badge badge-blue">active</span>
+            {% endif %}
+            <span class="text-sm text-gray-200">{{ sit.name }}</span>
+            {% if sit.category %}
+              <span class="text-xs text-gray-500">{{ sit.category }}</span>
+            {% endif %}
+          </div>
+          <div class="flex items-center gap-4">
+            <div class="text-right">
+              <div class="text-sm font-mono {% if sit.intensity_score >= 7 %}text-red-400{% elif sit.intensity_score >= 4 %}text-yellow-400{% else %}text-gray-400{% endif %}">{{ "%.1f" | format(sit.intensity_score) }}</div>
+              <div class="text-xs text-gray-500">intensity</div>
+            </div>
+            {% if sit.updated_at %}
+            <span class="text-xs text-gray-500">{{ sit.updated_at | timeago }}</span>
+            {% endif %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="card">
+        <p class="text-sm text-gray-500">No active or escalating situations.</p>
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Right column (2/5) — Cycle summary + Source health + Quick links -->
+  <div class="lg:col-span-2 space-y-6">
+
+    <!-- Latest cycle summary -->
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Latest Cycle</h2>
+      <div class="card">
+        {% if cycle_response %}
+        <div class="flex items-center gap-3 mb-3">
+          <a href="/cycles/{{ cycle_response.cycle_number }}" class="text-sm font-mono text-cyan-400 hover:text-cyan-300 hover:underline">Cycle #{{ cycle_response.cycle_number }}</a>
+          {% if cycle_response.status == "completed" %}
+            <span class="badge badge-green">completed</span>
+          {% elif cycle_response.status == "error" %}
+            <span class="badge badge-red">error</span>
+          {% else %}
+            <span class="badge badge-yellow">{{ cycle_response.status }}</span>
+          {% endif %}
+          <span class="text-xs text-gray-500">{{ cycle_response.completed_at | timeago }}</span>
+        </div>
+        <p class="text-sm text-gray-300 line-clamp-4">{{ cycle_response.cycle_summary }}</p>
+        <div class="mt-3 flex flex-wrap gap-3 text-xs text-gray-500">
+          <span>Actions: {{ cycle_response.actions_taken }}</span>
+          <span>Goals: {{ cycle_response.goals_active }}</span>
+          {% if cycle_response.error %}
+            <span class="text-red-400">{{ cycle_response.error }}</span>
+          {% endif %}
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-500">No cycle response available yet.</p>
         {% endif %}
       </div>
-    </a>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="card">
-    <p class="text-sm text-gray-500">No active or escalating situations.</p>
-  </div>
-  {% endif %}
-</div>
+    </div>
 
-<!-- Quick links -->
-<div class="mt-6 pt-6 border-t border-gray-700/50">
-  <h2 class="text-lg font-semibold text-gray-100 mb-3">Quick Links</h2>
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-    <a href="/events" class="card text-center hover:border-gray-600 transition-colors">
-      <div class="text-sm text-green-400">Events</div>
-      <div class="text-xs text-gray-500 mt-1">Browse all events</div>
-    </a>
-    <a href="/entities" class="card text-center hover:border-gray-600 transition-colors">
-      <div class="text-sm text-blue-400">Entities</div>
-      <div class="text-xs text-gray-500 mt-1">Entity profiles</div>
-    </a>
-    <a href="/graph" hx-boost="false" class="card text-center hover:border-gray-600 transition-colors">
-      <div class="text-sm text-orange-400">Graph</div>
-      <div class="text-xs text-gray-500 mt-1">Knowledge graph</div>
-    </a>
-    <a href="/consult" hx-boost="false" class="card text-center hover:border-gray-600 transition-colors">
-      <div class="text-sm text-purple-400">Consult</div>
-      <div class="text-xs text-gray-500 mt-1">Ask the agent</div>
-    </a>
+    <!-- Source health -->
+    <div>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold text-gray-100">Source Health</h2>
+        <a href="/sources" class="text-xs text-cyan-400 hover:text-cyan-300 hover:underline">View all</a>
+      </div>
+      <div class="card">
+        <div id="source-health" class="flex flex-wrap gap-1.5">
+          <span class="text-xs text-gray-500">Loading...</span>
+        </div>
+        <div id="source-health-summary" class="mt-3 text-xs text-gray-500"></div>
+      </div>
+    </div>
+
+    <!-- Cycle performance mini-chart -->
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Cycle Performance</h2>
+      <div class="card">
+        <div id="cycle-perf" style="min-height: 120px;">
+          <div class="flex items-center justify-center h-28 text-gray-500 text-sm">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick links -->
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Quick Links</h2>
+      <div class="grid grid-cols-2 gap-2">
+        <a href="/events" class="card text-center hover:border-gray-600 transition-colors py-3">
+          <div class="text-sm text-green-400">Events</div>
+        </a>
+        <a href="/entities" class="card text-center hover:border-gray-600 transition-colors py-3">
+          <div class="text-sm text-blue-400">Entities</div>
+        </a>
+        <a href="/graph" hx-boost="false" class="card text-center hover:border-gray-600 transition-colors py-3">
+          <div class="text-sm text-orange-400">Graph</div>
+        </a>
+        <a href="/consult" hx-boost="false" class="card text-center hover:border-gray-600 transition-colors py-3">
+          <div class="text-sm text-purple-400">Consult</div>
+        </a>
+      </div>
+    </div>
+
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.28/dist/uPlot.iife.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.28/dist/uPlot.min.css">
+<script src="/static/js/charts.js"></script>
+<script>
+(async function() {
+  // --- Event Ingest Timeline ---
+  const evData = await fetchJSON('/api/stats/events-timeseries?days=30');
+  const evContainer = document.getElementById('event-timeline');
+  if (evData && evData.length > 0) {
+    // Build uPlot data: [timestamps, conflict, political, economic, health, environment, technology, social, disaster, other]
+    const cats = ['conflict','political','economic','health','environment','technology','social','disaster','other'];
+    const timestamps = evData.map(d => new Date(d.date).getTime() / 1000);
+    const series = cats.map(c => evData.map(d => d[c] || 0));
+
+    // Stacked bar chart via uPlot bands
+    const uData = [timestamps, ...series];
+
+    // Compute stacked values for rendering
+    const stacked = [];
+    for (let i = 0; i < series.length; i++) {
+      stacked[i] = series[i].map((v, j) => {
+        let sum = v;
+        for (let k = 0; k < i; k++) sum += series[k][j];
+        return sum;
+      });
+    }
+    const stackedData = [timestamps, ...stacked];
+
+    const uSeries = [{}, ...cats.map((c, i) => ({
+      label: c,
+      stroke: COLORS[c] || COLORS.other,
+      fill: COLORS[c] ? COLORS[c] + '40' : COLORS.other + '40',
+      width: 1,
+      paths: uPlot.paths.bars({size: [0.8, 100]}),
+      points: {show: false},
+    }))];
+
+    // Build bands so each series fills down to the one below
+    const bands = [];
+    for (let i = cats.length; i > 1; i--) {
+      bands.push({series: [i, i - 1]});
+    }
+
+    const rect = evContainer.getBoundingClientRect();
+    const opts = {
+      ...uPlotDefaults(rect.width - 32, 200),
+      series: uSeries,
+      bands: bands,
+      axes: [
+        {
+          stroke: COLORS.text,
+          grid: {stroke: COLORS.border},
+          ticks: {stroke: COLORS.border},
+          values: (u, vals) => vals.map(v => {
+            const d = new Date(v * 1000);
+            return (d.getMonth()+1) + '/' + d.getDate();
+          }),
+        },
+        {
+          stroke: COLORS.text,
+          grid: {stroke: COLORS.border},
+          ticks: {stroke: COLORS.border},
+        }
+      ],
+    };
+
+    evContainer.innerHTML = '';
+    new uPlot(opts, stackedData, evContainer);
+  } else {
+    evContainer.innerHTML = '<div class="flex items-center justify-center h-48 text-gray-500 text-sm">No event data available</div>';
+  }
+
+  // --- Source Health Dots ---
+  const srcData = await fetchJSON('/api/stats/source-health');
+  const srcContainer = document.getElementById('source-health');
+  const srcSummary = document.getElementById('source-health-summary');
+  if (srcData && srcData.length > 0) {
+    let html = '';
+    let active = 0, error = 0, paused = 0;
+    srcData.forEach(s => {
+      let color = '#4ade80'; // green
+      let title = s.name + ' — ' + s.event_count + ' events';
+      if (s.status === 'error') { color = '#f87171'; error++; }
+      else if (s.status === 'paused' || s.status === 'retired') { color = '#6b7280'; paused++; }
+      else {
+        active++;
+        const failRate = s.fetch_count > 0 ? s.fail_count / s.fetch_count : 0;
+        if (failRate > 0.3) { color = '#facc15'; } // yellow for flaky
+      }
+      html += '<div class="w-3 h-3 rounded-full cursor-pointer" style="background:' + color + '" title="' + title + '"></div>';
+    });
+    srcContainer.innerHTML = html;
+    srcSummary.textContent = active + ' active, ' + error + ' errors, ' + paused + ' paused — ' + srcData.length + ' total';
+  } else {
+    srcContainer.innerHTML = '<span class="text-xs text-gray-500">No source data</span>';
+  }
+
+  // --- Cycle Performance Mini-Chart ---
+  const cycData = await fetchJSON('/api/stats/cycle-performance?last=50');
+  const cycContainer = document.getElementById('cycle-perf');
+  if (cycData && cycData.length > 0) {
+    const cycles = cycData.map(d => d.cycle);
+    const toolCalls = cycData.map(d => d.tool_calls);
+    const errors = cycData.map(d => d.errors);
+
+    const rect2 = cycContainer.getBoundingClientRect();
+    const opts2 = {
+      ...uPlotDefaults(rect2.width - 32, 100),
+      scales: { x: { time: false } },
+      axes: [
+        {
+          stroke: COLORS.text,
+          grid: {stroke: COLORS.border},
+          ticks: {stroke: COLORS.border},
+          values: (u, vals) => vals.map(v => '#' + v),
+          size: 40,
+        },
+        {
+          stroke: COLORS.text,
+          grid: {stroke: COLORS.border},
+          ticks: {stroke: COLORS.border},
+          size: 40,
+        }
+      ],
+      series: [
+        { label: 'Cycle' },
+        {
+          label: 'Tool Calls',
+          stroke: COLORS.cyan,
+          width: 1.5,
+          fill: COLORS.cyan + '20',
+          points: {show: false},
+        },
+        {
+          label: 'Errors',
+          stroke: COLORS.red,
+          width: 1.5,
+          points: {show: false},
+        }
+      ],
+    };
+
+    cycContainer.innerHTML = '';
+    new uPlot(opts2, [cycles, toolCalls, errors], cycContainer);
+  } else {
+    cycContainer.innerHTML = '<div class="flex items-center justify-center h-28 text-gray-500 text-sm">No cycle data</div>';
+  }
+})();
+</script>
 {% endblock %}

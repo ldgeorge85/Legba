@@ -2,225 +2,409 @@
 {% block title %}{{ entity.canonical_name }} — Legba Console{% endblock %}
 
 {% block content %}
-<div class="mb-6">
+{% if not entity %}
+<div class="card">
+  <p class="text-gray-400">Entity not found.</p>
+  <a href="/entities" class="text-cyan-400 hover:text-cyan-300 text-sm mt-2 inline-block">&larr; Back to entities</a>
+</div>
+{% else %}
+
+{# --- Breadcrumb --- #}
+<div class="mb-4">
   <a href="/entities" class="text-sm text-gray-500 hover:text-gray-300">&larr; Entities</a>
 </div>
 
-<!-- Header -->
+{# ================================================================ #}
+{# HEADER CARD                                                      #}
+{# ================================================================ #}
 <div class="card mb-6">
-  <div class="flex items-start justify-between">
-    <div>
-      <h1 class="text-2xl font-bold text-gray-100">{{ entity.canonical_name }}</h1>
-      <div class="flex items-center gap-3 mt-2">
-        <span class="badge badge-blue">{{ entity.entity_type.value }}</span>
-        <span class="text-xs text-gray-500">v{{ entity.version }}</span>
-        <span class="text-xs text-gray-500">ID: {{ entity.id | truncate_uuid }}</span>
+  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+    {# Left: name, type badge, aliases #}
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-3 flex-wrap">
+        <h1 class="text-2xl font-bold text-gray-100 truncate">{{ entity.canonical_name }}</h1>
+        {# Type badge — colored by entity type #}
+        {% set type_val = entity.entity_type.value %}
+        {% if type_val == 'country' %}
+          <span class="badge" style="background: rgba(56,189,248,0.15); color: #38bdf8;">{{ type_val }}</span>
+        {% elif type_val == 'person' %}
+          <span class="badge" style="background: rgba(167,139,250,0.15); color: #a78bfa;">{{ type_val }}</span>
+        {% elif type_val in ('organization', 'international_org', 'corporation') %}
+          <span class="badge" style="background: rgba(251,146,60,0.15); color: #fb923c;">{{ type_val }}</span>
+        {% elif type_val in ('location', 'infrastructure') %}
+          <span class="badge" style="background: rgba(74,222,128,0.15); color: #4ade80;">{{ type_val }}</span>
+        {% elif type_val in ('armed_group', 'military_unit') %}
+          <span class="badge" style="background: rgba(248,113,113,0.15); color: #f87171;">{{ type_val }}</span>
+        {% elif type_val == 'political_party' %}
+          <span class="badge" style="background: rgba(96,165,250,0.15); color: #60a5fa;">{{ type_val }}</span>
+        {% elif type_val == 'media_outlet' %}
+          <span class="badge" style="background: rgba(45,212,191,0.15); color: #2dd4bf;">{{ type_val }}</span>
+        {% else %}
+          <span class="badge badge-gray">{{ type_val }}</span>
+        {% endif %}
       </div>
-      {% if entity.aliases %}
-        <div class="text-sm text-gray-400 mt-2">Aliases: {{ entity.aliases | join(', ') }}</div>
-      {% endif %}
-    </div>
-    <div class="text-right">
-      <div class="flex items-center gap-2">
-        <div class="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+
+      {# Completeness progress bar #}
+      <div class="flex items-center gap-2 mt-3">
+        <span class="text-xs text-gray-500 w-24 flex-shrink-0">Completeness</span>
+        <div class="flex-1 max-w-xs h-2 bg-gray-700 rounded-full overflow-hidden">
           <div class="h-full rounded-full bar-fill {% if entity.completeness_score >= 0.7 %}bg-green-500{% elif entity.completeness_score >= 0.4 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
                style="width: {{ (entity.completeness_score * 100) | int }}%"></div>
         </div>
-        <span class="text-sm text-gray-400">{{ entity.completeness_score | format_pct }}</span>
+        <span class="text-sm font-medium text-gray-300">{{ entity.completeness_score | format_pct }}</span>
       </div>
-      <div class="text-xs text-gray-500 mt-1">Updated {{ entity.updated_at | timeago }}</div>
+
+      {# Aliases as small badges #}
+      {% if entity.aliases %}
+      <div class="flex flex-wrap gap-1.5 mt-3">
+        {% for alias in entity.aliases %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-700/60 text-gray-400">{{ alias }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {# Summary #}
+      {% if entity.summary %}
+        <p class="mt-3 text-sm text-gray-300 leading-relaxed">{{ entity.summary }}</p>
+      {% endif %}
+    </div>
+
+    {# Right: metadata + graph link #}
+    <div class="flex flex-col items-end gap-2 flex-shrink-0">
+      <a href="/graph?entity={{ entity.canonical_name | urlencode }}"
+         hx-boost="false"
+         class="btn text-xs flex items-center gap-1.5">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+        View in Graph
+      </a>
+      <div class="text-xs text-gray-500">v{{ entity.version }}</div>
+      <div class="text-xs text-gray-500">Updated {{ entity.updated_at | timeago }}</div>
+      <div class="text-xs text-gray-600">{{ entity.id | truncate_uuid }}</div>
     </div>
   </div>
-  {% if entity.summary %}
-    <p class="mt-4 text-sm text-gray-300">{{ entity.summary }}</p>
-  {% endif %}
 </div>
 
-<!-- Assertions by section -->
-<div class="mb-6">
-  <h2 class="text-lg font-semibold text-gray-100 mb-3">Assertions</h2>
-  {% if entity.sections %}
-    {% for section_name, assertions in entity.sections.items() %}
-    <div class="card mb-3">
-      <h3 class="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-2">
-        {{ section_name or 'General' }}
-      </h3>
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-left text-xs text-gray-500 border-b border-gray-700">
-            <th class="pb-1 pr-3">Key</th>
-            <th class="pb-1 pr-3">Value</th>
-            <th class="pb-1 pr-3">Confidence</th>
-            <th class="pb-1 pr-3">Source</th>
-            <th class="pb-1 pr-3">Observed</th>
-            <th class="pb-1"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for a in assertions %}
-          <tr class="border-b border-gray-800/50 {% if a.superseded %}opacity-40 line-through{% endif %}">
-            <td class="py-1.5 pr-3 font-mono text-xs text-gray-400">{{ a.key }}</td>
-            <td class="py-1.5 pr-3 text-gray-200">{{ a.value }}</td>
-            <td class="py-1.5 pr-3">
-              <div class="flex items-center gap-1">
-                <div class="w-12 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                  <div class="h-full bg-cyan-500 rounded-full bar-fill"
-                       style="width: {{ (a.confidence * 100) | int }}%"></div>
-                </div>
-                <span class="text-xs text-gray-500">{{ a.confidence | format_confidence }}</span>
-              </div>
-            </td>
-            <td class="py-1.5 pr-3 text-xs">
-              {% if a.source_event_id %}
-                <a href="/events/{{ a.source_event_id }}" class="text-cyan-400 hover:text-cyan-300">{{ a.source_event_id | truncate_uuid }}</a>
-              {% elif a.source_url %}
-                <span class="text-gray-500" title="{{ a.source_url }}">url</span>
-              {% else %}
-                <span class="text-gray-600">—</span>
+{# ================================================================ #}
+{# TWO-COLUMN LAYOUT                                               #}
+{# ================================================================ #}
+<div class="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-6">
+
+  {# ============================================================== #}
+  {# LEFT COLUMN (3/5 = 60%)                                        #}
+  {# ============================================================== #}
+  <div class="lg:col-span-3 space-y-6">
+
+    {# --- Facts Panel (grouped by predicate) --- #}
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Facts ({{ total_facts }})</h2>
+      {% if fact_groups %}
+        <div class="space-y-2" id="facts-container">
+          {% for group in fact_groups[:10] %}
+          <div class="card py-3 px-4">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">{{ group.key }}</span>
+              {% if group.facts | length > 1 %}
+                <span class="text-xs text-gray-600">({{ group.facts | length }})</span>
               {% endif %}
-            </td>
-            <td class="py-1.5 pr-3 text-xs text-gray-500">{{ a.observed_at | timeago }}</td>
-            <td class="py-1.5 text-right">
-              <button class="text-xs text-gray-500 hover:text-red-400"
-                      hx-delete="/api/entities/{{ entity.id }}/assertions?section={{ section_name }}&key={{ a.key }}&value={{ a.value }}"
-                      hx-confirm="Remove this assertion?"
-                      hx-target="closest tr"
-                      hx-swap="outerHTML">remove</button>
-            </td>
-          </tr>
+            </div>
+            {% for f in group.facts %}
+            <div class="flex items-center gap-3 py-1 {% if not loop.last %}border-b border-gray-800/40{% endif %}">
+              <span class="text-sm text-gray-200 flex-1 min-w-0 truncate" title="{{ f.value }}">{{ f.value }}</span>
+              {# Confidence bar #}
+              <div class="flex items-center gap-1 flex-shrink-0">
+                <div class="w-10 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full bar-fill {% if f.confidence >= 0.8 %}bg-cyan-500{% elif f.confidence >= 0.5 %}bg-yellow-500{% else %}bg-red-400{% endif %}"
+                       style="width: {{ (f.confidence * 100) | int }}%"></div>
+                </div>
+                <span class="text-xs text-gray-500 w-8 text-right">{{ f.confidence | format_confidence }}</span>
+              </div>
+              {# Source link #}
+              {% if f.source_event_id %}
+                <a href="/events/{{ f.source_event_id }}" class="text-xs text-cyan-400 hover:text-cyan-300 flex-shrink-0">src</a>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
           {% endfor %}
-        </tbody>
-      </table>
+
+          {# "Show all" expander if more than 10 groups #}
+          {% if fact_groups | length > 10 %}
+          <div id="facts-overflow" class="hidden space-y-2">
+            {% for group in fact_groups[10:] %}
+            <div class="card py-3 px-4">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">{{ group.key }}</span>
+                {% if group.facts | length > 1 %}
+                  <span class="text-xs text-gray-600">({{ group.facts | length }})</span>
+                {% endif %}
+              </div>
+              {% for f in group.facts %}
+              <div class="flex items-center gap-3 py-1 {% if not loop.last %}border-b border-gray-800/40{% endif %}">
+                <span class="text-sm text-gray-200 flex-1 min-w-0 truncate" title="{{ f.value }}">{{ f.value }}</span>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                  <div class="w-10 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div class="h-full rounded-full bar-fill {% if f.confidence >= 0.8 %}bg-cyan-500{% elif f.confidence >= 0.5 %}bg-yellow-500{% else %}bg-red-400{% endif %}"
+                         style="width: {{ (f.confidence * 100) | int }}%"></div>
+                  </div>
+                  <span class="text-xs text-gray-500 w-8 text-right">{{ f.confidence | format_confidence }}</span>
+                </div>
+                {% if f.source_event_id %}
+                  <a href="/events/{{ f.source_event_id }}" class="text-xs text-cyan-400 hover:text-cyan-300 flex-shrink-0">src</a>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+          <button onclick="document.getElementById('facts-overflow').classList.remove('hidden'); this.remove();"
+                  class="text-sm text-cyan-400 hover:text-cyan-300 mt-1">
+            Show all {{ fact_groups | length }} fact groups
+          </button>
+          {% endif %}
+        </div>
+      {% else %}
+        <div class="card"><p class="text-sm text-gray-500">No facts recorded yet.</p></div>
+      {% endif %}
     </div>
-    {% endfor %}
-  {% else %}
-    <div class="card"><p class="text-sm text-gray-500">No assertions recorded yet.</p></div>
-  {% endif %}
 
-  <!-- Add assertion form -->
-  <div class="card mt-3" id="add-assertion-result">
-    <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Add Assertion</h3>
-    <form hx-post="/api/entities/{{ entity.id }}/assertions"
-          hx-target="#add-assertion-result"
-          hx-swap="innerHTML"
-          class="flex flex-wrap items-end gap-2">
-      <div>
-        <label class="text-xs text-gray-500">Section</label>
-        <input name="section" value="general" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-28 block">
+    {# --- Add Assertion Form (collapsed) --- #}
+    <details class="group">
+      <summary class="text-sm text-gray-500 hover:text-gray-300 cursor-pointer select-none">
+        + Add assertion
+      </summary>
+      <div class="card mt-2" id="add-assertion-result">
+        <form hx-post="/api/entities/{{ entity.id }}/assertions"
+              hx-target="#add-assertion-result"
+              hx-swap="innerHTML"
+              class="flex flex-wrap items-end gap-2">
+          <div>
+            <label class="text-xs text-gray-500">Section</label>
+            <input name="section" value="general" class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-28 block">
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">Key</label>
+            <input name="key" required class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-32 block">
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">Value</label>
+            <input name="value" required class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-48 block">
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">Confidence</label>
+            <input name="confidence" type="number" step="0.01" min="0" max="1" value="0.7"
+                   class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-20 block">
+          </div>
+          <button type="submit" class="btn text-xs">Add</button>
+        </form>
       </div>
-      <div>
-        <label class="text-xs text-gray-500">Key</label>
-        <input name="key" required class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-32 block">
-      </div>
-      <div>
-        <label class="text-xs text-gray-500">Value</label>
-        <input name="value" required class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-48 block">
-      </div>
-      <div>
-        <label class="text-xs text-gray-500">Confidence</label>
-        <input name="confidence" type="number" step="0.01" min="0" max="1" value="0.7"
-               class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 w-20 block">
-      </div>
-      <button type="submit" class="btn text-xs">Add</button>
-    </form>
-  </div>
-</div>
+    </details>
 
-<!-- Linked events -->
-<div class="mb-6">
-  <h2 class="text-lg font-semibold text-gray-100 mb-3">Linked Events ({{ linked_events | length }})</h2>
-  <div class="card overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
-          <th class="pb-2 pr-3">Title</th>
-          <th class="pb-2 pr-3">Role</th>
-          <th class="pb-2 pr-3">Confidence</th>
-          <th class="pb-2">Date</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for link in linked_events %}
-        <tr class="border-b border-gray-800 hover:bg-gray-800/50">
-          <td class="py-2 pr-3">
-            <a href="/events/{{ link.event.id }}" class="text-cyan-400 hover:text-cyan-300">{{ link.event.title }}</a>
-          </td>
-          <td class="py-2 pr-3"><span class="badge badge-gray">{{ link.role }}</span></td>
-          <td class="py-2 pr-3 text-xs text-gray-400">{{ link.confidence | format_confidence }}</td>
-          <td class="py-2 text-xs text-gray-500">{{ link.event.event_timestamp | timeago if link.event.event_timestamp else '—' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="4" class="py-4 text-center text-gray-500">No linked events.</td></tr>
+    {# --- Linked Events --- #}
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Events ({{ linked_events | length }})</h2>
+      {% if linked_events %}
+      <div class="space-y-1.5">
+        {% for link in linked_events[:10] %}
+        <div class="card py-2.5 px-4 flex items-center gap-3">
+          <div class="min-w-0 flex-1">
+            <a href="/events/{{ link.event.id }}" class="text-sm text-cyan-400 hover:text-cyan-300 block truncate">{{ link.event.title }}</a>
+          </div>
+          {# Category badge #}
+          {% set cat = link.event.category.value if link.event.category else 'other' %}
+          {% if cat == 'conflict' %}
+            <span class="badge badge-red flex-shrink-0">{{ cat }}</span>
+          {% elif cat == 'political' %}
+            <span class="badge badge-blue flex-shrink-0">{{ cat }}</span>
+          {% elif cat == 'economic' %}
+            <span class="badge badge-yellow flex-shrink-0">{{ cat }}</span>
+          {% elif cat == 'technology' %}
+            <span class="badge badge-purple flex-shrink-0">{{ cat }}</span>
+          {% elif cat == 'health' %}
+            <span class="badge badge-green flex-shrink-0">{{ cat }}</span>
+          {% elif cat == 'disaster' %}
+            <span class="badge" style="background: rgba(244,114,182,0.15); color: #f472b6;">{{ cat }}</span>
+          {% else %}
+            <span class="badge badge-gray flex-shrink-0">{{ cat }}</span>
+          {% endif %}
+          {# Role #}
+          <span class="text-xs text-gray-500 flex-shrink-0 w-16 text-center">{{ link.role }}</span>
+          {# Timestamp #}
+          <span class="text-xs text-gray-500 flex-shrink-0 w-20 text-right">{{ link.event.event_timestamp | timeago if link.event.event_timestamp else '---' }}</span>
+        </div>
         {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+      </div>
+      {% if linked_events | length > 10 %}
+        <a href="/events?q={{ entity.canonical_name | urlencode }}"
+           class="text-sm text-cyan-400 hover:text-cyan-300 mt-2 inline-block">
+          View all {{ linked_events | length }} events &rarr;
+        </a>
+      {% endif %}
+      {% else %}
+        <div class="card"><p class="text-sm text-gray-500">No linked events.</p></div>
+      {% endif %}
+    </div>
 
-<!-- Graph neighbors -->
-<div class="mb-6">
-  <h2 class="text-lg font-semibold text-gray-100 mb-3">Graph Relationships ({{ relationships | length }})</h2>
-  <div class="card overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
-          <th class="pb-2 pr-3">Direction</th>
-          <th class="pb-2 pr-3">Type</th>
-          <th class="pb-2 pr-3">Entity</th>
-          <th class="pb-2 pr-3">Since</th>
-          <th class="pb-2">Until</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for rel in relationships %}
-        <tr class="border-b border-gray-800 hover:bg-gray-800/50">
-          <td class="py-2 pr-3">
-            {% if rel.direction == 'outgoing' %}
-              <span class="text-green-400">&rarr; out</span>
+    {# --- Graph Relationships --- #}
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Relationships ({{ relationships | length }})</h2>
+      {% if relationships %}
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+              <th class="pb-2 pr-3">Dir</th>
+              <th class="pb-2 pr-3">Type</th>
+              <th class="pb-2 pr-3">Entity</th>
+              <th class="pb-2 pr-3">Since</th>
+              <th class="pb-2">Until</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for rel in relationships %}
+            <tr class="border-b border-gray-800 hover:bg-gray-800/50">
+              <td class="py-1.5 pr-3">
+                {% if rel.direction == 'outgoing' %}
+                  <span class="text-green-400 text-xs">&rarr;</span>
+                {% else %}
+                  <span class="text-blue-400 text-xs">&larr;</span>
+                {% endif %}
+              </td>
+              <td class="py-1.5 pr-3"><span class="badge badge-purple">{{ rel.relation_type }}</span></td>
+              <td class="py-1.5 pr-3">
+                <span class="text-gray-200">{{ rel.entity_name }}</span>
+                <span class="text-xs text-gray-500 ml-1">{{ rel.entity_type }}</span>
+              </td>
+              <td class="py-1.5 pr-3 text-xs text-gray-500">{{ rel.rel_properties.get('since', '---') }}</td>
+              <td class="py-1.5 text-xs text-gray-500">{{ rel.rel_properties.get('until', '---') }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <div class="card"><p class="text-sm text-gray-500">No graph relationships found.</p></div>
+      {% endif %}
+    </div>
+
+  </div>{# /left column #}
+
+  {# ============================================================== #}
+  {# RIGHT COLUMN (2/5 = 40%)                                       #}
+  {# ============================================================== #}
+  <div class="lg:col-span-2 space-y-6">
+
+    {# --- Profile Summary Card --- #}
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Profile</h2>
+      <div class="card">
+        {% if profile_summary %}
+        <dl class="space-y-2.5">
+          {% for item in profile_summary %}
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-xs text-gray-500 uppercase tracking-wide flex-shrink-0">{{ item.label }}</dt>
+            <dd class="text-sm text-gray-200 text-right truncate" title="{{ item.value }}">{{ item.value }}</dd>
+          </div>
+          {% if not loop.last %}
+          <div class="border-b border-gray-800/50"></div>
+          {% endif %}
+          {% endfor %}
+        </dl>
+        {% else %}
+        <p class="text-sm text-gray-500">No profile data yet.</p>
+        <p class="text-xs text-gray-600 mt-1">Profile fields are auto-extracted from structured assertions matching known predicates for this entity type.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {# --- Linked Situations --- #}
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Situations</h2>
+      {% if situations %}
+      <div class="space-y-2">
+        {% for sit in situations %}
+        <a href="/situations/{{ sit.id }}" class="card block py-3 px-4 hover:border-gray-600 transition-colors">
+          <div class="flex items-center justify-between gap-2 mb-1">
+            <span class="text-sm text-gray-200 font-medium truncate">{{ sit.name }}</span>
+            {# Status badge #}
+            {% if sit.status == 'escalating' %}
+              <span class="badge badge-red">{{ sit.status }}</span>
+            {% elif sit.status == 'active' %}
+              <span class="badge badge-blue">{{ sit.status }}</span>
+            {% elif sit.status == 'de_escalating' %}
+              <span class="badge badge-green">de-escalating</span>
             {% else %}
-              <span class="text-blue-400">&larr; in</span>
+              <span class="badge badge-gray">{{ sit.status }}</span>
             {% endif %}
-          </td>
-          <td class="py-2 pr-3"><span class="badge badge-purple">{{ rel.relation_type }}</span></td>
-          <td class="py-2 pr-3">
-            <span class="text-gray-200">{{ rel.entity_name }}</span>
-            <span class="text-xs text-gray-500 ml-1">{{ rel.entity_type }}</span>
-          </td>
-          <td class="py-2 pr-3 text-xs text-gray-500">{{ rel.rel_properties.get('since', '—') }}</td>
-          <td class="py-2 text-xs text-gray-500">{{ rel.rel_properties.get('until', '—') }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5" class="py-4 text-center text-gray-500">No graph relationships found.</td></tr>
+          </div>
+          <div class="flex items-center gap-3">
+            {% if sit.category %}
+              <span class="text-xs text-gray-500">{{ sit.category }}</span>
+            {% endif %}
+            {# Intensity indicator #}
+            <div class="flex items-center gap-1">
+              <div class="w-12 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                <div class="h-full rounded-full bar-fill {% if sit.intensity_score >= 0.7 %}bg-red-500{% elif sit.intensity_score >= 0.4 %}bg-yellow-500{% else %}bg-green-500{% endif %}"
+                     style="width: {{ (sit.intensity_score * 100) | int }}%"></div>
+              </div>
+              <span class="text-xs text-gray-500">{{ "%.0f" | format(sit.intensity_score * 100) }}%</span>
+            </div>
+          </div>
+        </a>
         {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+      </div>
+      {% else %}
+        <div class="card"><p class="text-sm text-gray-500">Not linked to any situations.</p></div>
+      {% endif %}
+    </div>
 
-<!-- Version history -->
-<div class="mb-6">
-  <h2 class="text-lg font-semibold text-gray-100 mb-3">Version History</h2>
-  <div class="card overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
-          <th class="pb-2 pr-3">Version</th>
-          <th class="pb-2 pr-3">Cycle</th>
-          <th class="pb-2">Created</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for v in versions %}
-        <tr class="border-b border-gray-800">
-          <td class="py-2 pr-3 font-mono">v{{ v.version }}</td>
-          <td class="py-2 pr-3 text-gray-400">{{ v.cycle_number if v.cycle_number is not none else '—' }}</td>
-          <td class="py-2 text-xs text-gray-500">{{ v.created_at | timeago }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="3" class="py-4 text-center text-gray-500">No version history.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+    {# --- Tags --- #}
+    {% if entity.tags %}
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Tags</h2>
+      <div class="card">
+        <div class="flex flex-wrap gap-1.5">
+          {% for tag in entity.tags %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-cyan-900/40 text-cyan-300">{{ tag }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# --- Version History (collapsed) --- #}
+    <div>
+      <details>
+        <summary class="text-lg font-semibold text-gray-100 mb-3 cursor-pointer select-none hover:text-gray-300">
+          Version History ({{ versions | length }})
+        </summary>
+        <div class="card overflow-x-auto mt-2">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
+                <th class="pb-2 pr-3">Version</th>
+                <th class="pb-2 pr-3">Cycle</th>
+                <th class="pb-2">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for v in versions %}
+              <tr class="border-b border-gray-800">
+                <td class="py-1.5 pr-3 font-mono text-xs">v{{ v.version }}</td>
+                <td class="py-1.5 pr-3 text-gray-400 text-xs">{{ v.cycle_number if v.cycle_number is not none else '---' }}</td>
+                <td class="py-1.5 text-xs text-gray-500">{{ v.created_at | timeago }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="3" class="py-4 text-center text-gray-500 text-xs">No version history.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+
+  </div>{# /right column #}
+
+</div>{# /grid #}
+
+{% endif %}{# /entity exists #}
 {% endblock %}

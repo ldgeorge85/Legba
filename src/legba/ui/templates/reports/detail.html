@@ -36,4 +36,18 @@
     {{ report.content | render_message | safe }}
   </div>
 </div>
+
+<!-- Navigation -->
+<div class="mt-4 flex items-center justify-between">
+  {% if index > 0 %}
+    <a href="/reports/{{ index - 1 }}" class="btn text-xs">&larr; Newer Report</a>
+  {% else %}
+    <span></span>
+  {% endif %}
+  {% if index < total - 1 %}
+    <a href="/reports/{{ index + 1 }}" class="btn text-xs">Older Report &rarr;</a>
+  {% else %}
+    <span></span>
+  {% endif %}
+</div>
 {% endblock %}

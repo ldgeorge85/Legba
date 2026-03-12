@@ -3,97 +3,132 @@
 
 {% block content %}
 {% if situation %}
-<div class="mb-6">
-  <div class="flex items-center gap-3 mb-2">
-    <a href="/situations" class="text-sm text-gray-400 hover:text-gray-200">&larr; All Situations</a>
-  </div>
 
+<style>
+  /* vis-timeline dark theme overrides */
+  .vis-timeline { border-color: #374151; background: #1f2937; border-radius: 0.5rem; }
+  .vis-item { background: #374151; border-color: #4b5563; color: #d1d5db; border-radius: 4px; font-size: 12px; }
+  .vis-item.vis-selected { background: #1e40af; border-color: #3b82f6; }
+  .vis-item .vis-item-content { padding: 3px 6px; }
+  .vis-time-axis .vis-text { color: #9ca3af; fill: #9ca3af; }
+  .vis-grid.vis-minor { border-color: #1f2937; }
+  .vis-grid.vis-major { border-color: #374151; }
+  .vis-panel.vis-bottom { border-color: #374151; }
+  .vis-panel.vis-left { border-color: #374151; }
+  .vis-custom-time { background-color: #22d3ee; }
+  .vis-current-time { background-color: #22d3ee40; }
+  .vis-timeline .vis-panel.vis-center { border-color: #374151; }
+
+  /* tooltip for timeline events */
+  .timeline-tooltip {
+    position: absolute;
+    background: #111827;
+    border: 1px solid #374151;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    max-width: 320px;
+    z-index: 50;
+    pointer-events: none;
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.4);
+  }
+  .timeline-tooltip .tt-title { font-weight: 600; color: #e5e7eb; font-size: 13px; margin-bottom: 4px; }
+  .timeline-tooltip .tt-meta { font-size: 11px; color: #9ca3af; }
+  .timeline-tooltip .tt-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 500; }
+
+  /* Category dot colors for timeline items */
+  .cat-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+
+  /* Sortable table headers */
+  .sort-header { cursor: pointer; user-select: none; }
+  .sort-header:hover { color: #d1d5db; }
+</style>
+
+<!-- Breadcrumb -->
+<div class="mb-4">
+  <a href="/situations" class="text-sm text-gray-400 hover:text-gray-200">&larr; All Situations</a>
+</div>
+
+<!-- Header Card -->
+<div class="card mb-4">
   <div class="flex items-start justify-between gap-4">
-    <div>
-      <h1 class="text-2xl font-bold text-gray-100">{{ situation.name }}</h1>
-      <div class="flex items-center gap-2 mt-2">
+    <div class="flex-1 min-w-0">
+      <h1 class="text-2xl font-bold text-gray-100 mb-2">{{ situation.name }}</h1>
+      <div class="flex items-center gap-2 flex-wrap mb-3">
         {% if situation.status == 'escalating' %}
           <span class="badge badge-red">escalating</span>
         {% elif situation.status == 'de_escalating' %}
-          <span class="badge badge-green">de-escalating</span>
+          <span class="badge badge-cyan" style="background: #164e63; color: #22d3ee;">de-escalating</span>
         {% elif situation.status == 'active' %}
           <span class="badge badge-blue">active</span>
         {% elif situation.status == 'dormant' %}
           <span class="badge badge-gray">dormant</span>
         {% elif situation.status == 'resolved' %}
-          <span class="badge badge-gray">resolved</span>
+          <span class="badge badge-green">resolved</span>
         {% else %}
           <span class="badge badge-gray">{{ situation.status }}</span>
         {% endif %}
         {% if situation.category %}
           <span class="badge badge-purple">{{ situation.category }}</span>
         {% endif %}
+        {% for tag in situation.tags or [] %}
+          <span class="badge badge-yellow">{{ tag }}</span>
+        {% endfor %}
       </div>
+
+      {% if situation.description %}
+        <p class="text-sm text-gray-300 leading-relaxed">{{ situation.description }}</p>
+      {% endif %}
     </div>
 
-    <!-- Delete button -->
-    <button class="btn text-xs text-red-400 border-red-800 hover:bg-red-900"
-            hx-delete="/api/situations/{{ situation.id }}"
-            hx-confirm="Delete this situation and all its event links?"
-            hx-target="#action-result">
-      Delete
-    </button>
+    <!-- Intensity Gauge (right side) -->
+    <div class="flex-shrink-0 text-center min-w-[8rem]">
+      {% set score = situation.intensity_score or 0 %}
+      <div class="text-3xl font-bold font-mono
+        {% if score >= 7 %}text-red-400
+        {% elif score >= 4 %}text-yellow-400
+        {% else %}text-gray-400{% endif %}">{{ "%.1f"|format(score) }}</div>
+      <div class="text-xs text-gray-500 mb-1.5">intensity</div>
+      <div class="w-full h-2.5 bg-gray-700 rounded-full overflow-hidden">
+        {% set bar_pct = [(score / 10 * 100)|int, 100]|min %}
+        <div class="h-full rounded-full bar-fill
+          {% if score >= 7 %}bg-red-500
+          {% elif score >= 4 %}bg-yellow-500
+          {% else %}bg-gray-500{% endif %}"
+          style="width: {{ bar_pct }}%"></div>
+      </div>
+    </div>
   </div>
+
+  <!-- Entities & Regions row -->
+  {% if situation.key_entities or situation.regions %}
+    <div class="mt-4 pt-3 border-t border-gray-700">
+      {% if situation.key_entities %}
+        <div class="flex flex-wrap items-center gap-1.5 mb-2">
+          <span class="text-xs text-gray-500 mr-1">Entities:</span>
+          {% for ent in situation.key_entities %}
+            <a href="/entities?q={{ ent }}" class="badge badge-cyan hover:bg-cyan-800 transition-colors">{{ ent }}</a>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% if situation.regions %}
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="text-xs text-gray-500 mr-1">Regions:</span>
+          {% for reg in situation.regions %}
+            <span class="badge badge-gray">{{ reg }}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
 </div>
 
 <div id="action-result"></div>
 
-<!-- Description -->
-{% if situation.description %}
-  <div class="card mb-4">
-    <p class="text-sm text-gray-300">{{ situation.description }}</p>
-  </div>
-{% endif %}
-
-<!-- Key Entities & Regions -->
-<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-  {% if situation.key_entities %}
-    <div class="card">
-      <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Key Entities</h3>
-      <div class="flex flex-wrap gap-1">
-        {% for ent in situation.key_entities %}
-          <span class="badge badge-cyan">{{ ent }}</span>
-        {% endfor %}
-      </div>
-    </div>
-  {% endif %}
-
-  {% if situation.regions %}
-    <div class="card">
-      <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Regions</h3>
-      <div class="flex flex-wrap gap-1">
-        {% for reg in situation.regions %}
-          <span class="badge badge-gray">{{ reg }}</span>
-        {% endfor %}
-      </div>
-    </div>
-  {% endif %}
-</div>
-
-<!-- Stats -->
+<!-- Stats Row -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
   <div class="card text-center">
     <div class="text-xl font-bold text-gray-100">{{ situation.event_count }}</div>
     <div class="text-xs text-gray-500">Events Linked</div>
-  </div>
-  <div class="card text-center">
-    <div class="text-xl font-bold text-gray-100">{{ "%.0f"|format(situation.intensity_score * 100) }}%</div>
-    <div class="text-xs text-gray-500">Intensity</div>
-    <div class="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden mt-1">
-      {% set pct = (situation.intensity_score * 100)|int %}
-      {% if situation.intensity_score > 0.7 %}
-        <div class="bar-fill h-full bg-red-500 rounded-full" style="width: {{ pct }}%"></div>
-      {% elif situation.intensity_score > 0.4 %}
-        <div class="bar-fill h-full bg-yellow-500 rounded-full" style="width: {{ pct }}%"></div>
-      {% else %}
-        <div class="bar-fill h-full bg-cyan-500 rounded-full" style="width: {{ pct }}%"></div>
-      {% endif %}
-    </div>
   </div>
   <div class="card text-center">
     <div class="text-sm text-gray-300">{{ situation.created_at|timeago }}</div>
@@ -103,79 +138,79 @@
     <div class="text-sm text-gray-300">{{ situation.updated_at|timeago }}</div>
     <div class="text-xs text-gray-500">Updated</div>
   </div>
-</div>
-
-<!-- Update Status -->
-<div class="card mb-4">
-  <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Update Status</h3>
-  <div class="flex items-center gap-3">
-    <select name="status" id="status-select"
-            class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200">
-      <option value="active" {% if situation.status == 'active' %}selected{% endif %}>Active</option>
-      <option value="escalating" {% if situation.status == 'escalating' %}selected{% endif %}>Escalating</option>
-      <option value="de_escalating" {% if situation.status == 'de_escalating' %}selected{% endif %}>De-escalating</option>
-      <option value="dormant" {% if situation.status == 'dormant' %}selected{% endif %}>Dormant</option>
-      <option value="resolved" {% if situation.status == 'resolved' %}selected{% endif %}>Resolved</option>
-    </select>
-    <button class="btn text-xs"
-            hx-put="/api/situations/{{ situation.id }}"
-            hx-include="#status-select"
-            hx-target="#status-result"
-            hx-swap="innerHTML">
-      Update
-    </button>
-    <span id="status-result"></span>
+  <div class="card text-center">
+    <div class="text-sm text-gray-300">{% if situation.last_event_at %}{{ situation.last_event_at|timeago }}{% else %}--{% endif %}</div>
+    <div class="text-xs text-gray-500">Last Event</div>
   </div>
 </div>
 
-<!-- Tags -->
-{% if situation.tags %}
-  <div class="card mb-4">
-    <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2">Tags</h3>
-    <div class="flex flex-wrap gap-1">
-      {% for tag in situation.tags %}
-        <span class="badge badge-yellow">{{ tag }}</span>
-      {% endfor %}
+<!-- Event Timeline -->
+<div class="card mb-4 relative">
+  <div class="flex items-center justify-between mb-3">
+    <h3 class="text-sm font-semibold text-gray-200">Event Timeline</h3>
+    <div id="timeline-status" class="text-xs text-gray-500">Loading...</div>
+  </div>
+  <div id="timeline-container" style="min-height: 200px; position: relative;">
+    <div class="flex items-center justify-center py-12 text-gray-500 text-sm" id="timeline-placeholder">
+      <svg class="animate-spin h-5 w-5 mr-2 text-gray-500" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      </svg>
+      Loading timeline...
     </div>
   </div>
-{% endif %}
+  <div id="timeline-tooltip" class="timeline-tooltip hidden"></div>
+</div>
 
-<!-- Linked Events -->
-<div class="card">
+<!-- Linked Events Table -->
+<div class="card mb-4">
   <h3 class="text-sm font-semibold text-gray-200 mb-3">Linked Events ({{ linked_events|length }})</h3>
   {% if linked_events %}
     <div class="overflow-x-auto">
-      <table class="w-full text-sm">
+      <table class="w-full text-sm" id="events-table">
         <thead>
           <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-700">
-            <th class="pb-2 pr-4">Title</th>
-            <th class="pb-2 pr-4">Category</th>
-            <th class="pb-2 pr-4">Relevance</th>
-            <th class="pb-2 pr-4">Event Time</th>
-            <th class="pb-2">Linked</th>
+            <th class="pb-2 pr-4 sort-header" data-sort="title" onclick="sortTable('title')">
+              Title <span class="sort-indicator"></span>
+            </th>
+            <th class="pb-2 pr-4 sort-header" data-sort="category" onclick="sortTable('category')">
+              Category <span class="sort-indicator"></span>
+            </th>
+            <th class="pb-2 pr-4 sort-header" data-sort="timestamp" onclick="sortTable('timestamp')">
+              Timestamp <span class="sort-indicator"></span>
+            </th>
+            <th class="pb-2 pr-4 sort-header" data-sort="relevance" onclick="sortTable('relevance')">
+              Relevance <span class="sort-indicator"></span>
+            </th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-gray-800">
+        <tbody class="divide-y divide-gray-800" id="events-tbody">
           {% for evt in linked_events %}
-            <tr class="hover:bg-gray-800/50">
-              <td class="py-2 pr-4">
-                <a href="/events/{{ evt.id }}" class="text-cyan-400 hover:text-cyan-300">{{ evt.title[:80] }}{% if evt.title|length > 80 %}...{% endif %}</a>
+            <tr class="hover:bg-gray-800/50"
+                data-title="{{ evt.title }}"
+                data-category="{{ evt.category }}"
+                data-timestamp="{{ evt.event_timestamp or '' }}"
+                data-relevance="{{ evt.relevance }}">
+              <td class="py-2.5 pr-4">
+                <a href="/events/{{ evt.id }}" class="text-cyan-400 hover:text-cyan-300">{{ evt.title[:90] }}{% if evt.title|length > 90 %}...{% endif %}</a>
               </td>
-              <td class="py-2 pr-4">
+              <td class="py-2.5 pr-4">
                 <span class="badge badge-gray">{{ evt.category }}</span>
               </td>
-              <td class="py-2 pr-4">
-                <span class="text-xs text-gray-400">{{ "%.0f"|format(evt.relevance * 100) }}%</span>
-              </td>
-              <td class="py-2 pr-4 text-xs text-gray-400">
+              <td class="py-2.5 pr-4 text-xs text-gray-400 whitespace-nowrap">
                 {% if evt.event_timestamp %}
-                  {{ evt.event_timestamp[:19] if evt.event_timestamp is string else evt.event_timestamp.strftime('%Y-%m-%d %H:%M') }}
+                  {{ evt.event_timestamp[:16] if evt.event_timestamp is string else evt.event_timestamp.strftime('%Y-%m-%d %H:%M') }}
                 {% else %}
-                  —
+                  --
                 {% endif %}
               </td>
-              <td class="py-2 text-xs text-gray-500">
-                {{ evt.added_at|timeago }}
+              <td class="py-2.5 pr-4">
+                <div class="flex items-center gap-2">
+                  <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div class="h-full bg-cyan-500 rounded-full bar-fill" style="width: {{ (evt.relevance * 100)|int }}%"></div>
+                  </div>
+                  <span class="text-xs text-gray-400 font-mono">{{ "%.0f"|format(evt.relevance * 100) }}%</span>
+                </div>
               </td>
             </tr>
           {% endfor %}
@@ -187,7 +222,45 @@
   {% endif %}
 </div>
 
+<!-- Metadata & Controls -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+  <!-- Update Status -->
+  <div class="card">
+    <h3 class="text-xs font-semibold text-gray-400 uppercase mb-3">Update Status</h3>
+    <div class="flex items-center gap-3">
+      <select name="status" id="status-select"
+              class="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 flex-1">
+        <option value="active" {% if situation.status == 'active' %}selected{% endif %}>Active</option>
+        <option value="escalating" {% if situation.status == 'escalating' %}selected{% endif %}>Escalating</option>
+        <option value="de_escalating" {% if situation.status == 'de_escalating' %}selected{% endif %}>De-escalating</option>
+        <option value="dormant" {% if situation.status == 'dormant' %}selected{% endif %}>Dormant</option>
+        <option value="resolved" {% if situation.status == 'resolved' %}selected{% endif %}>Resolved</option>
+      </select>
+      <button class="btn text-xs"
+              hx-put="/api/situations/{{ situation.id }}"
+              hx-include="#status-select"
+              hx-target="#status-result"
+              hx-swap="innerHTML">
+        Update
+      </button>
+      <span id="status-result"></span>
+    </div>
+  </div>
+
+  <!-- Danger Zone -->
+  <div class="card">
+    <h3 class="text-xs font-semibold text-gray-400 uppercase mb-3">Danger Zone</h3>
+    <button class="btn text-xs text-red-400 border-red-800 hover:bg-red-900"
+            hx-delete="/api/situations/{{ situation.id }}"
+            hx-confirm="Delete this situation and all its event links?"
+            hx-target="#action-result">
+      Delete Situation
+    </button>
+  </div>
+</div>
+
 {% else %}
+<!-- Not Found -->
 <div class="mb-6">
   <a href="/situations" class="text-sm text-gray-400 hover:text-gray-200">&larr; All Situations</a>
 </div>
@@ -196,5 +269,215 @@
     <p>Situation not found</p>
   </div>
 </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if situation %}
+<script src="https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.js"></script>
+<link href="https://unpkg.com/vis-timeline/standalone/umd/vis-timeline-graph2d.min.css" rel="stylesheet">
+<script src="/static/js/charts.js"></script>
+<script>
+(function() {
+  const SITUATION_ID = "{{ situation.id }}";
+
+  // Category colors matching charts.js
+  const CAT_COLORS = {
+    conflict: '#f87171',
+    political: '#60a5fa',
+    economic: '#facc15',
+    technology: '#a78bfa',
+    health: '#4ade80',
+    environment: '#2dd4bf',
+    social: '#fb923c',
+    disaster: '#f472b6',
+    other: '#9ca3af',
+  };
+
+  // ---- Timeline ----
+  async function initTimeline() {
+    const statusEl = document.getElementById('timeline-status');
+    const containerEl = document.getElementById('timeline-container');
+    const placeholderEl = document.getElementById('timeline-placeholder');
+    const tooltipEl = document.getElementById('timeline-tooltip');
+
+    let data;
+    try {
+      const resp = await fetch('/api/stats/situation-timeline?id=' + SITUATION_ID);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      data = await resp.json();
+    } catch (e) {
+      statusEl.textContent = 'Failed to load timeline';
+      statusEl.classList.add('text-red-400');
+      if (placeholderEl) placeholderEl.innerHTML = '<p class="text-gray-500 text-sm">Could not load timeline data</p>';
+      return;
+    }
+
+    // Filter events that have timestamps
+    const timed = data.filter(d => d.event_timestamp);
+
+    if (timed.length === 0) {
+      statusEl.textContent = 'No timestamped events';
+      if (placeholderEl) {
+        placeholderEl.innerHTML = '<p class="text-gray-500 text-sm py-8">No events with timestamps to display on timeline</p>';
+      }
+      return;
+    }
+
+    // Remove placeholder
+    if (placeholderEl) placeholderEl.remove();
+
+    statusEl.textContent = timed.length + ' event' + (timed.length !== 1 ? 's' : '');
+
+    // Build vis-timeline items
+    const items = new vis.DataSet(timed.map(function(evt, idx) {
+      const catColor = CAT_COLORS[evt.category] || CAT_COLORS.other;
+      return {
+        id: idx,
+        content: '<span style="color:' + catColor + '; font-weight: 500;">' + escapeHtml(truncate(evt.title, 50)) + '</span>',
+        start: evt.event_timestamp,
+        type: 'point',
+        style: 'border-color: ' + catColor + '; color: ' + catColor + ';',
+        _raw: evt,
+      };
+    }));
+
+    // Options
+    const options = {
+      height: '280px',
+      margin: { item: { horizontal: 5, vertical: 10 } },
+      orientation: { axis: 'bottom' },
+      showCurrentTime: true,
+      zoomMin: 1000 * 60 * 60,          // 1 hour
+      zoomMax: 1000 * 60 * 60 * 24 * 365, // 1 year
+      tooltip: { followMouse: true, overflowMethod: 'cap' },
+      template: function(item) {
+        return item.content;
+      },
+    };
+
+    const timeline = new vis.Timeline(containerEl, items, options);
+
+    // Hover tooltip
+    let hoverTimeout = null;
+    timeline.on('itemover', function(props) {
+      clearTimeout(hoverTimeout);
+      const item = items.get(props.item);
+      if (!item || !item._raw) return;
+      const evt = item._raw;
+      const catColor = CAT_COLORS[evt.category] || CAT_COLORS.other;
+      const ts = evt.event_timestamp ? new Date(evt.event_timestamp).toLocaleString() : 'Unknown';
+
+      tooltipEl.innerHTML =
+        '<div class="tt-title">' + escapeHtml(evt.title) + '</div>' +
+        '<div class="tt-meta" style="margin-bottom: 4px;">' +
+          '<span class="tt-badge" style="background:' + catColor + '22; color:' + catColor + '; border: 1px solid ' + catColor + '44;">' + escapeHtml(evt.category) + '</span>' +
+          ' &middot; Relevance: ' + Math.round(evt.relevance * 100) + '%' +
+        '</div>' +
+        '<div class="tt-meta">' + ts + '</div>';
+
+      tooltipEl.classList.remove('hidden');
+
+      // Position near cursor
+      const rect = containerEl.getBoundingClientRect();
+      const event = props.event;
+      if (event) {
+        let left = event.clientX - rect.left + 12;
+        let top = event.clientY - rect.top - 10;
+        // Keep tooltip in bounds
+        if (left + 320 > rect.width) left = left - 340;
+        if (top < 0) top = 10;
+        tooltipEl.style.left = left + 'px';
+        tooltipEl.style.top = top + 'px';
+      }
+    });
+
+    timeline.on('itemout', function() {
+      hoverTimeout = setTimeout(function() {
+        tooltipEl.classList.add('hidden');
+      }, 100);
+    });
+
+    // Click to navigate
+    timeline.on('click', function(props) {
+      if (props.item !== null && props.item !== undefined) {
+        const item = items.get(props.item);
+        if (item && item._raw) {
+          window.location.href = '/events/' + item._raw.event_id;
+        }
+      }
+    });
+
+    // Fit all items
+    timeline.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
+  }
+
+  // ---- Table Sort ----
+  let currentSort = { col: null, asc: true };
+
+  window.sortTable = function(col) {
+    const tbody = document.getElementById('events-tbody');
+    if (!tbody) return;
+
+    // Toggle direction
+    if (currentSort.col === col) {
+      currentSort.asc = !currentSort.asc;
+    } else {
+      currentSort.col = col;
+      currentSort.asc = true;
+    }
+
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    rows.sort(function(a, b) {
+      let va = a.dataset[col] || '';
+      let vb = b.dataset[col] || '';
+
+      if (col === 'relevance') {
+        va = parseFloat(va) || 0;
+        vb = parseFloat(vb) || 0;
+        return currentSort.asc ? va - vb : vb - va;
+      }
+      if (col === 'timestamp') {
+        va = va || '9999';
+        vb = vb || '9999';
+      }
+      const cmp = va.localeCompare(vb);
+      return currentSort.asc ? cmp : -cmp;
+    });
+
+    rows.forEach(function(r) { tbody.appendChild(r); });
+
+    // Update sort indicators
+    document.querySelectorAll('.sort-header').forEach(function(th) {
+      const indicator = th.querySelector('.sort-indicator');
+      if (th.dataset.sort === col) {
+        indicator.textContent = currentSort.asc ? ' \u25B2' : ' \u25BC';
+      } else {
+        indicator.textContent = '';
+      }
+    });
+  };
+
+  // ---- Helpers ----
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(text || ''));
+    return div.innerHTML;
+  }
+
+  function truncate(str, len) {
+    if (!str) return '';
+    return str.length > len ? str.substring(0, len) + '...' : str;
+  }
+
+  // ---- Init ----
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTimeline);
+  } else {
+    // vis-timeline script may still be loading; defer slightly
+    setTimeout(initTimeline, 100);
+  }
+})();
+</script>
 {% endif %}
 {% endblock %}
