@@ -146,6 +146,8 @@ docker compose -p legba up -d supervisor
 | [PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md) | Prompt engineering notes |
 | [PLAN_V2.md](docs/PLAN_V2.md) | V2 architecture plan — cycle types, data pipeline, intelligence capabilities |
 | [GRACEFUL_SHUTDOWN.md](docs/GRACEFUL_SHUTDOWN.md) | Shutdown protocol details |
+| [PROGRESS_AUDIT.md](docs/PROGRESS_AUDIT.md) | Review of 586 autonomous cycles — tool usage evolution, operational metrics, journal analysis |
+| [EXECUTIVE_SUMMARY.md](docs/EXECUTIVE_SUMMARY.md) | High-level overview of the platform |
 
 ## Testing
 
