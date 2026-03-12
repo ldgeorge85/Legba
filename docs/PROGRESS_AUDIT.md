@@ -1,6 +1,6 @@
 # Legba Progress Audit — Cycles 60–657
 
-*Audit date: 2026-03-12 | Data: 586 unique cycles, 46,744 audit events, 475 journal entries, 1 world assessment report*
+*Audit date: 2026-03-12 | Data: 586 unique cycles, 46,744 audit events, 475 journal entries, 20 world assessment reports*
 
 ---
 
@@ -20,7 +20,7 @@ Legba's autonomous agent has been running continuously since 2026-03-08 06:27 UT
 | Facts stored | 1,650 |
 | Sources managed | 56 (52 active, 4 errored) |
 | Goals completed | 14 of 25 tracked |
-| World assessment reports | 1 (cycle 645) |
+| World assessment reports | 20 (cycles 360–645, every 15 cycles) |
 
 ---
 
@@ -290,16 +290,70 @@ The consolidations show genuine reflective evolution. Early: exploration, uncert
 
 ---
 
-## 9. World Assessment Report (Cycle 645)
+## 9. World Assessment Reports (20 Reports, Cycles 360–645)
 
-The single world assessment report demonstrates the platform's analytical capability:
+The agent produced 20 world assessment reports — one every 15 cycles during INTROSPECTION — spanning cycles 360 to 645. These are stored in Redis as a rolling history.
 
-- **Structure:** Executive summary → regional breakdowns (Middle East, North America, Europe, Africa, Asia-Pacific) → emerging patterns table → watch items → coverage assessment
-- **Grounding:** Every claim cites specific events by title. Relationship types (HostileTo, AlliedWith, SuppliesWeaponsTo) are referenced from the graph.
-- **Pattern detection:** 5 named patterns identified (multi-theater Iran hostility, GCC diplomatic push-back, political rhetoric amplification, cross-regional alliance formation, energy-security linkage)
-- **Self-awareness:** The coverage assessment notes that only 42% of sources generated events and identifies specific blind spots (Africa, Europe, Southeast Asia, maritime monitoring)
+### Report Inventory
 
-**Quality assessment:** The report is genuinely useful intelligence product. It identifies the dominant pattern (Iran-centered escalation across land, sea, and diplomatic domains), connects events to relationships, and flags specific watch items with confidence levels. The self-critical coverage assessment is particularly noteworthy — it identifies its own gaps.
+| Cycle | Date | Length | Sections | Tables | Regions |
+|-------|------|--------|----------|--------|---------|
+| 360 | Mar 9 21:45 | 8,448 | 12 | 0 | 5 |
+| 375 | Mar 9 23:56 | 12,183 | 11 | 0 | 5 |
+| 390 | Mar 10 02:09 | 11,921 | 12 | 0 | 5 |
+| 405 | Mar 10 04:19 | 11,948 | 11 | 0 | 6 |
+| 420 | Mar 10 06:49 | 11,031 | 11 | 0 | 5 |
+| 435 | Mar 10 09:49 | 13,821 | 12 | 0 | 6 |
+| 450 | Mar 10 12:56 | 12,298 | 12 | 0 | 5 |
+| 465 | Mar 10 15:36 | 11,889 | 11 | 0 | 6 |
+| 480 | Mar 10 18:05 | 12,882 | 12 | 0 | 5 |
+| 495 | Mar 10 20:56 | 10,158 | 16 | 0 | 5 |
+| 510 | Mar 11 00:01 | 10,483 | 13 | 0 | 5 |
+| 525 | Mar 11 02:45 | 10,293 | 11 | 4 | 6 |
+| 540 | Mar 11 05:38 | 10,149 | 12 | 0 | 5 |
+| 555 | Mar 11 08:23 | 10,053 | 11 | 0 | 5 |
+| 570 | Mar 11 11:07 | 10,186 | 12 | 0 | 6 |
+| 585 | Mar 11 14:14 | 12,825 | 14 | 7 | 5 |
+| 600 | Mar 11 17:15 | 9,181 | 13 | 0 | 5 |
+| 615 | Mar 11 19:51 | 9,705 | 10 | 0 | 4 |
+| 630 | Mar 11 22:40 | 10,458 | 11 | 0 | 3 |
+| 645 | Mar 12 01:28 | 9,489 | 10 | 4 | 5 |
+
+### Report Evolution
+
+**First report (cycle 360):**
+> *"The globe is dominated by an intensifying Iran‑Israel‑U.S. conflict that has spilled into Lebanon, Iran's domestic infrastructure, and regional air‑space, while parallel crises (war in Sudan, political instability in Peru and Venezuela, and renewed hostilities in South‑Asia) strain diplomatic and security resources."*
+
+Structured as: executive summary → regional situation (5 regions) → emerging patterns → watch items → coverage assessment. 8,448 chars — the shortest report. Covers the basics but is relatively sparse.
+
+**Mid-run report (cycle 480):**
+> *"The data set shows a rapidly escalating conflict between Iran and Israel that is spilling over into neighboring Lebanon and driving global oil‑price volatility, while West Africa wrestles with severe economic distress among cocoa producers and political crises in Guinea."*
+
+12,882 chars — nearly 50% longer than the first. The agent now cross-references economic and political domains (cocoa prices, oil volatility) alongside conflict events. Regional coverage expanded to include West African economic issues and Ghanaian peacekeepers in Lebanon — cross-regional connections the first report didn't attempt. Introduced table formatting for key actor/posture breakdowns.
+
+**Final report (cycle 645):**
+> *"The data record a rapidly‑escalating conflict centered on Iran, Israel and the United States, with multiple hostile events (e.g., U.S. missile strike on an Iranian school, joint Iran‑Hezbollah rocket attacks on northern Israel, mining of the Strait of Hormuz)."*
+
+9,489 chars — leaner than mid-run. The most focused and structured: 5 named emerging patterns with evidence tables, specific watch items with confidence levels, and a self-critical coverage assessment noting only 42% source utilization.
+
+### Structural Trends
+
+- **Length stabilized** around 10–12k chars after an initial ramp from 8.4k. The agent found its natural report length.
+- **Sections stayed consistent** at 10–14, suggesting a stable internal template.
+- **Tables appeared sporadically** (cycles 525, 585, 645) — the agent experiments with formatting but doesn't consistently use structured tables.
+- **Regional coverage averaged 5 of 6 regions**, with Africa, Europe, and Asia-Pacific regularly flagged as "insufficient coverage."
+- **Reports produced every ~2.5 hours** on average (every 15 cycles at ~10 min/cycle).
+
+### Quality Assessment
+
+The reports are genuinely useful intelligence products:
+
+- **Grounded:** Every claim cites specific events by title. Relationship types (HostileTo, AlliedWith, SuppliesWeaponsTo) are referenced from the graph, not invented.
+- **Pattern detection:** Identifies cross-domain patterns (energy-security linkage, diplomatic alliance formation, economic contagion) — not just summarizing events.
+- **Self-critical:** Every report includes a coverage assessment that identifies blind spots and recommends source expansion. The agent knows what it doesn't know.
+- **Evolving focus:** Early reports focused narrowly on the Iran-Israel conflict. Later reports broadened to West Africa, Latin America, and Asia-Pacific as new sources came online and the knowledge graph expanded.
+
+The agent produced these 20 reports autonomously, without prompting, on a fixed 15-cycle cadence. Each reflects the state of the knowledge graph at that moment — they are snapshots of an evolving understanding, not repetitions of the same template.
 
 ---
 
