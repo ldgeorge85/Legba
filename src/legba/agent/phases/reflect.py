@@ -61,8 +61,10 @@ class ReflectMixin:
             self._reflection_data = {}
             self.logger.log_error(f"Reflection failed: {e}")
 
+        significance = float(self._reflection_data.get("significance", 0.0))
         self.logger.log("reflect_complete",
                         reflection_length=len(self._reflection),
+                        significance=significance,
                         facts_extracted=len(self._reflection_data.get("facts_learned", [])),
                         entities_extracted=len(self._reflection_data.get("entities_discovered", [])))
 

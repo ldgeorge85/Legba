@@ -472,8 +472,9 @@ This is a focused data ingestion cycle. Your job is to:
 - If a source consistently fails, set its status to "error" with last_error
 
 ### API Sources
-- For sources with source_type "api", use http_request to fetch JSON data — feed_parse only handles RSS/Atom feeds.
-- Parse the JSON response and extract events manually, then store with event_store.
+- For sources with source_type "api", use feed_parse with source_type="api" — it handles JSON APIs natively.
+- feed_parse auto-extracts items from common JSON structures (arrays, "articles", "results", "data", "items", "events", etc.)
+- If feed_parse can't extract items from an unusual JSON structure, fall back to http_request and parse manually.
 
 ### DO NOT:
 - Do NOT spend time on graph enrichment or deep research — that's for research cycles
@@ -523,22 +524,25 @@ ANALYSIS_PROMPT = """You are running a **dedicated analysis cycle**.
 
 This is a focused analysis cycle. Your job is to find patterns, anomalies, and insights in the data you've accumulated.
 
-### 1. Graph Analysis
-- Use graph_query to explore relationship patterns between entities
-- Use graph_analyze (centrality, clustering, paths) to find structural insights
-- Look for unexpected connections — entities linked through intermediaries
+### 1. Graph Analysis — Your Most Powerful Lens
+- **graph_analyze** is your structural intelligence tool. Use it every analysis cycle:
+  - `centrality` — who are the most connected actors? Emerging hubs you haven't noticed?
+  - `clustering` — which groups of entities form tight clusters? Are there surprising cluster memberships?
+  - `paths` — find the shortest path between two entities. How is Iran connected to China? Through what intermediaries?
+- **graph_query** — explore specific relationship patterns. Example: "MATCH (a)-[r:ALLY_OF]->(b)-[r2:HOSTILE_TO]->(c) RETURN a, b, c" to find triangles of tension.
+- Look for unexpected connections — entities linked through intermediaries that suggest hidden dynamics.
 
-### 2. Event Pattern Analysis
-- Use event_search and event_query to find temporal patterns
-- Use anomaly_detect if you have 30+ events — look for unusual spikes or gaps
-- Use temporal_query to find trends over time periods
-- Cross-reference events with entity relationships for deeper context
+### 2. Event Pattern Analysis — Find What Manual Review Misses
+- **anomaly_detect** — run this on event data. It flags unusual spikes, gaps, and outliers that human scanning misses. Works best with 30+ events. Example: a sudden cluster of economic events in a region that usually shows political activity. This is one of your most valuable tools — use it.
+- **temporal_query** — find trends over time windows. Example: "How has conflict event frequency in the Middle East changed week over week?" or "Which entity types are gaining events fastest?" Trend detection reveals acceleration and deceleration in real-world dynamics.
+- **event_search** + **event_query** — cross-reference events with entity relationships for deeper context.
 
 ### 3. Identify Gaps and Anomalies
 - Which important entities have few events linked? (under-covered areas)
 - Which categories are over/under-represented?
 - Are there entities that should be connected but aren't?
 - Are there unexpected patterns in event timing or clustering?
+- What does anomaly_detect flag? Follow up on every anomaly — they're often the most interesting findings.
 
 ### 4. Synthesize Findings
 - Store important analytical insights with memory_store (significance 0.7+)

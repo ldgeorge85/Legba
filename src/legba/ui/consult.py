@@ -1521,13 +1521,25 @@ async def _handle_link_event_to_situation(stores: StoreHolder, args: dict) -> st
         async with stores.structured._pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO situation_events (situation_id, event_id, relevance) "
-                "VALUES ($1, $2, $3) ON CONFLICT (situation_id, event_id) DO UPDATE SET relevance = $3",
+                "VALUES ($1, $2, $3) ON CONFLICT (situation_id, event_id) DO UPDATE SET relevance = $3, added_at = NOW()",
                 sid, eid, relevance,
             )
-            await conn.execute(
-                "UPDATE situations SET event_count = event_count + 1, "
-                "last_event_at = now(), updated_at = now() WHERE id = $1",
+            # Count actual rows instead of blind increment
+            now = datetime.now(timezone.utc)
+            actual_count = await conn.fetchval(
+                "SELECT count(*) FROM situation_events WHERE situation_id = $1",
                 sid,
+            )
+            await conn.execute(
+                "UPDATE situations SET "
+                "event_count = $2, "
+                "last_event_at = $3, updated_at = $3, "
+                "data = jsonb_set(jsonb_set(data, '{event_count}', $4::jsonb), "
+                "'{last_event_at}', $5::jsonb) "
+                "WHERE id = $1",
+                sid, actual_count, now,
+                json.dumps(actual_count),
+                json.dumps(now.isoformat()),
             )
         return f"Event '{event_id}' linked to situation '{situation_id}' (relevance: {relevance})."
     except Exception as e:

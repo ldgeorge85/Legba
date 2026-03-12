@@ -196,6 +196,7 @@ class NarrateMixin:
             doc = {
                 "type": doc_type,
                 "cycle": cycle,
+                "cycle_number": cycle,
                 "timestamp": timestamp,
                 "content": content,
                 **extra,

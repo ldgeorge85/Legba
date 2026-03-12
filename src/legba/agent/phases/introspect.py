@@ -27,6 +27,8 @@ INTROSPECTION_TOOLS: frozenset[str] = frozenset({
 class IntrospectMixin:
     """Introspection cycle: deep review of knowledge base."""
 
+    _REPORT_INDEX = "legba-reports"
+
     def _is_introspection_cycle(self: AgentCycle) -> bool:
         """Check if this cycle should be a deep introspection instead of normal ops."""
         interval = self.config.agent.mission_review_interval
@@ -304,6 +306,14 @@ class IntrospectMixin:
                 report_history = report_history[-20:]
             await self.memory.registers.set_json("report_history", report_history)
 
+            # Archive to OpenSearch for permanent storage and search
+            await self._archive_report_to_opensearch(
+                cycle=self.state.cycle_number,
+                timestamp=report_data["timestamp"],
+                content=report_content,
+                report_type="world_assessment",
+            )
+
             # Also publish to outbound so it shows in messages
             self._outbox_messages.append(OutboxMessage(
                 id=str(uuid4()),
@@ -317,3 +327,24 @@ class IntrospectMixin:
 
         except Exception as e:
             self.logger.log_error(f"Analysis report generation failed: {e}")
+
+    async def _archive_report_to_opensearch(self: AgentCycle, *, cycle: int,
+                                             timestamp: str, content: str,
+                                             report_type: str) -> None:
+        """Archive a report document to OpenSearch for permanent storage."""
+        if not self.opensearch or not self.opensearch.available:
+            return
+        try:
+            doc = {
+                "type": report_type,
+                "cycle_number": cycle,
+                "timestamp": timestamp,
+                "content": content,
+            }
+            await self.opensearch.index_document(
+                index=self._REPORT_INDEX,
+                document=doc,
+                doc_id=f"{report_type}-{cycle}",
+            )
+        except Exception:
+            pass  # Best-effort — don't break the cycle if archiving fails

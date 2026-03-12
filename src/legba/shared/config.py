@@ -308,14 +308,14 @@ class SupervisorConfig:
 
     max_consecutive_failures: int = 5   # Kill agent after this many heartbeat failures
     cycle_sleep: float = 2.0            # Seconds between cycles
-    heartbeat_timeout: int = 300        # Seconds to wait for agent heartbeat
+    heartbeat_timeout: int = 360        # Seconds to wait for agent heartbeat
 
     @classmethod
     def from_env(cls) -> SupervisorConfig:
         return cls(
             max_consecutive_failures=int(os.getenv("SUPERVISOR_MAX_FAILURES", "5")),
             cycle_sleep=float(os.getenv("SUPERVISOR_CYCLE_SLEEP", "2.0")),
-            heartbeat_timeout=int(os.getenv("SUPERVISOR_HEARTBEAT_TIMEOUT", "300")),
+            heartbeat_timeout=int(os.getenv("SUPERVISOR_HEARTBEAT_TIMEOUT", "360")),
         )
 
 
