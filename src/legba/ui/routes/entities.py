@@ -177,21 +177,50 @@ async def _fetch_entity_situations(pool, entity_name: str, limit: int = 5) -> li
         return []
 
 
-@router.get("/entities")
-async def entity_list(
-    request: Request,
-    q: str | None = None,
-    entity_type: str | None = None,
-):
-    stores = get_stores(request)
-    entities = await stores.structured.search_entity_profiles(
-        query=q or None,
-        entity_type=entity_type or None,
-        limit=50,
-    )
-    total = await stores.count_entities()
+PAGE_SIZE = 50
 
-    context = {
+
+async def _query_entities_paged(stores, q, entity_type, offset):
+    """Query entities with pagination. Returns (entities, total)."""
+    from ...shared.schemas.entity_profiles import EntityProfile
+
+    if not stores.structured._available:
+        return [], 0
+
+    conditions = []
+    params = []
+    idx = 1
+
+    if q:
+        conditions.append(f"LOWER(canonical_name) LIKE LOWER(${idx})")
+        params.append(f"%{q}%")
+        idx += 1
+    if entity_type:
+        conditions.append(f"entity_type = ${idx}")
+        params.append(entity_type)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            total = await conn.fetchval(
+                f"SELECT count(*) FROM entity_profiles {where}", *params,
+            )
+            rows = await conn.fetch(
+                f"SELECT data FROM entity_profiles {where} "
+                f"ORDER BY updated_at DESC "
+                f"LIMIT ${idx} OFFSET ${idx + 1}",
+                *params, PAGE_SIZE, offset,
+            )
+            entities = [EntityProfile.model_validate_json(row["data"]) for row in rows]
+            return entities, total
+    except Exception:
+        return [], 0
+
+
+def _entity_context(request, entities, total, q, entity_type, offset):
+    return {
         "request": request,
         "active_page": "entities",
         "entities": entities,
@@ -199,11 +228,40 @@ async def entity_list(
         "q": q,
         "entity_type": entity_type,
         "entity_types": ENTITY_TYPES,
+        "offset": offset,
+        "page_size": PAGE_SIZE,
+        "has_more": (offset + PAGE_SIZE) < total,
+        "next_offset": offset + PAGE_SIZE,
     }
+
+
+@router.get("/entities")
+async def entity_list(
+    request: Request,
+    q: str | None = None,
+    entity_type: str | None = None,
+    offset: int = 0,
+):
+    stores = get_stores(request)
+    entities, total = await _query_entities_paged(stores, q, entity_type, offset)
+    context = _entity_context(request, entities, total, q, entity_type, offset)
 
     if request.headers.get("HX-Request") and not request.headers.get("HX-Boosted"):
         return templates.TemplateResponse("entities/_rows.html", context)
     return templates.TemplateResponse("entities/list.html", context)
+
+
+@router.get("/entities/rows")
+async def entity_rows(
+    request: Request,
+    q: str | None = None,
+    entity_type: str | None = None,
+    offset: int = 0,
+):
+    stores = get_stores(request)
+    entities, total = await _query_entities_paged(stores, q, entity_type, offset)
+    context = _entity_context(request, entities, total, q, entity_type, offset)
+    return templates.TemplateResponse("entities/_rows.html", context)
 
 
 @router.get("/entities/{entity_id}")

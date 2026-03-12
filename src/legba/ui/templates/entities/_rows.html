@@ -28,3 +28,18 @@
   <td colspan="5" class="py-8 text-center text-gray-500">No entities found.</td>
 </tr>
 {% endfor %}
+
+{% if has_more %}
+<tr id="load-more-row">
+  <td colspan="5" class="py-4 text-center">
+    <button class="btn"
+            hx-get="/entities/rows?offset={{ next_offset }}{% if q %}&q={{ q }}{% endif %}{% if entity_type %}&entity_type={{ entity_type }}{% endif %}"
+            hx-target="#load-more-row"
+            hx-swap="outerHTML"
+            hx-indicator=".htmx-indicator">
+      Load more
+    </button>
+    <span class="htmx-indicator text-xs text-gray-500 ml-2">Loading...</span>
+  </td>
+</tr>
+{% endif %}

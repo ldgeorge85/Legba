@@ -16,26 +16,24 @@ from ...shared.schemas.events import EventCategory
 router = APIRouter()
 
 CATEGORIES = [c.value for c in EventCategory]
+PAGE_SIZE = 50
 
 
-@router.get("/events")
-async def event_list(
-    request: Request,
-    q: str | None = None,
-    category: str | None = None,
-):
-    stores = get_stores(request)
+async def _query_events_paged(stores, q, category, offset):
+    """Query events with pagination. Returns (events, total)."""
+    from ...shared.schemas.events import Event
 
     if q:
-        # Full-text search via OpenSearch
+        # Full-text search via OpenSearch (no offset — refine query instead)
         os_query = {
             "multi_match": {
                 "query": q,
                 "fields": ["title^2", "summary", "full_content", "actors", "locations"],
             }
         }
-        result = await stores.opensearch.search("legba-events-*", os_query, size=50)
-        from ...shared.schemas.events import Event
+        result = await stores.opensearch.search(
+            "legba-events-*", os_query, size=PAGE_SIZE,
+        )
         events = []
         for hit in result.get("hits", []):
             try:
@@ -43,14 +41,40 @@ async def event_list(
             except Exception:
                 continue
         total = result.get("total", len(events))
-    else:
-        events = await stores.structured.query_events(
-            category=category or None,
-            limit=50,
-        )
-        total = await stores.count_events()
+        return events, total
 
-    context = {
+    # Postgres query with offset
+    if not stores.structured._available:
+        return [], 0
+
+    conditions = []
+    params = []
+    idx = 1
+
+    if category:
+        conditions.append(f"category = ${idx}")
+        params.append(category)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            total = await conn.fetchval(f"SELECT count(*) FROM events {where}", *params)
+            rows = await conn.fetch(
+                f"SELECT data FROM events {where} "
+                f"ORDER BY event_timestamp DESC NULLS LAST, created_at DESC "
+                f"LIMIT ${idx} OFFSET ${idx + 1}",
+                *params, PAGE_SIZE, offset,
+            )
+            events = [Event.model_validate_json(row["data"]) for row in rows]
+            return events, total
+    except Exception:
+        return [], 0
+
+
+def _event_context(request, events, total, q, category, offset):
+    return {
         "request": request,
         "active_page": "events",
         "events": events,
@@ -58,11 +82,40 @@ async def event_list(
         "q": q,
         "category": category,
         "categories": CATEGORIES,
+        "offset": offset,
+        "page_size": PAGE_SIZE,
+        "has_more": (offset + PAGE_SIZE) < total,
+        "next_offset": offset + PAGE_SIZE,
     }
+
+
+@router.get("/events")
+async def event_list(
+    request: Request,
+    q: str | None = None,
+    category: str | None = None,
+    offset: int = 0,
+):
+    stores = get_stores(request)
+    events, total = await _query_events_paged(stores, q, category, offset)
+    context = _event_context(request, events, total, q, category, offset)
 
     if request.headers.get("HX-Request") and not request.headers.get("HX-Boosted"):
         return templates.TemplateResponse("events/_rows.html", context)
     return templates.TemplateResponse("events/list.html", context)
+
+
+@router.get("/events/rows")
+async def event_rows(
+    request: Request,
+    q: str | None = None,
+    category: str | None = None,
+    offset: int = 0,
+):
+    stores = get_stores(request)
+    events, total = await _query_events_paged(stores, q, category, offset)
+    context = _event_context(request, events, total, q, category, offset)
+    return templates.TemplateResponse("events/_rows.html", context)
 
 
 @router.get("/events/{event_id}")
