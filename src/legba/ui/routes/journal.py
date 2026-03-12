@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from ..app import templates
 
 router = APIRouter()
+
+
+@router.get("/api/journal")
+async def api_journal(request: Request):
+    stores = request.app.state.stores
+    journal_data = await stores.registers.get_json("journal") or {}
+    return JSONResponse(journal_data)
 
 
 @router.get("/journal")

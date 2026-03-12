@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from ..app import templates
 
@@ -26,6 +27,12 @@ async def reports_list(request: Request):
         "active_page": "reports",
         "reports": reports,
     })
+
+
+@router.get("/api/reports")
+async def api_reports(request: Request):
+    reports = await _get_reports(request)
+    return JSONResponse(reports)
 
 
 @router.get("/reports/{index}")
