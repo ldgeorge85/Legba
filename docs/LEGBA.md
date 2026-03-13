@@ -48,7 +48,8 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - OpenSearch Audit :9201 -- Audit logs (agent cannot access)
 |   |   - Airflow :8080       -- Scheduled pipelines, DAG orchestration
 |   |
-|   +-- Operator Console :8501  -- Web UI + consultation (FastAPI + htmx)
+|   +-- Operator Console v1 :8501  -- Web UI + consultation (FastAPI + htmx)
+|   +-- Operator Console v2 :8503  -- Multi-panel workstation (React + Dockview + Sigma.js + MapLibre)
 |   |
 |   +-- Optional: OpenSearch Dashboards :5601
 |
@@ -649,6 +650,31 @@ Interactive agentic chat interface at `/consult`. The operator converses directl
 
 **Provider handling:** vLLM gets a single combined user message; Anthropic gets proper system field + multi-turn messages — same branching logic as the agent but using providers directly.
 
+### Operator Console v2 — "The Crossroads"
+
+Multi-panel intelligence workstation built with React, running as a separate container on port **8503**. Designed for interactive analysis with draggable, resizable, tabbed panels.
+
+**Stack:** React 18 + TypeScript + Vite, Tailwind CSS + shadcn/ui, Dockview (multi-panel layout), Sigma.js + Graphology (WebGL graph), MapLibre GL JS (geospatial map), vis-timeline (temporal events), TanStack Query (server state), Zustand (client state).
+
+**Access:** `ssh -L 8503:localhost:8503 user@<your-host>` then `http://localhost:8503`
+
+**19 panels across 6 groups:**
+
+| Group | Panels |
+|-------|--------|
+| Overview | Dashboard (KPIs, recent events, sparklines) |
+| Intelligence | Events (search, filter, paginated), Entities (search, type filter), Sources (CRUD), Goals (tree, status edit), Facts (search, delete) |
+| Visualization | Knowledge Graph (Sigma.js, ForceAtlas2, ego graph, search highlight), Geospatial Map (MapLibre, dark tiles, fly-to), Timeline (vis-timeline, category colors) |
+| Real-Time | Live Feed (SSE stream), Consult (AI chat, markdown rendered) |
+| Tracking | Situations (status filter), Watchlist (CRUD, entity/keyword tracking) |
+| System | Analytics, Cycle Monitor (type detection), Journal (consolidation + entries), Reports (markdown, download) |
+
+**Cross-panel interactions:** Clicking an entity in Graph/Map/table selects it globally. Other panels react — Graph highlights, Map flies to location, Entity Detail opens. Selection history with back/forward.
+
+**API layer:** v2 JSON endpoints at `/api/v2/*` (CRUD for all resources) plus proxied legacy endpoints (`/api/graph`, `/api/journal`, `/api/reports`, `/consult/*`, `/sse/*`).
+
+Full details: [UI_V2.md](UI_V2.md)
+
 ---
 
 ## 8. Self-Modification & Safety
@@ -891,5 +917,6 @@ legba/
 | Orchestration | Apache Airflow |
 | Analytics | PyOD, statsforecast, spaCy, NetworkX, scikit-learn |
 | RSS/Feed | feedparser, trafilatura |
-| Operator Console | FastAPI, Jinja2, htmx, Tailwind CSS |
+| Operator Console v1 | FastAPI, Jinja2, htmx, Tailwind CSS |
+| Operator Console v2 | React 18, TypeScript, Vite, Dockview, Sigma.js, Graphology, MapLibre GL JS, vis-timeline, TanStack Query, Zustand, Tailwind CSS |
 | Data models | Pydantic v2 |

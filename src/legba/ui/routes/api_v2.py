@@ -1,0 +1,1160 @@
+"""
+API v2 — JSON endpoints for the React UI.
+
+All endpoints return JSON. Mounted under /api/v2/.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+from uuid import UUID
+
+from fastapi import APIRouter, Request, Query, Body
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+from ..app import get_stores
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v2", tags=["api-v2"])
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _json(data, status=200):
+    return JSONResponse(content=data, status_code=status)
+
+
+def _serialize_event(ev) -> dict:
+    """Convert Event pydantic model to JSON-safe dict."""
+    return {
+        "event_id": str(ev.id),
+        "title": ev.title,
+        "category": ev.category if isinstance(ev.category, str) else ev.category.value,
+        "confidence": ev.confidence,
+        "timestamp": ev.event_timestamp.isoformat() if ev.event_timestamp else None,
+        "source_name": None,  # No source_name on Event; resolved via source_id join if needed
+        "source_url": ev.source_url or None,
+        "source_id": str(ev.source_id) if ev.source_id else None,
+        "description": ev.summary or "",
+        "tags": ev.tags if hasattr(ev, "tags") and ev.tags else [],
+        "created_at": ev.created_at.isoformat() if hasattr(ev, "created_at") and ev.created_at else None,
+    }
+
+
+def _serialize_entity(ep) -> dict:
+    """Convert EntityProfile pydantic model to JSON-safe dict."""
+    return {
+        "entity_id": str(ep.id),
+        "name": ep.canonical_name,
+        "entity_type": ep.entity_type if isinstance(ep.entity_type, str) else ep.entity_type.value,
+        "first_seen": ep.created_at.isoformat() if hasattr(ep, "created_at") and ep.created_at else None,
+        "last_seen": ep.updated_at.isoformat() if hasattr(ep, "updated_at") and ep.updated_at else None,
+        "event_count": getattr(ep, "event_link_count", 0) or 0,
+        "completeness": getattr(ep, "completeness_score", None),
+        "aliases": list(ep.aliases) if hasattr(ep, "aliases") and ep.aliases else [],
+    }
+
+
+# ------------------------------------------------------------------
+# Dashboard
+# ------------------------------------------------------------------
+
+@router.get("/dashboard")
+async def dashboard(request: Request):
+    stores = get_stores(request)
+
+    # Parallel count queries
+    import asyncio
+    counts = await asyncio.gather(
+        stores.count_entities(),
+        stores.count_events(),
+        stores.count_sources(),
+        stores.count_goals(),
+        stores.count_facts(),
+        stores.count_situations(),
+        stores.count_watchlist(),
+        stores.count_relationships(),
+        return_exceptions=True,
+    )
+
+    def _safe(val):
+        return val if not isinstance(val, Exception) else 0
+
+    # Current cycle from Redis
+    cycle = 0
+    agent_status = "unknown"
+    try:
+        cycle_val = await stores.registers._redis.get("legba:cycle")
+        if cycle_val:
+            cycle = int(cycle_val)
+        status_val = await stores.registers._redis.get("legba:agent_status")
+        if status_val:
+            agent_status = status_val if isinstance(status_val, str) else status_val.decode()
+    except Exception:
+        pass
+
+    # Recent events
+    recent_events = []
+    try:
+        from ...shared.schemas.events import Event
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT data FROM events ORDER BY event_timestamp DESC NULLS LAST LIMIT 15"
+            )
+            for row in rows:
+                try:
+                    ev = Event.model_validate_json(row["data"])
+                    recent_events.append(_serialize_event(ev))
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    # Active situations
+    active_situations = []
+    try:
+        sits = await stores.fetch_active_situations(limit=5)
+        active_situations = [
+            {
+                "situation_id": s["id"],
+                "title": s["name"],
+                "status": s["status"],
+                "severity": s.get("category", "medium"),
+                "event_count": 0,
+                "created_at": s.get("updated_at", "").isoformat() if hasattr(s.get("updated_at", ""), "isoformat") else str(s.get("updated_at", "")),
+                "updated_at": s.get("updated_at", "").isoformat() if hasattr(s.get("updated_at", ""), "isoformat") else str(s.get("updated_at", "")),
+            }
+            for s in sits
+        ]
+    except Exception:
+        pass
+
+    return _json({
+        "entities": _safe(counts[0]),
+        "events": _safe(counts[1]),
+        "sources": _safe(counts[2]),
+        "goals": _safe(counts[3]),
+        "facts": _safe(counts[4]),
+        "situations": _safe(counts[5]),
+        "watchlist": _safe(counts[6]),
+        "relationships": _safe(counts[7]),
+        "current_cycle": cycle,
+        "agent_status": agent_status,
+        "recent_events": recent_events,
+        "active_situations": active_situations,
+    })
+
+
+# ------------------------------------------------------------------
+# Events
+# ------------------------------------------------------------------
+
+@router.get("/events")
+async def list_events(
+    request: Request,
+    offset: int = 0,
+    limit: int = Query(default=50, le=200),
+    category: str | None = None,
+    q: str | None = None,
+):
+    stores = get_stores(request)
+    from ...shared.schemas.events import Event
+
+    if q:
+        os_query = {
+            "multi_match": {
+                "query": q,
+                "fields": ["title^2", "summary", "full_content", "actors", "locations"],
+            }
+        }
+        result = await stores.opensearch.search("legba-events-*", os_query, size=limit)
+        events = []
+        for hit in result.get("hits", []):
+            try:
+                events.append(_serialize_event(Event.model_validate(hit)))
+            except Exception:
+                continue
+        return _json({
+            "items": events,
+            "total": result.get("total", len(events)),
+            "offset": offset,
+            "limit": limit,
+        })
+
+    if not stores.structured._available:
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+    conditions, params, idx = [], [], 1
+    if category:
+        conditions.append(f"category = ${idx}")
+        params.append(category)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            total = await conn.fetchval(f"SELECT count(*) FROM events {where}", *params)
+            rows = await conn.fetch(
+                f"SELECT data FROM events {where} "
+                f"ORDER BY event_timestamp DESC NULLS LAST, created_at DESC "
+                f"LIMIT ${idx} OFFSET ${idx + 1}",
+                *params, limit, offset,
+            )
+            items = []
+            for row in rows:
+                try:
+                    items.append(_serialize_event(Event.model_validate_json(row["data"])))
+                except Exception:
+                    continue
+            return _json({"items": items, "total": total, "offset": offset, "limit": limit})
+    except Exception as exc:
+        logger.warning("Events query failed: %s", exc)
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+
+@router.get("/events/{event_id}")
+async def get_event(request: Request, event_id: UUID):
+    stores = get_stores(request)
+    ev = await stores.get_event(event_id)
+    if not ev:
+        return _json({"error": "not found"}, 404)
+
+    data = _serialize_event(ev)
+
+    # Get linked entities
+    entities = []
+    try:
+        ents = await stores.structured.get_event_entities(event_id)
+        entities = [
+            {
+                "entity_id": str(e.get("entity_id", "")),
+                "name": e.get("name", ""),
+                "entity_type": e.get("entity_type", ""),
+                "role": e.get("role"),
+            }
+            for e in ents
+        ]
+    except Exception:
+        pass
+
+    data["entities"] = entities
+    return _json(data)
+
+
+@router.delete("/events/{event_id}")
+async def delete_event(request: Request, event_id: UUID):
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute("DELETE FROM event_entities WHERE event_id = $1", event_id)
+            await conn.execute("DELETE FROM events WHERE id = $1", event_id)
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Entities
+# ------------------------------------------------------------------
+
+@router.get("/entities")
+async def list_entities(
+    request: Request,
+    offset: int = 0,
+    limit: int = Query(default=50, le=200),
+    type: str | None = None,
+    q: str | None = None,
+):
+    stores = get_stores(request)
+    from ...shared.schemas.entity_profiles import EntityProfile
+
+    if not stores.structured._available:
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+    conditions, params, idx = [], [], 1
+    if q:
+        conditions.append(f"LOWER(canonical_name) LIKE LOWER(${idx})")
+        params.append(f"%{q}%")
+        idx += 1
+    if type:
+        conditions.append(f"entity_type = ${idx}")
+        params.append(type)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            total = await conn.fetchval(f"SELECT count(*) FROM entity_profiles {where}", *params)
+            rows = await conn.fetch(
+                f"SELECT data FROM entity_profiles {where} "
+                f"ORDER BY updated_at DESC "
+                f"LIMIT ${idx} OFFSET ${idx + 1}",
+                *params, limit, offset,
+            )
+            items = []
+            for row in rows:
+                try:
+                    ep = EntityProfile.model_validate_json(row["data"])
+                    items.append(_serialize_entity(ep))
+                except Exception:
+                    total -= 1
+            return _json({"items": items, "total": total, "offset": offset, "limit": limit})
+    except Exception as exc:
+        logger.warning("Entities query failed: %s", exc)
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+
+@router.get("/entities/{entity_id}")
+async def get_entity(request: Request, entity_id: str):
+    stores = get_stores(request)
+
+    try:
+        entity_uuid = UUID(entity_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid entity_id"}, 400)
+
+    ep = await stores.structured.get_entity_profile(entity_uuid)
+    if not ep:
+        return _json({"error": "not found"}, 404)
+
+    data = _serialize_entity(ep)
+
+    # Assertions
+    assertions = []
+    try:
+        for section_name, section_assertions in (ep.sections or {}).items():
+            for a in section_assertions:
+                if isinstance(a, dict):
+                    if a.get("superseded"):
+                        continue
+                    assertions.append({
+                        "key": a.get("key", ""),
+                        "value": str(a.get("value", "")),
+                        "confidence": a.get("confidence", 0),
+                        "source": a.get("source_url", ""),
+                        "timestamp": str(a.get("observed_at", "")),
+                    })
+                else:
+                    if getattr(a, "superseded", False):
+                        continue
+                    assertions.append({
+                        "key": a.key,
+                        "value": str(a.value),
+                        "confidence": a.confidence,
+                        "source": getattr(a, "source_url", ""),
+                        "timestamp": str(getattr(a, "observed_at", "")),
+                    })
+    except Exception:
+        pass
+    data["assertions"] = assertions
+
+    # Relationships from graph
+    relationships = []
+    try:
+        if stores.graph.available:
+            graph = await stores.graph.get_ego_graph(ep.canonical_name, depth=1)
+            for edge in graph.get("edges", []):
+                relationships.append({
+                    "source": edge.get("source", ""),
+                    "target": edge.get("target", ""),
+                    "rel_type": edge.get("rel_type", ""),
+                    "properties": {k: v for k, v in edge.items() if k not in ("source", "target", "rel_type")},
+                })
+    except Exception:
+        pass
+    data["relationships"] = relationships
+
+    return _json(data)
+
+
+@router.delete("/entities/{entity_id}")
+async def delete_entity(request: Request, entity_id: str):
+    stores = get_stores(request)
+    try:
+        uid = UUID(entity_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid entity_id"}, 400)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute("DELETE FROM event_entities WHERE entity_id = $1", uid)
+            await conn.execute("DELETE FROM entity_profiles WHERE id = $1", uid)
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Sources
+# ------------------------------------------------------------------
+
+@router.get("/sources")
+async def list_sources(
+    request: Request,
+    offset: int = 0,
+    limit: int = Query(default=50, le=200),
+    status: str | None = None,
+    q: str | None = None,
+):
+    stores = get_stores(request)
+
+    if not stores.structured._available:
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+    conditions, params, idx = [], [], 1
+    if q:
+        conditions.append(f"LOWER(name) LIKE LOWER(${idx})")
+        params.append(f"%{q}%")
+        idx += 1
+    if status:
+        conditions.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            total = await conn.fetchval(f"SELECT count(*) FROM sources {where}", *params)
+            rows = await conn.fetch(
+                f"SELECT id, name, url, source_type, status, "
+                f"fetch_success_count, fetch_failure_count, "
+                f"events_produced_count, last_successful_fetch_at "
+                f"FROM sources {where} "
+                f"ORDER BY events_produced_count DESC NULLS LAST "
+                f"LIMIT ${idx} OFFSET ${idx + 1}",
+                *params, limit, offset,
+            )
+            items = [
+                {
+                    "source_id": str(r["id"]),
+                    "name": r["name"],
+                    "url": r["url"],
+                    "source_type": r["source_type"],
+                    "status": r["status"],
+                    "fetch_count": r["fetch_success_count"] or 0,
+                    "fail_count": r["fetch_failure_count"] or 0,
+                    "event_count": r["events_produced_count"] or 0,
+                    "last_fetched": r["last_successful_fetch_at"].isoformat() if r["last_successful_fetch_at"] else None,
+                }
+                for r in rows
+            ]
+            return _json({"items": items, "total": total, "offset": offset, "limit": limit})
+    except Exception as exc:
+        logger.warning("Sources query failed: %s", exc)
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+
+class SourceCreate(BaseModel):
+    name: str
+    url: str
+    source_type: str = "rss"
+
+
+@router.post("/sources")
+async def create_source(request: Request, body: SourceCreate):
+    stores = get_stores(request)
+    from uuid import uuid4
+    sid = uuid4()
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO sources (id, name, url, source_type, status) VALUES ($1, $2, $3, $4, 'active')",
+                sid, body.name, body.url, body.source_type,
+            )
+        return _json({"source_id": str(sid), "status": "created"}, 201)
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.put("/sources/{source_id}")
+async def update_source(request: Request, source_id: str, body: dict = Body(...)):
+    stores = get_stores(request)
+    try:
+        uid = UUID(source_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid source_id"}, 400)
+    allowed = {"name", "url", "source_type", "status"}
+    sets, params, idx = [], [], 1
+    for k, v in body.items():
+        if k in allowed:
+            sets.append(f"{k} = ${idx}")
+            params.append(v)
+            idx += 1
+    if not sets:
+        return _json({"error": "no valid fields"}, 400)
+    params.append(uid)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE sources SET {', '.join(sets)} WHERE id = ${idx}", *params
+            )
+        return _json({"status": "updated"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.delete("/sources/{source_id}")
+async def delete_source(request: Request, source_id: str):
+    stores = get_stores(request)
+    try:
+        uid = UUID(source_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid source_id"}, 400)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute("DELETE FROM sources WHERE id = $1", uid)
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Goals
+# ------------------------------------------------------------------
+
+@router.get("/goals")
+async def list_goals(request: Request):
+    stores = get_stores(request)
+
+    if not stores.structured._available:
+        return _json([])
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, data, status, priority, parent_id, created_at, updated_at "
+                "FROM goals ORDER BY priority ASC, created_at ASC"
+            )
+
+        goal_map = {}
+        roots = []
+
+        for r in rows:
+            data = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+            item = {
+                "goal_id": str(r["id"]),
+                "description": data.get("description", ""),
+                "status": r["status"],
+                "priority": r["priority"],
+                "progress_pct": data.get("progress_pct", 0) or 0,
+                "parent_id": str(r["parent_id"]) if r["parent_id"] else None,
+                "children": [],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            }
+            goal_map[str(r["id"])] = item
+
+        for item in goal_map.values():
+            if item["parent_id"] and item["parent_id"] in goal_map:
+                goal_map[item["parent_id"]]["children"].append(item)
+            else:
+                roots.append(item)
+
+        return _json(roots)
+    except Exception as exc:
+        logger.warning("Goals query failed: %s", exc)
+        return _json([])
+
+
+@router.put("/goals/{goal_id}")
+async def update_goal(request: Request, goal_id: str, body: dict = Body(...)):
+    stores = get_stores(request)
+    try:
+        uid = UUID(goal_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid goal_id"}, 400)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT data FROM goals WHERE id = $1", uid)
+            if not row:
+                return _json({"error": "not found"}, 404)
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            # Update allowed fields
+            for k in ("status", "priority", "description", "progress_pct"):
+                if k in body:
+                    data[k] = body[k]
+            sets = ["data = $1"]
+            params = [json.dumps(data)]
+            if "status" in body:
+                sets.append(f"status = ${len(params) + 1}")
+                params.append(body["status"])
+            if "priority" in body:
+                sets.append(f"priority = ${len(params) + 1}")
+                params.append(int(body["priority"]))
+            params.append(uid)
+            await conn.execute(
+                f"UPDATE goals SET {', '.join(sets)}, updated_at = NOW() WHERE id = ${len(params)}",
+                *params,
+            )
+        return _json({"status": "updated"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.delete("/goals/{goal_id}")
+async def delete_goal(request: Request, goal_id: str):
+    stores = get_stores(request)
+    try:
+        uid = UUID(goal_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid goal_id"}, 400)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            # Unparent children before deleting
+            await conn.execute("UPDATE goals SET parent_id = NULL WHERE parent_id = $1", uid)
+            await conn.execute("DELETE FROM goals WHERE id = $1", uid)
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Situations
+# ------------------------------------------------------------------
+
+@router.get("/situations")
+async def list_situations(request: Request, status: str | None = None):
+    stores = get_stores(request)
+
+    if not stores.structured._available:
+        return _json([])
+
+    conditions, params, idx = [], [], 1
+    if status:
+        conditions.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT id, name, status, category, intensity_score, created_at, updated_at "
+                f"FROM situations {where} "
+                f"ORDER BY intensity_score DESC NULLS LAST, updated_at DESC",
+                *params,
+            )
+            items = [
+                {
+                    "situation_id": str(r["id"]),
+                    "title": r["name"],
+                    "status": r["status"],
+                    "severity": r["category"] or "medium",
+                    "event_count": 0,
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                }
+                for r in rows
+            ]
+            return _json(items)
+    except Exception as exc:
+        logger.warning("Situations query failed: %s", exc)
+        return _json([])
+
+
+# ------------------------------------------------------------------
+# Watchlist
+# ------------------------------------------------------------------
+
+@router.get("/watchlist")
+async def list_watchlist(request: Request):
+    stores = get_stores(request)
+
+    if not stores.structured._available:
+        return _json([])
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, name, data, priority, active, created_at, "
+                "last_triggered_at, trigger_count "
+                "FROM watchlist WHERE active = true ORDER BY created_at DESC"
+            )
+            items = []
+            for r in rows:
+                data = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+                items.append({
+                    "watch_id": str(r["id"]),
+                    "entity_name": r["name"],
+                    "watch_type": r["priority"],
+                    "description": data.get("description", ""),
+                    "entities": data.get("entities", []),
+                    "keywords": data.get("keywords", []),
+                    "categories": data.get("categories", []),
+                    "trigger_count": r["trigger_count"] or 0,
+                    "triggers": {},
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                })
+            return _json(items)
+    except Exception as exc:
+        logger.warning("Watchlist query failed: %s", exc)
+        return _json([])
+
+
+class WatchCreate(BaseModel):
+    name: str
+    description: str = ""
+    entities: list[str] = []
+    keywords: list[str] = []
+    categories: list[str] = []
+    priority: str = "medium"
+
+
+@router.post("/watchlist")
+async def create_watch(request: Request, body: WatchCreate):
+    stores = get_stores(request)
+    from uuid import uuid4
+    wid = uuid4()
+    data_obj = {
+        "description": body.description,
+        "entities": body.entities,
+        "keywords": body.keywords,
+        "categories": body.categories,
+    }
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO watchlist (id, name, data, priority, active) VALUES ($1, $2, $3, $4, true)",
+                wid, body.name, json.dumps(data_obj), body.priority,
+            )
+        return _json({"watch_id": str(wid), "status": "created"}, 201)
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.put("/watchlist/{watch_id}")
+async def update_watch(request: Request, watch_id: str, body: dict = Body(...)):
+    stores = get_stores(request)
+    try:
+        uid = UUID(watch_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid watch_id"}, 400)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT name, data, priority FROM watchlist WHERE id = $1", uid)
+            if not row:
+                return _json({"error": "not found"}, 404)
+            data_obj = json.loads(row["data"]) if isinstance(row["data"], str) else (row["data"] or {})
+            name = body.get("name", row["name"])
+            priority = body.get("priority", row["priority"])
+            for k in ("description", "entities", "keywords", "categories"):
+                if k in body:
+                    data_obj[k] = body[k]
+            await conn.execute(
+                "UPDATE watchlist SET name = $1, data = $2, priority = $3 WHERE id = $4",
+                name, json.dumps(data_obj), priority, uid,
+            )
+        return _json({"status": "updated"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.delete("/watchlist/{watch_id}")
+async def delete_watch(request: Request, watch_id: str):
+    stores = get_stores(request)
+    try:
+        uid = UUID(watch_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid watch_id"}, 400)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute("DELETE FROM watch_triggers WHERE watch_id = $1", uid)
+            await conn.execute("DELETE FROM watchlist WHERE id = $1", uid)
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.get("/watchlist/triggers")
+async def list_watch_triggers(request: Request):
+    stores = get_stores(request)
+
+    if not stores.structured._available:
+        return _json([])
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT wt.id, wt.watch_name, wt.event_title, "
+                "wt.match_reasons, wt.priority, wt.triggered_at "
+                "FROM watch_triggers wt "
+                "ORDER BY wt.triggered_at DESC LIMIT 20"
+            )
+            triggers = [
+                {
+                    "watch_id": str(r["id"]),
+                    "entity_name": r["watch_name"],
+                    "trigger_type": r["priority"],
+                    "details": r["event_title"],
+                    "triggered_at": r["triggered_at"].isoformat() if r["triggered_at"] else None,
+                }
+                for r in rows
+            ]
+            return _json(triggers)
+    except Exception as exc:
+        logger.warning("Watch triggers query failed: %s", exc)
+        return _json([])
+
+
+# ------------------------------------------------------------------
+# Facts
+# ------------------------------------------------------------------
+
+@router.get("/facts")
+async def list_facts(
+    request: Request,
+    offset: int = 0,
+    limit: int = Query(default=50, le=200),
+    q: str | None = None,
+    predicate: str | None = None,
+):
+    stores = get_stores(request)
+
+    if not stores.structured._available:
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+    conditions, params, idx = [], [], 1
+    if q:
+        conditions.append(f"(LOWER(subject) LIKE LOWER(${idx}) OR LOWER(value) LIKE LOWER(${idx}))")
+        params.append(f"%{q}%")
+        idx += 1
+    if predicate:
+        conditions.append(f"predicate = ${idx}")
+        params.append(predicate)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            total = await conn.fetchval(f"SELECT count(*) FROM facts {where}", *params)
+            rows = await conn.fetch(
+                f"SELECT id, subject, predicate, value, confidence, source_cycle, created_at "
+                f"FROM facts {where} ORDER BY created_at DESC "
+                f"LIMIT ${idx} OFFSET ${idx + 1}",
+                *params, limit, offset,
+            )
+            items = [
+                {
+                    "fact_id": str(r["id"]),
+                    "subject": r["subject"],
+                    "predicate": r["predicate"],
+                    "object": r["value"],
+                    "confidence": float(r["confidence"]) if r["confidence"] else 0,
+                    "source": f"cycle {r['source_cycle']}" if r["source_cycle"] else "",
+                    "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+                }
+                for r in rows
+            ]
+            return _json({"items": items, "total": total, "offset": offset, "limit": limit})
+    except Exception as exc:
+        logger.warning("Facts query failed: %s", exc)
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+
+@router.delete("/facts/{fact_id}")
+async def delete_fact(request: Request, fact_id: str):
+    stores = get_stores(request)
+    try:
+        uid = UUID(fact_id)
+    except (ValueError, AttributeError):
+        return _json({"error": "invalid fact_id"}, 400)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute("DELETE FROM facts WHERE id = $1", uid)
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Memory (Qdrant)
+# ------------------------------------------------------------------
+
+@router.get("/memory")
+async def list_memory(
+    request: Request,
+    collection: str = "legba_short_term",
+    q: str | None = None,
+    offset: str | None = None,
+):
+    stores = get_stores(request)
+
+    if q:
+        results = await stores.search_memories(collection, q, limit=50)
+        return _json({"points": results, "next_offset": None})
+
+    points, next_offset = await stores.get_memories(collection, limit=50, offset=offset)
+    return _json({"points": points, "next_offset": next_offset})
+
+
+@router.delete("/memory/{collection}/{point_id}")
+async def delete_memory(request: Request, collection: str, point_id: str):
+    stores = get_stores(request)
+    try:
+        from qdrant_client.models import PointIdsList
+        stores._qdrant.delete(
+            collection_name=collection,
+            points_selector=PointIdsList(points=[point_id]),
+        )
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Cycles (Audit OpenSearch)
+# ------------------------------------------------------------------
+
+# Phase keywords that indicate cycle type (same logic as cycles.py)
+_CYCLE_TYPE_KEYWORDS = {
+    "evolve": "EVOLVE",
+    "introspection": "INTROSPECTION",
+    "analysis": "ANALYSIS",
+    "analyze": "ANALYSIS",
+    "research": "RESEARCH",
+    "acquire": "ACQUIRE",
+}
+
+
+def _detect_cycle_type(phase_names: list[str]) -> str:
+    """Detect cycle type from phase event names."""
+    priority = ["EVOLVE", "INTROSPECTION", "ANALYSIS", "RESEARCH", "ACQUIRE"]
+    detected = set()
+    for name in phase_names:
+        lower = name.lower()
+        for keyword, ctype in _CYCLE_TYPE_KEYWORDS.items():
+            if keyword in lower:
+                detected.add(ctype)
+    for p in priority:
+        if p in detected:
+            return p
+    return "NORMAL"
+
+
+@router.get("/cycles")
+async def list_cycles(
+    request: Request,
+    offset: int = 0,
+    limit: int = Query(default=50, le=200),
+):
+    stores = get_stores(request)
+
+    try:
+        # Aggregate audit entries by cycle number (field is "cycle" in the audit index)
+        agg_result = await stores.audit.aggregate(
+            "legba-audit-*",
+            aggs={
+                "cycles": {
+                    "terms": {
+                        "field": "cycle",
+                        "size": limit,
+                        "order": {"_key": "desc"},
+                    },
+                    "aggs": {
+                        "tool_count": {
+                            "filter": {"term": {"event": "tool_call"}}
+                        },
+                        "llm_count": {
+                            "filter": {"term": {"event": "llm_call"}}
+                        },
+                        "error_count": {
+                            "filter": {"term": {"event": "error"}}
+                        },
+                        "min_ts": {"min": {"field": "timestamp"}},
+                        "max_ts": {"max": {"field": "timestamp"}},
+                        "phase_names": {
+                            "filter": {"term": {"event": "phase"}},
+                            "aggs": {
+                                "names": {
+                                    "terms": {
+                                        "field": "phase",
+                                        "size": 20,
+                                    }
+                                }
+                            },
+                        },
+                    },
+                }
+            },
+        )
+
+        buckets = (
+            agg_result.get("aggregations", {})
+            .get("cycles", {})
+            .get("buckets", [])
+        )
+
+        items = []
+        for b in buckets:
+            cycle_num = b.get("key")
+            min_ts = b.get("min_ts", {}).get("value_as_string")
+            max_ts = b.get("max_ts", {}).get("value_as_string")
+
+            # Compute duration
+            duration_s = 0
+            if min_ts and max_ts:
+                try:
+                    dt_min = datetime.fromisoformat(str(min_ts).replace("Z", "+00:00"))
+                    dt_max = datetime.fromisoformat(str(max_ts).replace("Z", "+00:00"))
+                    duration_s = int((dt_max - dt_min).total_seconds())
+                except Exception:
+                    pass
+
+            # Extract phase names for cycle type detection
+            phase_buckets = (
+                b.get("phase_names", {})
+                .get("names", {})
+                .get("buckets", [])
+            )
+            phase_names = [pb.get("key", "") for pb in phase_buckets]
+            cycle_type = _detect_cycle_type(phase_names)
+
+            items.append({
+                "cycle_number": cycle_num,
+                "cycle_type": cycle_type,
+                "started_at": min_ts or "",
+                "duration_s": duration_s,
+                "tool_calls": b.get("tool_count", {}).get("doc_count", 0),
+                "llm_calls": b.get("llm_count", {}).get("doc_count", 0),
+                "events_stored": 0,
+                "errors": b.get("error_count", {}).get("doc_count", 0),
+            })
+
+        total = len(items)
+        return _json({
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        })
+    except Exception as exc:
+        logger.warning("Cycles query failed: %s", exc)
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+
+@router.get("/cycles/{cycle_number}")
+async def get_cycle(request: Request, cycle_number: int):
+    stores = get_stores(request)
+
+    try:
+        # Query all audit entries for this cycle (field is "cycle")
+        result = await stores.audit.search(
+            "legba-audit-*",
+            {"term": {"cycle": cycle_number}},
+            size=500,
+            sort=[{"timestamp": {"order": "asc"}}],
+        )
+        hits = result.get("hits", [])
+        if not hits:
+            return _json({"error": "not found"}, 404)
+
+        # Aggregate stats from individual audit entries
+        tool_calls = 0
+        llm_calls = 0
+        errors = 0
+        total_tokens = 0
+        phases = []
+        timestamps = []
+
+        for hit in hits:
+            event_type = hit.get("event", "")
+            ts = hit.get("timestamp")
+            if ts:
+                timestamps.append(ts)
+
+            if event_type == "tool_call":
+                tool_calls += 1
+            elif event_type == "llm_call":
+                llm_calls += 1
+                usage = hit.get("usage")
+                if isinstance(usage, dict):
+                    total_tokens += usage.get("total_tokens", 0) or 0
+            elif event_type == "error":
+                errors += 1
+            elif event_type == "phase":
+                phase_name = hit.get("phase", "")
+                if phase_name:
+                    phases.append({"phase": phase_name, "timestamp": ts})
+
+        # Detect cycle type from phase names
+        phase_names = [p["phase"] for p in phases]
+        cycle_type = _detect_cycle_type(phase_names)
+
+        # Compute duration from first/last timestamps
+        duration_s = 0
+        started_at = ""
+        if timestamps:
+            started_at = timestamps[0]
+            try:
+                ts_list = []
+                for t in timestamps:
+                    try:
+                        ts_list.append(datetime.fromisoformat(str(t).replace("Z", "+00:00")))
+                    except Exception:
+                        continue
+                if len(ts_list) >= 2:
+                    duration_s = int((max(ts_list) - min(ts_list)).total_seconds())
+            except Exception:
+                pass
+
+        return _json({
+            "cycle_number": cycle_number,
+            "cycle_type": cycle_type,
+            "started_at": started_at,
+            "duration_s": duration_s,
+            "tool_calls": tool_calls,
+            "llm_calls": llm_calls,
+            "events_stored": 0,
+            "errors": errors,
+            "total_tokens": total_tokens,
+            "phases": phases,
+        })
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Graph edges (JSON mutations)
+# ------------------------------------------------------------------
+
+@router.post("/graph/edges")
+async def add_edge(request: Request):
+    body = await request.json()
+    stores = get_stores(request)
+
+    try:
+        await stores.graph.store_relationship(
+            source=body["source"],
+            target=body["target"],
+            rel_type=body["rel_type"],
+            properties=body.get("properties", {}),
+        )
+        return _json({"status": "created"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.delete("/graph/edges")
+async def remove_edge(request: Request):
+    body = await request.json()
+    stores = get_stores(request)
+
+    try:
+        await stores.graph.remove_relationship(
+            source=body["source"],
+            target=body["target"],
+            rel_type=body["rel_type"],
+        )
+        return _json({"status": "deleted"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)

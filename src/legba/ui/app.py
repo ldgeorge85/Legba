@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -75,6 +76,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Legba Operator Console", lifespan=lifespan)
+
+# CORS for React UI v2 (dev server + container)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:8503"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -196,6 +206,8 @@ from .routes.watchlist import router as watchlist_router
 from .routes.situations import router as situations_router
 from .routes.consult import router as consult_router
 from .routes.analytics import router as analytics_router
+from .routes.api_v2 import router as api_v2_router
+from .routes.sse import router as sse_router
 
 app.include_router(dashboard_router)
 app.include_router(entities_router)
@@ -213,3 +225,5 @@ app.include_router(watchlist_router)
 app.include_router(situations_router)
 app.include_router(consult_router)
 app.include_router(analytics_router)
+app.include_router(api_v2_router)
+app.include_router(sse_router)

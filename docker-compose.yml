@@ -292,6 +292,44 @@ services:
     profiles:
       - dev  # Only started manually or for development
 
+  # --- Operator Console UI v2 (React SPA) ---
+  # Palantir Gotham-style multi-panel workspace.
+  # Access via SSH tunnel: ssh -L 8503:localhost:8503
+
+  ui-v2:
+    build:
+      context: .
+      dockerfile: docker/ui-v2.Dockerfile
+    ports:
+      - "8503:8503"
+    depends_on:
+      ui:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8503/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - v2
+
+  # Dev mode for UI v2 — Vite HMR with bind-mount (no node on host)
+  ui-v2-dev:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./legba-ui:/app
+    environment:
+      VITE_API_BASE: http://ui:8501
+    depends_on:
+      ui:
+        condition: service_healthy
+    profiles:
+      - v2-dev
+
   # --- Dev / Test runner ---
   # Runs tests inside the agent container environment.
 
