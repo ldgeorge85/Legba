@@ -15,7 +15,7 @@ Legba is a persistent AI agent that runs indefinitely — ingesting global event
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
 ├── Docker Compose (project: legba, 10 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
-│   ├── Agent (ephemeral) — One container per cycle, 5 cycle types, self-modifiable code
+│   ├── Agent (ephemeral) — One container per cycle, 6 cycle types, self-modifiable code
 │   ├── Operator UI       — Web console with CRUD + consultation (FastAPI + htmx)
 │   ├── Redis             — Transient state, journal, reports
 │   ├── Postgres + AGE    — Structured data, entity graph (Cypher)
@@ -28,17 +28,18 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 
 ## Agent Cycle
 
-Every cycle (~2-10 minutes), the agent runs one of **5 cycle types** (selected by priority):
+Every cycle (~2-10 minutes), the agent runs one of **6 cycle types** (selected by priority):
 
 ```
 WAKE → ORIENT → [cycle type routing] → REFLECT → NARRATE → PERSIST
 
 Cycle types (priority order):
+  Every 30 cycles: EVOLVE        — self-improvement, prompt/tool evaluation, operational scorecard
   Every 15 cycles: INTROSPECTION — deep audit, journal consolidation, world assessment
-  Every 10 cycles: ANALYSIS     — pattern detection, graph mining, anomaly detection
-  Every 5 cycles:  RESEARCH     — entity enrichment via Wikipedia/reference sources
-  Every 3 cycles:  ACQUIRE      — dedicated source fetching, event ingestion
-  Otherwise:       NORMAL       — goal-directed PLAN → REASON+ACT
+  Every 10 cycles: ANALYSIS      — pattern detection, graph mining, anomaly detection
+  Every 5 cycles:  RESEARCH      — entity enrichment via Wikipedia/reference sources
+  Every 3 cycles:  ACQUIRE       — dedicated source fetching, event ingestion
+  Otherwise:       NORMAL        — goal-directed PLAN → REASON+ACT
 ```
 
 - **WAKE**: Load config, connect services, register 58 tools, drain inbox

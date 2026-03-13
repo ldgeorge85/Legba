@@ -117,11 +117,20 @@ class NarrateMixin:
         await self.memory.registers.set_json(self._JOURNAL_KEY, journal_data)
 
         # Archive to OpenSearch for permanent record
+        content = "\n".join(entries)
+        # Safety: if content looks like a JSON array wrapper, strip it
+        if content.startswith('["') and content.endswith('"]'):
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, list):
+                    content = "\n".join(str(e) for e in parsed)
+            except (json.JSONDecodeError, ValueError):
+                pass
         await self._archive_journal_to_opensearch(
             doc_type="entry",
             cycle=self.state.cycle_number,
             timestamp=ts,
-            content="\n".join(entries),
+            content=content,
             entries=entries,
         )
 

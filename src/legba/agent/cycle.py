@@ -1,7 +1,7 @@
 """
 Core Agent Cycle
 
-WAKE → ORIENT → [ACQUIRE|ANALYZE|RESEARCH|INTROSPECTION|PLAN→ACT] → REFLECT → NARRATE → PERSIST
+WAKE → ORIENT → [EVOLVE|ACQUIRE|ANALYZE|RESEARCH|INTROSPECTION|PLAN→ACT] → REFLECT → NARRATE → PERSIST
 
 One cycle = one execution of this module. The supervisor manages the lifecycle:
 it launches the agent for a single cycle, the agent runs through all phases,
@@ -11,6 +11,7 @@ Phase logic lives in phases/*.py as mixin classes. This module wires them
 together into a single AgentCycle class and owns the top-level orchestration.
 
 Cycle type routing (evaluated in priority order):
+  - Every 30 cycles: EVOLVE (self-improvement, prompt/tool evaluation)
   - Every 15 cycles: INTROSPECTION (deep audit, reports, journal consolidation)
   - Every 10 cycles: ANALYSIS (analytics, pattern detection, graph mining)
   - Every 5 cycles:  RESEARCH (entity enrichment, gap-filling)
@@ -54,9 +55,10 @@ from .phases.introspect import IntrospectMixin
 from .phases.research import ResearchMixin
 from .phases.acquire import AcquireMixin
 from .phases.analyze import AnalyzeMixin
+from .phases.evolve import EvolveMixin
 
 # Re-export constants for backward compatibility
-from .phases import REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL, ANALYSIS_INTERVAL
+from .phases import REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL, ANALYSIS_INTERVAL, EVOLVE_INTERVAL
 
 
 class AgentCycle(
@@ -71,6 +73,7 @@ class AgentCycle(
     ResearchMixin,
     AcquireMixin,
     AnalyzeMixin,
+    EvolveMixin,
 ):
     """
     Executes a single agent cycle.
@@ -111,7 +114,11 @@ class AgentCycle(
 
             # Cycle type routing — evaluated in priority order.
             # Higher-priority types take precedence when intervals overlap.
-            if self._is_introspection_cycle():
+            if self._is_evolve_cycle():
+                await self._evolve()
+                await self._reflect()
+                await self._narrate()
+            elif self._is_introspection_cycle():
                 await self._mission_review()
                 await self._reflect()
                 await self._narrate()

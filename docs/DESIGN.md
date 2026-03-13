@@ -97,7 +97,7 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 
 ### Module Structure
 
-`cycle.py` is a thin orchestrator (~190 lines) that inherits from 10 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
+`cycle.py` is a thin orchestrator (~195 lines) that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
 
 | Mixin | File | Phase |
 |-------|------|-------|
@@ -110,6 +110,9 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 | `PersistMixin` | `phases/persist.py` | Memory storage, goal completion, heartbeat |
 | `IntrospectMixin` | `phases/introspect.py` | Mission review, analysis reports |
 | `ResearchMixin` | `phases/research.py` | Entity enrichment cycles |
+| `AcquireMixin` | `phases/acquire.py` | Dedicated source fetching + event ingestion |
+| `AnalyzeMixin` | `phases/analyze.py` | Pattern detection, graph mining, anomaly detection |
+| `EvolveMixin` | `phases/evolve.py` | Self-improvement, operational scorecard, change tracking |
 
 Class attributes (e.g. `_JOURNAL_KEY`, `_JOURNAL_MAX_ENTRIES`) are defined on their owning mixin and accessed via MRO since `AgentCycle` inherits all mixins. Phase modules use `TYPE_CHECKING` guards for `AgentCycle` type hints to avoid circular imports.
 

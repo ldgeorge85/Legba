@@ -29,7 +29,7 @@ One host VM (Debian 12, 8 vCPU, 16GB RAM) running 10 Docker containers:
 | Component | Role |
 |-----------|------|
 | **Supervisor** | Agent lifecycle — launches one ephemeral container per cycle, heartbeat validation, audit logging, auto-rollback on bad self-modifications |
-| **Agent** (ephemeral) | The brain — runs one cycle then exits. 58 tools, 5 cycle types, self-modifiable code volume |
+| **Agent** (ephemeral) | The brain — runs one cycle then exits. 58 tools, 6 cycle types, self-modifiable code volume |
 | **Operator UI** | Web console (FastAPI + htmx) — full CRUD on all data, interactive LLM-backed consultation engine |
 | **Postgres + AGE** | Structured data + entity graph (Cypher queries) |
 | **Redis** | Transient state, counters, journal, reports |

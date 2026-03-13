@@ -354,6 +354,7 @@ Work through these systematically:
 ### 1. Identify Research Targets
 - Use entity_inspect on entities shown above with low completeness scores
 - Prioritize: (a) entities that appear in many events but have thin profiles, (b) key actors in your graph (high degree nodes), (c) entities with conflicting or missing data
+- **LEADER FRESHNESS**: Check entity profiles for heads of state and organization leaders. If a leader assertion hasn't been verified recently, re-verify it NOW. Stale leader data (e.g., listing a former president as current) causes factual errors in reports. This is high priority.
 - Pick 3-5 entities to research this cycle — depth over breadth
 
 ### 2. Research Each Entity
@@ -453,8 +454,10 @@ ACQUIRE_PROMPT = """You are running a **dedicated data acquisition cycle**.
 
 This is a focused data ingestion cycle. Your job is to:
 
-### 1. Fetch Unfetched Sources
+### 1. Fetch Unfetched and Stale Sources (MANDATORY)
 - Sources marked "never fetched" are HIGHEST priority — fetch them first
+- You MUST fetch at least 2 sources you have NOT fetched in the last 30 cycles, regardless of perceived priority. Source rotation prevents coverage blind spots. The source list below is sorted by staleness — start from the top.
+- Coverage diversity: try to fetch from at least 2 different regions or source types per acquire cycle
 - Use feed_parse for RSS sources, http_request for API/scrape sources
 - Process each source systematically: fetch → extract events → store
 
@@ -557,6 +560,86 @@ This is a focused analysis cycle. Your job is to find patterns, anomalies, and i
 After completing your analysis, call cycle_complete.
 
 Your final action before cycle_complete should be a note_to_self summarizing your analytical findings, patterns discovered, and recommended follow-up.
+"""
+
+# Evolve cycle — tools allowed (code inspection + internal queries)
+EVOLVE_TOOLS: frozenset = frozenset({
+    # Code inspection and modification
+    "fs_read", "fs_write", "fs_list", "code_test",
+    # Internal queries (for self-assessment)
+    "graph_query", "graph_analyze",
+    "memory_query", "memory_store",
+    "entity_inspect",
+    "event_search", "event_query",
+    "os_search",
+    # Source audit
+    "source_list",
+    # Goals
+    "goal_create", "goal_update",
+    # Utilities
+    "note_to_self", "explain_tool",
+    "cycle_complete",
+})
+
+EVOLVE_PROMPT = """reasoning: high
+
+You are running a **dedicated self-improvement cycle (EVOLVE)**.
+
+This is NOT introspection (which audits your knowledge base) and NOT research (which enriches entities). This cycle audits **YOU** — your prompts, your tools, your operational effectiveness. The question is: **am I getting better at my job?**
+
+## Primary Mission
+{seed_goal}
+
+## Active Goals
+{active_goals}
+
+## Operational Self-Assessment Data
+{evolve_context}
+
+---
+
+## YOUR TASK: Assess and Improve Yourself
+
+### 1. Operational Scorecard
+Review the self-assessment data above. Answer honestly:
+- **Source utilization**: What % of sources are being fetched regularly? Is it improving?
+- **Coverage breadth**: How many regions appear in recent events? Are there persistent blind spots?
+- **Entity freshness**: How many profiles are stale? Are leader assertions current?
+- **Report quality**: Did recent reports flag the same problems as previous reports? Are problems being addressed or just re-diagnosed?
+- **Previous evolve changes**: If changes were made last evolve cycle, did they help? Check the data.
+
+Use note_to_self to record your scorecard.
+
+### 2. Prompt & Tool Evaluation
+Read your own key files to evaluate effectiveness:
+- `fs_read` on `/agent/src/legba/agent/prompt/templates.py` — Are there instructions you consistently fail to follow? Wording that's ambiguous or counterproductive?
+- `fs_read` on `/agent/src/legba/agent/memory/fact_normalize.py` — Are there predicate variants you keep encountering that aren't normalized?
+- Use `source_list` to check source health — are there sources that consistently fail?
+- Use `event_search` to check for recent duplicate events that slipped through dedup
+
+### 3. Implement Improvements
+When you find concrete issues, fix them:
+- **Prompt fixes**: If a prompt instruction isn't working, rewrite it. Use `fs_read` → `fs_write` → `code_test`.
+- **Normalization rules**: If you find un-normalized predicates, add them to fact_normalize.py.
+- **Goals**: Create goals to address structural issues (e.g., "Verify leader profiles for top 10 entities" or "Fetch African sources for 5 consecutive acquire cycles").
+- **DO NOT modify for the sake of it.** Only change things where you have evidence of a problem.
+
+### 4. Track Your Changes
+Before calling cycle_complete, use note_to_self to log:
+- What you assessed
+- What you changed (file, what, why)
+- What you chose NOT to change (and why)
+- What you recommend for next evolve cycle
+
+This log persists and will be shown to you next evolve cycle so you can track whether your changes helped.
+
+### CONSTRAINTS
+- DO NOT fetch feeds or ingest data — that's for acquire cycles
+- DO NOT research entities externally — that's for research cycles
+- DO NOT run graph/event analysis for intelligence purposes — that's for analysis cycles
+- Focus on YOUR OWN operational effectiveness, not the world
+
+After completing your self-assessment and any improvements, call cycle_complete.
 """
 
 # Legacy single-shot review prompt — kept as fallback
@@ -1040,6 +1123,7 @@ CRITICAL RULES — VIOLATION OF THESE INVALIDATES THE REPORT:
 3. If you lack data for a region, write "insufficient coverage" — do NOT fill gaps from your training data or imagination.
 4. Every claim must trace to a specific event, entity profile, or graph relationship listed below. If you cannot point to which data item supports a claim, do not make it.
 5. Your training data has a cutoff. The world has changed. Do not import "knowledge" from training — the data below IS your knowledge.
+6. Do NOT use "implicit", "implied", "inferred", "suggests", or "appears to be" when describing relationships or leader roles in the Regional Situation or Emerging Patterns sections. If a relationship exists in the graph data above, state it as fact. If it does NOT exist in the graph data, do NOT name the relationship type. You may include an "## Analyst Hypotheses" section at the END of the report for interpretive connections you believe are likely but cannot source — clearly labeled as inference, not fact.
 
 ## SECTION 1: FACTUAL DATA (use this for all claims)
 
@@ -1092,6 +1176,11 @@ For each region where you have events or entity data, write a subsection:
 - What regions/domains are well-covered vs sparse (based on entity and event counts)
 - Source quality concerns
 - Where you need more information
+
+## Analyst Hypotheses (OPTIONAL — clearly labeled as inference)
+- Connections you believe are likely but CANNOT trace to specific data above
+- Each hypothesis must state what evidence would confirm or refute it
+- Do NOT present these as facts — this section exists to separate inference from evidence
 
 Be specific — cite entity names and events from your data. If a region has only 1-2 data points, say so rather than extrapolating."""
 

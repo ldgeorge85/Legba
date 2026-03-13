@@ -16,3 +16,6 @@ ACQUIRE_INTERVAL = 3
 
 # Analysis cadence: analytical tools cycle every N cycles.
 ANALYSIS_INTERVAL = 10
+
+# Evolve cadence: self-improvement cycle every N cycles.
+EVOLVE_INTERVAL = 30
