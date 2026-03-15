@@ -88,14 +88,28 @@ async def dashboard(request: Request):
 
     # Current cycle from Redis
     cycle = 0
-    agent_status = "unknown"
+    agent_status = "idle"
     try:
-        cycle_val = await stores.registers._redis.get("legba:cycle")
+        cycle_val = await stores.registers._redis.get("legba:cycle_number")
         if cycle_val:
-            cycle = int(cycle_val)
-        status_val = await stores.registers._redis.get("legba:agent_status")
-        if status_val:
-            agent_status = status_val if isinstance(status_val, str) else status_val.decode()
+            cycle = int(cycle_val) if isinstance(cycle_val, int) else int(cycle_val.decode() if isinstance(cycle_val, bytes) else cycle_val)
+    except Exception:
+        pass
+    # Derive agent status from most recent audit entry timestamp
+    try:
+        from datetime import timezone
+        latest = await stores.audit.search(
+            "legba-audit-*",
+            {"match_all": {}},
+            size=1,
+            sort=[{"timestamp": "desc"}],
+        )
+        if latest.get("hits"):
+            ts_str = latest["hits"][0].get("timestamp", "")
+            if ts_str:
+                last_ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - last_ts).total_seconds()
+                agent_status = "running" if age < 300 else "idle"
     except Exception:
         pass
 
@@ -115,6 +129,22 @@ async def dashboard(request: Request):
                     continue
     except Exception:
         pass
+
+    # Ingestion status from Redis
+    ingestion = {}
+    try:
+        hb = await stores.registers._redis.get("legba:ingest:heartbeat")
+        events_1h = await stores.registers._redis.get("legba:ingest:events_1h")
+        events_24h = await stores.registers._redis.get("legba:ingest:events_24h")
+        errors_1h = await stores.registers._redis.get("legba:ingest:errors_1h")
+        ingestion = {
+            "active": hb is not None,
+            "events_1h": int(events_1h) if events_1h else 0,
+            "events_24h": int(events_24h) if events_24h else 0,
+            "errors_1h": int(errors_1h) if errors_1h else 0,
+        }
+    except Exception:
+        ingestion = {"active": False, "events_1h": 0, "events_24h": 0, "errors_1h": 0}
 
     # Active situations
     active_situations = []
@@ -148,6 +178,7 @@ async def dashboard(request: Request):
         "agent_status": agent_status,
         "recent_events": recent_events,
         "active_situations": active_situations,
+        "ingestion": ingestion,
     })
 
 

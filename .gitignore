@@ -28,3 +28,7 @@ curl_*.json
 .claude/
 .vscode/
 .idea/
+
+# Internal analysis docs (not published)
+docs/PHASE_*.md
+docs/TOOL_UTILIZATION.md

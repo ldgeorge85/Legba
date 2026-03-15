@@ -87,7 +87,9 @@ class Source(BaseModel):
 
     # Flexible metadata
     tags: list[str] = Field(default_factory=list)
-    config: dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)  # auth_config, custom settings
+    query_template: str = ""  # URL pattern with {placeholders} e.g. {since_iso}, {timespan}
+    category: str = ""  # Primary content category (conflict, disaster, health, etc.)
 
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

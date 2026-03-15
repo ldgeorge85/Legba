@@ -247,6 +247,32 @@ class StructuredStore:
                     added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     PRIMARY KEY (situation_id, event_id)
                 );
+
+                -- Ingestion service columns on sources
+                ALTER TABLE sources ADD COLUMN IF NOT EXISTS fetch_interval_minutes INTEGER DEFAULT 60;
+                ALTER TABLE sources ADD COLUMN IF NOT EXISTS next_fetch_at TIMESTAMPTZ;
+                ALTER TABLE sources ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '';
+                CREATE INDEX IF NOT EXISTS idx_sources_next_fetch ON sources(next_fetch_at)
+                    WHERE status = 'active';
+
+                -- Ingestion log table
+                CREATE TABLE IF NOT EXISTS ingestion_log (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    source_id UUID REFERENCES sources(id),
+                    source_name TEXT NOT NULL DEFAULT '',
+                    fetch_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    fetch_completed_at TIMESTAMPTZ,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    events_fetched INTEGER DEFAULT 0,
+                    events_stored INTEGER DEFAULT 0,
+                    events_deduped INTEGER DEFAULT 0,
+                    error_message TEXT,
+                    duration_ms INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_ingestion_log_source
+                    ON ingestion_log(source_id);
+                CREATE INDEX IF NOT EXISTS idx_ingestion_log_time
+                    ON ingestion_log(fetch_started_at DESC);
             """)
 
     # --- Goal operations ---

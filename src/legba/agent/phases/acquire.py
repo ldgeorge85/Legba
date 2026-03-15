@@ -19,6 +19,10 @@ class AcquireMixin:
 
         Runs every ACQUIRE_INTERVAL cycles, but NOT on introspection,
         research, or analysis cycles (they take priority).
+
+        When INGESTION_SERVICE_ACTIVE=true, ACQUIRE is repurposed for
+        source discovery instead of data fetching. The cycle still fires
+        on schedule, but the prompt changes (see _acquire).
         """
         from . import ACQUIRE_INTERVAL
         cn = self.state.cycle_number
@@ -29,29 +33,61 @@ class AcquireMixin:
                 and not self._is_analysis_cycle()
                 and not self._is_research_cycle())
 
+    def _ingestion_service_active(self: AgentCycle) -> bool:
+        """Check if the standalone ingestion service is handling data acquisition.
+
+        True when INGESTION_SERVICE_ACTIVE=true or the ingestion service
+        heartbeat is present in Redis (auto-detect).
+        """
+        import os
+        explicit = os.getenv("INGESTION_SERVICE_ACTIVE", "").lower()
+        if explicit in ("true", "1", "yes"):
+            return True
+        # Auto-detect via Redis heartbeat
+        if hasattr(self, "_ingestion_heartbeat_detected"):
+            return self._ingestion_heartbeat_detected
+        return False
+
     async def _acquire(self: AgentCycle) -> None:
         """Acquire cycle: fetch feeds, store events, resolve entities.
 
-        Uses a filtered tool set focused on data ingestion. No graph
-        enrichment, no deep research — just get data in.
+        When the ingestion service is active (INGESTION_SERVICE_ACTIVE=true
+        or heartbeat detected), this becomes a source discovery cycle instead.
         """
-        self.logger.log_phase("acquire")
+        ingestion_active = self._ingestion_service_active()
+        mode = "source_discovery" if ingestion_active else "acquire"
+        self.logger.log_phase(mode)
 
-        # Build source status for the acquire prompt
+        # Build source status for the prompt
         source_status = await self._build_source_status()
 
         from ..prompt import templates as _tpl
-        allowed_tools = _tpl.ACQUIRE_TOOLS
 
-        inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
-        acquire_messages = self.assembler.assemble_acquire_prompt(
-            cycle_number=self.state.cycle_number,
-            seed_goal=self.state.seed_goal,
-            active_goals=[g.model_dump() for g in self._active_goals],
-            source_status=source_status,
-            allowed_tools=allowed_tools,
-            inbox_messages=inbox_messages if inbox_messages else None,
-        )
+        if ingestion_active:
+            allowed_tools = _tpl.SOURCE_DISCOVERY_TOOLS
+            # Build ingestion status from Redis
+            ingestion_status = getattr(self, "_ingestion_status", "(ingestion service status unavailable)")
+            inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
+            acquire_messages = self.assembler.assemble_source_discovery_prompt(
+                cycle_number=self.state.cycle_number,
+                seed_goal=self.state.seed_goal,
+                active_goals=[g.model_dump() for g in self._active_goals],
+                source_status=source_status,
+                ingestion_status=ingestion_status,
+                allowed_tools=allowed_tools,
+                inbox_messages=inbox_messages if inbox_messages else None,
+            )
+        else:
+            allowed_tools = _tpl.ACQUIRE_TOOLS
+            inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
+            acquire_messages = self.assembler.assemble_acquire_prompt(
+                cycle_number=self.state.cycle_number,
+                seed_goal=self.state.seed_goal,
+                active_goals=[g.model_dump() for g in self._active_goals],
+                source_status=source_status,
+                allowed_tools=allowed_tools,
+                inbox_messages=inbox_messages if inbox_messages else None,
+            )
 
         async def acquire_executor(tool_name: str, arguments: dict) -> str:
             if tool_name not in allowed_tools:
@@ -59,7 +95,11 @@ class AcquireMixin:
                         f"Available tools: {', '.join(sorted(allowed_tools))}")
             return await self.executor.execute(tool_name, arguments)
 
-        self._cycle_plan = "ACQUIRE CYCLE: Source fetching, event ingestion, entity resolution."
+        self._cycle_plan = (
+            "SOURCE DISCOVERY CYCLE: Find and register new data sources, evaluate source quality."
+            if ingestion_active else
+            "ACQUIRE CYCLE: Source fetching, event ingestion, entity resolution."
+        )
 
         try:
             self._final_response, self._conversation = await self.llm.reason_with_tools(

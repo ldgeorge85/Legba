@@ -191,6 +191,99 @@ class OrientMixin:
         except Exception:
             pass
 
+        # --- Ingestion service status (when running) ---
+        self._ingestion_status = ""
+        self._ingestion_heartbeat_detected = False
+        self._ingestion_briefing = ""
+        try:
+            if self.memory and self.memory.registers:
+                redis = self.memory.registers._redis
+                heartbeat = await redis.get("legba:ingest:heartbeat")
+                if heartbeat:
+                    self._ingestion_heartbeat_detected = True
+                    events_1h = await redis.get("legba:ingest:events_1h") or "0"
+                    events_24h = await redis.get("legba:ingest:events_24h") or "0"
+                    errors_1h = await redis.get("legba:ingest:errors_1h") or "0"
+
+                    # Count active sources
+                    active_sources = 0
+                    total_sources = 0
+                    try:
+                        import asyncpg
+                        from ...shared.config import PostgresConfig
+                        pg = PostgresConfig.from_env()
+                        conn = await asyncpg.connect(
+                            host=pg.host, port=pg.port, user=pg.user,
+                            password=pg.password, database=pg.database,
+                        )
+                        total_sources = await conn.fetchval("SELECT COUNT(*) FROM sources")
+                        active_sources = await conn.fetchval(
+                            "SELECT COUNT(*) FROM sources WHERE status = 'active'"
+                        )
+                        # Top categories from recent events
+                        cat_rows = await conn.fetch("""
+                            SELECT category, COUNT(*) as cnt
+                            FROM events
+                            WHERE created_at > NOW() - INTERVAL '1 hour'
+                            GROUP BY category
+                            ORDER BY cnt DESC
+                            LIMIT 5
+                        """)
+                        cat_summary = ", ".join(
+                            f"{r['category']}({r['cnt']})" for r in cat_rows
+                        ) if cat_rows else "none yet"
+
+                        # High-signal event briefing (3.3)
+                        briefing_rows = await conn.fetch("""
+                            SELECT title, category, summary,
+                                   array_to_string(actors, ', ') as actors_str,
+                                   array_to_string(locations, ', ') as locs_str,
+                                   confidence
+                            FROM events
+                            WHERE created_at > NOW() - INTERVAL '2 hours'
+                              AND confidence >= 0.7
+                            ORDER BY confidence DESC, created_at DESC
+                            LIMIT 10
+                        """)
+                        await conn.close()
+
+                        if briefing_rows:
+                            brief_lines = ["## High-Signal Event Briefing (last 2h)", ""]
+                            for r in briefing_rows:
+                                line = f"- **{r['title'][:100]}** [{r['category']}]"
+                                if r['locs_str']:
+                                    line += f" — {r['locs_str'][:60]}"
+                                if r['actors_str']:
+                                    line += f" (actors: {r['actors_str'][:60]})"
+                                brief_lines.append(line)
+                            self._ingestion_briefing = "\n".join(brief_lines)
+                    except Exception:
+                        cat_summary = "unavailable"
+
+                    self._ingestion_status = (
+                        f"\n## Ingestion Service Status\n"
+                        f"**Service: RUNNING** (heartbeat: {heartbeat})\n"
+                        f"Events stored (1h): **{events_1h}** | "
+                        f"Events stored (24h): **{events_24h}** | "
+                        f"Errors (1h): {errors_1h}\n"
+                        f"Sources: {active_sources}/{total_sources} active\n"
+                        f"Top categories (1h): {cat_summary}"
+                    )
+
+                    # Append to graph inventory for planner visibility
+                    if self._graph_inventory:
+                        self._graph_inventory += "\n" + self._ingestion_status
+                    else:
+                        self._graph_inventory = self._ingestion_status
+
+                    if self._ingestion_briefing:
+                        if self._graph_inventory:
+                            self._graph_inventory += "\n\n" + self._ingestion_briefing
+                        else:
+                            self._graph_inventory = self._ingestion_briefing
+        except Exception:
+            pass
+
         # Retrieve previous cycle's reflection-forward data
         self._reflection_forward = ""
         try:

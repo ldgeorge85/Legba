@@ -82,6 +82,29 @@ class PersistMixin:
         except Exception as e:
             self.logger.log_error(f"Goal auto-complete failed: {e}")
 
+        # Auto-abandon goals stuck at 0% for too long
+        try:
+            stale_threshold = self.state.cycle_number - 150
+            if stale_threshold > 0 and self.memory and self.memory.structured._available:
+                async with self.memory.structured._pool.acquire() as conn:
+                    stale_goals = await conn.fetch(
+                        "SELECT id, data->>'name' as name FROM goals "
+                        "WHERE status = 'active' AND (data->>'progress_pct')::numeric = 0 "
+                        "AND created_at < NOW() - INTERVAL '3 days'"
+                    )
+                    for g in stale_goals:
+                        await conn.execute(
+                            "UPDATE goals SET status = 'abandoned', "
+                            "data = data || '{\"abandon_reason\": \"auto-abandoned: no progress in 3+ days\"}'::jsonb "
+                            "WHERE id = $1", g["id"]
+                        )
+                        if g["name"]:
+                            self.logger.log("goal_auto_abandoned", goal_id=str(g["id"]), name=g["name"])
+                        else:
+                            self.logger.log("goal_auto_abandoned", goal_id=str(g["id"]))
+        except Exception as e:
+            self.logger.log_error(f"Goal auto-abandon check failed: {e}")
+
         # Update per-goal work tracker (Phase O)
         try:
             goal_progress = self._reflection_data.get("goal_progress", {})

@@ -309,6 +309,43 @@ class PromptAssembler:
             Message(role="user", content=user_text),
         ]
 
+    def assemble_source_discovery_prompt(
+        self,
+        cycle_number: int,
+        seed_goal: str,
+        active_goals: list[dict],
+        source_status: str,
+        ingestion_status: str,
+        allowed_tools: frozenset[str],
+        inbox_messages: list[InboxMessage] | None = None,
+    ) -> list[Message]:
+        """Build the message list for the source discovery cycle (ingestion service active)."""
+        goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
+
+        from ..llm.format import format_tool_definitions
+        discovery_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
+        system_text = templates.SYSTEM_PROMPT.format(
+            cycle_number=cycle_number,
+            context_tokens="source_discovery",
+        )
+        system_text += "\n\n" + format_tool_definitions(discovery_tool_data)
+        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+
+        user_text = templates.SOURCE_DISCOVERY_PROMPT.format(
+            seed_goal=seed_goal,
+            active_goals=goals_text,
+            source_status=source_status,
+            ingestion_status=ingestion_status,
+        )
+
+        if inbox_messages:
+            user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+
+        return [
+            Message(role="system", content=system_text),
+            Message(role="user", content=user_text),
+        ]
+
     def assemble_analysis_cycle_prompt(
         self,
         cycle_number: int,
@@ -338,6 +375,29 @@ class PromptAssembler:
 
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+
+        # Context budget enforcement: progressively truncate if over 75% of budget
+        estimated = _estimate_tokens(system_text) + _estimate_tokens(user_text)
+        budget_limit = int(self._max_context_tokens * 0.75)
+        if self._max_context_tokens > 0 and estimated > budget_limit:
+            # First: truncate analysis_context to 8000 chars
+            analysis_context_truncated = analysis_context[:8000]
+            if len(analysis_context) > 8000:
+                analysis_context_truncated += "\n(... analysis context truncated to fit budget)"
+            # Second: truncate active_goals to 3000 chars
+            goals_text_truncated = goals_text[:3000]
+            if len(goals_text) > 3000:
+                goals_text_truncated += "\n(... goals truncated to fit budget)"
+            # Rebuild user_text with truncated data
+            user_text = templates.ANALYSIS_PROMPT.format(
+                seed_goal=seed_goal,
+                active_goals=goals_text_truncated,
+                analysis_context=analysis_context_truncated,
+            )
+            if inbox_messages:
+                user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+            user_text += "\n\n(Note: context was truncated to fit budget)"
+            self._truncated = True
 
         return [
             Message(role="system", content=system_text),

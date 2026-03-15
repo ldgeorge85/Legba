@@ -213,7 +213,12 @@ async def _query_entities_paged(stores, q, entity_type, offset):
                 f"LIMIT ${idx} OFFSET ${idx + 1}",
                 *params, PAGE_SIZE, offset,
             )
-            entities = [EntityProfile.model_validate_json(row["data"]) for row in rows]
+            entities = []
+            for row in rows:
+                try:
+                    entities.append(EntityProfile.model_validate_json(row["data"]))
+                except Exception:
+                    total -= 1  # Don't count invalid rows
             return entities, total
     except Exception:
         return [], 0

@@ -31,6 +31,30 @@
       </div>
     </div>
 
+    <!-- Recent Ingestion Activity (only shown when ingestion service is running) -->
+    {% if ingestion.running %}
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Recent Fetch Activity</h2>
+      <div class="card overflow-x-auto">
+        <table class="w-full text-xs" id="ingestion-log-table">
+          <thead>
+            <tr class="border-b border-gray-700 text-gray-500">
+              <th class="text-left py-1.5 pr-3">Source</th>
+              <th class="text-center py-1.5 px-2">Status</th>
+              <th class="text-right py-1.5 px-2">Stored</th>
+              <th class="text-right py-1.5 px-2">Dedup</th>
+              <th class="text-right py-1.5 px-2">Time</th>
+              <th class="text-right py-1.5 pl-2">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td colspan="6" class="text-center py-4 text-gray-500">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
     <!-- Active situations -->
     <div>
       <div class="flex items-center justify-between mb-3">
@@ -127,6 +151,39 @@
         <div id="cycle-perf" style="min-height: 120px;">
           <div class="flex items-center justify-center h-28 text-gray-500 text-sm">Loading...</div>
         </div>
+      </div>
+    </div>
+
+    <!-- Ingestion Service -->
+    <div>
+      <h2 class="text-lg font-semibold text-gray-100 mb-3">Ingestion Service</h2>
+      <div class="card">
+        {% if ingestion.running %}
+        <div class="flex items-center gap-2 mb-3">
+          <div class="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse"></div>
+          <span class="text-sm text-green-400 font-medium">Running</span>
+        </div>
+        <div class="grid grid-cols-3 gap-3 text-center">
+          <div>
+            <div class="text-lg font-bold text-green-400">{{ ingestion.events_1h }}</div>
+            <div class="text-xs text-gray-500">Events/1h</div>
+          </div>
+          <div>
+            <div class="text-lg font-bold text-blue-400">{{ ingestion.events_24h }}</div>
+            <div class="text-xs text-gray-500">Events/24h</div>
+          </div>
+          <div>
+            <div class="text-lg font-bold {% if ingestion.errors_1h > 10 %}text-red-400{% elif ingestion.errors_1h > 0 %}text-yellow-400{% else %}text-gray-400{% endif %}">{{ ingestion.errors_1h }}</div>
+            <div class="text-xs text-gray-500">Errors/1h</div>
+          </div>
+        </div>
+        {% else %}
+        <div class="flex items-center gap-2">
+          <div class="w-2.5 h-2.5 rounded-full bg-gray-600"></div>
+          <span class="text-sm text-gray-500">Not running</span>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">Agent handles data acquisition via ACQUIRE cycles.</p>
+        {% endif %}
       </div>
     </div>
 
@@ -297,6 +354,32 @@
     new uPlot(opts2, [cycles, toolCalls, errors], cycContainer);
   } else {
     cycContainer.innerHTML = '<div class="flex items-center justify-center h-28 text-gray-500 text-sm">No cycle data</div>';
+  }
+  // --- Ingestion Log Table ---
+  const logTable = document.getElementById('ingestion-log-table');
+  if (logTable) {
+    const logData = await fetchJSON('/api/stats/ingestion-log?limit=15');
+    const tbody = logTable.querySelector('tbody');
+    if (logData && logData.length > 0) {
+      tbody.innerHTML = logData.map(row => {
+        const statusBadge = row.status === 'success'
+          ? '<span class="badge badge-green">ok</span>'
+          : '<span class="badge badge-red">err</span>';
+        const dur = row.duration_ms ? (row.duration_ms / 1000).toFixed(1) + 's' : '-';
+        const when = row.started_at ? timeAgo(new Date(row.started_at)) : '-';
+        const errTip = row.error ? ' title="' + row.error.replace(/"/g, '&quot;') + '"' : '';
+        return '<tr class="border-b border-gray-800 hover:bg-gray-800/30"' + errTip + '>'
+          + '<td class="py-1.5 pr-3 text-gray-300 truncate max-w-[180px]">' + row.source_name + '</td>'
+          + '<td class="text-center py-1.5 px-2">' + statusBadge + '</td>'
+          + '<td class="text-right py-1.5 px-2 text-green-400">' + (row.events_stored || 0) + '</td>'
+          + '<td class="text-right py-1.5 px-2 text-gray-500">' + (row.events_deduped || 0) + '</td>'
+          + '<td class="text-right py-1.5 px-2 text-gray-400">' + dur + '</td>'
+          + '<td class="text-right py-1.5 pl-2 text-gray-500">' + when + '</td>'
+          + '</tr>';
+      }).join('');
+    } else {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-gray-500">No fetch activity yet</td></tr>';
+    }
   }
 })();
 </script>

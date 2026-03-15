@@ -56,13 +56,40 @@ class AnalyzeMixin:
         self._cycle_plan = "ANALYSIS CYCLE: Pattern detection, graph mining, anomaly detection, trend analysis."
 
         try:
-            self._final_response, self._conversation = await self.llm.reason_with_tools(
-                messages=analysis_messages,
-                tool_executor=analysis_executor,
-                purpose="analysis",
-                max_steps=self.config.agent.max_reasoning_steps,
-                stop_check=self._make_stop_checker(),
-            )
+            try:
+                self._final_response, self._conversation = await self.llm.reason_with_tools(
+                    messages=analysis_messages,
+                    tool_executor=analysis_executor,
+                    purpose="analysis",
+                    max_steps=self.config.agent.max_reasoning_steps,
+                    stop_check=self._make_stop_checker(),
+                )
+            except Exception as first_err:
+                # Retry once with reduced context
+                self.logger.log("analysis_retry",
+                               reason=f"First attempt failed: {first_err}")
+                self.logger.logger.warning(
+                    "Analysis cycle first attempt failed, retrying with reduced context: %s",
+                    first_err,
+                )
+                reduced_context = analysis_context[:4000]
+                if len(analysis_context) > 4000:
+                    reduced_context += "\n(... truncated for retry)"
+                analysis_messages = self.assembler.assemble_analysis_cycle_prompt(
+                    cycle_number=self.state.cycle_number,
+                    seed_goal=self.state.seed_goal,
+                    active_goals=[g.model_dump() for g in self._active_goals],
+                    analysis_context=reduced_context,
+                    allowed_tools=allowed_tools,
+                    inbox_messages=inbox_messages if inbox_messages else None,
+                )
+                self._final_response, self._conversation = await self.llm.reason_with_tools(
+                    messages=analysis_messages,
+                    tool_executor=analysis_executor,
+                    purpose="analysis_retry",
+                    max_steps=self.config.agent.max_reasoning_steps,
+                    stop_check=self._make_stop_checker(),
+                )
 
             self.state.actions_taken = sum(
                 1 for m in self._conversation

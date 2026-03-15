@@ -8,7 +8,9 @@
   </td>
   <td class="py-2 pr-4">
     {% set ct = cycle.cycle_type | default('NORMAL') %}
-    {% if ct == 'INTROSPECTION' %}
+    {% if ct == 'EVOLVE' %}
+      <span class="badge badge-orange">EVOLVE</span>
+    {% elif ct == 'INTROSPECTION' %}
       <span class="badge badge-purple">INTROSPECT</span>
     {% elif ct == 'ANALYSIS' %}
       <span class="badge badge-blue">ANALYSIS</span>

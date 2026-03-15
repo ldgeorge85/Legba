@@ -15,6 +15,7 @@ router = APIRouter()
 
 # Phase names that indicate cycle type (matched case-insensitively against phase events)
 _CYCLE_TYPE_KEYWORDS = {
+    "evolve": "EVOLVE",
     "introspection": "INTROSPECTION",
     "analysis": "ANALYSIS",
     "analyze": "ANALYSIS",
@@ -26,6 +27,7 @@ _CYCLE_TYPE_KEYWORDS = {
 PHASE_COLORS = {
     "wake": {"bg": "#374151", "text": "#9ca3af", "label": "WAKE"},       # gray
     "orient": {"bg": "#1e3a5f", "text": "#60a5fa", "label": "ORIENT"},   # blue
+    "evolve": {"bg": "#4a1d00", "text": "#fb923c", "label": "EVOLVE"},   # orange
     "plan": {"bg": "#422006", "text": "#facc15", "label": "PLAN"},       # yellow
     "act": {"bg": "#083344", "text": "#22d3ee", "label": "ACT"},         # cyan
     "reflect": {"bg": "#2e1065", "text": "#a78bfa", "label": "REFLECT"}, # violet
@@ -63,7 +65,7 @@ def _detect_cycle_type(phase_names: list[str]) -> str:
     Looks for keywords like 'acquire', 'research', 'analysis', 'introspection'
     in the phase names. Returns the highest-priority match or 'NORMAL'.
     """
-    priority = ["INTROSPECTION", "ANALYSIS", "RESEARCH", "ACQUIRE"]
+    priority = ["EVOLVE", "INTROSPECTION", "ANALYSIS", "RESEARCH", "ACQUIRE"]
     detected = set()
     for name in phase_names:
         lower = name.lower()

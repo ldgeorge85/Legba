@@ -147,6 +147,46 @@ services:
     profiles:
       - dashboards
 
+  # --- Ingestion Service ---
+  # Deterministic source fetcher. No LLM. Runs continuously,
+  # fetching sources on their configured intervals.
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: docker/ingestion.Dockerfile
+    env_file: .env
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      NATS_URL: nats://nats:4222
+      INGESTION_CHECK_INTERVAL: "30"
+      INGESTION_MAX_WORKERS: "4"
+      INGESTION_LOG_LEVEL: "INFO"
+    ports:
+      - "8600:8600"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8600/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
   # --- Operator Console UI ---
   # Read-only web interface for inspecting system state.
   # Access via SSH tunnel: ssh -L 8501:localhost:8501

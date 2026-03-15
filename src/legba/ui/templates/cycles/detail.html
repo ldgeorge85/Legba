@@ -11,7 +11,9 @@
   <div class="flex items-center gap-4">
     <h1 class="text-2xl font-bold text-gray-100 font-mono">Cycle #{{ cycle_number }}</h1>
     {% set ct = cycle_type | default('NORMAL') %}
-    {% if ct == 'INTROSPECTION' %}
+    {% if ct == 'EVOLVE' %}
+      <span class="badge badge-orange">EVOLVE</span>
+    {% elif ct == 'INTROSPECTION' %}
       <span class="badge badge-purple">INTROSPECTION</span>
     {% elif ct == 'ANALYSIS' %}
       <span class="badge badge-blue">ANALYSIS</span>

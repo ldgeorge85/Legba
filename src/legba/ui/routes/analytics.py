@@ -207,6 +207,62 @@ async def source_health(request: Request):
         return JSONResponse([])
 
 
+@router.get("/ingestion-log")
+async def ingestion_log(request: Request, limit: int = Query(default=20, ge=1, le=100)):
+    """Recent ingestion service fetch activity."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return JSONResponse([])
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            # Check if ingestion_log table exists
+            exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'ingestion_log')"
+            )
+            if not exists:
+                return JSONResponse([])
+
+            rows = await conn.fetch(
+                """
+                SELECT
+                    source_name,
+                    status,
+                    events_fetched,
+                    events_stored,
+                    events_deduped,
+                    error_message,
+                    duration_ms,
+                    fetch_started_at,
+                    fetch_completed_at
+                FROM ingestion_log
+                ORDER BY fetch_started_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+
+        result = [
+            {
+                "source_name": row["source_name"],
+                "status": row["status"],
+                "events_fetched": row["events_fetched"],
+                "events_stored": row["events_stored"],
+                "events_deduped": row["events_deduped"],
+                "error": row["error_message"],
+                "duration_ms": row["duration_ms"],
+                "started_at": row["fetch_started_at"].isoformat() if row["fetch_started_at"] else None,
+                "completed_at": row["fetch_completed_at"].isoformat() if row["fetch_completed_at"] else None,
+            }
+            for row in rows
+        ]
+        return JSONResponse(result)
+
+    except Exception as exc:
+        logger.warning("ingestion-log query failed: %s", exc)
+        return JSONResponse([])
+
+
 @router.get("/fact-distribution")
 async def fact_distribution(request: Request):
     """Fact counts by confidence bucket and top predicates."""

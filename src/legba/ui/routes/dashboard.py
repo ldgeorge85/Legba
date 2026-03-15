@@ -38,6 +38,24 @@ async def _fetch_stats(request: Request) -> dict:
         stores.count_watchlist(),
         stores.registers.get_int("last_ingestion_cycle", 0),
     )
+
+    # Ingestion service status from Redis
+    ingestion = {"running": False, "events_1h": 0, "events_24h": 0, "errors_1h": 0}
+    try:
+        redis = stores.registers._redis
+        heartbeat = await redis.get("legba:ingest:heartbeat")
+        if heartbeat:
+            ingestion["running"] = True
+            ingestion["heartbeat"] = heartbeat
+            ev1h = await redis.get("legba:ingest:events_1h")
+            ev24h = await redis.get("legba:ingest:events_24h")
+            err1h = await redis.get("legba:ingest:errors_1h")
+            ingestion["events_1h"] = int(ev1h) if ev1h else 0
+            ingestion["events_24h"] = int(ev24h) if ev24h else 0
+            ingestion["errors_1h"] = int(err1h) if err1h else 0
+    except Exception:
+        pass
+
     return {
         "cycle_number": cycle_number,
         "entity_count": entity_count,
@@ -49,6 +67,7 @@ async def _fetch_stats(request: Request) -> dict:
         "situation_count": situation_count,
         "watchlist_count": watchlist_count,
         "last_ingestion_cycle": last_ingestion_cycle,
+        "ingestion": ingestion,
     }
 
 

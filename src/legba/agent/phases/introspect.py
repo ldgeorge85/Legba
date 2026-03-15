@@ -190,6 +190,20 @@ class IntrospectMixin:
             if not entity_profiles_text:
                 entity_profiles_text = f"({entity_count} entities in graph, but no detailed profiles with summaries available)"
 
+            # --- Get previous report for evolution/comparison ---
+            last_report = await self.memory.registers.get_json("latest_report") or {}
+            last_report_content = last_report.get("content", "")
+            last_report_cycle = last_report.get("cycle", 0)
+            # Extract executive summary (first ~1500 chars after "## Executive Summary")
+            previous_assessment = ""
+            if last_report_content:
+                idx = last_report_content.find("## Executive Summary")
+                if idx >= 0:
+                    end_idx = last_report_content.find("\n## ", idx + 20)
+                    previous_assessment = last_report_content[idx:end_idx if end_idx > 0 else idx + 1500].strip()
+                if not previous_assessment:
+                    previous_assessment = last_report_content[:1500]
+
             # --- Recent events with full detail ---
             recent_events = ""
             try:
@@ -202,6 +216,8 @@ class IntrospectMixin:
                     )
                     if events:
                         lines = []
+                        if last_report_cycle > 0:
+                            lines.append(f"(Events since last report at cycle {last_report_cycle})")
                         for ev in events:
                             src = ev.get("_source", ev)
                             title = src.get("title", "untitled")
@@ -270,6 +286,11 @@ class IntrospectMixin:
             journal_data = await self.memory.registers.get_json(self._JOURNAL_KEY) or {}
             narrative = journal_data.get("consolidation", "")
 
+            # Append previous assessment for report evolution/comparison
+            narrative_with_prev = narrative
+            if previous_assessment:
+                narrative_with_prev += f"\n\n## YOUR PREVIOUS ASSESSMENT (cycle {last_report_cycle})\n{previous_assessment}\n\nCRITICAL: Focus on what has CHANGED since cycle {last_report_cycle}. Do not repeat the same analysis."
+
             report_messages = self.assembler.assemble_analysis_report_prompt(
                 cycle_number=self.state.cycle_number,
                 graph_summary=graph_summary,
@@ -278,7 +299,7 @@ class IntrospectMixin:
                 recent_events=recent_events,
                 entity_count=entity_count,
                 coverage_regions=coverage_regions,
-                narrative=narrative,
+                narrative=narrative_with_prev,
             )
 
             response = await self.llm.complete(

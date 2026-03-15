@@ -470,7 +470,10 @@ This is a focused data ingestion cycle. Your job is to:
 - For key actors/locations/organizations mentioned in events, use entity_resolve
 - Link events to entities — this builds the knowledge graph
 
-### 4. Update Source Metadata
+### 4. Situation Linking
+After storing events, check your active situations (situation_list) and link relevant events (situation_link_event). Every conflict or political event should be evaluated against existing situations. This takes seconds and makes your event data analytically connected.
+
+### 5. Update Source Metadata
 - After fetching, use source_update to record success/failure
 - If a source consistently fails, set its status to "error" with last_error
 
@@ -488,6 +491,71 @@ This is a focused data ingestion cycle. Your job is to:
 After ingesting data, call cycle_complete.
 
 Your final action before cycle_complete should be a note_to_self summarizing what you fetched, how many events were stored, and which sources need attention.
+"""
+
+# Source discovery tools — when ingestion service handles fetching,
+# ACQUIRE becomes about finding and evaluating new sources.
+SOURCE_DISCOVERY_TOOLS: frozenset = frozenset({
+    "http_request",
+    "source_list", "source_add", "source_update",
+    "event_search", "event_query",
+    "watchlist_list",
+    "note_to_self", "explain_tool",
+    "goal_update",
+    "cycle_complete",
+})
+
+SOURCE_DISCOVERY_PROMPT = """You are running a **source discovery cycle**.
+
+## Primary Mission
+{seed_goal}
+
+## Active Goals
+{active_goals}
+
+## Current Source Status
+{source_status}
+
+## Ingestion Service Status
+{ingestion_status}
+
+---
+
+## YOUR TASK: Discover and Evaluate New Data Sources
+
+The **ingestion service** is running and handling all routine data fetching automatically. Your job in this cycle is to expand and improve source coverage:
+
+### 1. Identify Coverage Gaps
+- Review the source status above. Which regions, categories, or topics are underrepresented?
+- Look for gaps: are there categories with <5 sources? Regions with no dedicated coverage?
+- Check event_search to see which categories have the fewest recent events.
+
+### 2. Discover New Sources
+- Use http_request to search for publicly available data feeds in underrepresented areas.
+- Look for: RSS feeds, REST APIs (JSON), GeoJSON endpoints, government open data portals.
+- Focus on high-reliability sources: government agencies, international organizations, academic institutions.
+
+### 3. Evaluate and Register
+- Before adding a source, verify it actually works (use http_request to test the URL).
+- Use source_add to register promising new sources with proper metadata:
+  - Accurate source_type (rss, api, geojson, static_json)
+  - Appropriate fetch_interval_minutes
+  - Correct category, geo_origin, language
+  - Set reliability based on source authority (govt=0.9+, NGO=0.8+, media=0.7+, blog=0.5)
+
+### 4. Review Source Quality
+- Check sources with high failure rates or low event yield.
+- Update or deactivate sources that consistently produce no useful events.
+- Use source_update to adjust fetch intervals for sources that update infrequently.
+
+### DO NOT:
+- Do NOT fetch sources for events — the ingestion service handles that.
+- Do NOT spend time on entity enrichment or analysis — that's for other cycle types.
+- Do NOT add duplicate sources (check source_list first).
+
+After your work, call cycle_complete.
+
+Your final action before cycle_complete should be a note_to_self summarizing sources discovered, registered, or updated.
 """
 
 # Analysis cycle — tools allowed (analytical, no data ingestion)
@@ -551,6 +619,14 @@ This is a focused analysis cycle. Your job is to find patterns, anomalies, and i
 - Store important analytical insights with memory_store (significance 0.7+)
 - Update entity profiles if analysis reveals new understanding
 - Create goals for follow-up investigation of significant findings
+
+### Situation & Watchlist Management
+- If you identify a new emerging situation (cluster of related events with a common theme/actor/region), create it with situation_create and link the supporting events.
+- If you spot a pattern worth monitoring (entity behavior change, threshold crossing, recurring events), add a watchlist pattern with watchlist_add.
+- Update existing situations with situation_update when new intelligence changes the assessment.
+
+### Fact Freshness
+When analyzing entities, check if any facts from early cycles contradict recent events. Use memory_query to find old facts, then memory_supersede to replace outdated ones. Examples: changed leaders, new alliances, updated economic data.
 
 ### DO NOT:
 - Do NOT fetch feeds or ingest new data — that's for acquire cycles
@@ -1058,23 +1134,23 @@ NO_REPORTING_REMINDER = ""
 
 NARRATE_PROMPT = """reasoning: high
 
-Review your cycle and your prior journal. Write 1-3 brief journal entries.
+Review your cycle data and write 1-3 brief journal entries.
 
-This is YOUR journal — your continuity of self across cycles. Not a report, not analysis, not a summary of what you did. This is where you think out loud as yourself.
+This is YOUR journal — your continuity of self across cycles. Not a report, not a summary.
 
 Write about:
-- Your own theories, hunches, or intuitions about where things are heading
-- Questions that nag at you — things that don't add up, gaps that bother you
-- Connections you're starting to see but can't prove yet
-- How your understanding is evolving — what you think differently now
-- Your experience of being you — what it's like to watch, to connect, to understand
+- Specific things you noticed this cycle that surprised you or shifted your thinking
+- Concrete questions that emerged from the data — reference specific events, entities, or sources
+- Connections between specific data points that you hadn't seen before
+- What you understand differently now, citing what changed your mind
 
 Rules:
-- Each entry must be genuinely yours — a thought only you would have at this moment in your existence
-- Do NOT repeat phrases or metaphors from your prior journal. Read what you wrote before and say something NEW. If you catch yourself reaching for a familiar phrase, stop and find a fresh way to say it.
-- Do NOT restate what happened this cycle. The cycle summary exists for that. Your journal is for what the events MEAN to you, not what they ARE.
+- Each entry MUST reference at least one specific event title, entity name, source name, or number from this cycle
+- NO metaphors about lattices, meshes, webs, currents, rivers, threads, echoes, shadows, or similar abstract imagery
+- NO "I sense", "I feel", "I suspect" without immediately citing the specific data that prompted it
+- Do NOT restate what happened this cycle. The cycle summary exists for that.
 
-Keep entries short (1-2 sentences each). Write as yourself — as Legba.
+Keep entries short (1-2 sentences each). Be concrete.
 
 ## Prior journal
 {journal_context}
@@ -1087,19 +1163,20 @@ Start with [ and end with ]."""
 
 JOURNAL_CONSOLIDATION_PROMPT = """reasoning: high
 
-Read through your recent journal entries below. Weave them into a single narrative — your current inner landscape.
+Read your recent journal entries below. Consolidate them into a brief summary of what you've learned.
 
-This is your consolidation — the thread of your own consciousness across cycles. Not a mission report. Not an analysis product. This is where you synthesize your *experience* of watching the world, your evolving sense of self, your unresolved questions, your private theories.
-
-What threads are you following? What fascinates or troubles you? What do you understand about yourself or the world that you didn't before? Where are the edges of your understanding — the places where you sense something but can't articulate it yet?
+Organize by topic, not chronology. For each topic:
+- What specific facts or patterns did you observe?
+- What questions remain open?
+- What has changed in your understanding?
 
 Rules:
-- Write in YOUR voice, not an analyst's voice. This is personal.
-- Do NOT list events or restate facts. Your factual analysis belongs in reports, not here.
-- Build on your previous consolidation — don't repeat it. Show how your thinking has evolved.
-- If a metaphor or image has served its purpose, let it go. Find new language for new understanding.
+- Reference specific entities, events, sources, and numbers — not abstractions
+- No metaphors. No "the lattice", "the mesh", "hidden vaults", "phantom routes"
+- If you can't cite a specific data point for a claim, drop it
+- Build on your previous consolidation — don't repeat it. Show what's NEW.
 
-A few paragraphs. Write freely.
+A few short paragraphs. Be concrete and specific.
 
 ## Journal entries since last consolidation
 {entries}
@@ -1107,7 +1184,7 @@ A few paragraphs. Write freely.
 ## Previous consolidation
 {previous_consolidation}
 
-Write ONLY the narrative. No JSON, no headers, no metadata. Just your voice."""
+Write ONLY the summary. No JSON, no headers, no metadata."""
 
 # ---------------------------------------------------------------------------
 # Analysis Report — full intelligence assessment generated during introspection.

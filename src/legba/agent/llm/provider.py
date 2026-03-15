@@ -171,7 +171,29 @@ class VLLMProvider:
                 raise LLMApiError(response.status_code, body, len(messages), total_chars)
 
             data = response.json()
-            choice = data["choices"][0]
+            choices = data.get("choices", [])
+
+            # Handle vLLM reasoning mode multi-message output.
+            # Reasoning mode produces N output messages (reasoning + final).
+            # Normally 2, but occasionally >2 which previously caused errors.
+            if len(choices) < 1:
+                raise LLMApiError(
+                    response.status_code,
+                    f"Expected at least 1 output choice, but got {len(choices)}",
+                    len(messages), total_chars,
+                )
+            if len(choices) > 1:
+                log.warning("Got %d output choices instead of 1, concatenating extras", len(choices))
+                combined_content = "\n".join(
+                    c.get("message", {}).get("content", "") or "" for c in choices[1:]
+                )
+                # Merge extra choices content into the first choice
+                first_content = choices[0].get("message", {}).get("content", "") or ""
+                choices = [
+                    {**choices[0], "message": {**choices[0].get("message", {}), "content": first_content + "\n" + combined_content}}
+                ]
+
+            choice = choices[0]
             raw_content = choice.get("message", {}).get("content", "") or ""
 
             # Strip any Harmony markers the model may emit in its output

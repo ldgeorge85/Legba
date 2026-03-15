@@ -131,6 +131,25 @@ class ReflectMixin:
 
                 await self.memory.store_fact(fact, embedding=embedding)
 
+                # Auto-supersede conflicting facts
+                try:
+                    if fact.subject and fact.predicate:
+                        existing = await self.memory.structured.query_facts(
+                            subject=fact.subject, predicate=fact.predicate
+                        )
+                        for old in existing:
+                            if (old.id != fact.id
+                                    and str(old.value) != str(fact.value)
+                                    and not old.superseded_by):
+                                await self.memory.structured.supersede_fact(old.id, fact)
+                                self.logger.log("fact_auto_superseded",
+                                    subject=fact.subject,
+                                    predicate=fact.predicate,
+                                    old_value=str(old.value)[:100],
+                                    new_value=str(fact.value)[:100])
+                except Exception:
+                    pass  # Best-effort, don't break reflect
+
             except Exception as e:
                 self.logger.log_error(f"Failed to store reflection fact: {e}")
 
