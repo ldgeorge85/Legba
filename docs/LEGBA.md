@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Continuously operating autonomous intelligence platform.*
-*Last updated: 2026-03-12 | EVOLVE cycle, report grounding, source rotation, entity freshness*
+*Last updated: 2026-03-15 | Ingestion service, data quality hardening, batch entity linking*
 
 ---
 
@@ -13,7 +13,7 @@ The operator provides a seed goal. The agent then operates indefinitely: ingesti
 
 **Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events, producing structured briefings, detecting patterns, and flagging significant developments.
 
-**Key numbers:** 100+ Python source files, 241 tests, **58 built-in tools** across 17 builtin modules, 7 platform services, 10 Docker containers.
+**Key numbers:** 100+ Python source files, 241 tests, **58 built-in tools** across 17 builtin modules, 8 platform services, 11 Docker containers.
 
 ---
 
@@ -47,6 +47,15 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - OpenSearch :9200    -- Bulk data, full-text search, aggregations
 |   |   - OpenSearch Audit :9201 -- Audit logs (agent cannot access)
 |   |   - Airflow :8080       -- Scheduled pipelines, DAG orchestration
+|   |
+|   +-- Ingestion Service :8600
+|   |   - Standalone deterministic source fetcher
+|   |   - 3-tier dedup (GUID, source_url, Jaccard title similarity)
+|   |   - 15 source-specific normalizers (RSS, GeoJSON, NWS, USGS, GDELT, etc.)
+|   |   - Auto entity linking (title → entity profile matching)
+|   |   - Batch entity linker (periodic, word-boundary regex, conservative)
+|   |   - Source health tracking (success/failure counters, exponential backoff)
+|   |   - NATS publishing for real-time event notifications
 |   |
 |   +-- Operator Console v1 :8501  -- Web UI + consultation (FastAPI + htmx)
 |   +-- Operator Console v2 :8503  -- Multi-panel workstation (React + Dockview + Sigma.js + MapLibre)
@@ -163,6 +172,7 @@ The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) 
    e. ACQUIRE (every 3)        -- dedicated source fetching, event ingestion, entity resolution
    f. NORMAL                   -- goal-directed PLAN → REASON+ACT
 4. REFLECT   -- LLM evaluates: significance (calibrated 0-1 scale), facts learned, entities, goal progress
+              -- Facts are auto-superseded when a new fact with the same subject+predicate but different value is stored
 5. NARRATE   -- LLM writes 1-3 journal entries + extracts investigation leads
 6. PERSIST   -- Store episode, track ingestion, auto-complete goals, promote memories, heartbeat, exit
 ```
@@ -305,6 +315,8 @@ Reports are substantial documents (1000-3000+ words). Stored in Redis (`report_h
 - Coverage regions from graph Country nodes
 
 The prompt explicitly forbids fabrication: the LLM may only reference entities, leaders, events, and relationships present in the injected data. Journal narrative is included but clearly labeled as "experiential perspective for voice/continuity only — not a source of facts."
+
+Reports now include the previous report's executive summary for continuity — the agent must focus on what has CHANGED since the last assessment rather than repeating the same analysis.
 
 - **UI:** `/reports` page with list + detail views, full markdown rendering.
 
@@ -563,6 +575,32 @@ event_store("Russia launches missile at Ukraine")
   > entity_resolve(name="Ukraine", event_id=..., role="target")
       > creates EventEntityLink(event_id, entity_id, role="target")
 ```
+
+### Ingestion Service (Standalone)
+
+The ingestion service (`src/legba/ingestion/`) runs as a persistent container alongside the agent, handling automated data acquisition:
+
+**Architecture:**
+- Scheduler polls `sources` table for feeds due for fetching (based on `next_fetch_at`)
+- Concurrent fetching (configurable max workers, default 4)
+- Source-specific normalizers for 15+ feed types (RSS, Atom, JSON APIs, GeoJSON, CSV)
+- 3-tier dedup: GUID exact → source_url exact → adaptive Jaccard title similarity
+- Events stored to both Postgres and OpenSearch
+- Entity auto-linking: matches entity names in event titles against `entity_profiles.canonical_name`
+- Batch entity linker: runs every ~30 minutes, processes up to 200 unlinked events using word-boundary regex matching
+- Source health: tracks success/failure counts, exponential backoff on failures, auto-error at 10 consecutive failures
+
+**Key normalizers:**
+- NWS weather alerts (area-specific titles, alert ID as source_url)
+- USGS earthquakes (magnitude + place in title)
+- GDELT (country extraction from sourceCountry)
+- Event Registry (topic mapping)
+- NASA EONET (natural events)
+- Generic RSS/Atom (feedparser-based)
+
+**Category inference:** Keyword-based regex classification into 9 categories (conflict, political, disaster, health, economic, technology, environment, social, other). Source-level category overrides take priority.
+
+**Relationship to agent:** The agent's ACQUIRE cycles are aware of the ingestion service (auto-detected via Redis heartbeat). When active, ACQUIRE shifts to source discovery and management rather than manual fetching. The agent still handles entity resolution, fact extraction, and analytical processing that requires LLM judgment.
 
 ---
 
@@ -882,6 +920,17 @@ legba/
 |   |   +-- prompt/
 |   |       +-- templates.py         -- All prompt templates (includes information layers framing)
 |   |       +-- assembler.py         -- Context assembly + token budget + world briefing injection
+|   +-- ingestion/
+|   |   +-- __init__.py
+|   |   +-- __main__.py          -- Entry point
+|   |   +-- config.py            -- IngestionConfig from env
+|   |   +-- service.py           -- Main service loop, tick scheduler
+|   |   +-- fetcher.py           -- RSS/JSON/GeoJSON/CSV fetching + parsing
+|   |   +-- normalizer.py        -- Event normalization, category inference
+|   |   +-- source_normalizers.py -- 15 source-specific normalizers
+|   |   +-- dedup.py             -- 3-tier dedup engine (GUID, URL, Jaccard)
+|   |   +-- storage.py           -- Postgres/OpenSearch storage + entity auto-linking
+|   |   +-- scheduler.py         -- Source scheduling (next_fetch_at management)
 |   +-- supervisor/
 |   |   +-- main.py, lifecycle.py, heartbeat.py, comms.py, cli.py, audit.py, drain.py
 |   +-- ui/
