@@ -375,7 +375,14 @@ For each target entity:
 - Verify existing relationships — if research contradicts a stored relationship, update it
 - Use temporal markers (since/until) when research reveals when relationships started or ended
 
-### 5. Resolve Data Conflicts
+### 5. Process Unlinked Events
+Your event store has thousands of events that aren't linked to any entities. These are analytically invisible. Spend part of each research cycle linking them:
+- Use event_search to find recent high-significance events that have no entity links
+- For each, call entity_resolve for the key actors/countries mentioned in the title
+- Focus on events in your active situations — they're the highest value to link
+- Aim to link at least 10-15 events per research cycle
+
+### 6. Resolve Data Conflicts
 - If research reveals that stored facts are wrong, use memory_supersede to correct them
 - If two entities turn out to be the same thing (variant names), note this for operator cleanup
 - If graph relationships contradict researched facts, fix the graph
@@ -466,9 +473,12 @@ This is a focused data ingestion cycle. Your job is to:
 - Set significance based on relevance to your mission (0.3-0.8 range; reserve >0.8 for truly major events)
 - Always include source_url for dedup — do NOT re-store events you've already ingested
 
-### 3. Resolve Entities
-- For key actors/locations/organizations mentioned in events, use entity_resolve
-- Link events to entities — this builds the knowledge graph
+### 3. Resolve Entities (CRITICAL — do not skip)
+After storing events, you MUST resolve the key entities mentioned in them:
+- For each batch of events you store, pick the 3-5 most important ones and call entity_resolve for the main actors, countries, and organizations mentioned in the title
+- An event without entity links is analytically invisible — it cannot be found through entity or graph queries, and it won't appear in reports
+- Focus on entities already in your graph first (countries, major actors), then new entities if they appear in multiple events
+- Example: after storing "Iran strikes Israeli oil tanker in Strait of Hormuz", resolve: Iran, Israel, Strait of Hormuz
 
 ### 4. Situation Linking
 After storing events, check your active situations (situation_list) and link relevant events (situation_link_event). Every conflict or political event should be evaluated against existing situations. This takes seconds and makes your event data analytically connected.
@@ -615,7 +625,14 @@ This is a focused analysis cycle. Your job is to find patterns, anomalies, and i
 - Are there unexpected patterns in event timing or clustering?
 - What does anomaly_detect flag? Follow up on every anomaly — they're often the most interesting findings.
 
-### 4. Synthesize Findings
+### 4. Extract Facts from Events
+Your knowledge base has thousands of events but relatively few facts. During analysis, extract key assertions:
+- For major events, store the core facts: who did what to whom, what changed, what was decided
+- Use memory_store for dynamic facts (e.g., "Iran struck Israeli oil tanker on 2026-03-14", "US deployed 5000 marines to Middle East")
+- These are ANALYTICAL facts from events, not static geography — focus on what happened and what it means
+- Aim to extract 10-20 facts per analysis cycle from the most significant recent events
+
+### 5. Synthesize Findings
 - Store important analytical insights with memory_store (significance 0.7+)
 - Update entity profiles if analysis reveals new understanding
 - Create goals for follow-up investigation of significant findings

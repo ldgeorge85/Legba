@@ -202,6 +202,15 @@ class IngestionService:
         if self._tick_count % 20 == 0:  # Every ~10 minutes
             await self._dedup.load_cache()
 
+        # Batch entity linking — process unlinked events every ~30 minutes
+        if self._tick_count % 60 == 30:
+            try:
+                linked = await self._storage.batch_link_entities(limit=200)
+                if linked:
+                    logger.info("Batch linker: %d entity links created", linked)
+            except Exception as e:
+                logger.warning("Batch linker failed: %s", e)
+
     async def _process_source(self, source: ScheduledSource) -> None:
         """Fetch, dedup, store events from a single source."""
         async with self._fetch_sem:

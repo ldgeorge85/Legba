@@ -242,6 +242,97 @@ class StorageLayer:
         return linked
 
     # ------------------------------------------------------------------
+    # Batch entity linker — periodic post-processing of unlinked events
+    # ------------------------------------------------------------------
+
+    async def batch_link_entities(self, limit: int = 200) -> int:
+        """Link recently unlinked events to known entities via title matching.
+
+        Runs periodically (called from service tick). Conservative matching:
+        - Only matches entity names >= 5 chars (avoids 'US' matching 'bus')
+        - Uses word-boundary matching via regex (not substring)
+        - Only high-confidence entity types (country, person, org, armed_group)
+        - Caps at 5 links per event to prevent noise
+        - Confidence 0.6 for title matches (lower than agent-created links at 0.8)
+
+        Returns total number of new links created.
+        """
+        total_linked = 0
+        try:
+            # Get recent events with zero entity links
+            unlinked = await self._pool.fetch(
+                """
+                SELECT e.id, e.title
+                FROM events e
+                LEFT JOIN event_entity_links eel ON e.id = eel.event_id
+                WHERE eel.event_id IS NULL
+                  AND e.title IS NOT NULL
+                  AND length(e.title) >= 10
+                  AND e.created_at > NOW() - INTERVAL '48 hours'
+                ORDER BY e.created_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+
+            if not unlinked:
+                return 0
+
+            # Load entity names once (cached for the batch)
+            entities = await self._pool.fetch(
+                "SELECT id, canonical_name FROM entity_profiles "
+                "WHERE length(canonical_name) >= 5 "
+                "AND entity_type IN ('country', 'person', 'organization', "
+                "    'armed_group', 'international_org') "
+                "ORDER BY length(canonical_name) DESC"
+            )
+
+            if not entities:
+                return 0
+
+            # Build word-boundary patterns for safe matching
+            import re
+            patterns = []
+            for ent in entities:
+                name = ent["canonical_name"]
+                try:
+                    pat = re.compile(r'\b' + re.escape(name) + r'\b', re.IGNORECASE)
+                    patterns.append((ent["id"], name, pat))
+                except re.error:
+                    continue
+
+            # Match each unlinked event
+            for ev in unlinked:
+                title = ev["title"]
+                links_for_event = 0
+                for ent_id, ent_name, pat in patterns:
+                    if pat.search(title):
+                        try:
+                            await self._pool.execute(
+                                "INSERT INTO event_entity_links "
+                                "(event_id, entity_id, role, confidence) "
+                                "VALUES ($1, $2, 'mentioned', 0.6) "
+                                "ON CONFLICT DO NOTHING",
+                                ev["id"], ent_id,
+                            )
+                            links_for_event += 1
+                            total_linked += 1
+                        except Exception:
+                            pass
+                    if links_for_event >= 5:
+                        break
+
+            if total_linked > 0:
+                logger.info(
+                    "Batch entity linker: %d links created for %d events",
+                    total_linked, len(unlinked),
+                )
+        except Exception as e:
+            logger.warning("Batch entity linker error: %s", e)
+
+        return total_linked
+
+    # ------------------------------------------------------------------
     # Source tracking
     # ------------------------------------------------------------------
 
