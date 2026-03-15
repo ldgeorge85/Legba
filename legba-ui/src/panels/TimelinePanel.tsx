@@ -39,11 +39,29 @@ export function TimelinePanel() {
 
       if (cancelled || !containerRef.current) return
 
-      // Build items — filter out any events with invalid/null timestamps
+      // Build items — use timestamp, fall back to created_at, filter invalid
+      const now = Date.now()
+      const sevenDaysAgo = now - 1000 * 60 * 60 * 24 * 7
+      const oneDayAhead = now + 1000 * 60 * 60 * 24
+
       const validEvents = data!.items.filter((ev) => {
-        if (!ev.timestamp) return false
-        const d = new Date(ev.timestamp)
+        const raw = ev.timestamp ?? ev.created_at ?? ''
+        if (!raw) return false
+        const d = new Date(raw)
         return !isNaN(d.getTime())
+      }).map((ev) => {
+        let ts = new Date(ev.timestamp ?? ev.created_at ?? '')
+        // Clamp outliers: if timestamp is in the future or very old, use created_at instead
+        if (ts.getTime() > oneDayAhead || ts.getTime() < sevenDaysAgo) {
+          const createdStr = ev.created_at
+          if (createdStr) {
+            const created = new Date(createdStr)
+            if (!isNaN(created.getTime()) && created.getTime() <= oneDayAhead) {
+              ts = created
+            }
+          }
+        }
+        return { ...ev, _ts: ts }
       })
 
       if (validEvents.length === 0) return
@@ -52,35 +70,44 @@ export function TimelinePanel() {
         validEvents.map((ev) => ({
             id: ev.event_id,
             content: ev.title.length > 60 ? ev.title.slice(0, 57) + '...' : ev.title,
-            start: new Date(ev.timestamp),
-            title: ev.title,
+            start: ev._ts,
+            title: `${ev.title}\n${ev._ts.toLocaleString()}`,
+            className: `cat-${ev.category || 'other'}`,
             style: `background-color: ${CATEGORY_COLORS[ev.category] ?? CATEGORY_COLORS.other}22; border-color: ${CATEGORY_COLORS[ev.category] ?? CATEGORY_COLORS.other}; color: #e2e8f0;`,
           })),
       ) as DataSet<{ id: string; content: string; start: Date; title: string; style: string }>
 
-      // Compute explicit time bounds from data to prevent vis-timeline
-      // from drawing excessive grid lines when it can't determine range
-      const timestamps = validEvents.map((ev) => new Date(ev.timestamp).getTime())
-      const minTime = Math.min(...timestamps)
-      const maxTime = Math.max(...timestamps)
-      const range = maxTime - minTime
-      // Add 5% padding on each side, minimum 1 hour
-      const padding = Math.max(range * 0.05, 1000 * 60 * 60)
+      // Compute time bounds — clamp to reasonable range (ignore outliers)
+      const timestamps = validEvents.map((ev) => ev._ts.getTime())
+      const minTime = Math.max(Math.min(...timestamps), sevenDaysAgo)
+      const maxTime = Math.min(Math.max(...timestamps), oneDayAhead)
+
+      // Initial view: show last 48 hours
+      const twoDays = 1000 * 60 * 60 * 48
+      const viewStart = now - twoDays
+      const viewEnd = now + 1000 * 60 * 60  // 1 hour into future
+
+      // Data bounds with padding
+      const dataRange = maxTime - minTime
+      const boundPadding = Math.max(dataRange * 0.1, 1000 * 60 * 60 * 24)
+
+      // vis-timeline needs a concrete pixel height, not percentages
+      const containerHeight = containerRef.current!.clientHeight || 400
 
       const options: TimelineOptions = {
-        height: '100%',
+        height: containerHeight,
         margin: { item: 4 },
         orientation: 'top',
         showCurrentTime: true,
-        start: new Date(minTime - padding),
-        end: new Date(maxTime + padding),
-        min: new Date(minTime - padding * 4),
-        max: new Date(maxTime + padding * 4),
-        zoomMin: 1000 * 60 * 60,        // 1 hour
-        zoomMax: 1000 * 60 * 60 * 24 * 90, // 90 days
+        start: new Date(viewStart),
+        end: new Date(viewEnd),
+        min: new Date(minTime - boundPadding),
+        max: new Date(maxTime + boundPadding),
+        zoomMin: 1000 * 60 * 60,            // 1 hour
+        zoomMax: 1000 * 60 * 60 * 24 * 365, // 1 year
         stack: true,
         verticalScroll: true,
-        maxHeight: '100%',
+        maxHeight: containerHeight,
       }
 
       // Kill previous instance
@@ -147,7 +174,7 @@ export function TimelinePanel() {
       <div className="flex items-center gap-2 p-2 border-b border-border shrink-0 text-xs text-muted-foreground">
         <span>
           Timeline
-          {data && ` — ${data.items.filter((e) => e.timestamp && !isNaN(new Date(e.timestamp).getTime())).length} events`}
+          {data && ` — ${data.items.length} events (${data.total} total)`}
         </span>
         <div className="ml-auto flex items-center gap-1">
           {page > 0 && (

@@ -1,5 +1,12 @@
 // API response types — mirrors backend schemas
 
+export interface IngestionStatus {
+  active: boolean
+  events_1h: number
+  events_24h: number
+  errors_1h: number
+}
+
 export interface DashboardStats {
   entities: number
   events: number
@@ -13,6 +20,7 @@ export interface DashboardStats {
   agent_status: string
   recent_events: EventSummary[]
   active_situations: SituationSummary[]
+  ingestion?: IngestionStatus
 }
 
 export interface EventSummary {
@@ -22,6 +30,7 @@ export interface EventSummary {
   confidence: number
   timestamp: string
   source_name: string | null
+  created_at?: string
 }
 
 export interface EventDetail extends EventSummary {
