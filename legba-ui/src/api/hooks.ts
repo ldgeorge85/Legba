@@ -113,7 +113,14 @@ export function useDeleteEvent() {
 
 // ── Entities ──
 
-export function useEntities(params: { offset?: number; limit?: number; type?: string; q?: string }) {
+export function useEntities(params: {
+  offset?: number
+  limit?: number
+  type?: string
+  q?: string
+  min_completeness?: number
+  created_after?: string
+}) {
   return useQuery({
     queryKey: ['entities', params],
     queryFn: () => {
@@ -122,6 +129,8 @@ export function useEntities(params: { offset?: number; limit?: number; type?: st
       if (params.limit) sp.set('limit', String(params.limit))
       if (params.type) sp.set('type', params.type)
       if (params.q) sp.set('q', params.q)
+      if (params.min_completeness != null) sp.set('min_completeness', String(params.min_completeness))
+      if (params.created_after) sp.set('created_after', params.created_after)
       return api.get<PaginatedResponse<EntitySummary>>(`/api/v2/entities?${sp}`)
     },
   })
@@ -279,7 +288,14 @@ export function useDeleteWatch() {
 
 // ── Facts ──
 
-export function useFacts(params: { offset?: number; limit?: number; q?: string; predicate?: string }) {
+export function useFacts(params: {
+  offset?: number
+  limit?: number
+  q?: string
+  predicate?: string
+  min_confidence?: number
+  subject?: string
+}) {
   return useQuery({
     queryKey: ['facts', params],
     queryFn: () => {
@@ -288,6 +304,8 @@ export function useFacts(params: { offset?: number; limit?: number; q?: string; 
       if (params.limit) sp.set('limit', String(params.limit))
       if (params.q) sp.set('q', params.q)
       if (params.predicate) sp.set('predicate', params.predicate)
+      if (params.min_confidence != null) sp.set('min_confidence', String(params.min_confidence))
+      if (params.subject) sp.set('subject', params.subject)
       return api.get<PaginatedResponse<Fact>>(`/api/v2/facts?${sp}`)
     },
   })

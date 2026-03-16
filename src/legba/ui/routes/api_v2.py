@@ -408,6 +408,8 @@ async def list_entities(
     limit: int = Query(default=50, le=200),
     type: str | None = None,
     q: str | None = None,
+    min_completeness: float | None = None,
+    created_after: str | None = None,
 ):
     stores = get_stores(request)
     from ...shared.schemas.entity_profiles import EntityProfile
@@ -424,6 +426,19 @@ async def list_entities(
         conditions.append(f"entity_type = ${idx}")
         params.append(type)
         idx += 1
+    if min_completeness is not None and min_completeness > 0:
+        conditions.append(f"completeness_score >= ${idx}")
+        params.append(min_completeness)
+        idx += 1
+    if created_after:
+        try:
+            dt = datetime.fromisoformat(created_after)
+        except ValueError:
+            dt = None
+        if dt:
+            conditions.append(f"created_at >= ${idx}")
+            params.append(dt)
+            idx += 1
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -1063,6 +1078,8 @@ async def list_facts(
     limit: int = Query(default=50, le=200),
     q: str | None = None,
     predicate: str | None = None,
+    min_confidence: float | None = None,
+    subject: str | None = None,
 ):
     stores = get_stores(request)
 
@@ -1077,6 +1094,14 @@ async def list_facts(
     if predicate:
         conditions.append(f"predicate = ${idx}")
         params.append(predicate)
+        idx += 1
+    if min_confidence is not None and min_confidence > 0:
+        conditions.append(f"confidence >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+    if subject:
+        conditions.append(f"LOWER(subject) LIKE LOWER(${idx})")
+        params.append(f"%{subject}%")
         idx += 1
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""

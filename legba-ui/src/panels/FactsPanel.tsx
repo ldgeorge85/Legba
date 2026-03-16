@@ -1,17 +1,59 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useFacts, useFactPredicates } from '@/api/hooks'
 import { api } from '@/api/client'
 import { TimeAgo } from '@/components/common/TimeAgo'
-import { Search, ChevronLeft, ChevronRight, X } from 'lucide-react'
+import {
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 50
+
+interface FactFilters {
+  predicate: string
+  minConfidence: number
+  subject: string
+}
+
+const DEFAULT_FILTERS: FactFilters = {
+  predicate: '',
+  minConfidence: 0,
+  subject: '',
+}
+
+function useDebounce<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
 
 export function FactsPanel() {
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
-  const [predicate, setPredicate] = useState('')
-  const { data, isLoading } = useFacts({ offset, limit: PAGE_SIZE, q: search || undefined, predicate: predicate || undefined })
+  const [filters, setFilters] = useState<FactFilters>(DEFAULT_FILTERS)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+
+  const debouncedSearch = useDebounce(search, 300)
+  const debouncedFilters = useDebounce(filters, 300)
+
+  const queryParams = {
+    offset,
+    limit: PAGE_SIZE,
+    q: debouncedSearch || undefined,
+    predicate: debouncedFilters.predicate || undefined,
+    min_confidence: debouncedFilters.minConfidence > 0 ? debouncedFilters.minConfidence : undefined,
+    subject: debouncedFilters.subject || undefined,
+  }
+
+  const { data, isLoading } = useFacts(queryParams)
   const { data: predicates } = useFactPredicates()
   const queryClient = useQueryClient()
   const deleteMutation = useMutation({
@@ -19,10 +61,57 @@ export function FactsPanel() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['facts'] }),
   })
 
+  // Count active filters
+  const activeFilterCount =
+    (filters.predicate ? 1 : 0) +
+    (filters.minConfidence > 0 ? 1 : 0) +
+    (filters.subject ? 1 : 0)
+
+  const clearFilters = useCallback(() => {
+    setFilters(DEFAULT_FILTERS)
+    setOffset(0)
+  }, [])
+
+  // Filter chips
+  const activeChips: { label: string; onRemove: () => void }[] = []
+  if (filters.predicate) {
+    activeChips.push({
+      label: `predicate: ${filters.predicate}`,
+      onRemove: () => { setFilters((f) => ({ ...f, predicate: '' })); setOffset(0) },
+    })
+  }
+  if (filters.minConfidence > 0) {
+    activeChips.push({
+      label: `conf >= ${Math.round(filters.minConfidence * 100)}%`,
+      onRemove: () => { setFilters((f) => ({ ...f, minConfidence: 0 })); setOffset(0) },
+    })
+  }
+  if (filters.subject) {
+    activeChips.push({
+      label: `subject: ${filters.subject}`,
+      onRemove: () => { setFilters((f) => ({ ...f, subject: '' })); setOffset(0) },
+    })
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div className="flex items-center gap-2 p-2 border-b border-border shrink-0">
+        <button
+          onClick={() => setFiltersOpen(!filtersOpen)}
+          className={cn(
+            'p-1.5 rounded border border-border hover:bg-secondary transition-colors relative',
+            filtersOpen && 'bg-primary/10 border-primary/40'
+          )}
+          title="Toggle filters"
+        >
+          <SlidersHorizontal size={14} />
+          {activeFilterCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-primary text-[9px] flex items-center justify-center text-primary-foreground font-bold">
+              {activeFilterCount}
+            </span>
+          )}
+        </button>
         <div className="relative flex-1">
           <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -33,19 +122,97 @@ export function FactsPanel() {
             className="w-full pl-7 pr-2 py-1 text-sm bg-secondary border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
-        <select
-          value={predicate}
-          onChange={(e) => { setPredicate(e.target.value); setOffset(0) }}
-          className="text-sm bg-secondary border border-border rounded px-2 py-1 focus:outline-none max-w-[180px]"
-        >
-          <option value="">All predicates</option>
-          {predicates?.map((p) => (
-            <option key={p.predicate} value={p.predicate}>
-              {p.predicate} ({p.count})
-            </option>
-          ))}
-        </select>
       </div>
+
+      {/* Filter bar */}
+      {filtersOpen && (
+        <div className="flex items-center gap-3 px-3 py-2 border-b border-border shrink-0 bg-card/50 flex-wrap">
+          {/* Predicate dropdown */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] text-muted-foreground whitespace-nowrap">Predicate</label>
+            <select
+              value={filters.predicate}
+              onChange={(e) => { setFilters((f) => ({ ...f, predicate: e.target.value })); setOffset(0) }}
+              className="text-xs bg-secondary border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary max-w-[180px]"
+            >
+              <option value="">All</option>
+              {predicates?.map((p) => (
+                <option key={p.predicate} value={p.predicate}>
+                  {p.predicate} ({p.count})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Subject search */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] text-muted-foreground whitespace-nowrap">Subject</label>
+            <input
+              type="text"
+              placeholder="Filter by subject..."
+              value={filters.subject}
+              onChange={(e) => { setFilters((f) => ({ ...f, subject: e.target.value })); setOffset(0) }}
+              className="text-xs bg-secondary border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary w-36"
+            />
+          </div>
+
+          {/* Confidence slider */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] text-muted-foreground whitespace-nowrap">Min confidence</label>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={filters.minConfidence}
+              onChange={(e) => {
+                setFilters((f) => ({ ...f, minConfidence: parseFloat(e.target.value) }))
+                setOffset(0)
+              }}
+              className="w-20 h-1.5 accent-primary cursor-pointer"
+            />
+            <span className="text-[10px] text-foreground font-mono tabular-nums w-7">
+              {Math.round(filters.minConfidence * 100)}%
+            </span>
+          </div>
+
+          {activeFilterCount > 0 && (
+            <button
+              onClick={clearFilters}
+              className="text-[10px] text-muted-foreground hover:text-foreground ml-auto"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Active filter chips (shown when filter bar is collapsed) */}
+      {activeChips.length > 0 && !filtersOpen && (
+        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border shrink-0 flex-wrap">
+          <span className="text-[10px] text-muted-foreground mr-1">Filters:</span>
+          {activeChips.map((chip) => (
+            <span
+              key={chip.label}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-primary/10 text-primary border border-primary/20 rounded"
+            >
+              {chip.label}
+              <button
+                onClick={chip.onRemove}
+                className="hover:text-destructive transition-colors"
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+          <button
+            onClick={clearFilters}
+            className="text-[10px] text-muted-foreground hover:text-foreground ml-1"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
@@ -55,7 +222,7 @@ export function FactsPanel() {
           <div className="p-4 text-sm text-muted-foreground">No facts found</div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-card border-b border-border">
+            <thead className="sticky top-0 bg-card border-b border-border z-10">
               <tr className="text-left text-xs text-muted-foreground">
                 <th className="px-3 py-2 font-medium">Subject</th>
                 <th className="px-3 py-2 font-medium">Predicate</th>
@@ -99,9 +266,12 @@ export function FactsPanel() {
       </div>
 
       {/* Pagination */}
-      {data && data.total > PAGE_SIZE && (
-        <div className="flex items-center justify-between px-3 py-1.5 border-t border-border text-xs text-muted-foreground shrink-0">
-          <span>{data.total} facts</span>
+      <div className="flex items-center justify-between px-3 py-1.5 border-t border-border text-xs text-muted-foreground shrink-0">
+        <span>
+          {data ? `${data.total} fact${data.total !== 1 ? 's' : ''}` : '--'}
+          {activeFilterCount > 0 && ' matching'}
+        </span>
+        {data && data.total > PAGE_SIZE && (
           <div className="flex items-center gap-1">
             <button
               disabled={offset === 0}
@@ -110,7 +280,9 @@ export function FactsPanel() {
             >
               <ChevronLeft size={14} />
             </button>
-            <span>{Math.floor(offset / PAGE_SIZE) + 1} / {Math.ceil(data.total / PAGE_SIZE)}</span>
+            <span>
+              {Math.floor(offset / PAGE_SIZE) + 1} / {Math.ceil(data.total / PAGE_SIZE)}
+            </span>
             <button
               disabled={offset + PAGE_SIZE >= data.total}
               onClick={() => setOffset(offset + PAGE_SIZE)}
@@ -119,8 +291,8 @@ export function FactsPanel() {
               <ChevronRight size={14} />
             </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
