@@ -50,14 +50,45 @@ docker exec legba-redis-1 redis-cli GET legba:cycle_number  # Current cycle
 ### Full Reset (wipe all data, fresh start)
 ```bash
 # 1. Back up volumes first (see Backups section)
+bash scripts/backup.sh
+
 # 2. Tear down everything
 docker compose -p legba down -v
+
 # 3. Clean any remaining volumes (compose sometimes leaves orphans)
 docker volume ls --format '{{.Name}}' | grep legba | xargs -r docker volume rm
-# 4. Rebuild and start
-docker compose -p legba build agent supervisor
+
+# 4. Rebuild and start all services
+docker compose -p legba build
 docker compose -p legba up -d
+
+# 5. Wait for services to be healthy (~30s)
+docker compose -p legba ps  # verify all show "healthy"
+
+# 6. Seed sources (RSS feeds, APIs — populates the sources table)
+docker compose -p legba exec postgres psql -U legba -d legba -c "SELECT 1"  # verify DB ready
+docker compose -p legba exec ui python3 /app/scripts/seed_sources.py
+
+# 7. Seed world knowledge (entities, facts, situations, watchlist, goals)
+docker compose -p legba exec ui python3 /app/scripts/seed_data.py
+# Seeds: 163 entities, 776 facts, 5 situations, 8 watchlist items, 5 goals
+# All leader data verified as of March 2026. Safe to re-run (idempotent).
+
+# 8. Start the supervisor (begins agent cycling)
+docker compose -p legba up -d supervisor
 ```
+
+**What the agent gets on cycle 1 after seeding:**
+- 200+ configured sources (seed_sources.py)
+- 163 entity profiles: 103 countries, 30 verified heads of state, 17 organizations, 13 armed groups
+- 776 facts: current leaders, capitals, 300 border relationships, NATO/EU/BRICS membership, alliances, hostilities
+- 5 active situations (Ukraine-Russia, Iran-Israel, Sudan, South China Sea, Pakistan-Afghanistan)
+- 8 watchlist items (Hormuz, nuclear, ceasefire, humanitarian crises, etc.)
+- 5 initial goals
+
+The ingestion service starts fetching immediately. The agent wakes up with a functional world model and begins enriching it from cycle 1 — no cold-start period needed.
+
+**Updating the seed data:** If world leaders change or new organizations form, edit `scripts/seed_data.py` directly. The script is idempotent — re-running it after changes adds new entries without duplicating existing ones.
 
 ### Hot Deploy (code changes, no data reset)
 ```bash

@@ -60,6 +60,10 @@ Each specialized cycle type uses a **filtered tool set** — only tools relevant
 docker compose -p legba build
 docker compose -p legba up -d
 
+# Seed data (run once on fresh install — safe to re-run)
+docker compose -p legba exec ui python3 /app/scripts/seed_sources.py   # 200+ sources
+docker compose -p legba exec ui python3 /app/scripts/seed_data.py      # world knowledge
+
 # Monitor
 docker compose -p legba logs supervisor -f
 
