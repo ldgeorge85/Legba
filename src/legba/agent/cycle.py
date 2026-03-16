@@ -118,6 +118,10 @@ class AgentCycle(
                 await self._evolve()
                 await self._reflect()
                 await self._narrate()
+                # EVOLVE overlaps with INTROSPECTION (both hit multiples of 30).
+                # Always generate the analysis report so we don't skip reporting.
+                await self._journal_consolidation()
+                await self._generate_analysis_report()
             elif self._is_introspection_cycle():
                 await self._mission_review()
                 await self._reflect()
