@@ -468,12 +468,26 @@ async def list_entities(
 async def get_entity(request: Request, entity_id: str):
     stores = get_stores(request)
 
+    ep = None
     try:
         entity_uuid = UUID(entity_id)
+        ep = await stores.structured.get_entity_profile(entity_uuid)
     except (ValueError, AttributeError):
-        return _json({"error": "invalid entity_id"}, 400)
+        pass  # Not a UUID — try name lookup below
 
-    ep = await stores.structured.get_entity_profile(entity_uuid)
+    # Fallback: look up by canonical_name (supports graph panel clicks which pass names)
+    if not ep and stores.structured._available:
+        try:
+            row = await stores.structured._pool.fetchrow(
+                "SELECT data FROM entity_profiles WHERE canonical_name ILIKE $1 LIMIT 1",
+                entity_id,
+            )
+            if row:
+                from ...shared.schemas.entity_profiles import EntityProfile
+                ep = EntityProfile.model_validate_json(row["data"])
+        except Exception:
+            pass
+
     if not ep:
         return _json({"error": "not found"}, 404)
 

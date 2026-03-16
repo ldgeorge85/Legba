@@ -374,18 +374,39 @@ export function GraphPanel() {
 
     sigmaRef.current = sigma
 
-    // ── Click handler: select entity and open detail panel ──
+    // ── Click handler: first click highlights, second click opens detail ──
     sigma.on('clickNode', ({ node }) => {
-      const apiNode = nodeMapRef.current.get(node)
-      if (apiNode) {
-        const entityId = (apiNode.properties?.entity_id as string) ?? apiNode.id
-        select({
-          type: 'entity',
-          id: entityId,
-          name: apiNode.label,
-        })
-        openPanel('entity-detail')
+      const hlSet = highlightedNodesRef.current
+      const wasHighlighted = hlSet.has(node)
+
+      // First click: highlight this node and its neighbors
+      highlightedNodesRef.current = new Set([node])
+      bestMatchRef.current = node
+      setHighlightTick((t) => t + 1)
+      sigma.refresh()
+
+      // Second click on same node: open the detail panel
+      if (wasHighlighted) {
+        const apiNode = nodeMapRef.current.get(node)
+        if (apiNode) {
+          // entity_id from AGE properties, or use the name for lookup
+          const entityId = (apiNode.properties?.entity_id as string) || ''
+          select({
+            type: 'entity',
+            id: entityId || apiNode.id,
+            name: apiNode.label,
+          })
+          openPanel('entity-detail')
+        }
       }
+    })
+
+    // Click on empty space: clear highlight
+    sigma.on('clickStage', () => {
+      highlightedNodesRef.current = new Set()
+      bestMatchRef.current = null
+      setHighlightTick((t) => t + 1)
+      sigma.refresh()
     })
 
     // ── Hover handlers: tooltip ──
