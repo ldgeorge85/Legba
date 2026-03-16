@@ -11,6 +11,7 @@ Tiers:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 import asyncpg
@@ -23,9 +24,40 @@ _STOPWORDS = frozenset(
     "his her we our you your as".split()
 )
 
+# Source name suffixes appended by aggregators (e.g., "Title - BBC News")
+# Stripped before Jaccard comparison to prevent near-dupes from different sources.
+_SOURCE_SUFFIX_RE = re.compile(
+    r"\s*[-–—|]\s*("
+    r"Reuters|AP News|AP|BBC|BBC News|CNN|Al Jazeera|NPR|PBS|"
+    r"Sky News|Fox News|NBC News|CBS News|ABC News|USA Today|"
+    r"The Guardian|The New York Times|The Washington Post|"
+    r"Time Magazine|Yahoo|Yahoo News|New York Post|"
+    r"ClickOnDetroit|WDIV Local 4|FOX 2 Detroit|Bridge Michigan|"
+    r"Michigan Public|KCRA|Spectrum News|NewsNation|MS NOW|"
+    r"KFOR\.com|News On 6|The Detroit News|"
+    r"Texas A&M Athletics"
+    r")\s*$",
+    re.I,
+)
+
+# Common prefixes that add noise without content
+_PREFIX_RE = re.compile(
+    r"^(live updates?:\s*|watch:\s*|breaking:\s*|report:\s*|"
+    r"exclusive:\s*|opinion:\s*|analysis:\s*)",
+    re.I,
+)
+
+
+def _strip_title(title: str) -> str:
+    """Strip source suffixes and common prefixes from a title."""
+    title = _SOURCE_SUFFIX_RE.sub("", title)
+    title = _PREFIX_RE.sub("", title)
+    return title.strip()
+
 
 def _title_words(title: str) -> set[str]:
     """Normalize title to a set of content words for Jaccard comparison."""
+    title = _strip_title(title)
     words = set()
     for w in title.lower().split():
         w = w.strip(".,;:!?\"'()[]{}—–-")
