@@ -397,6 +397,13 @@ class StructuredStore:
 
     # --- Fact operations ---
 
+    # Predicates where only one value should be active per subject or per value.
+    # E.g., only one person can be LeaderOf a given country at a time.
+    _VOLATILE_PREDICATES = frozenset({
+        "LeaderOf", "HeadOfState", "HeadOfGovernment", "President",
+        "PrimeMinister", "SupremeLeader", "Monarch",
+    })
+
     async def store_fact(self, fact: Fact) -> bool:
         if not self._available:
             return False
@@ -407,6 +414,23 @@ class StructuredStore:
             fact.value = normalize_fact_value(fact.value)
 
             async with self._pool.acquire() as conn:
+                # Auto-supersede for volatile predicates (leadership, etc.)
+                # "A LeaderOf B" should supersede any "X LeaderOf B" where X != A
+                # Also supersede "B LeaderOf X" (wrong direction) for same entity
+                if fact.predicate in self._VOLATILE_PREDICATES:
+                    await conn.execute(
+                        """
+                        UPDATE facts SET superseded_by = $1, updated_at = NOW()
+                        WHERE predicate = $2
+                        AND superseded_by IS NULL
+                        AND (
+                            (lower(value) = lower($3) AND lower(subject) != lower($4))
+                            OR (lower(subject) = lower($3) AND lower(value) != lower($4))
+                        )
+                        """,
+                        fact.id, fact.predicate, fact.value, fact.subject,
+                    )
+
                 await conn.execute(
                     """
                     INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at)
