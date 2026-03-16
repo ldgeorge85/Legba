@@ -338,6 +338,61 @@ async def list_events(
         return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
 
 
+@router.get("/events/geo")
+async def events_geo(request: Request):
+    """Events with geo coordinates for heatmap visualization."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, title, category, confidence, event_timestamp,
+                       data->'geo_coordinates' AS geo_coords
+                FROM events
+                WHERE data->'geo_coordinates' IS NOT NULL
+                  AND jsonb_array_length(COALESCE(data->'geo_coordinates', '[]'::jsonb)) > 0
+                ORDER BY created_at DESC
+                LIMIT 2000
+                """
+            )
+
+        features = []
+        for r in rows:
+            geo_coords = r["geo_coords"]
+            if isinstance(geo_coords, str):
+                geo_coords = json.loads(geo_coords)
+            if not geo_coords or not isinstance(geo_coords, list):
+                continue
+            for coord in geo_coords:
+                lat = coord.get("lat")
+                lon = coord.get("lon")
+                if lat is None or lon is None:
+                    continue
+                features.append({
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [float(lon), float(lat)],
+                    },
+                    "properties": {
+                        "id": str(r["id"]),
+                        "title": r["title"],
+                        "category": r["category"],
+                        "confidence": float(r["confidence"]) if r["confidence"] else 0.5,
+                        "timestamp": r["event_timestamp"].isoformat() if r["event_timestamp"] else None,
+                        "location_name": coord.get("name", ""),
+                    },
+                })
+
+        return _json({
+            "type": "FeatureCollection",
+            "features": features,
+        })
+    except Exception as exc:
+        logger.warning("events/geo failed: %s", exc)
+        return _json({"type": "FeatureCollection", "features": []})
+
+
 @router.get("/events/{event_id}")
 async def get_event(request: Request, event_id: UUID):
     stores = get_stores(request)
@@ -1444,65 +1499,6 @@ async def remove_edge(request: Request):
         return _json({"status": "deleted"})
     except Exception as exc:
         return _json({"error": str(exc)}, 500)
-
-
-# ------------------------------------------------------------------
-# Event Geo Data (for heatmap)
-# ------------------------------------------------------------------
-
-@router.get("/events/geo")
-async def events_geo(request: Request):
-    """Events with geo coordinates for heatmap visualization."""
-    stores = get_stores(request)
-    try:
-        async with stores.structured._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id, title, category, confidence, event_timestamp,
-                       data->'geo_coordinates' AS geo_coords
-                FROM events
-                WHERE data->'geo_coordinates' IS NOT NULL
-                  AND jsonb_array_length(COALESCE(data->'geo_coordinates', '[]'::jsonb)) > 0
-                ORDER BY created_at DESC
-                LIMIT 2000
-                """
-            )
-
-        features = []
-        for r in rows:
-            geo_coords = r["geo_coords"]
-            if isinstance(geo_coords, str):
-                geo_coords = json.loads(geo_coords)
-            if not geo_coords or not isinstance(geo_coords, list):
-                continue
-            for coord in geo_coords:
-                lat = coord.get("lat")
-                lon = coord.get("lon")
-                if lat is None or lon is None:
-                    continue
-                features.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [float(lon), float(lat)],
-                    },
-                    "properties": {
-                        "id": str(r["id"]),
-                        "title": r["title"],
-                        "category": r["category"],
-                        "confidence": float(r["confidence"]) if r["confidence"] else 0.5,
-                        "timestamp": r["event_timestamp"].isoformat() if r["event_timestamp"] else None,
-                        "location_name": coord.get("name", ""),
-                    },
-                })
-
-        return _json({
-            "type": "FeatureCollection",
-            "features": features,
-        })
-    except Exception as exc:
-        logger.warning("events/geo failed: %s", exc)
-        return _json({"type": "FeatureCollection", "features": []})
 
 
 # ------------------------------------------------------------------
