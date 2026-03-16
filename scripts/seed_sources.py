@@ -586,8 +586,8 @@ REGIONAL_SOURCES = [
 # ============================================================================
 
 TIER_2_SOURCES = [
-    # ACLED migrated to OAuth 2.0 (Sept 2025). Requires env vars:
-    #   ACLED_CLIENT_ID, ACLED_CLIENT_SECRET
+    # ACLED migrated to OAuth 2.0 (Sept 2025). Uses password grant (ROPC).
+    # Requires env vars: ACLED_USERNAME, ACLED_PASSWORD
     SourceDef(
         name="ACLED Conflict Events",
         url="https://acleddata.com/api/acled/read",
@@ -600,8 +600,15 @@ TIER_2_SOURCES = [
         description="Armed Conflict Location and Event Data — structured conflict events with actors, fatalities, locations",
         tags=["acled", "conflict", "violence", "protest"],
         query_template="https://acleddata.com/api/acled/read?limit=200&event_date={date_today}|{date_today}&event_date_where=BETWEEN",
-        auth_config={"type": "bearer", "token_url": "https://api.acleddata.com/oauth/token", "client_id": "$ACLED_CLIENT_ID", "client_secret": "$ACLED_CLIENT_SECRET"},
-        initial_status="paused",  # Credentials not yet configured
+        auth_config={
+            "type": "bearer",
+            "token_url": "https://acleddata.com/oauth/token",
+            "grant_type": "password",
+            "username": "$ACLED_USERNAME",
+            "password": "$ACLED_PASSWORD",
+            "client_id": "acled",
+        },
+        initial_status="active",  # Credentials available
     ),
     SourceDef(
         name="NASA FIRMS — Global Thermal Anomalies",

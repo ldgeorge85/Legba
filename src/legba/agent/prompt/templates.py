@@ -583,6 +583,8 @@ ANALYSIS_TOOLS: frozenset = frozenset({
     # Watchlist + situations (analysis can create/update these)
     "watchlist_add", "watchlist_list",
     "situation_create", "situation_update", "situation_list", "situation_link_event",
+    # Predictions (analysis can create and review hypotheses)
+    "prediction_create", "prediction_update", "prediction_list",
     # Utilities
     "note_to_self", "explain_tool",
     "goal_update", "goal_create",
@@ -642,6 +644,13 @@ Your knowledge base has thousands of events but relatively few facts. During ana
 - If you identify a new emerging situation (cluster of related events with a common theme/actor/region), create it with situation_create and link the supporting events.
 - If you spot a pattern worth monitoring (entity behavior change, threshold crossing, recurring events), add a watchlist pattern with watchlist_add.
 - Update existing situations with situation_update when new intelligence changes the assessment.
+
+### Prediction Tracking
+When you identify a pattern that may develop into a significant event, create a prediction with prediction_create. Include:
+- A specific, falsifiable hypothesis (e.g. "Turkey will impose sanctions on Country X within 3 months")
+- The category (conflict, political, economic, etc.)
+- Your confidence level (0.0-1.0)
+Later cycles will evaluate predictions against incoming evidence. Use prediction_list to review open predictions and prediction_update to add supporting/contradicting evidence or resolve them.
 
 ### Fact Freshness
 When analyzing entities, check if any facts from early cycles contradict recent events. Use memory_query to find old facts, then memory_supersede to replace outdated ones. Examples: changed leaders, new alliances, updated economic data.

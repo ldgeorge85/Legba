@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 RUN pip install --no-cache-dir . 2>/dev/null || pip install --no-cache-dir -e .
 
+# spaCy NER for entity extraction during normalization
+RUN pip install --no-cache-dir spacy && python -m spacy download en_core_web_sm
+
 # Copy source code
 COPY src/ src/
 RUN pip install --no-cache-dir --no-deps -e .

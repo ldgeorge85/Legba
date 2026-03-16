@@ -943,6 +943,98 @@ async def list_watch_triggers(request: Request):
 
 
 # ------------------------------------------------------------------
+# Predictions / Hypothesis Tracking
+# ------------------------------------------------------------------
+
+class PredictionCreate(BaseModel):
+    hypothesis: str
+    source_cycle: int = 0
+    source_type: str = "report"
+    category: str = ""
+    region: str = ""
+    confidence: float = 0.5
+
+
+class PredictionUpdate(BaseModel):
+    status: str | None = None
+    evidence_for: str | None = None
+    evidence_against: str | None = None
+    confidence: float | None = None
+    resolution_note: str | None = None
+    resolution_cycle: int | None = None
+
+
+@router.get("/predictions")
+async def list_predictions(request: Request, status: str | None = None, limit: int = 50):
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json([])
+    try:
+        items = await stores.structured.list_predictions(status=status, limit=limit)
+        return _json(items)
+    except Exception as exc:
+        logger.warning("Predictions list failed: %s", exc)
+        return _json([])
+
+
+@router.post("/predictions")
+async def create_prediction(request: Request, body: PredictionCreate):
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"error": "structured store unavailable"}, 503)
+    try:
+        pid = await stores.structured.create_prediction(
+            hypothesis=body.hypothesis,
+            source_cycle=body.source_cycle,
+            source_type=body.source_type,
+            category=body.category,
+            region=body.region,
+            confidence=body.confidence,
+        )
+        if not pid:
+            return _json({"error": "failed to create prediction"}, 500)
+        return _json({"prediction_id": pid, "status": "created"}, 201)
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.get("/predictions/{prediction_id}")
+async def get_prediction(request: Request, prediction_id: str):
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"error": "structured store unavailable"}, 503)
+    try:
+        item = await stores.structured.get_prediction(prediction_id)
+        if not item:
+            return _json({"error": "not found"}, 404)
+        return _json(item)
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.put("/predictions/{prediction_id}")
+async def update_prediction(request: Request, prediction_id: str, body: PredictionUpdate):
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"error": "structured store unavailable"}, 503)
+    try:
+        ok = await stores.structured.update_prediction(
+            prediction_id=prediction_id,
+            status=body.status,
+            evidence_for=body.evidence_for,
+            evidence_against=body.evidence_against,
+            confidence=body.confidence,
+            resolution_note=body.resolution_note,
+            resolution_cycle=body.resolution_cycle,
+        )
+        if not ok:
+            return _json({"error": "not found or update failed"}, 404)
+        return _json({"status": "updated"})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
 # Facts
 # ------------------------------------------------------------------
 

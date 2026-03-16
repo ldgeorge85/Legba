@@ -360,10 +360,10 @@ class IngestionService:
         resolved = dict(auth_config)
         auth_type = resolved.get("type", "")
 
-        # Bearer / OAuth2: resolve token, client_id, client_secret env refs.
+        # Bearer / OAuth2: resolve token, client_id, client_secret, username, password env refs.
         # Token exchange itself happens in fetcher._get_oauth_token at fetch time.
         if auth_type == "bearer":
-            for key in ("token", "client_id", "client_secret"):
+            for key in ("token", "client_id", "client_secret", "username", "password"):
                 val = resolved.get(key, "")
                 if isinstance(val, str) and val.startswith("$"):
                     env_key = val[1:]

@@ -273,6 +273,25 @@ class StructuredStore:
                     ON ingestion_log(source_id);
                 CREATE INDEX IF NOT EXISTS idx_ingestion_log_time
                     ON ingestion_log(fetch_started_at DESC);
+
+                -- Predictions / hypothesis tracking
+                CREATE TABLE IF NOT EXISTS predictions (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    hypothesis TEXT NOT NULL,
+                    source_cycle INTEGER NOT NULL,
+                    source_type TEXT DEFAULT 'report',
+                    category TEXT DEFAULT '',
+                    region TEXT DEFAULT '',
+                    status TEXT DEFAULT 'open',
+                    confidence REAL DEFAULT 0.5,
+                    evidence_for TEXT[] DEFAULT '{}',
+                    evidence_against TEXT[] DEFAULT '{}',
+                    resolution_cycle INTEGER,
+                    resolution_note TEXT DEFAULT '',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_predictions_status ON predictions(status);
             """)
 
     # --- Goal operations ---
@@ -1558,3 +1577,168 @@ class StructuredStore:
                 pass  # Vertex may not exist in graph
 
         return edges_moved
+
+    # --- Prediction / hypothesis tracking ---
+
+    async def create_prediction(self, hypothesis: str, source_cycle: int,
+                                category: str = "", region: str = "",
+                                confidence: float = 0.5, source_type: str = "report") -> str:
+        """Create a new prediction/hypothesis. Returns ID."""
+        if not self._available:
+            return ""
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO predictions (hypothesis, source_cycle, source_type,
+                                             category, region, confidence)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
+                    """,
+                    hypothesis, source_cycle, source_type,
+                    category, region, confidence,
+                )
+                return str(row["id"])
+        except Exception as e:
+            logger.error("Failed to create prediction: %s", e)
+            return ""
+
+    async def update_prediction(self, prediction_id: str, status: str = None,
+                                evidence_for: str = None, evidence_against: str = None,
+                                confidence: float = None, resolution_note: str = None,
+                                resolution_cycle: int = None) -> bool:
+        """Update a prediction. Append evidence, change status."""
+        if not self._available:
+            return False
+        try:
+            pid = UUID(prediction_id)
+        except (ValueError, TypeError):
+            return False
+        try:
+            async with self._pool.acquire() as conn:
+                # Verify prediction exists
+                row = await conn.fetchrow("SELECT id FROM predictions WHERE id = $1", pid)
+                if not row:
+                    return False
+
+                if evidence_for:
+                    await conn.execute(
+                        "UPDATE predictions SET evidence_for = array_append(evidence_for, $1), "
+                        "updated_at = NOW() WHERE id = $2",
+                        evidence_for, pid,
+                    )
+                if evidence_against:
+                    await conn.execute(
+                        "UPDATE predictions SET evidence_against = array_append(evidence_against, $1), "
+                        "updated_at = NOW() WHERE id = $2",
+                        evidence_against, pid,
+                    )
+                if status:
+                    await conn.execute(
+                        "UPDATE predictions SET status = $1, updated_at = NOW() WHERE id = $2",
+                        status, pid,
+                    )
+                if confidence is not None:
+                    await conn.execute(
+                        "UPDATE predictions SET confidence = $1, updated_at = NOW() WHERE id = $2",
+                        confidence, pid,
+                    )
+                if resolution_note:
+                    await conn.execute(
+                        "UPDATE predictions SET resolution_note = $1, updated_at = NOW() WHERE id = $2",
+                        resolution_note, pid,
+                    )
+                if resolution_cycle is not None:
+                    await conn.execute(
+                        "UPDATE predictions SET resolution_cycle = $1, updated_at = NOW() WHERE id = $2",
+                        resolution_cycle, pid,
+                    )
+            return True
+        except Exception as e:
+            logger.error("Failed to update prediction %s: %s", prediction_id, e)
+            return False
+
+    async def list_predictions(self, status: str = None, limit: int = 50) -> list[dict]:
+        """List predictions, optionally filtered by status."""
+        if not self._available:
+            return []
+        try:
+            async with self._pool.acquire() as conn:
+                if status:
+                    rows = await conn.fetch(
+                        "SELECT id, hypothesis, source_cycle, source_type, category, region, "
+                        "status, confidence, evidence_for, evidence_against, "
+                        "resolution_cycle, resolution_note, created_at, updated_at "
+                        "FROM predictions WHERE status = $1 "
+                        "ORDER BY created_at DESC LIMIT $2",
+                        status, limit,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        "SELECT id, hypothesis, source_cycle, source_type, category, region, "
+                        "status, confidence, evidence_for, evidence_against, "
+                        "resolution_cycle, resolution_note, created_at, updated_at "
+                        "FROM predictions ORDER BY created_at DESC LIMIT $1",
+                        limit,
+                    )
+            return [
+                {
+                    "id": str(r["id"]),
+                    "hypothesis": r["hypothesis"],
+                    "source_cycle": r["source_cycle"],
+                    "source_type": r["source_type"] or "report",
+                    "category": r["category"] or "",
+                    "region": r["region"] or "",
+                    "status": r["status"] or "open",
+                    "confidence": r["confidence"],
+                    "evidence_for": list(r["evidence_for"] or []),
+                    "evidence_against": list(r["evidence_against"] or []),
+                    "resolution_cycle": r["resolution_cycle"],
+                    "resolution_note": r["resolution_note"] or "",
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.error("Failed to list predictions: %s", e)
+            return []
+
+    async def get_prediction(self, prediction_id: str) -> dict | None:
+        """Get a single prediction by ID."""
+        if not self._available:
+            return None
+        try:
+            pid = UUID(prediction_id)
+        except (ValueError, TypeError):
+            return None
+        try:
+            async with self._pool.acquire() as conn:
+                r = await conn.fetchrow(
+                    "SELECT id, hypothesis, source_cycle, source_type, category, region, "
+                    "status, confidence, evidence_for, evidence_against, "
+                    "resolution_cycle, resolution_note, created_at, updated_at "
+                    "FROM predictions WHERE id = $1",
+                    pid,
+                )
+                if not r:
+                    return None
+                return {
+                    "id": str(r["id"]),
+                    "hypothesis": r["hypothesis"],
+                    "source_cycle": r["source_cycle"],
+                    "source_type": r["source_type"] or "report",
+                    "category": r["category"] or "",
+                    "region": r["region"] or "",
+                    "status": r["status"] or "open",
+                    "confidence": r["confidence"],
+                    "evidence_for": list(r["evidence_for"] or []),
+                    "evidence_against": list(r["evidence_against"] or []),
+                    "resolution_cycle": r["resolution_cycle"],
+                    "resolution_note": r["resolution_note"] or "",
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                }
+        except Exception as e:
+            logger.error("Failed to get prediction %s: %s", prediction_id, e)
+            return None

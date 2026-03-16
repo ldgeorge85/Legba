@@ -175,7 +175,7 @@ class WakeMixin:
             fs, shell, http, memory_tools, graph_tools, goal_tools,
             selfmod_tools, nats_tools, opensearch_tools, analytics_tools,
             orchestration_tools, feed_tools, source_tools, event_tools,
-            entity_tools, watchlist_tools, situation_tools,
+            entity_tools, watchlist_tools, situation_tools, prediction_tools,
         )
         from ..tools.subagent import run_subagent
         from ...shared.schemas.tools import ToolDefinition, ToolParameter
@@ -246,6 +246,9 @@ class WakeMixin:
 
         # Situation tracking tools — persistent tracked narratives
         situation_tools.register(self.registry, structured=self.memory.structured)
+
+        # Prediction / hypothesis tracking tools
+        prediction_tools.register(self.registry, structured=self.memory.structured, state=self.state)
 
         # note_to_self tool — working memory within this cycle
         self._register_note_to_self()

@@ -41,7 +41,7 @@ def _resolve_env(value: str) -> str:
 
 
 async def _get_oauth_token(auth_config: dict) -> str:
-    """Get OAuth2 token via client credentials grant. Caches until expiry."""
+    """Get OAuth2 token via client_credentials or password grant. Caches until expiry."""
     token_url = auth_config.get("token_url", "")
     if not token_url:
         return ""
@@ -54,34 +54,56 @@ async def _get_oauth_token(auth_config: dict) -> str:
         if time.time() < expires_at - 60:
             return token
 
-    client_id = _resolve_env(auth_config.get("client_id", ""))
-    client_secret = _resolve_env(auth_config.get("client_secret", ""))
+    grant_type = auth_config.get("grant_type", "client_credentials")
 
-    if not client_id or not client_secret:
-        logger.warning("OAuth2 client_id or client_secret not resolved for %s", token_url)
-        return ""
+    data = {"grant_type": grant_type}
+
+    if grant_type == "password":
+        # Resource Owner Password Credentials (ROPC) — used by ACLED etc.
+        username = _resolve_env(auth_config.get("username", ""))
+        password = _resolve_env(auth_config.get("password", ""))
+        client_id = _resolve_env(auth_config.get("client_id", ""))
+        if not username or not password:
+            logger.warning("OAuth2 password grant: username or password not resolved for %s", token_url)
+            return ""
+        data["username"] = username
+        data["password"] = password
+        if client_id:
+            data["client_id"] = client_id
+    else:
+        # Client Credentials grant (default)
+        client_id = _resolve_env(auth_config.get("client_id", ""))
+        client_secret = _resolve_env(auth_config.get("client_secret", ""))
+        if not client_id or not client_secret:
+            logger.warning("OAuth2 client_id or client_secret not resolved for %s", token_url)
+            return ""
+        data["client_id"] = client_id
+        data["client_secret"] = client_secret
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(token_url, data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            })
-            resp.raise_for_status()
-            data = resp.json()
+            resp = await client.post(token_url, data=data)
+            if resp.status_code >= 400:
+                # Log response body for debugging auth errors
+                body = resp.text[:300] if resp.text else "(empty)"
+                logger.error(
+                    "OAuth2 token exchange failed for %s: HTTP %d — %s",
+                    token_url, resp.status_code, body,
+                )
+                return ""
+            resp_data = resp.json()
     except Exception as e:
         logger.error("OAuth2 token exchange failed for %s: %s", token_url, e)
         return ""
 
-    token = data.get("access_token", "")
+    token = resp_data.get("access_token", "")
     if not token:
         logger.error("OAuth2 response missing access_token from %s", token_url)
         return ""
 
-    expires_in = data.get("expires_in", 3600)
+    expires_in = resp_data.get("expires_in", 3600)
     _token_cache[cache_key] = (token, time.time() + expires_in)
-    logger.info("OAuth2 token acquired from %s (expires in %ds)", token_url, expires_in)
+    logger.info("OAuth2 token acquired from %s (expires in %ds, grant=%s)", token_url, expires_in, grant_type)
     return token
 
 # Retry config for transient HTTP errors (429, 502, 503)
@@ -319,6 +341,7 @@ async def fetch_source(
                      or {"type": "query_param", "key": "api_key", "value": "..."}
                      or {"type": "bearer", "token": "..."} (static token)
                      or {"type": "bearer", "token_url": "...", "client_id": "...", "client_secret": "..."} (OAuth2 client credentials)
+                     or {"type": "bearer", "token_url": "...", "grant_type": "password", "username": "...", "password": "...", "client_id": "..."} (OAuth2 ROPC)
         last_fetch: Last successful fetch time (for incremental queries)
         timeout: HTTP timeout in seconds
         limit: Max entries to return

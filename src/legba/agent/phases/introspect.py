@@ -22,6 +22,8 @@ INTROSPECTION_TOOLS: frozenset[str] = frozenset({
     "note_to_self", "explain_tool",
     "goal_update", "goal_create",
     "cycle_complete",
+    # Predictions (introspection can review and update hypotheses)
+    "prediction_create", "prediction_update", "prediction_list",
 })
 
 

@@ -366,6 +366,19 @@ You have both read and write tools. Write tools let you create, update, and dele
 {tool_defs}
 ```
 
+When the operator asks about graph relationships, entities, or connections,
+use the query_graph tool to answer. Translate natural language to Cypher queries.
+
+Examples:
+- "Show me all HostileTo edges" → query_graph("MATCH (a)-[r:HostileTo]->(b) RETURN a.name, b.name")
+- "Who leads Iran?" → query_graph("MATCH (p)-[:LeaderOf]->(c {{name: 'Iran'}}) RETURN p.name")
+- "What's connected to Hezbollah?" → query_graph("MATCH (h {{name: 'Hezbollah'}})-[r]-(n) RETURN type(r), n.name")
+- "Entities added since cycle 1000" → query_graph("MATCH (n) WHERE n.source_cycle > 1000 RETURN n.name, labels(n)")
+
+Remember: This is Apache AGE (Postgres), not Neo4j. Use ag_catalog functions.
+Key syntax: MATCH, WHERE, RETURN. Labels use labels(n). Edge types use type(r).
+Property predicates go in WHERE, not in MATCH pattern shorthand.
+
 Respond with a SINGLE JSON object: {{"actions": [{{"tool": "name", "args": {{...}}}}]}}
 Use the respond tool for your final answer: {{"actions": [{{"tool": "respond", "args": {{"message": "..."}}}}]}}
 Output ONLY valid JSON. After the closing }}, STOP."""

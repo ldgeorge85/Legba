@@ -19,6 +19,57 @@ from .source_normalizers import get_source_normalizer
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# spaCy NER — lazy-loaded for entity extraction
+# ---------------------------------------------------------------------------
+
+_nlp = None
+
+
+def _get_nlp():
+    """Lazy-load spaCy model on first use."""
+    global _nlp
+    if _nlp is None:
+        try:
+            import spacy
+            _nlp = spacy.load("en_core_web_sm")
+            logger.info("spaCy en_core_web_sm loaded for NER")
+        except Exception as e:
+            logger.warning("spaCy unavailable, NER extraction disabled: %s", e)
+            _nlp = False  # Sentinel: tried and failed, don't retry
+    return _nlp if _nlp is not False else None
+
+
+def extract_entities_ner(text: str) -> tuple[list[str], list[str]]:
+    """Extract person/org names and locations from text using spaCy NER.
+
+    Returns (actors, locations). Both lists are capped at 10 entries.
+    Only call when source-level extraction yielded no actors/locations.
+    """
+    if not text or len(text) < 20:
+        return [], []
+
+    nlp = _get_nlp()
+    if nlp is None:
+        return [], []
+
+    doc = nlp(text[:1000])  # Cap input length for performance
+
+    actors: list[str] = []
+    locations: list[str] = []
+    for ent in doc.ents:
+        if ent.label_ in ("PERSON", "ORG", "NORP"):
+            name = ent.text.strip()
+            if len(name) > 2 and name not in actors:
+                actors.append(name)
+        elif ent.label_ in ("GPE", "LOC", "FAC"):
+            name = ent.text.strip()
+            if len(name) > 2 and name not in locations:
+                locations.append(name)
+
+    return actors[:10], locations[:10]
+
+
+# ---------------------------------------------------------------------------
 # Category inference from title/summary keywords
 # ---------------------------------------------------------------------------
 
@@ -304,6 +355,15 @@ def normalize_entry(
     actors: list[str] = list(entry.authors) if entry.authors else []
     locations: list[str] = []
     tags: list[str] = [t for t in entry.tags if t]
+
+    # NER fallback: if no actors/locations from structured fields, try spaCy
+    if not actors and not locations:
+        ner_text = f"{title} {summary}" if summary else title
+        ner_actors, ner_locations = extract_entities_ner(ner_text)
+        if ner_actors:
+            actors = ner_actors
+        if ner_locations:
+            locations = ner_locations
 
     event = create_event(
         title=title,

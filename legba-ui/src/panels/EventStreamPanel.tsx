@@ -1,38 +1,82 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { cn, categoryColor } from '@/lib/utils'
 import { Badge } from '@/components/common/Badge'
 import { TimeAgo } from '@/components/common/TimeAgo'
 import type { EventSummary } from '@/api/types'
 
+type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected'
+
+const MAX_EVENTS = 100
+
 export function EventStreamPanel() {
   const [events, setEvents] = useState<(EventSummary & { _received: string })[]>([])
-  const [connected, setConnected] = useState(false)
+  const [status, setStatus] = useState<ConnectionStatus>('disconnected')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const sourceRef = useRef<EventSource | null>(null)
+  const hadConnectionRef = useRef(false)
 
-  useEffect(() => {
+  const connect = useCallback(() => {
+    if (sourceRef.current) {
+      sourceRef.current.close()
+    }
+
     const source = new EventSource('/sse/stream')
+    sourceRef.current = source
 
-    source.onopen = () => setConnected(true)
-    source.onerror = () => setConnected(false)
+    source.onopen = () => {
+      hadConnectionRef.current = true
+      setStatus('connected')
+    }
+
+    source.onerror = () => {
+      // EventSource auto-reconnects on error. If we had a prior connection,
+      // show "reconnecting"; otherwise show "disconnected".
+      if (hadConnectionRef.current && source.readyState === EventSource.CONNECTING) {
+        setStatus('reconnecting')
+      } else if (source.readyState === EventSource.CLOSED) {
+        setStatus('disconnected')
+      } else {
+        setStatus('reconnecting')
+      }
+    }
 
     source.addEventListener('event:new', (e: MessageEvent) => {
       const data = JSON.parse(e.data) as EventSummary
-      setEvents((prev) => [{ ...data, _received: new Date().toISOString() }, ...prev].slice(0, 200))
+      setEvents((prev) =>
+        [{ ...data, _received: new Date().toISOString() }, ...prev].slice(0, MAX_EVENTS)
+      )
     })
 
-    return () => source.close()
+    return source
   }, [])
+
+  useEffect(() => {
+    const source = connect()
+    return () => source.close()
+  }, [connect])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
   }, [events.length])
 
+  const statusDot = {
+    connected: 'bg-green-400',
+    reconnecting: 'bg-yellow-400 animate-pulse',
+    disconnected: 'bg-red-400',
+  }
+
+  const statusLabel = {
+    connected: 'Connected',
+    reconnecting: 'Reconnecting...',
+    disconnected: 'Disconnected',
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 p-2 border-b border-border shrink-0">
-        <div className={cn('w-2 h-2 rounded-full', connected ? 'bg-green-400' : 'bg-red-400')} />
+        <div className={cn('w-2 h-2 rounded-full', statusDot[status])} />
         <span className="text-xs text-muted-foreground">
-          {connected ? 'Connected' : 'Disconnected'} — {events.length} events
+          {statusLabel[status]} — {events.length} events
         </span>
       </div>
       <div ref={scrollRef} className="flex-1 overflow-auto">
