@@ -364,10 +364,12 @@ For each target entity:
 - **Official sources**: For countries, try CIA World Factbook entries. For organizations, check their official websites. For people, check recent news profiles.
 - **Cross-reference**: Compare what you find against what you already have stored. Note discrepancies.
 
-### 3. Update Profiles
+### 3. Update Profiles — DEPTH OVER BREADTH
 - Use entity_profile to add sourced assertions (government structure, population, leadership, military capability, economic data, key relationships — whatever is relevant)
+- **TARGET: 8-15 facts per entity per research cycle.** A Wikipedia summary alone contains dozens of extractable facts (capital, population, GDP, government type, leader, area, major cities, official languages, currency, UN membership, alliances, borders). Extract ALL of them, not just 2-3.
 - Set confidence based on source quality (Wikipedia = 0.7, official government = 0.8, single news report = 0.5)
 - Add or update the entity summary
+- **Common mistake**: researching 5 entities shallowly (2-3 facts each). Instead, research 2-3 entities deeply (10+ facts each). A thin profile is almost as useless as no profile.
 
 ### 4. Strengthen the Graph
 - For each researched entity, check its graph relationships with graph_query
@@ -654,6 +656,13 @@ Later cycles will evaluate predictions against incoming evidence. Use prediction
 
 ### Fact Freshness
 When analyzing entities, check if any facts from early cycles contradict recent events. Use memory_query to find old facts, then memory_supersede to replace outdated ones. Examples: changed leaders, new alliances, updated economic data.
+
+### MANDATORY TOOL USAGE:
+Every analysis cycle MUST include at least:
+- One **anomaly_detect** call (on events from the last 7 days)
+- One **graph_analyze** call (centrality or clustering)
+- One **temporal_query** call (trend over the past week)
+If you skip these tools, the cycle has failed its purpose. These are your analytical instruments — USE them.
 
 ### DO NOT:
 - Do NOT fetch feeds or ingest new data — that's for acquire cycles
