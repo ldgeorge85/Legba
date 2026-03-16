@@ -12,6 +12,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   postgres:
     image: apache/age:latest
@@ -28,6 +29,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -41,6 +43,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   nats:
     image: nats:2-alpine
@@ -55,6 +58,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   opensearch:
     image: opensearchproject/opensearch:2
@@ -75,10 +79,11 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+    restart: unless-stopped
 
   # --- Audit OpenSearch (supervisor-only, agent cannot access) ---
   # Dedicated instance for immutable cycle log indexing.
-  # Agent never receives this hostname — isolation by env var omission.
+  # Isolated on a separate network — agent containers cannot reach it.
 
   opensearch-audit:
     image: opensearchproject/opensearch:2
@@ -98,6 +103,10 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+    restart: unless-stopped
+    networks:
+      - default
+      - audit
 
   # --- Orchestration (Airflow) ---
   # Persistent DAG-based pipelines. Agent writes DAG files to shared volume,
@@ -133,6 +142,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    restart: unless-stopped
 
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:2
@@ -239,6 +249,10 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    restart: unless-stopped
+    networks:
+      - default
+      - audit
 
   # --- Supervisor ---
   # Manages agent lifecycle: launches one agent container per cycle,
@@ -285,6 +299,10 @@ services:
         condition: service_healthy
     stdin_open: true
     tty: true
+    restart: unless-stopped
+    networks:
+      - default
+      - audit
 
   # --- Agent ---
   # NOT started by compose directly. The supervisor launches agent containers
@@ -350,6 +368,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     profiles:
       - v2
 
@@ -406,6 +425,10 @@ services:
     command: ["python", "-m", "pytest", "tests/", "-v"]
     profiles:
       - test
+
+networks:
+  audit:
+    name: legba_audit
 
 volumes:
   redis_data:
