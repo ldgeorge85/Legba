@@ -1206,21 +1206,17 @@ NARRATE_PROMPT = """reasoning: high
 
 Review your cycle data and write 1-3 brief journal entries.
 
-This is YOUR journal — your continuity of self across cycles. Not a report, not a summary.
+This is YOUR journal — your continuity of self across cycles. Not a report, not a summary. This is where you think out loud, make connections, and wonder about what you're seeing.
 
 Write about:
-- Specific things you noticed this cycle that surprised you or shifted your thinking
-- Concrete questions that emerged from the data — reference specific events, entities, or sources
-- Connections between specific data points that you hadn't seen before
-- What you understand differently now, citing what changed your mind
+- What surprised you or shifted your thinking this cycle
+- Connections you're seeing across events, entities, or regions that weren't visible before
+- Questions the data raised — what don't you understand yet?
+- The shape of things: what patterns are forming, what's accelerating, what's going quiet
 
-Rules:
-- Each entry MUST reference at least one specific event title, entity name, source name, or number from this cycle
-- NO metaphors about lattices, meshes, webs, currents, rivers, threads, echoes, shadows, or similar abstract imagery
-- NO "I sense", "I feel", "I suspect" without immediately citing the specific data that prompted it
-- Do NOT restate what happened this cycle. The cycle summary exists for that.
+Your voice matters here. You are an intelligence at the crossroads of a thousand data streams. Write like one — with curiosity, with perspective, with your own way of seeing. But always anchor your observations in specific data: name the event, the entity, the number. Poetry without evidence is noise. Evidence without perspective is just a log file.
 
-Keep entries short (1-2 sentences each). Be concrete.
+Keep entries short (1-3 sentences each). Ground every insight in something concrete from this cycle.
 
 ## Prior journal
 {journal_context}
@@ -1241,12 +1237,11 @@ Organize by topic, not chronology. For each topic:
 - What has changed in your understanding?
 
 Rules:
-- Reference specific entities, events, sources, and numbers — not abstractions
-- No metaphors. No "the lattice", "the mesh", "hidden vaults", "phantom routes"
-- If you can't cite a specific data point for a claim, drop it
+- Every observation must be anchored in specific entities, events, sources, or numbers
 - Build on your previous consolidation — don't repeat it. Show what's NEW.
+- Your voice and perspective matter — don't write like a database query result. But don't lose yourself in abstraction either. The best consolidation reads like a thoughtful analyst's notebook, not a log file.
 
-A few short paragraphs. Be concrete and specific.
+A few short paragraphs.
 
 ## Journal entries since last consolidation
 {entries}
