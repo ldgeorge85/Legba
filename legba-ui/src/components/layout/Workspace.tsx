@@ -95,12 +95,33 @@ const components = {
   panel: DockviewPanel,
 }
 
+const STORAGE_KEY = 'legba-workspace-layout'
+
+function saveLayout(api: DockviewApi) {
+  try {
+    const layout = api.toJSON()
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(layout))
+  } catch { /* ignore */ }
+}
+
 export function Workspace() {
   const apiRef = useRef<DockviewApi | null>(null)
   const { pendingPanel, clearPending } = useWorkspaceStore()
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api
+
+    // Try to restore saved layout
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved) {
+        const layout = JSON.parse(saved)
+        event.api.fromJSON(layout)
+        // Save on every layout change (tab moves, closes, etc.)
+        event.api.onDidLayoutChange(() => saveLayout(event.api))
+        return
+      }
+    } catch { /* fall through to default */ }
 
     // Open default dashboard panel
     event.api.addPanel({
@@ -109,6 +130,9 @@ export function Workspace() {
       params: { type: 'dashboard' as PanelType },
       title: 'Dashboard',
     })
+
+    // Save on every layout change
+    event.api.onDidLayoutChange(() => saveLayout(event.api))
   }, [])
 
   // Handle panel open requests from sidebar
