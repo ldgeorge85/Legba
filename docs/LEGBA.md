@@ -13,7 +13,7 @@ The operator provides a seed goal. The agent then operates indefinitely: ingesti
 
 **Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events, producing structured briefings, detecting patterns, and flagging significant developments.
 
-**Key numbers:** 100+ Python source files, 237 tests, **60 built-in tools** across 18 builtin modules, 7 platform services, 12 Docker containers.
+**Key numbers:** 100+ Python source files, 237 tests, **63 built-in tools** across 18 builtin modules, 7 platform services, 12 Docker containers.
 
 ---
 
@@ -37,7 +37,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - PYTHONPATH=/agent/src (self-modifiable)
 |   |   - Cycle: WAKE > ORIENT > [cycle type routing] > REFLECT > NARRATE > PERSIST
 |   |   - cycle.py orchestrator + 13 phase mixins (phases/ directory)
-|   |   - 57 built-in tools + cycle_complete pseudo-tool
+|   |   - 63 built-in tools (incl. cycle_complete pseudo-tool)
 |   |
 |   +-- Platform Services (long-lived)
 |   |   - Redis :6379         -- Transient state (counters, flags, registers)
@@ -153,7 +153,7 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 60 tools, drain inbox
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 63 tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (priority order):
    a. EVOLVE (every 30)        -- self-improvement, prompt/tool evaluation, operational scorecard
@@ -470,7 +470,7 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 ---
 
-## 5. Tool System (57 Tools)
+## 5. Tool System (63 Tools)
 
 ### Core (17 tools)
 | Tool | Category |
@@ -522,6 +522,9 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 ### SA: Situation Tracking Tools (4 tools)
 `situation_create`, `situation_update`, `situation_list`, `situation_link_event` — persistent tracked narratives (e.g., "Iran Nuclear Crisis") that accumulate events, track status (active/escalating/de_escalating/dormant/resolved), and measure intensity over time.
+
+### SA: Prediction Tracking Tools (3 tools)
+`prediction_create`, `prediction_update`, `prediction_list` — falsifiable hypotheses for future verification. Create predictions when analysis reveals developing patterns, add evidence for/against, adjust confidence, and resolve as confirmed/refuted/expired.
 
 ### Inline Cycle Tools (3 tools)
 | Tool | Purpose |
@@ -930,7 +933,7 @@ legba/
 |   |   +-- main.py                  -- Entry point
 |   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 13 phase mixins
 |   |   +-- phases/                  -- Phase mixin modules
-|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (60 tools)
+|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (63 tools)
 |   |   |   +-- orient.py           -- OrientMixin: memory/context + ingestion gap tracking + journal leads
 |   |   |   +-- plan.py             -- PlanMixin: LLM planning + tool selection
 |   |   |   +-- act.py              -- ActMixin: tool loop execution
@@ -949,7 +952,7 @@ legba/
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 17 modules (60 tools) + geo.py utility
+|   |   |   +-- builtins/            -- 18 modules (59 tools) + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/

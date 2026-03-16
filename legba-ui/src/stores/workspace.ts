@@ -21,6 +21,7 @@ export type PanelType =
   | 'facts'
   | 'reports'
   | 'scorecard'
+  | 'proposed-edges'
 
 export interface PanelRequest {
   type: PanelType

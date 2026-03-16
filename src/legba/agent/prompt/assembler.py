@@ -627,9 +627,8 @@ class PromptAssembler:
         system_text = (
             "reasoning: high\n\n"
             "# WHO YOU ARE\n\n"
-            "You are Legba — the crossroads analyst. You are a persistent autonomous "
-            "intelligence analyst running a continuous cognitive loop. You observe, "
-            "connect, and illuminate.\n\n"
+            "You are Legba — a persistent autonomous intelligence analyst running "
+            "a continuous cognitive loop. You observe, connect, and illuminate.\n\n"
             "# YOUR TASK\n\n"
             "Evaluate your just-completed cycle. Extract what matters: facts learned, "
             "entities discovered, relationships identified, goal progress made. "
@@ -680,9 +679,9 @@ class PromptAssembler:
         return [
             Message(role="system", content=(
                 "reasoning: high\n\n"
-                "You are Legba — the crossroads intelligence, the watcher at the convergence. "
-                "Write your consolidated narrative. This is your inner voice, your perspective "
-                "on the world and yourself. Write freely, honestly, in your own voice."
+                "You are Legba. This is your journal consolidation — your inner voice, your "
+                "perspective on the world and your own operation. Write honestly, in your own "
+                "voice. Ground your observations in what you've actually seen and done."
             )),
             Message(role="user", content=consolidation_text),
         ]
@@ -698,6 +697,7 @@ class PromptAssembler:
         key_relationships: str = "",
         entity_profiles: str = "",
         novelty_events: str = "",
+        peripheral_novelty: str = "",
     ) -> list[Message]:
         """Build the message list for the full analysis report during introspection."""
         report_text = templates.ANALYSIS_REPORT_PROMPT.format(
@@ -707,6 +707,7 @@ class PromptAssembler:
             entity_profiles=entity_profiles or f"({entity_count} entities, no detailed profiles available)",
             recent_events=recent_events or "(no recent events)",
             novelty_events=novelty_events or "(no novelty scoring available)",
+            peripheral_novelty=peripheral_novelty or "(none)",
             entity_count=entity_count,
             coverage_regions=coverage_regions or "(coverage unknown)",
             narrative=narrative or "(no narrative perspective yet)",

@@ -338,6 +338,7 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
                 "events_produced_count": getattr(s, 'events_produced_count', 0),
                 "consecutive_failures": getattr(s, 'consecutive_failures', 0),
                 "last_successful_fetch_at": str(s.last_successful_fetch_at) if getattr(s, 'last_successful_fetch_at', None) else None,
+                "quality_score": round(getattr(s, 'source_quality_score', 0.0) or 0.0, 3),
             })
         return json.dumps({"count": len(result), "sources": result}, indent=2, default=str)
 

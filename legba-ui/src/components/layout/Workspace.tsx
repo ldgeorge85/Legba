@@ -27,6 +27,7 @@ import { TimelinePanel } from '@/panels/TimelinePanel'
 import { FactsPanel } from '@/panels/FactsPanel'
 import { ReportsPanel } from '@/panels/ReportsPanel'
 import { ScorecardPanel } from '@/panels/ScorecardPanel'
+import { ProposedEdgesPanel } from '@/panels/ProposedEdgesPanel'
 
 const PANEL_TITLES: Record<PanelType, string> = {
   dashboard: 'Dashboard',
@@ -49,6 +50,7 @@ const PANEL_TITLES: Record<PanelType, string> = {
   facts: 'Facts',
   reports: 'Reports',
   scorecard: 'Scorecard',
+  'proposed-edges': 'Proposed Edges',
 }
 
 function PanelContent({ type, params }: { type: PanelType; params?: Record<string, string> }) {
@@ -73,6 +75,7 @@ function PanelContent({ type, params }: { type: PanelType; params?: Record<strin
     case 'facts': return <FactsPanel />
     case 'reports': return <ReportsPanel />
     case 'scorecard': return <ScorecardPanel />
+    case 'proposed-edges': return <ProposedEdgesPanel />
     default: return <div className="p-4 text-muted-foreground">Unknown panel type</div>
   }
 }

@@ -647,7 +647,8 @@ async def list_sources(
             rows = await conn.fetch(
                 f"SELECT id, name, url, source_type, status, "
                 f"fetch_success_count, fetch_failure_count, "
-                f"events_produced_count, last_successful_fetch_at "
+                f"events_produced_count, last_successful_fetch_at, "
+                f"source_quality_score "
                 f"FROM sources {where} "
                 f"ORDER BY events_produced_count DESC NULLS LAST "
                 f"LIMIT ${idx} OFFSET ${idx + 1}",
@@ -664,6 +665,7 @@ async def list_sources(
                     "fail_count": r["fetch_failure_count"] or 0,
                     "event_count": r["events_produced_count"] or 0,
                     "last_fetched": r["last_successful_fetch_at"].isoformat() if r["last_successful_fetch_at"] else None,
+                    "quality_score": round(r["source_quality_score"] or 0.0, 3),
                 }
                 for r in rows
             ]
@@ -1597,3 +1599,58 @@ async def global_search(request: Request, q: str = Query(..., min_length=2)):
         logger.warning("Global search failed: %s", exc)
 
     return _json(results)
+
+
+# ---------------------------------------------------------------------------
+# Proposed Edges (relationship inference queue)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/proposed-edges")
+async def list_proposed_edges(request: Request, status: str = "pending", limit: int = 50):
+    """List proposed graph edges by status (pending/approved/rejected)."""
+    stores = request.app.state.stores
+    try:
+        items = await stores.structured.list_proposed_edges(status=status, limit=limit)
+        return _json({"items": items, "total": len(items)})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+@router.post("/proposed-edges/{edge_id}/review")
+async def review_proposed_edge(request: Request, edge_id: str):
+    """Approve or reject a proposed edge. Body: {"action": "approved"|"rejected"}"""
+    stores = request.app.state.stores
+    try:
+        body = await request.json()
+        action = body.get("action", "")
+        if action not in ("approved", "rejected"):
+            return _json({"error": "action must be 'approved' or 'rejected'"}, 400)
+
+        ok = await stores.structured.review_proposed_edge(edge_id, action)
+        if not ok:
+            return _json({"error": "edge not found or already reviewed"}, 404)
+
+        # If approved, commit to graph
+        if action == "approved":
+            try:
+                edge_list = await stores.structured.list_proposed_edges(status="approved", limit=1)
+                # Re-fetch the specific edge to get its data
+                async with stores.structured._pool.acquire() as conn:
+                    from uuid import UUID as _UUID
+                    r = await conn.fetchrow(
+                        "SELECT source_entity, target_entity, relationship_type, source_cycle "
+                        "FROM proposed_edges WHERE id = $1",
+                        _UUID(edge_id),
+                    )
+                    if r and stores.graph and stores.graph.available:
+                        await stores.graph.add_relationship(
+                            r["source_entity"], r["target_entity"], r["relationship_type"],
+                            {"source_cycle": r["source_cycle"], "operator_approved": True},
+                        )
+            except Exception as exc:
+                logger.warning("Graph commit for approved edge failed: %s", exc)
+
+        return _json({"success": True, "action": action})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)

@@ -325,7 +325,13 @@ class IntrospectMixin:
             except Exception:
                 pass
 
+            # Build set of stale entity names for confidence propagation
+            stale_entity_names: set[str] = set()
             if stale_leaders:
+                for sl in stale_leaders:
+                    stale_entity_names.add(sl["subject"].lower())
+                    stale_entity_names.add(sl["value"].lower())
+
                 stale_text = "\n\n### STALE LEADER FACTS (verify before citing)\n"
                 stale_text += (
                     "The following leader/head-of-state facts have not been "
@@ -340,8 +346,20 @@ class IntrospectMixin:
                     )
                 entity_profiles_text += stale_text
 
+                # Annotate relationship lines involving stale entities
+                if stale_entity_names and key_relationships:
+                    annotated_lines = []
+                    for line in key_relationships.split("\n"):
+                        line_lower = line.lower()
+                        if any(name in line_lower for name in stale_entity_names):
+                            annotated_lines.append(line + "  ⚠ REDUCED CONFIDENCE — involves stale entity")
+                        else:
+                            annotated_lines.append(line)
+                    key_relationships = "\n".join(annotated_lines)
+
             # --- Novelty scoring: surface under-represented events ---
             novelty_events_text = ""
+            peripheral_novelty_text = ""
             try:
                 if self.memory and self.memory.structured and self.memory.structured._available:
                     async with self.memory.structured._pool.acquire() as conn:
@@ -437,16 +455,24 @@ class IntrospectMixin:
                             })
 
                         scored.sort(key=lambda x: x["novelty"], reverse=True)
-                        top_novel = scored[:10]
+                        top_novel = scored[:15]
 
-                        if top_novel:
-                            lines = []
-                            for item in top_novel:
-                                lines.append(
-                                    f"- [novelty={item['novelty']:.2f}] [{item['category']}] "
-                                    f"({item['region']}) {item['title']}"
-                                )
-                            novelty_events_text = "\n".join(lines)
+                        # Partition into primary-domain vs peripheral events
+                        primary_domains = self.config.agent.report_primary_domains
+                        primary_lines: list[str] = []
+                        peripheral_lines: list[str] = []
+                        for item in top_novel:
+                            line = (
+                                f"- [novelty={item['novelty']:.2f}] [{item['category']}] "
+                                f"({item['region']}) {item['title']}"
+                            )
+                            if item["category"] in primary_domains:
+                                primary_lines.append(line)
+                            else:
+                                peripheral_lines.append(line)
+
+                        novelty_events_text = "\n".join(primary_lines) if primary_lines else ""
+                        peripheral_novelty_text = "\n".join(peripheral_lines) if peripheral_lines else ""
             except Exception:
                 pass  # Best-effort — don't break the report if novelty scoring fails
 
@@ -460,6 +486,7 @@ class IntrospectMixin:
                 coverage_regions=coverage_regions,
                 narrative=narrative_with_prev,
                 novelty_events=novelty_events_text,
+                peripheral_novelty=peripheral_novelty_text,
             )
 
             response = await self.llm.complete(
@@ -508,6 +535,17 @@ class IntrospectMixin:
 
             # Compute and store operator scorecard
             await self._compute_scorecard()
+
+            # Recompute source quality scores
+            try:
+                updated = await self.memory.structured.compute_source_quality_scores()
+                if updated:
+                    self.logger.log("source_quality_recomputed", sources_updated=updated)
+            except Exception:
+                pass
+
+            # Extract proposed edges from report (relationship inference queue)
+            await self._extract_proposed_edges(report_content, key_relationships)
 
         except Exception as e:
             self.logger.log_error(f"Analysis report generation failed: {e}")
@@ -595,6 +633,13 @@ class IntrospectMixin:
                 )
                 scorecard["source_health"] = {r["status"]: r["cnt"] for r in rows}
 
+                # --- Source quality scores (top/bottom) ---
+                try:
+                    quality = await self.memory.structured.get_source_quality_summary(limit=5)
+                    scorecard["source_quality"] = quality
+                except Exception:
+                    scorecard["source_quality"] = {}
+
                 # --- Top entities by event involvement ---
                 rows = await conn.fetch(
                     "SELECT ep.canonical_name, COUNT(eel.event_id) AS event_count "
@@ -644,3 +689,140 @@ class IntrospectMixin:
 
         except Exception as e:
             self.logger.log_error(f"Scorecard computation failed: {e}")
+
+    async def _extract_proposed_edges(
+        self: AgentCycle,
+        report_content: str,
+        existing_relationships: str,
+    ) -> None:
+        """Extract relationship proposals from the report that aren't in the graph.
+
+        Runs a focused LLM call to identify relationships asserted or implied in the
+        report that don't appear in the existing graph edges. Stores proposals in the
+        proposed_edges table for operator review. Auto-approves high-confidence proposals
+        where both entities are already resolved.
+        """
+        if not report_content or not self.memory.structured or not self.memory.structured._available:
+            return
+        try:
+            from ..llm.format import Message
+
+            extract_messages = [
+                Message(role="system", content=(
+                    "reasoning: low\n\n"
+                    "You extract structured relationship data from intelligence reports. "
+                    "Output ONLY valid JSON — no markdown, no commentary."
+                )),
+                Message(role="user", content=(
+                    "Below is an intelligence report and the current graph relationships.\n\n"
+                    "## Current Graph Relationships\n"
+                    f"{existing_relationships}\n\n"
+                    "## Report\n"
+                    f"{report_content[:4000]}\n\n"
+                    "Identify relationships mentioned or strongly implied in the report "
+                    "that are NOT already in the graph relationships above. For each, output:\n"
+                    '{"proposals": [{"source": "EntityA", "target": "EntityB", '
+                    '"rel_type": "HostileTo", "confidence": 0.8, '
+                    '"evidence": "brief quote or reason from report"}]}\n\n'
+                    "Use ONLY canonical relationship types: LeaderOf, HostileTo, AlliedWith, "
+                    "SuppliesWeaponsTo, SanctionedBy, MemberOf, OperatesIn, LocatedIn, "
+                    "OccupiedBy, SignatoryTo, TradesWith, BordersWith, FundedBy, AffiliatedWith, PartOf.\n"
+                    "If no new relationships found, output: {\"proposals\": []}\n"
+                    "Output ONLY the JSON object."
+                )),
+            ]
+
+            response = await self.llm.complete(extract_messages, purpose="edge_extraction")
+            content = response.content.strip()
+
+            # Parse JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if not json_match:
+                return
+            proposals_data = json.loads(json_match.group())
+            proposals = proposals_data.get("proposals", [])
+            if not proposals:
+                return
+
+            # Resolve which entities exist in the graph
+            resolved_entities: set[str] = set()
+            try:
+                async with self.memory.structured._pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT LOWER(canonical_name) AS name FROM entity_profiles"
+                    )
+                    resolved_entities = {r["name"] for r in rows}
+            except Exception:
+                pass
+
+            # Canonical relationship types for auto-approve validation
+            canonical_rels = {
+                "LeaderOf", "HostileTo", "AlliedWith", "SuppliesWeaponsTo",
+                "SanctionedBy", "MemberOf", "OperatesIn", "LocatedIn",
+                "OccupiedBy", "SignatoryTo", "TradesWith", "BordersWith",
+                "FundedBy", "AffiliatedWith", "PartOf",
+            }
+
+            stored = 0
+            async with self.memory.structured._pool.acquire() as conn:
+                for p in proposals[:10]:  # Cap at 10 per cycle
+                    source = p.get("source", "").strip()
+                    target = p.get("target", "").strip()
+                    rel_type = p.get("rel_type", "").strip()
+                    confidence = float(p.get("confidence", 0.5))
+                    evidence = p.get("evidence", "")[:500]
+
+                    if not source or not target or not rel_type:
+                        continue
+
+                    # Check for duplicates
+                    existing = await conn.fetchval(
+                        "SELECT id FROM proposed_edges "
+                        "WHERE LOWER(source_entity) = LOWER($1) "
+                        "AND LOWER(target_entity) = LOWER($2) "
+                        "AND relationship_type = $3 "
+                        "AND status = 'pending'",
+                        source, target, rel_type,
+                    )
+                    if existing:
+                        continue
+
+                    # Auto-approve if high confidence + both entities resolved + canonical type
+                    both_resolved = (
+                        source.lower() in resolved_entities
+                        and target.lower() in resolved_entities
+                    )
+                    auto_approve = (
+                        confidence >= 0.85
+                        and both_resolved
+                        and rel_type in canonical_rels
+                    )
+
+                    status = "approved" if auto_approve else "pending"
+
+                    await conn.execute(
+                        "INSERT INTO proposed_edges "
+                        "(source_entity, target_entity, relationship_type, confidence, "
+                        "evidence_text, source_cycle, status) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                        source, target, rel_type, confidence,
+                        evidence, self.state.cycle_number, status,
+                    )
+                    stored += 1
+
+                    # If auto-approved and graph is available, commit to graph immediately
+                    if auto_approve and self.memory.graph and self.memory.graph.available:
+                        try:
+                            await self.memory.graph.add_relationship(
+                                source, target, rel_type,
+                                {"source_cycle": self.state.cycle_number, "auto_proposed": True},
+                            )
+                        except Exception:
+                            pass  # Edge commit failure is non-fatal
+
+            if stored:
+                self.logger.log("proposed_edges_extracted", count=stored)
+
+        except Exception as e:
+            self.logger.log_error(f"Edge extraction failed (non-fatal): {e}")

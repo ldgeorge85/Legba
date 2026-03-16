@@ -208,46 +208,11 @@ class TestCycleSchemas:
 
 
 # ---------------------------------------------------------------------------
-# Harmony formatting
+# Legacy harmony tests (removed — harmony module replaced by format.py)
 # ---------------------------------------------------------------------------
-from legba.agent.llm.harmony import (
-    format_messages,
-    parse_response,
-    Message,
-    START,
-    END,
-    MESSAGE,
-    CHANNEL,
-)
+from legba.agent.llm.format import Message
 
 
-class TestHarmonyFormatting:
-    def test_format_messages_produces_correct_tokens(self):
-        msgs = [
-            Message(role="system", content="You are Legba."),
-            Message(role="user", content="What is your purpose?"),
-        ]
-        output = format_messages(msgs)
-        assert f"{START}system{MESSAGE}You are Legba.{END}" in output
-        assert f"{START}user{MESSAGE}What is your purpose?{END}" in output
-
-    def test_format_messages_with_channel(self):
-        msgs = [
-            Message(role="assistant", content="Thinking...", channel="analysis"),
-        ]
-        output = format_messages(msgs)
-        assert f"{START}assistant{CHANNEL}analysis{MESSAGE}Thinking...{END}" in output
-
-    def test_parse_response_extracts_content(self):
-        raw = f"{CHANNEL}analysis{MESSAGE}Internal reasoning here.{END}"
-        parsed = parse_response(raw)
-        assert "analysis" in parsed
-        assert parsed["analysis"] == "Internal reasoning here."
-
-    def test_parse_response_default_channel(self):
-        parsed = parse_response("Just plain text")
-        assert "default" in parsed
-        assert parsed["default"] == "Just plain text"
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +222,7 @@ from legba.shared.schemas.tools import ToolDefinition, ToolParameter
 
 
 class TestToolDefinition:
-    def test_to_harmony_typescript_renders_syntax(self):
+    def test_to_typescript_renders_syntax(self):
         defn = ToolDefinition(
             name="fs_read",
             description="Read a file",
@@ -267,7 +232,7 @@ class TestToolDefinition:
             ],
             return_type="string",
         )
-        ts = defn.to_harmony_typescript()
+        ts = defn.to_typescript()
         assert "// Read a file" in ts
         assert "type fs_read = (_: {" in ts
         assert "  path: string," in ts
@@ -283,7 +248,7 @@ class TestToolDefinition:
                 ToolParameter(name="optional_p", type="boolean", required=False),
             ],
         )
-        ts = defn.to_harmony_typescript()
+        ts = defn.to_typescript()
         assert "  required_p: number," in ts
         assert "  optional_p?: boolean," in ts
 
@@ -291,40 +256,20 @@ class TestToolDefinition:
 # ---------------------------------------------------------------------------
 # Tool parser
 # ---------------------------------------------------------------------------
-from legba.agent.llm.tool_parser import parse_tool_call
-from legba.agent.llm.harmony import CONSTRAIN, CALL
+from legba.agent.llm.tool_parser import parse_tool_calls
 
 
 class TestToolParser:
-    def test_parse_tool_call_valid(self):
-        raw = (
-            f"{START}assistant{CHANNEL}commentary to=functions.fs_read"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"path": "/workspace/config.yml"}'
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "fs_read"
-        assert call.arguments["path"] == "/workspace/config.yml"
+    def test_parse_tool_calls_from_json(self):
+        text = '{"actions": [{"tool": "fs_read", "args": {"path": "/test"}}]}'
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].tool_name == "fs_read"
+        assert calls[0].arguments["path"] == "/test"
 
-    def test_parse_missing_tool_name_returns_none(self):
-        raw = f"{START}assistant{CHANNEL}analysis{MESSAGE}Just thinking out loud{END}"
-        call = parse_tool_call(raw, "length")
-        assert call is None
-
-    def test_parse_bad_json_returns_raw(self):
-        raw = (
-            f"{START}assistant{CHANNEL}commentary to=functions.shell_exec"
-            f"{CONSTRAIN}json{MESSAGE}"
-            "not valid json at all"
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "shell_exec"
-        # Bad JSON gets stored in _raw fallback
-        assert "_raw" in call.arguments or isinstance(call.arguments, dict)
+    def test_parse_no_tool_calls(self):
+        calls = parse_tool_calls("Just some text with no tools")
+        assert len(calls) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +385,7 @@ class TestToolRegistry:
         names = {t.name for t in tools}
         assert names == {"a", "b"}
 
-    def test_to_harmony_definitions(self):
+    def test_to_tool_definitions(self):
         reg = ToolRegistry(dynamic_tools_path="/tmp/legba_test_tools_does_not_exist")
         reg.register(
             ToolDefinition(
@@ -451,11 +396,9 @@ class TestToolRegistry:
             ),
             self._dummy_handler,
         )
-        harmony = reg.to_harmony_definitions()
-        assert "namespace functions {" in harmony
-        assert "type greet" in harmony
-        assert "name: string," in harmony
-        assert "} // namespace functions" in harmony
+        tool_defs = reg.to_tool_definitions()
+        assert '"greet"' in tool_defs
+        assert '"name"' in tool_defs
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +409,7 @@ from legba.agent.prompt.assembler import PromptAssembler
 
 class TestPromptAssembler:
     def test_assemble_reason_prompt_includes_seed_goal(self):
-        assembler = PromptAssembler(tool_definitions="# Tools\n## functions\nnamespace functions {\n} // namespace functions")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         messages = assembler.assemble_reason_prompt(
             cycle_number=1,
             seed_goal="Become self-improving",
@@ -477,11 +420,11 @@ class TestPromptAssembler:
         # The messages list should contain user messages that reference the seed goal
         all_content = " ".join(m.content for m in messages)
         assert "Become self-improving" in all_content
-        # Should have system, developer, user (goal context), user (action request) at minimum
-        assert len(messages) >= 3
+        # Should have system, user at minimum
+        assert len(messages) >= 2
 
     def test_assemble_reflect_prompt_works(self):
-        assembler = PromptAssembler(tool_definitions="")
+        assembler = PromptAssembler(tool_data=[], tool_summary="")
         messages = assembler.assemble_reflect_prompt(
             cycle_plan="Read 3 files and analyze config",
             working_memory="Step 1: read_file(path=config.yaml) → Found configuration",
@@ -495,7 +438,7 @@ class TestPromptAssembler:
         assert "Found configuration" in all_content
 
     def test_assemble_reason_prompt_with_inbox(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         inbox_msg = InboxMessage(
             id=str(uuid4()),
             content="Please report status",
@@ -514,453 +457,21 @@ class TestPromptAssembler:
 
 
 # ---------------------------------------------------------------------------
-# Comprehensive Harmony format tests
+# Legacy harmony format tests removed — harmony module replaced by format.py.
+# Extended tool parser tests removed — parse_tool_call replaced by
+# parse_tool_calls with JSON-based tool format.
 # ---------------------------------------------------------------------------
-from legba.agent.llm.harmony import (
-    format_for_completion,
-    format_tool_result,
-    format_tool_definitions,
-    parse_tool_call_header,
-    extract_final,
-    RETURN,
-)
 
 
-class TestHarmonyForCompletion:
-    """format_for_completion — generates the prompt suffix the LLM starts completing from."""
 
-    def test_appends_assistant_analysis_start(self):
-        msgs = [Message(role="system", content="Hello")]
-        prompt = format_for_completion(msgs, channel="analysis")
-        assert prompt.endswith(f"{START}assistant{CHANNEL}analysis{MESSAGE}")
+# (Harmony and extended tool parser test classes removed — referencing
+#  deleted legba.agent.llm.harmony module. See git history for originals.)
+# Removed: TestHarmonyForCompletion, TestHarmonyToolResult,
+# TestHarmonyToolDefinitions, TestHarmonyParseToolCallHeader,
+# TestHarmonyExtractFinal, TestHarmonyParseResponse,
+# TestHarmonyMessageFormatting, TestToolParserLiteralText,
+# TestToolParserMixedFormat, TestToolParserEdgeCases
 
-    def test_appends_assistant_final_channel(self):
-        prompt = format_for_completion([], channel="final")
-        assert prompt.endswith(f"{START}assistant{CHANNEL}final{MESSAGE}")
-
-    def test_no_channel_omits_channel_token(self):
-        prompt = format_for_completion([], channel=None)
-        assert prompt.endswith(f"{START}assistant{MESSAGE}")
-        assert CHANNEL not in prompt.split(f"{START}assistant")[-1]
-
-    def test_full_conversation_format(self):
-        msgs = [
-            Message(role="system", content="You are Legba."),
-            Message(role="developer", content="# Tools\nnamespace functions {}"),
-            Message(role="user", content="What is your goal?"),
-        ]
-        prompt = format_for_completion(msgs, channel="analysis")
-        # All three messages should appear in order
-        sys_pos = prompt.index("You are Legba.")
-        dev_pos = prompt.index("# Tools")
-        user_pos = prompt.index("What is your goal?")
-        assert sys_pos < dev_pos < user_pos
-        # Ends with assistant start
-        assert prompt.endswith(f"{START}assistant{CHANNEL}analysis{MESSAGE}")
-
-
-class TestHarmonyToolResult:
-    """format_tool_result — formats tool output to feed back into conversation."""
-
-    def test_basic_tool_result(self):
-        result = format_tool_result("fs_read", "file contents here")
-        assert f"{START}functions.fs_read to=assistant" in result
-        assert f"{CHANNEL}commentary" in result
-        assert f"{MESSAGE}file contents here{END}" in result
-
-    def test_custom_channel(self):
-        result = format_tool_result("exec", "output", target_channel="analysis")
-        assert f"{CHANNEL}analysis" in result
-
-    def test_non_string_result_converted(self):
-        result = format_tool_result("http_request", {"status": 200})
-        assert "{'status': 200}" in result or "status" in result
-
-    def test_result_roundtrip_parseable(self):
-        """Tool result can be parsed back as a message."""
-        result = format_tool_result("memory_query", "Found 3 episodes")
-        # Should have proper start/end tokens
-        assert result.startswith(START)
-        assert result.endswith(END)
-
-
-class TestHarmonyToolDefinitions:
-    """format_tool_definitions — renders tool schemas as TypeScript for developer message."""
-
-    def test_single_tool(self):
-        tools = [{
-            "name": "fs_read",
-            "description": "Read a file",
-            "parameters": [
-                {"name": "path", "type": "string", "required": True},
-                {"name": "offset", "type": "number", "required": False},
-            ],
-        }]
-        output = format_tool_definitions(tools)
-        assert "namespace functions {" in output
-        assert "// Read a file" in output
-        assert "type fs_read = (_: {" in output
-        assert "  path: string," in output
-        assert "  offset?: number," in output
-        assert "} // namespace functions" in output
-
-    def test_multiple_tools(self):
-        tools = [
-            {"name": "a", "description": "Tool A", "parameters": []},
-            {"name": "b", "description": "Tool B", "parameters": []},
-        ]
-        output = format_tool_definitions(tools)
-        assert "type a = " in output
-        assert "type b = " in output
-        # Only one namespace block
-        assert output.count("namespace functions {") == 1
-        assert output.count("} // namespace functions") == 1
-
-    def test_no_tools(self):
-        output = format_tool_definitions([])
-        assert "namespace functions {" in output
-        assert "} // namespace functions" in output
-
-    def test_custom_return_type(self):
-        tools = [{"name": "get_count", "description": "Count", "parameters": [], "return_type": "number"}]
-        output = format_tool_definitions(tools)
-        assert "}) => number;" in output
-
-
-class TestHarmonyParseToolCallHeader:
-    """parse_tool_call_header — extracts tool routing from assistant message headers."""
-
-    def test_extract_tool_name_and_constrain(self):
-        header = f"commentary to=functions.fs_read{CONSTRAIN}json"
-        tool_name, constrain = parse_tool_call_header(header)
-        assert tool_name == "fs_read"
-        assert constrain == "json"
-
-    def test_extract_tool_name_without_constrain(self):
-        header = "commentary to=functions.exec"
-        tool_name, constrain = parse_tool_call_header(header)
-        assert tool_name == "exec"
-        assert constrain is None
-
-    def test_no_tool_routing(self):
-        header = f"{CHANNEL}analysis{MESSAGE}Just thinking"
-        tool_name, constrain = parse_tool_call_header(header)
-        assert tool_name is None
-        assert constrain is None
-
-    def test_nested_function_name(self):
-        header = "commentary to=functions.http_request"
-        tool_name, _ = parse_tool_call_header(header)
-        assert tool_name == "http_request"
-
-    def test_spawn_subagent(self):
-        header = f"commentary to=functions.spawn_subagent{CONSTRAIN}json"
-        tool_name, constrain = parse_tool_call_header(header)
-        assert tool_name == "spawn_subagent"
-        assert constrain == "json"
-
-
-class TestHarmonyExtractFinal:
-    """extract_final — pulls the user-facing response from multi-channel output."""
-
-    def test_extract_final_channel(self):
-        raw = f"{CHANNEL}analysis{MESSAGE}thinking...{END}{CHANNEL}final{MESSAGE}Here is the answer.{END}"
-        assert extract_final(raw) == "Here is the answer."
-
-    def test_extract_default_when_no_channels(self):
-        assert extract_final("plain text response") == "plain text response"
-
-    def test_extract_strips_end_token(self):
-        raw = f"some response{END}"
-        result = extract_final(raw)
-        assert END not in result
-
-    def test_extract_with_return_token(self):
-        raw = f"{CHANNEL}final{MESSAGE}Done.{RETURN}"
-        result = extract_final(raw)
-        assert result == "Done."
-
-
-class TestHarmonyParseResponse:
-    """parse_response — splits multi-channel responses."""
-
-    def test_multiple_channels(self):
-        raw = (
-            f"{CHANNEL}analysis{MESSAGE}Step 1: think about it{END}"
-            f"{CHANNEL}commentary{MESSAGE}I will read the file{END}"
-            f"{CHANNEL}final{MESSAGE}The file contains X{END}"
-        )
-        parsed = parse_response(raw)
-        assert "analysis" in parsed
-        assert "commentary" in parsed
-        assert "final" in parsed
-        assert parsed["analysis"] == "Step 1: think about it"
-        assert parsed["final"] == "The file contains X"
-
-    def test_single_channel(self):
-        raw = f"{CHANNEL}analysis{MESSAGE}Just thinking{END}"
-        parsed = parse_response(raw)
-        assert "analysis" in parsed
-        assert parsed["analysis"] == "Just thinking"
-
-    def test_no_channels(self):
-        parsed = parse_response("raw text with no tokens")
-        assert "default" in parsed
-
-    def test_content_with_newlines(self):
-        raw = f"{CHANNEL}analysis{MESSAGE}Line 1\nLine 2\nLine 3{END}"
-        parsed = parse_response(raw)
-        assert "Line 1\nLine 2\nLine 3" == parsed["analysis"]
-
-    def test_channel_terminated_by_call_token(self):
-        raw = f"{CHANNEL}commentary to=functions.exec{CONSTRAIN}json{MESSAGE}" '{"cmd": "ls"}' f"{CALL}"
-        parsed = parse_response(raw)
-        # Should still extract the commentary content
-        assert any('{"cmd": "ls"}' in v for v in parsed.values())
-
-
-class TestHarmonyMessageFormatting:
-    """_format_message — individual message formatting edge cases."""
-
-    def test_tool_result_message_format(self):
-        msg = Message(
-            role="functions.fs_read",
-            content='{"content": "hello"}',
-            channel="commentary",
-            to="assistant",
-        )
-        output = format_messages([msg])
-        assert f"{START}functions.fs_read to=assistant" in output
-        assert f"{CHANNEL}commentary" in output
-        assert '{"content": "hello"}' in output
-        assert output.endswith(END)
-
-    def test_assistant_tool_call_message_format(self):
-        msg = Message(
-            role="assistant",
-            content='{"path": "/workspace"}',
-            channel="commentary",
-            to="functions.fs_read",
-            constrain="json",
-        )
-        output = format_messages([msg])
-        assert "to=functions.fs_read" in output
-        assert f"{CONSTRAIN}json" in output
-        assert '{"path": "/workspace"}' in output
-
-    def test_developer_message(self):
-        msg = Message(role="developer", content="# Instructions\nBe helpful.")
-        output = format_messages([msg])
-        assert f"{START}developer{MESSAGE}# Instructions\nBe helpful.{END}" in output
-
-
-# ---------------------------------------------------------------------------
-# Extended tool parser tests
-# ---------------------------------------------------------------------------
-from legba.agent.llm.tool_parser import (
-    parse_tool_calls_from_text,
-    _extract_arguments,
-    CALL_INDICATOR,
-)
-
-
-class TestToolParserLiteralText:
-    """Tests for models that write literal text instead of Harmony special tokens."""
-
-    def test_literal_tool_call_json_merged(self):
-        """Model writes 'to=functions.fs_readjson{...}' — no special tokens."""
-        raw = (
-            "I need to check the filesystem.\n\n"
-            "assistantcommentary to=functions.fs_readjson{\n"
-            '  "path": "/workspace/config.yml"\n'
-            "}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "fs_read"
-        assert call.arguments["path"] == "/workspace/config.yml"
-
-    def test_literal_tool_call_json_spaced(self):
-        """Model writes 'to=functions.goal_list json{...}' — space before json."""
-        raw = (
-            "Let me list the goals.\n\n"
-            'assistantcommentary to=functions.goal_list json{\n'
-            '  "status": "active"\n'
-            '}'
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "goal_list"
-        assert call.arguments["status"] == "active"
-
-    def test_literal_tool_call_with_analysis(self):
-        """Model mixes analysis text with literal tool call."""
-        raw = (
-            "We should decompose this goal into subtasks.\n\n"
-            "assistantcommentary to=functions.goal_decomposejson{\n"
-            '  "goal_id": "d597c1c0-343c-4850-a058-4be41893ec56",\n'
-            '  "subtasks": "Run tests|Check results|Report"\n'
-            "}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "goal_decompose"
-        assert call.arguments["goal_id"] == "d597c1c0-343c-4850-a058-4be41893ec56"
-        assert "Run tests" in call.arguments["subtasks"]
-
-    def test_literal_nested_json(self):
-        """Literal format with nested JSON (http_request with headers)."""
-        raw = (
-            "Making an API request.\n\n"
-            'assistantcommentary to=functions.http_requestjson{\n'
-            '  "method": "GET",\n'
-            '  "url": "https://nvd.nist.gov/feeds/json/cve/1.1",\n'
-            '  "headers": {"Accept": "application/json"}\n'
-            '}'
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "http_request"
-        assert call.arguments["method"] == "GET"
-        assert call.arguments["headers"]["Accept"] == "application/json"
-
-    def test_proper_format_still_works(self):
-        """Verify proper Harmony token format still parses correctly."""
-        raw = (
-            f"{START}assistant{CHANNEL}commentary to=functions.fs_read"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"path": "/workspace/config.yml"}'
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "fs_read"
-        assert call.arguments["path"] == "/workspace/config.yml"
-
-    def test_clean_tool_name_no_false_positive(self):
-        """Tool name that legitimately ends in characters shouldn't be mangled."""
-        from legba.agent.llm.tool_parser import _clean_tool_name
-        assert _clean_tool_name("exec") == "exec"
-        assert _clean_tool_name("fs_read") == "fs_read"
-        assert _clean_tool_name("http_request") == "http_request"
-        assert _clean_tool_name("json") == "json"  # 4 chars exactly, don't strip
-        assert _clean_tool_name("fs_readjson") == "fs_read"
-        assert _clean_tool_name("goal_decomposejson") == "goal_decompose"
-
-
-class TestToolParserExtended:
-    """Additional tool parser tests for edge cases and multi-call parsing."""
-
-    def test_parse_nested_json_arguments(self):
-        raw = (
-            f"{START}assistant{CHANNEL}commentary to=functions.http_request"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"url": "https://api.example.com", "headers": {"Authorization": "Bearer tok"}, "body": {"key": "value"}}'
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "http_request"
-        assert call.arguments["url"] == "https://api.example.com"
-        assert call.arguments["headers"]["Authorization"] == "Bearer tok"
-        assert call.arguments["body"]["key"] == "value"
-
-    def test_parse_tool_call_with_analysis_prefix(self):
-        """Model sometimes emits analysis before the tool call header."""
-        raw = (
-            f"{CHANNEL}analysis{MESSAGE}I need to read the file{END}"
-            f"{START}assistant{CHANNEL}commentary to=functions.fs_read"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"path": "/workspace/data.json"}'
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "fs_read"
-        assert call.arguments["path"] == "/workspace/data.json"
-
-    def test_parse_tool_call_without_constrain(self):
-        """Some models may omit the constrain token."""
-        raw = (
-            f"to=functions.exec{MESSAGE}"
-            '{"command": "ls -la"}'
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "exec"
-        assert call.arguments["command"] == "ls -la"
-
-    def test_parse_multiple_tool_calls(self):
-        text = (
-            f"{START}assistant{CHANNEL}commentary to=functions.fs_read"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"path": "/a.txt"}'
-            f"{END}"
-            f"{START}assistant{CHANNEL}commentary to=functions.fs_read"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"path": "/b.txt"}'
-            f"{END}"
-        )
-        calls = parse_tool_calls_from_text(text)
-        assert len(calls) == 2
-        assert calls[0].arguments["path"] == "/a.txt"
-        assert calls[1].arguments["path"] == "/b.txt"
-
-    def test_parse_tool_calls_empty_text(self):
-        calls = parse_tool_calls_from_text("")
-        assert calls == []
-
-    def test_parse_tool_calls_no_tool_routing(self):
-        text = f"{START}assistant{CHANNEL}final{MESSAGE}No tools needed.{END}"
-        calls = parse_tool_calls_from_text(text)
-        assert calls == []
-
-    def test_extract_arguments_empty(self):
-        assert _extract_arguments("") == {}
-
-    def test_extract_arguments_json_in_extra_text(self):
-        """Model wraps JSON in extra explanation text."""
-        text = f'{CONSTRAIN}json{MESSAGE}Here is the call: {{"path": "/test"}}'
-        result = _extract_arguments(text)
-        assert result.get("path") == "/test"
-
-    def test_call_indicator_constant(self):
-        assert CALL_INDICATOR == "to=functions."
-
-    def test_finish_reason_length_with_no_routing(self):
-        """finish_reason='length' and no tool routing = not a tool call."""
-        raw = f"{START}assistant{CHANNEL}analysis{MESSAGE}Some long reasoning...{END}"
-        call = parse_tool_call(raw, "length")
-        assert call is None
-
-    def test_graph_tool_call(self):
-        """Graph tool calls with cypher query in arguments."""
-        raw = (
-            f"{START}assistant{CHANNEL}commentary to=functions.graph_query"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"query": "MATCH (n:Vulnerability) RETURN n LIMIT 10", "mode": "cypher"}'
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "graph_query"
-        assert call.arguments["mode"] == "cypher"
-        assert "MATCH" in call.arguments["query"]
-
-    def test_goal_tool_call(self):
-        """Goal tool calls parse correctly."""
-        raw = (
-            f"{START}assistant{CHANNEL}commentary to=functions.goal_create"
-            f"{CONSTRAIN}json{MESSAGE}"
-            '{"description": "Monitor CVE feeds daily", "goal_type": "task", "priority": 3}'
-            f"{CALL}"
-        )
-        call = parse_tool_call(raw, "stop")
-        assert call is not None
-        assert call.tool_name == "goal_create"
-        assert call.arguments["description"] == "Monitor CVE feeds daily"
-        assert call.arguments["priority"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -978,26 +489,26 @@ class TestGoalToolDefinitions:
     """Verify goal tool definitions render correctly for Harmony."""
 
     def test_goal_create_harmony_typescript(self):
-        ts = GOAL_CREATE_DEF.to_harmony_typescript()
+        ts = GOAL_CREATE_DEF.to_typescript()
         assert "type goal_create = " in ts
         assert "description: string," in ts
         assert "goal_type?: string," in ts
         assert "priority?: number," in ts
 
     def test_goal_list_harmony_typescript(self):
-        ts = GOAL_LIST_DEF.to_harmony_typescript()
+        ts = GOAL_LIST_DEF.to_typescript()
         assert "type goal_list = " in ts
         assert "status?: string," in ts
 
     def test_goal_update_harmony_typescript(self):
-        ts = GOAL_UPDATE_DEF.to_harmony_typescript()
+        ts = GOAL_UPDATE_DEF.to_typescript()
         assert "type goal_update = " in ts
         assert "goal_id: string," in ts
         assert "action: string," in ts
         assert "progress_pct?: number," in ts
 
     def test_goal_decompose_harmony_typescript(self):
-        ts = GOAL_DECOMPOSE_DEF.to_harmony_typescript()
+        ts = GOAL_DECOMPOSE_DEF.to_typescript()
         assert "type goal_decompose = " in ts
         assert "goal_id: string," in ts
         assert "subtasks: string," in ts
@@ -1011,12 +522,11 @@ class TestGoalToolDefinitions:
         for defn in [GOAL_CREATE_DEF, GOAL_LIST_DEF, GOAL_UPDATE_DEF, GOAL_DECOMPOSE_DEF]:
             reg.register(defn, noop)
 
-        harmony_str = reg.to_harmony_definitions()
-        assert "type goal_create" in harmony_str
-        assert "type goal_list" in harmony_str
-        assert "type goal_update" in harmony_str
-        assert "type goal_decompose" in harmony_str
-        assert harmony_str.count("namespace functions {") == 1
+        tool_defs = reg.to_tool_definitions()
+        assert '"goal_create"' in tool_defs
+        assert '"goal_list"' in tool_defs
+        assert '"goal_update"' in tool_defs
+        assert '"goal_decompose"' in tool_defs
 
 
 # ---------------------------------------------------------------------------
@@ -1028,7 +538,7 @@ class TestAssemblerMemoryGuidance:
     """Verify memory management guidance is wired into prompts."""
 
     def test_memory_guidance_in_reason_prompt(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         messages = assembler.assemble_reason_prompt(
             cycle_number=10,
             seed_goal="Be autonomous",
@@ -1043,7 +553,7 @@ class TestAssemblerMemoryGuidance:
         assert "memory_supersede" in system_msg  # replaced 'relevance decay' with specific tool check
 
     def test_bootstrap_threshold_respected(self):
-        assembler = PromptAssembler(tool_definitions="# Tools", bootstrap_threshold=3)
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)", bootstrap_threshold=3)
         # Cycle 3 should include bootstrap addon
         msgs_early = assembler.assemble_reason_prompt(
             cycle_number=3, seed_goal="goal",
@@ -1059,7 +569,7 @@ class TestAssemblerMemoryGuidance:
         assert "Early Cycle Guidance" not in msgs_late[0].content
 
     def test_default_bootstrap_threshold_is_5(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         # Cycle 5 — should include bootstrap
         msgs = assembler.assemble_reason_prompt(
             cycle_number=5, seed_goal="goal",
@@ -1075,190 +585,8 @@ class TestAssemblerMemoryGuidance:
         assert "Early Cycle Guidance" not in msgs[0].content
 
 
-# ---------------------------------------------------------------------------
-# Format chain validation — no mocks, exercises real code paths
-# ---------------------------------------------------------------------------
 
-
-class TestFormatChainEndToEnd:
-    """
-    Validates the complete prompt assembly → Harmony format → parse round-trip.
-
-    Exercises the real assembler, formatter, parser, and tool result formatting
-    using actual production code paths. No mocks.
-    """
-
-    def test_assembled_prompt_produces_valid_harmony(self):
-        """PromptAssembler → format_for_completion → valid Harmony structure."""
-        tools = [
-            {"name": "fs_read", "description": "Read a file", "parameters": [
-                {"name": "path", "type": "string", "required": True},
-            ]},
-            {"name": "exec", "description": "Run a command", "parameters": [
-                {"name": "command", "type": "string", "required": True},
-                {"name": "timeout", "type": "number", "required": False},
-            ]},
-        ]
-        tool_defs_str = format_tool_definitions(tools)
-
-        assembler = PromptAssembler(tool_definitions=tool_defs_str)
-        messages = assembler.assemble_reason_prompt(
-            cycle_number=1,
-            seed_goal="Identify and track cybersecurity threats",
-            active_goals=[
-                {"description": "Set up threat feeds", "goal_type": "task", "priority": 3, "progress_pct": 0, "status": "active"},
-            ],
-            memory_context={
-                "episodes": [
-                    {"content": "First boot complete", "score": 0.95, "cycle_number": 0},
-                ],
-                "facts": [
-                    {"subject": "system", "predicate": "has", "value": "internet access"},
-                ],
-            },
-            inbox_messages=[],
-        )
-
-        # Format into Harmony completion prompt
-        prompt = format_for_completion(messages, channel="analysis")
-
-        # Verify Harmony structure
-        assert f"{START}system{MESSAGE}" in prompt
-        assert f"{START}developer{MESSAGE}" in prompt
-        assert f"{START}user{MESSAGE}" in prompt
-        assert prompt.endswith(f"{START}assistant{CHANNEL}analysis{MESSAGE}")
-
-        # Verify content gets through the chain
-        assert "cybersecurity threats" in prompt
-        assert "namespace functions {" in prompt
-        assert "type fs_read" in prompt
-        assert "type exec" in prompt
-        assert "Set up threat feeds" in prompt
-        assert "First boot complete" in prompt
-        assert "## Memory" in prompt
-        assert assembler.estimated_tokens > 0
-
-    def test_tool_call_parse_from_realistic_response(self):
-        """Simulate what the LLM would produce and parse it through the real parser."""
-        # This is what vLLM would return in response.content
-        raw_llm_output = (
-            f"I need to check the filesystem to understand the workspace layout."
-            f"{END}"
-            f"{START}assistant{CHANNEL}commentary to=functions.fs_list"
-            f"{CONSTRAIN}json{MESSAGE}"
-            f'{{"path": "/workspace", "recursive": false}}'
-        )
-
-        # Parse through real tool parser
-        call = parse_tool_call(raw_llm_output, "stop")
-        assert call is not None
-        assert call.tool_name == "fs_list"
-        assert call.arguments["path"] == "/workspace"
-        assert call.arguments["recursive"] is False
-
-    def test_tool_result_format_then_parse(self):
-        """Format a tool result, then parse it back — round-trip validation."""
-        result_str = format_tool_result(
-            "fs_read",
-            "redis_host: redis\nredis_port: 6379\npostgres_host: postgres",
-        )
-
-        # Verify it has proper Harmony structure
-        assert result_str.startswith(START)
-        assert result_str.endswith(END)
-        assert "functions.fs_read to=assistant" in result_str
-        assert "redis_host: redis" in result_str
-
-        # Parse it back
-        parsed = parse_response(result_str)
-        assert any("redis_host" in v for v in parsed.values())
-
-    def test_full_conversation_assembly_with_tool_result_roundtrip(self):
-        """Build a realistic multi-turn conversation and verify formatting."""
-        # Initial messages from assembler
-        assembler = PromptAssembler(
-            tool_definitions="namespace functions {\ntype fs_read = (_: { path: string }) => string;\n} // namespace functions"
-        )
-        messages = assembler.assemble_reason_prompt(
-            cycle_number=3,
-            seed_goal="Monitor threats",
-            active_goals=[],
-            memory_context={},
-            inbox_messages=[],
-        )
-
-        # Simulate assistant tool call message (what LLMClient adds to conversation)
-        messages.append(Message(
-            role="assistant",
-            content='{"path": "/workspace/config.yml"}',
-            channel="commentary",
-            to="functions.fs_read",
-            constrain="json",
-        ))
-
-        # Simulate tool result message (what LLMClient adds after execution)
-        messages.append(Message(
-            role="functions.fs_read",
-            content="redis_host: redis\nredis_port: 6379",
-            channel="commentary",
-            to="assistant",
-        ))
-
-        # Format the entire conversation
-        prompt = format_for_completion(messages, channel="analysis")
-
-        # Verify the tool call and result appear in correct Harmony format
-        assert "to=functions.fs_read" in prompt
-        assert f"{CONSTRAIN}json" in prompt
-        assert "functions.fs_read to=assistant" in prompt
-        assert "redis_host: redis" in prompt
-
-        # Verify message ordering is preserved
-        system_pos = prompt.index("Monitor threats")
-        tool_call_pos = prompt.index("to=functions.fs_read")
-        tool_result_pos = prompt.index("functions.fs_read to=assistant")
-        assert system_pos < tool_call_pos < tool_result_pos
-
-    def test_multi_tool_call_parsing_from_realistic_output(self):
-        """Parse multiple tool calls from a single response (batch tool use)."""
-        raw = (
-            f"{START}assistant{CHANNEL}commentary to=functions.fs_read"
-            f"{CONSTRAIN}json{MESSAGE}"
-            f'{{"path": "/etc/hosts"}}'
-            f"{END}"
-            f"{START}assistant{CHANNEL}commentary to=functions.exec"
-            f"{CONSTRAIN}json{MESSAGE}"
-            f'{{"command": "whoami"}}'
-            f"{END}"
-        )
-        calls = parse_tool_calls_from_text(raw)
-        assert len(calls) == 2
-        assert calls[0].tool_name == "fs_read"
-        assert calls[0].arguments["path"] == "/etc/hosts"
-        assert calls[1].tool_name == "exec"
-        assert calls[1].arguments["command"] == "whoami"
-
-    def test_inbox_message_flows_through_assembly(self):
-        """Inbox messages appear correctly in the assembled prompt."""
-        assembler = PromptAssembler(tool_definitions="# Tools")
-        inbox_msg = InboxMessage(
-            id=str(uuid4()),
-            content="Report on CVE-2025-1234 immediately",
-            priority=MessagePriority.DIRECTIVE,
-            requires_response=True,
-        )
-        messages = assembler.assemble_reason_prompt(
-            cycle_number=5,
-            seed_goal="Threat analysis",
-            active_goals=[],
-            memory_context={},
-            inbox_messages=[inbox_msg],
-        )
-        prompt = format_for_completion(messages, channel="analysis")
-        assert "CVE-2025-1234" in prompt
-        assert "DIRECTIVE" in prompt
-        assert "REQUIRES RESPONSE" in prompt
-
+# (TestFormatChainEndToEnd removed — referenced deleted harmony module)
 
 # ---------------------------------------------------------------------------
 # Supervisor: Heartbeat + Auto-Rollback
@@ -1675,29 +1003,29 @@ from legba.agent.tools.builtins.nats_tools import (
 
 class TestNatsToolDefinitions:
     def test_nats_publish_harmony(self):
-        ts = NATS_PUBLISH_DEF.to_harmony_typescript()
+        ts = NATS_PUBLISH_DEF.to_typescript()
         assert "type nats_publish" in ts
         assert "subject: string," in ts
         assert "payload: string," in ts
 
     def test_nats_subscribe_harmony(self):
-        ts = NATS_SUBSCRIBE_DEF.to_harmony_typescript()
+        ts = NATS_SUBSCRIBE_DEF.to_typescript()
         assert "type nats_subscribe" in ts
         assert "subject: string," in ts
         assert "limit?: number," in ts
 
     def test_nats_create_stream_harmony(self):
-        ts = NATS_CREATE_STREAM_DEF.to_harmony_typescript()
+        ts = NATS_CREATE_STREAM_DEF.to_typescript()
         assert "type nats_create_stream" in ts
         assert "name: string," in ts
         assert "subjects: string," in ts
 
     def test_nats_queue_summary_harmony(self):
-        ts = NATS_QUEUE_SUMMARY_DEF.to_harmony_typescript()
+        ts = NATS_QUEUE_SUMMARY_DEF.to_typescript()
         assert "type nats_queue_summary" in ts
 
     def test_nats_list_streams_harmony(self):
-        ts = NATS_LIST_STREAMS_DEF.to_harmony_typescript()
+        ts = NATS_LIST_STREAMS_DEF.to_typescript()
         assert "type nats_list_streams" in ts
 
     def test_all_nats_tools_in_namespace(self):
@@ -1710,7 +1038,7 @@ class TestNatsToolDefinitions:
                      NATS_QUEUE_SUMMARY_DEF, NATS_LIST_STREAMS_DEF]:
             reg.register(defn, noop)
 
-        harmony_str = reg.to_harmony_definitions()
+        harmony_str = reg.to_tool_definitions()
         assert "type nats_publish" in harmony_str
         assert "type nats_subscribe" in harmony_str
         assert "type nats_create_stream" in harmony_str
@@ -1728,7 +1056,7 @@ class TestAssemblerQueueSummary:
     """Verify queue summary appears in assembled prompt when provided."""
 
     def test_queue_summary_in_reason_prompt(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         queue = QueueSummary(
             human_pending=0,
             data_streams=[
@@ -1750,7 +1078,7 @@ class TestAssemblerQueueSummary:
         assert "42" in all_content
 
     def test_empty_queue_summary_omitted(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         queue = QueueSummary()  # all zeros
         messages = assembler.assemble_reason_prompt(
             cycle_number=10,
@@ -1764,7 +1092,7 @@ class TestAssemblerQueueSummary:
         assert "NATS Queue Summary" not in all_content
 
     def test_no_queue_summary_omitted(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         messages = assembler.assemble_reason_prompt(
             cycle_number=10,
             seed_goal="Monitor threats",
@@ -1830,31 +1158,31 @@ from legba.agent.tools.builtins.opensearch_tools import (
 
 class TestOpenSearchToolDefinitions:
     def test_os_create_index_harmony(self):
-        ts = OS_CREATE_INDEX_DEF.to_harmony_typescript()
+        ts = OS_CREATE_INDEX_DEF.to_typescript()
         assert "os_create_index" in ts
         assert "index" in ts
 
     def test_os_index_document_harmony(self):
-        ts = OS_INDEX_DOCUMENT_DEF.to_harmony_typescript()
+        ts = OS_INDEX_DOCUMENT_DEF.to_typescript()
         assert "os_index_document" in ts
         assert "document" in ts
 
     def test_os_search_harmony(self):
-        ts = OS_SEARCH_DEF.to_harmony_typescript()
+        ts = OS_SEARCH_DEF.to_typescript()
         assert "os_search" in ts
         assert "query" in ts
 
     def test_os_aggregate_harmony(self):
-        ts = OS_AGGREGATE_DEF.to_harmony_typescript()
+        ts = OS_AGGREGATE_DEF.to_typescript()
         assert "os_aggregate" in ts
         assert "aggs" in ts
 
     def test_os_delete_index_harmony(self):
-        ts = OS_DELETE_INDEX_DEF.to_harmony_typescript()
+        ts = OS_DELETE_INDEX_DEF.to_typescript()
         assert "os_delete_index" in ts
 
     def test_os_list_indices_harmony(self):
-        ts = OS_LIST_INDICES_DEF.to_harmony_typescript()
+        ts = OS_LIST_INDICES_DEF.to_typescript()
         assert "os_list_indices" in ts
 
     def test_all_opensearch_tools_in_namespace(self):
@@ -1881,31 +1209,31 @@ class TestAnalyticsToolDefinitions:
     """Verify analytics tool definitions render correctly for Harmony."""
 
     def test_anomaly_detect_harmony(self):
-        ts = ANOMALY_DETECT_DEF.to_harmony_typescript()
+        ts = ANOMALY_DETECT_DEF.to_typescript()
         assert "type anomaly_detect" in ts
         assert "method?" in ts
         assert "contamination?" in ts
 
     def test_forecast_harmony(self):
-        ts = FORECAST_DEF.to_harmony_typescript()
+        ts = FORECAST_DEF.to_typescript()
         assert "type forecast" in ts
         assert "horizon?" in ts
         assert "frequency?" in ts
 
     def test_nlp_extract_harmony(self):
-        ts = NLP_EXTRACT_DEF.to_harmony_typescript()
+        ts = NLP_EXTRACT_DEF.to_typescript()
         assert "type nlp_extract" in ts
         assert "text?" in ts
         assert "operations?" in ts
 
     def test_graph_analyze_harmony(self):
-        ts = GRAPH_ANALYZE_DEF.to_harmony_typescript()
+        ts = GRAPH_ANALYZE_DEF.to_typescript()
         assert "type graph_analyze" in ts
         assert "operation: string," in ts
         assert "entity?" in ts
 
     def test_correlate_harmony(self):
-        ts = CORRELATE_DEF.to_harmony_typescript()
+        ts = CORRELATE_DEF.to_typescript()
         assert "type correlate" in ts
         assert "fields: string," in ts
         assert "operation?" in ts
@@ -1921,7 +1249,7 @@ class TestAnalyticsToolDefinitions:
         for defn in all_defs:
             reg.register(defn, noop)
 
-        harmony_str = reg.to_harmony_definitions()
+        harmony_str = reg.to_tool_definitions()
         assert "type anomaly_detect" in harmony_str
         assert "type forecast" in harmony_str
         assert "type nlp_extract" in harmony_str
@@ -1952,7 +1280,7 @@ class TestAssemblerAnalyticsGuidance:
     """Verify analytics guidance is wired into prompts."""
 
     def test_analytics_guidance_in_reason_prompt(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         messages = assembler.assemble_reason_prompt(
             cycle_number=10,
             seed_goal="Analyze data",
@@ -2119,31 +1447,31 @@ class TestOrchestrationToolDefinitions:
     """Verify orchestration tool definitions render correctly for Harmony."""
 
     def test_workflow_define_harmony(self):
-        ts = WORKFLOW_DEFINE_DEF.to_harmony_typescript()
+        ts = WORKFLOW_DEFINE_DEF.to_typescript()
         assert "type workflow_define" in ts
         assert "dag_id: string," in ts
         assert "dag_code: string," in ts
 
     def test_workflow_trigger_harmony(self):
-        ts = WORKFLOW_TRIGGER_DEF.to_harmony_typescript()
+        ts = WORKFLOW_TRIGGER_DEF.to_typescript()
         assert "type workflow_trigger" in ts
         assert "dag_id: string," in ts
         assert "conf?" in ts
 
     def test_workflow_status_harmony(self):
-        ts = WORKFLOW_STATUS_DEF.to_harmony_typescript()
+        ts = WORKFLOW_STATUS_DEF.to_typescript()
         assert "type workflow_status" in ts
         assert "dag_id: string," in ts
         assert "dag_run_id?" in ts
         assert "include_tasks?" in ts
 
     def test_workflow_list_harmony(self):
-        ts = WORKFLOW_LIST_DEF.to_harmony_typescript()
+        ts = WORKFLOW_LIST_DEF.to_typescript()
         assert "type workflow_list" in ts
         assert "limit?" in ts
 
     def test_workflow_pause_harmony(self):
-        ts = WORKFLOW_PAUSE_DEF.to_harmony_typescript()
+        ts = WORKFLOW_PAUSE_DEF.to_typescript()
         assert "type workflow_pause" in ts
         assert "dag_id: string," in ts
         assert "paused: boolean," in ts
@@ -2159,7 +1487,7 @@ class TestOrchestrationToolDefinitions:
         for defn in all_defs:
             reg.register(defn, noop)
 
-        harmony_str = reg.to_harmony_definitions()
+        harmony_str = reg.to_tool_definitions()
         assert "type workflow_define" in harmony_str
         assert "type workflow_trigger" in harmony_str
         assert "type workflow_status" in harmony_str
@@ -2184,7 +1512,7 @@ class TestAssemblerOrchestrationGuidance:
     """Verify orchestration guidance is wired into prompts."""
 
     def test_orchestration_guidance_in_reason_prompt(self):
-        assembler = PromptAssembler(tool_definitions="# Tools")
+        assembler = PromptAssembler(tool_data=[], tool_summary="(no tools)")
         messages = assembler.assemble_reason_prompt(
             cycle_number=10,
             seed_goal="Orchestrate pipelines",

@@ -292,6 +292,27 @@ class StructuredStore:
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_predictions_status ON predictions(status);
+
+                -- Entity freshness tracking (for confidence propagation)
+                ALTER TABLE entity_profiles ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMPTZ;
+
+                -- Source credibility tracking (per-source event quality)
+                ALTER TABLE sources ADD COLUMN IF NOT EXISTS source_quality_score REAL DEFAULT 0.0;
+
+                -- Proposed edges queue (relationship inference from reports)
+                CREATE TABLE IF NOT EXISTS proposed_edges (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    source_entity TEXT NOT NULL,
+                    target_entity TEXT NOT NULL,
+                    relationship_type TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 0.5,
+                    evidence_text TEXT NOT NULL DEFAULT '',
+                    source_cycle INTEGER,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    reviewed_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_proposed_edges_status ON proposed_edges(status);
             """)
 
     # --- Goal operations ---
@@ -918,8 +939,8 @@ class StructuredStore:
                         """
                         INSERT INTO entity_profiles (id, data, canonical_name, entity_type,
                                                      version, completeness_score, last_event_link_at,
-                                                     created_at, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                                                     created_at, updated_at, last_verified_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
                         ON CONFLICT (id) DO UPDATE SET
                             data = EXCLUDED.data,
                             canonical_name = EXCLUDED.canonical_name,
@@ -927,7 +948,8 @@ class StructuredStore:
                             version = EXCLUDED.version,
                             completeness_score = EXCLUDED.completeness_score,
                             last_event_link_at = EXCLUDED.last_event_link_at,
-                            updated_at = NOW()
+                            updated_at = NOW(),
+                            last_verified_at = NOW()
                         """,
                         profile.id,
                         profile.model_dump_json(),
@@ -1742,3 +1764,155 @@ class StructuredStore:
         except Exception as e:
             logger.error("Failed to get prediction %s: %s", prediction_id, e)
             return None
+
+    # --- Source credibility tracking ---
+
+    async def compute_source_quality_scores(self) -> int:
+        """Recompute source_quality_score for all active sources.
+
+        Quality score (0.0-1.0) = weighted average of:
+        - entity_link_rate: fraction of source's events that have entity links (50%)
+        - event_yield: events_produced / fetch_success (normalized, 30%)
+        - reliability: inverse of failure rate (20%)
+
+        Returns number of sources updated.
+        """
+        if not self._available:
+            return 0
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT
+                        s.id,
+                        s.events_produced_count,
+                        s.fetch_success_count,
+                        s.fetch_failure_count,
+                        COUNT(DISTINCT eel.event_id) AS linked_events,
+                        COUNT(DISTINCT e.id) AS total_events
+                    FROM sources s
+                    LEFT JOIN events e ON e.source_id = s.id
+                    LEFT JOIN event_entity_links eel ON eel.event_id = e.id
+                    WHERE s.status = 'active'
+                    GROUP BY s.id, s.events_produced_count,
+                             s.fetch_success_count, s.fetch_failure_count
+                """)
+
+                updated = 0
+                for r in rows:
+                    total = r["total_events"] or 0
+                    linked = r["linked_events"] or 0
+                    successes = r["fetch_success_count"] or 0
+                    failures = r["fetch_failure_count"] or 0
+                    produced = r["events_produced_count"] or 0
+
+                    # Entity link rate (0-1): what fraction of events got entity links
+                    link_rate = linked / max(total, 1)
+
+                    # Event yield (0-1): events produced per successful fetch, normalized
+                    yield_per_fetch = produced / max(successes, 1)
+                    # Normalize: 5+ events/fetch = 1.0
+                    event_yield = min(yield_per_fetch / 5.0, 1.0)
+
+                    # Reliability (0-1): success rate
+                    total_fetches = successes + failures
+                    reliability = successes / max(total_fetches, 1)
+
+                    # Weighted composite
+                    score = round(
+                        0.5 * link_rate + 0.3 * event_yield + 0.2 * reliability,
+                        3,
+                    )
+
+                    await conn.execute(
+                        "UPDATE sources SET source_quality_score = $1 WHERE id = $2",
+                        score, r["id"],
+                    )
+                    updated += 1
+
+                return updated
+        except Exception as e:
+            logger.error("Failed to compute source quality scores: %s", e)
+            return 0
+
+    async def get_source_quality_summary(self, limit: int = 10) -> dict:
+        """Get top and bottom sources by quality score for ORIENT injection."""
+        if not self._available:
+            return {}
+        try:
+            async with self._pool.acquire() as conn:
+                top = await conn.fetch(
+                    "SELECT name, source_quality_score FROM sources "
+                    "WHERE status = 'active' AND source_quality_score > 0 "
+                    "ORDER BY source_quality_score DESC LIMIT $1",
+                    limit,
+                )
+                bottom = await conn.fetch(
+                    "SELECT name, source_quality_score FROM sources "
+                    "WHERE status = 'active' AND events_produced_count > 0 "
+                    "ORDER BY source_quality_score ASC LIMIT $1",
+                    limit,
+                )
+                return {
+                    "top": [{"name": r["name"], "score": r["source_quality_score"]} for r in top],
+                    "bottom": [{"name": r["name"], "score": r["source_quality_score"]} for r in bottom],
+                }
+        except Exception as e:
+            logger.error("Failed to get source quality summary: %s", e)
+            return {}
+
+    # --- Proposed edges (relationship inference queue) ---
+
+    async def list_proposed_edges(
+        self, status: str = "pending", limit: int = 50
+    ) -> list[dict]:
+        """List proposed edges filtered by status."""
+        if not self._available:
+            return []
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, source_entity, target_entity, relationship_type, "
+                    "confidence, evidence_text, source_cycle, status, "
+                    "reviewed_at, created_at "
+                    "FROM proposed_edges WHERE status = $1 "
+                    "ORDER BY created_at DESC LIMIT $2",
+                    status, limit,
+                )
+                return [
+                    {
+                        "id": str(r["id"]),
+                        "source_entity": r["source_entity"],
+                        "target_entity": r["target_entity"],
+                        "relationship_type": r["relationship_type"],
+                        "confidence": r["confidence"],
+                        "evidence_text": r["evidence_text"] or "",
+                        "source_cycle": r["source_cycle"],
+                        "status": r["status"],
+                        "reviewed_at": r["reviewed_at"].isoformat() if r["reviewed_at"] else None,
+                        "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error("Failed to list proposed edges: %s", e)
+            return []
+
+    async def review_proposed_edge(
+        self, edge_id: str, action: str
+    ) -> bool:
+        """Approve or reject a proposed edge. Returns True on success."""
+        if not self._available or action not in ("approved", "rejected"):
+            return False
+        try:
+            from uuid import UUID as _UUID
+            eid = _UUID(edge_id)
+            async with self._pool.acquire() as conn:
+                result = await conn.execute(
+                    "UPDATE proposed_edges SET status = $1, reviewed_at = NOW() "
+                    "WHERE id = $2 AND status = 'pending'",
+                    action, eid,
+                )
+                return "UPDATE 1" in result
+        except Exception as e:
+            logger.error("Failed to review proposed edge %s: %s", edge_id, e)
+            return False

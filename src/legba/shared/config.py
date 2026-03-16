@@ -277,6 +277,11 @@ class AgentConfig:
     # Mission review
     mission_review_interval: int = 15   # Strategic review every N cycles (0 = disabled)
 
+    # Report relevance filtering
+    report_primary_domains: frozenset[str] = frozenset({
+        "conflict", "political", "economic", "disaster",
+    })
+
     # Qdrant collection names
     qdrant_short_term: str = "legba_short_term"
     qdrant_long_term: str = "legba_long_term"
@@ -296,6 +301,9 @@ class AgentConfig:
             bootstrap_threshold=int(os.getenv("AGENT_BOOTSTRAP_THRESHOLD", "5")),
             max_context_tokens=int(os.getenv("AGENT_MAX_CONTEXT_TOKENS", "120000")),
             mission_review_interval=int(os.getenv("AGENT_MISSION_REVIEW_INTERVAL", "15")),
+            report_primary_domains=frozenset(
+                os.getenv("REPORT_PRIMARY_DOMAINS", "conflict,political,economic,disaster").split(",")
+            ),
             qdrant_short_term=os.getenv("AGENT_QDRANT_SHORT_TERM", "legba_short_term"),
             qdrant_long_term=os.getenv("AGENT_QDRANT_LONG_TERM", "legba_long_term"),
             qdrant_facts=os.getenv("AGENT_QDRANT_FACTS", "legba_facts"),

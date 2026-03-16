@@ -143,6 +143,24 @@ class OrientMixin:
                         f"Focus on parsing existing sources rather than adding new ones."
                     )
                 self._source_health = health_line
+
+                # Per-source quality breakdown
+                try:
+                    quality = await self.memory.structured.get_source_quality_summary(limit=5)
+                    if quality.get("top"):
+                        top_lines = ", ".join(
+                            f"{s['name']} ({s['score']:.0%})" for s in quality["top"]
+                        )
+                        health_line += f"\n**Top quality sources:** {top_lines}"
+                    if quality.get("bottom"):
+                        bottom_lines = ", ".join(
+                            f"{s['name']} ({s['score']:.0%})" for s in quality["bottom"]
+                        )
+                        health_line += f"\n**Lowest quality sources:** {bottom_lines}"
+                    self._source_health = health_line
+                except Exception:
+                    pass
+
                 # Append to graph inventory so the planner sees it
                 if self._graph_inventory:
                     self._graph_inventory += "\n" + self._source_health
