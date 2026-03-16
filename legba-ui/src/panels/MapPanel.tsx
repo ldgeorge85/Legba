@@ -21,7 +21,19 @@ const TYPE_COLORS: Record<string, string> = {
 
 const DEFAULT_COLOR = '#6b7280' // gray-500
 
-type MapMode = 'entities' | 'heatmap'
+type MapMode = 'entities' | 'events' | 'heatmap'
+
+const CATEGORY_COLORS: Record<string, string> = {
+  conflict: '#ef4444',
+  political: '#3b82f6',
+  economic: '#f59e0b',
+  technology: '#06b6d4',
+  health: '#22c55e',
+  environment: '#10b981',
+  social: '#a855f7',
+  disaster: '#f97316',
+  other: '#6b7280',
+}
 
 function colorForType(type: string): string {
   return TYPE_COLORS[type.toLowerCase()] ?? DEFAULT_COLOR
@@ -89,8 +101,9 @@ function legendEntries(nodes: GeoNode[]): Array<{ type: string; color: string }>
   return entries.sort((a, b) => a.type.localeCompare(b.type))
 }
 
-/** IDs of all entity-related layers (for toggling visibility) */
+/** IDs of all layers by mode (for toggling visibility) */
 const ENTITY_LAYER_IDS = ['cluster-circles', 'cluster-count', 'entity-circles', 'entity-labels']
+const EVENT_LAYER_IDS = ['event-circles', 'event-labels']
 const HEATMAP_LAYER_IDS = ['event-heat', 'event-heat-points']
 
 export function MapPanel() {
@@ -279,8 +292,54 @@ export function MapPanel() {
         },
       })
 
-      // Start with heatmap hidden
-      for (const id of HEATMAP_LAYER_IDS) {
+      // ── Individual event marker layers (Events mode) ──
+      map.addLayer({
+        id: 'event-circles',
+        type: 'circle',
+        source: 'events-geo',
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 4, 6, 6, 10, 8],
+          'circle-color': [
+            'match', ['get', 'category'],
+            'conflict', '#ef4444',
+            'political', '#3b82f6',
+            'economic', '#f59e0b',
+            'technology', '#06b6d4',
+            'health', '#22c55e',
+            'environment', '#10b981',
+            'social', '#a855f7',
+            'disaster', '#f97316',
+            '#6b7280',  // default (other)
+          ],
+          'circle-opacity': 0.8,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1,
+          'circle-stroke-opacity': 0.5,
+        },
+      })
+
+      map.addLayer({
+        id: 'event-labels',
+        type: 'symbol',
+        source: 'events-geo',
+        layout: {
+          'text-field': ['get', 'title'],
+          'text-size': 10,
+          'text-offset': [0, 1.4],
+          'text-anchor': 'top',
+          'text-max-width': 14,
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': '#e2e8f0',
+          'text-halo-color': '#0f172a',
+          'text-halo-width': 1.5,
+        },
+        minzoom: 6,
+      })
+
+      // Start with events and heatmap hidden
+      for (const id of [...EVENT_LAYER_IDS, ...HEATMAP_LAYER_IDS]) {
         map.setLayoutProperty(id, 'visibility', 'none')
       }
 
@@ -367,6 +426,48 @@ export function MapPanel() {
         popupRef.current?.remove()
       })
 
+      // Hover on event circles
+      map.on('mouseenter', 'event-circles', (e) => {
+        map.getCanvas().style.cursor = 'pointer'
+        if (e.features && e.features.length > 0) {
+          const feature = e.features[0]
+          const coords = (feature.geometry as GeoJSON.Point).coordinates.slice() as [number, number]
+          const title = feature.properties?.title ?? ''
+          const category = feature.properties?.category ?? ''
+          const locationName = feature.properties?.location_name ?? ''
+          const catColor = CATEGORY_COLORS[category] ?? DEFAULT_COLOR
+
+          popupRef.current
+            ?.setLngLat(coords)
+            .setHTML(
+              `<div style="font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.4; max-width: 250px;">
+                <strong style="color: ${catColor}">${escapeHtml(title.slice(0, 80))}</strong>
+                <br/>
+                <span style="color: #94a3b8; text-transform: capitalize;">${escapeHtml(category)}</span>
+                ${locationName ? `<br/><span style="color: #64748b;">${escapeHtml(locationName)}</span>` : ''}
+              </div>`,
+            )
+            .addTo(map)
+        }
+      })
+
+      map.on('mouseleave', 'event-circles', () => {
+        map.getCanvas().style.cursor = ''
+        popupRef.current?.remove()
+      })
+
+      // Click on event marker → open event detail
+      map.on('click', 'event-circles', (e) => {
+        if (e.features && e.features.length > 0) {
+          const feature = e.features[0]
+          const eventId = feature.properties?.id
+          if (eventId) {
+            select({ type: 'event', id: eventId, name: feature.properties?.title ?? '' })
+            openPanel('event-detail', { id: eventId })
+          }
+        }
+      })
+
       // Click on unclustered entity
       map.on('click', 'entity-circles', (e) => {
         if (e.features && e.features.length > 0) {
@@ -419,17 +520,17 @@ export function MapPanel() {
     if (!map || !mapReady) return
 
     const entityVis = mode === 'entities' ? 'visible' : 'none'
+    const eventVis = mode === 'events' ? 'visible' : 'none'
     const heatVis = mode === 'heatmap' ? 'visible' : 'none'
 
     for (const id of ENTITY_LAYER_IDS) {
-      if (map.getLayer(id)) {
-        map.setLayoutProperty(id, 'visibility', entityVis)
-      }
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', entityVis)
+    }
+    for (const id of EVENT_LAYER_IDS) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', eventVis)
     }
     for (const id of HEATMAP_LAYER_IDS) {
-      if (map.getLayer(id)) {
-        map.setLayoutProperty(id, 'visibility', heatVis)
-      }
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', heatVis)
     }
   }, [mode, mapReady])
 
@@ -461,6 +562,7 @@ export function MapPanel() {
         <span>
           Geo map
           {mode === 'entities' && data && ` \u2014 ${data.nodes.length} entities`}
+          {mode === 'events' && ` \u2014 ${eventCount} events`}
           {mode === 'heatmap' && ` \u2014 ${eventCount} events`}
         </span>
 
@@ -475,6 +577,16 @@ export function MapPanel() {
             }`}
           >
             Entities
+          </button>
+          <button
+            onClick={() => setMode('events')}
+            className={`px-2 py-0.5 rounded text-xs transition-colors ${
+              mode === 'events'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Events
           </button>
           <button
             onClick={() => setMode('heatmap')}
@@ -517,6 +629,21 @@ export function MapPanel() {
                     style={{ backgroundColor: e.color }}
                   />
                   <span className="text-foreground/80 capitalize">{e.type.replace('_', ' ')}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Event category legend (events mode) */}
+        {mode === 'events' && eventCount > 0 && (
+          <div className="absolute bottom-3 left-3 z-10 bg-background/85 backdrop-blur-sm border border-border rounded-md px-3 py-2 text-xs">
+            <div className="text-muted-foreground mb-1 font-medium">Event Categories</div>
+            <div className="flex flex-col gap-0.5">
+              {Object.entries(CATEGORY_COLORS).map(([cat, color]) => (
+                <div key={cat} className="flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                  <span className="text-foreground/80 capitalize">{cat}</span>
                 </div>
               ))}
             </div>
