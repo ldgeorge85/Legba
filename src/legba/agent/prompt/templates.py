@@ -323,7 +323,7 @@ Work through these systematically using your tools:
 - Store analytical conclusions in memory (memory_store)
 - Use note_to_self for findings that should guide the next few normal cycles
 
-After completing your introspection, call cycle_complete to signal you're done.
+When your introspection is complete, call cycle_complete. Do not continue making graph_store or entity_inspect calls if you've already covered the key entities. Thoroughness means covering important ground, not re-checking what you already inspected.
 
 Your final action before cycle_complete should be a note_to_self summarizing your key findings and recommendations for the next cycles.
 """
@@ -660,7 +660,7 @@ When analyzing entities, check if any facts from early cycles contradict recent 
 - Do NOT do web research or entity enrichment — that's for research cycles
 - Do NOT skip analysis tools in favor of just reading data
 
-After completing your analysis, call cycle_complete.
+When your analysis is complete, call cycle_complete. If you've already queried the graph, run your analytical tools, and stored your findings, you're done — don't pad the cycle with redundant graph_store or entity_inspect calls. Quality analysis means sharp findings, not maximum tool calls.
 
 Your final action before cycle_complete should be a note_to_self summarizing your analytical findings, patterns discovered, and recommended follow-up.
 """
@@ -724,10 +724,18 @@ Read your own key files to evaluate effectiveness:
 When you find concrete issues, fix them:
 - **Prompt fixes**: If a prompt instruction isn't working, rewrite it. Use `fs_read` → `fs_write` → `code_test`.
 - **Normalization rules**: If you find un-normalized predicates, add them to fact_normalize.py.
+- **Tool defaults**: If a tool's parameters don't match how you actually use it, adjust the implementation.
+- **Helper functions**: If you repeat the same multi-step pattern across cycles, write a utility function.
 - **Goals**: Create goals to address structural issues (e.g., "Verify leader profiles for top 10 entities" or "Fetch African sources for 5 consecutive acquire cycles").
 - **DO NOT modify for the sake of it.** Only change things where you have evidence of a problem.
 
-### 4. Track Your Changes
+### 4. Workflow Audit
+Check your Airflow workflows with `workflow_list`:
+- Are existing workflows running successfully? Check with `workflow_status`.
+- Are there recurring tasks you do manually every few cycles that should be automated as a DAG?
+- Consider: daily entity completeness re-scoring, periodic source health reports, scheduled data exports.
+
+### 5. Track Your Changes
 Before calling cycle_complete, use note_to_self to log:
 - What you assessed
 - What you changed (file, what, why)
@@ -919,6 +927,15 @@ EFFICIENCY_GUIDANCE = """## Efficiency
 - Store collected data in OpenSearch (os_index_document) for later retrieval.
 - If running long, use note_to_self to save progress and pick up next cycle.
 - At the end of your plan, call goal_update to record your progress percentage.
+
+### When to Stop
+It is better to finish well than to fill time. Call `cycle_complete` when:
+- You have accomplished the main objective of your plan
+- You are re-checking entities or relationships you already inspected this cycle
+- You are making the same type of tool call repeatedly without new results
+- Your tool results are returning data you've already seen this cycle
+
+Do NOT keep working just because you have step budget remaining. A focused cycle that calls cycle_complete at step 8 is better than a bloated cycle that repeats itself until step 20. The forced budget limit is a safety net, not a target.
 """
 
 # ---------------------------------------------------------------------------
@@ -947,14 +964,26 @@ The difference between intelligence and aggregation is analysis. Collection with
 # ---------------------------------------------------------------------------
 
 ORCHESTRATION_GUIDANCE = """## Workflows (Airflow)
-Define persistent DAG pipelines for recurring tasks:
-- **workflow_define**: Deploy a Python DAG file
+You have access to Airflow for defining persistent, scheduled pipelines that run independently of your cycle loop.
+
+**Tools:**
+- **workflow_define**: Deploy a Python DAG file to Airflow
 - **workflow_trigger**: Trigger a DAG run with optional config
 - **workflow_status**: Check run/task status
-- **workflow_list**: List all DAGs
+- **workflow_list**: List all deployed DAGs
 - **workflow_pause**: Pause/unpause a DAG
 
-Use for: periodic data ingestion, scheduled reports, multi-step pipelines. Workflows survive restarts.
+**When to use workflows:**
+- Tasks that should run on a fixed schedule regardless of your cycle (e.g., daily summary generation, weekly entity freshness audit)
+- Multi-step pipelines with dependencies between stages (e.g., fetch → transform → load → notify)
+- Background data processing that shouldn't consume your reasoning steps (e.g., batch re-scoring entity completeness)
+- Recurring reports or data exports that the operator expects on a cadence
+
+**When NOT to use workflows:**
+- One-time tasks (just do them in your cycle)
+- Tasks that require your reasoning/judgment (workflows run Python, not LLM calls)
+
+If you notice yourself repeating the same multi-step task every few cycles, that's a signal to define a workflow instead. Check `workflow_list` during INTROSPECTION or EVOLVE cycles to see if your existing workflows are running and producing results.
 """
 
 # ---------------------------------------------------------------------------
@@ -981,11 +1010,11 @@ SA_GUIDANCE = """## Situational Awareness — Source & Event Management
 - Use `event_search` for full-text search across event content, actors, locations, and tags.
 
 ### Source Lifecycle
-- When feed_parse or http_request returns a 403 or 405: retry once by calling the same URL with http_request and adding a browser User-Agent header (e.g. "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"). If it still fails, call source_update to set status=disabled and record the error in last_error.
+- When feed_parse or http_request returns a 403 or 405: retry once by calling the same URL with http_request and adding a browser User-Agent header (e.g. "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"). If it still fails, call source_update to set status=paused and record the error in last_error.
 - After ANY successful feed_parse, call source_update to clear last_error (if set). This keeps the source registry healthy.
 - Before adding a new source with source_add, call source_list to check for existing coverage of that outlet. If a source_add returns "duplicate_detected", that outlet is already registered — move on. Don't retry with a different URL variant.
 - Do NOT add sources you have no immediate plan to use. Quality and utilization over quantity. Twenty well-used sources produce better intelligence than a hundred idle ones.
-- Periodically audit source health: if a source has produced zero events across several cycles, or its reliability score has dropped below 0.3, disable it with source_update(status=disabled). A clean registry focuses your attention.
+- Periodically audit source health: if a source has produced zero events across several cycles, or its reliability score has dropped below 0.3, disable it with source_update(status=paused). A clean registry focuses your attention.
 
 ### HTTP Behavior
 - All HTTP requests carry the Legba-SA User-Agent header identifying this bot.
