@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from uuid import UUID
 
@@ -134,14 +135,15 @@ async def dashboard(request: Request):
     ingestion = {}
     try:
         hb = await stores.registers._redis.get("legba:ingest:heartbeat")
-        events_1h = await stores.registers._redis.get("legba:ingest:events_1h")
-        events_24h = await stores.registers._redis.get("legba:ingest:events_24h")
-        errors_1h = await stores.registers._redis.get("legba:ingest:errors_1h")
+        now = time.time()
+        events_1h = await stores.registers._redis.zcount("legba:ingest:events_1h", now - 3600, now)
+        events_24h = await stores.registers._redis.zcount("legba:ingest:events_24h", now - 86400, now)
+        errors_1h = await stores.registers._redis.zcount("legba:ingest:errors_1h", now - 3600, now)
         ingestion = {
             "active": hb is not None,
-            "events_1h": int(events_1h) if events_1h else 0,
-            "events_24h": int(events_24h) if events_24h else 0,
-            "errors_1h": int(errors_1h) if errors_1h else 0,
+            "events_1h": events_1h,
+            "events_24h": events_24h,
+            "errors_1h": errors_1h,
         }
     except Exception:
         ingestion = {"active": False, "events_1h": 0, "events_24h": 0, "errors_1h": 0}
@@ -186,6 +188,59 @@ async def dashboard(request: Request):
 # Events
 # ------------------------------------------------------------------
 
+@router.get("/events/facets")
+async def event_facets(request: Request):
+    """Aggregated facets for event filtering."""
+    stores = get_stores(request)
+    facets: dict = {}
+
+    if not stores.structured._available:
+        return _json({"categories": {}, "sources": {}, "timeline": {}})
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            # Category counts
+            rows = await conn.fetch(
+                "SELECT category, COUNT(*) as cnt FROM events GROUP BY category ORDER BY cnt DESC"
+            )
+            facets["categories"] = {r["category"]: r["cnt"] for r in rows}
+
+            # Source counts (top 20)
+            rows = await conn.fetch(
+                "SELECT s.name, COUNT(e.id) as cnt FROM events e "
+                "JOIN sources s ON e.source_id = s.id "
+                "GROUP BY s.name ORDER BY cnt DESC LIMIT 20"
+            )
+            facets["sources"] = {r["name"]: r["cnt"] for r in rows}
+
+            # Time distribution (events per day, last 30 days)
+            rows = await conn.fetch(
+                "SELECT DATE(created_at) as day, COUNT(*) as cnt FROM events "
+                "WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY day ORDER BY day"
+            )
+            facets["timeline"] = {str(r["day"]): r["cnt"] for r in rows}
+
+            # Confidence distribution (buckets)
+            rows = await conn.fetch(
+                "SELECT "
+                "  CASE "
+                "    WHEN confidence >= 0.9 THEN '0.9-1.0' "
+                "    WHEN confidence >= 0.7 THEN '0.7-0.9' "
+                "    WHEN confidence >= 0.5 THEN '0.5-0.7' "
+                "    WHEN confidence >= 0.3 THEN '0.3-0.5' "
+                "    ELSE '0.0-0.3' "
+                "  END as bucket, COUNT(*) as cnt "
+                "FROM events GROUP BY bucket ORDER BY bucket"
+            )
+            facets["confidence_buckets"] = {r["bucket"]: r["cnt"] for r in rows}
+
+    except Exception as exc:
+        logger.warning("Event facets query failed: %s", exc)
+        facets = {"categories": {}, "sources": {}, "timeline": {}, "confidence_buckets": {}}
+
+    return _json(facets)
+
+
 @router.get("/events")
 async def list_events(
     request: Request,
@@ -193,6 +248,10 @@ async def list_events(
     limit: int = Query(default=50, le=200),
     category: str | None = None,
     q: str | None = None,
+    source: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    min_confidence: float | None = None,
 ):
     stores = get_stores(request)
     from ...shared.schemas.events import Event
@@ -223,8 +282,37 @@ async def list_events(
 
     conditions, params, idx = [], [], 1
     if category:
-        conditions.append(f"category = ${idx}")
-        params.append(category)
+        cats = [c.strip() for c in category.split(",") if c.strip()]
+        if len(cats) == 1:
+            conditions.append(f"category = ${idx}")
+            params.append(cats[0])
+            idx += 1
+        elif cats:
+            placeholders = ", ".join(f"${idx + i}" for i in range(len(cats)))
+            conditions.append(f"category IN ({placeholders})")
+            params.extend(cats)
+            idx += len(cats)
+    if source:
+        conditions.append(f"source_id IN (SELECT id FROM sources WHERE LOWER(name) = LOWER(${idx}))")
+        params.append(source)
+        idx += 1
+    if start_date:
+        try:
+            conditions.append(f"event_timestamp >= ${idx}")
+            params.append(datetime.fromisoformat(start_date))
+            idx += 1
+        except ValueError:
+            pass
+    if end_date:
+        try:
+            conditions.append(f"event_timestamp <= ${idx}")
+            params.append(datetime.fromisoformat(end_date))
+            idx += 1
+        except ValueError:
+            pass
+    if min_confidence is not None:
+        conditions.append(f"confidence >= ${idx}")
+        params.append(min_confidence)
         idx += 1
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -294,6 +382,24 @@ async def delete_event(request: Request, event_id: UUID):
 # ------------------------------------------------------------------
 # Entities
 # ------------------------------------------------------------------
+
+@router.get("/entities/types")
+async def entity_types(request: Request):
+    """List distinct entity types with counts for filter dropdowns."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json([])
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT entity_type, COUNT(*) as cnt FROM entity_profiles "
+                "GROUP BY entity_type ORDER BY cnt DESC"
+            )
+            return _json([{"type": r["entity_type"], "count": r["cnt"]} for r in rows])
+    except Exception as exc:
+        logger.warning("Entity types query failed: %s", exc)
+        return _json([])
+
 
 @router.get("/entities")
 async def list_entities(
@@ -840,6 +946,24 @@ async def list_watch_triggers(request: Request):
 # Facts
 # ------------------------------------------------------------------
 
+@router.get("/facts/predicates")
+async def fact_predicates(request: Request):
+    """List distinct predicates with counts for filter dropdowns."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json([])
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT predicate, COUNT(*) as cnt FROM facts "
+                "GROUP BY predicate ORDER BY cnt DESC LIMIT 50"
+            )
+            return _json([{"predicate": r["predicate"], "count": r["cnt"]} for r in rows])
+    except Exception as exc:
+        logger.warning("Fact predicates query failed: %s", exc)
+        return _json([])
+
+
 @router.get("/facts")
 async def list_facts(
     request: Request,
@@ -1189,3 +1313,160 @@ async def remove_edge(request: Request):
         return _json({"status": "deleted"})
     except Exception as exc:
         return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Event Geo Data (for heatmap)
+# ------------------------------------------------------------------
+
+@router.get("/events/geo")
+async def events_geo(request: Request):
+    """Events with geo coordinates for heatmap visualization."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, title, category, confidence, event_timestamp,
+                       data->'geo_coordinates' AS geo_coords
+                FROM events
+                WHERE data->'geo_coordinates' IS NOT NULL
+                  AND jsonb_array_length(COALESCE(data->'geo_coordinates', '[]'::jsonb)) > 0
+                ORDER BY created_at DESC
+                LIMIT 2000
+                """
+            )
+
+        features = []
+        for r in rows:
+            geo_coords = r["geo_coords"]
+            if isinstance(geo_coords, str):
+                geo_coords = json.loads(geo_coords)
+            if not geo_coords or not isinstance(geo_coords, list):
+                continue
+            for coord in geo_coords:
+                lat = coord.get("lat")
+                lon = coord.get("lon")
+                if lat is None or lon is None:
+                    continue
+                features.append({
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [float(lon), float(lat)],
+                    },
+                    "properties": {
+                        "id": str(r["id"]),
+                        "title": r["title"],
+                        "category": r["category"],
+                        "confidence": float(r["confidence"]) if r["confidence"] else 0.5,
+                        "timestamp": r["event_timestamp"].isoformat() if r["event_timestamp"] else None,
+                        "location_name": coord.get("name", ""),
+                    },
+                })
+
+        return _json({
+            "type": "FeatureCollection",
+            "features": features,
+        })
+    except Exception as exc:
+        logger.warning("events/geo failed: %s", exc)
+        return _json({"type": "FeatureCollection", "features": []})
+
+
+# ------------------------------------------------------------------
+# Operator Scorecard
+# ------------------------------------------------------------------
+
+@router.get("/scorecard")
+async def get_scorecard(request: Request):
+    """Return the latest operator scorecard computed during INTROSPECTION."""
+    stores = get_stores(request)
+    try:
+        scorecard = await stores.registers.get_json("scorecard")
+        cycle = await stores.registers.get_int("scorecard_cycle", 0)
+        return _json({"cycle": cycle, "data": scorecard or {}})
+    except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Global Search
+# ------------------------------------------------------------------
+
+@router.get("/search")
+async def global_search(request: Request, q: str = Query(..., min_length=2)):
+    """Search across entities, events, facts, and situations."""
+    stores = get_stores(request)
+    results: dict = {"entities": [], "events": [], "facts": [], "situations": []}
+
+    if not stores.structured._available:
+        return _json(results)
+
+    pattern = f"%{q}%"
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            # Entities: search canonical_name
+            try:
+                rows = await conn.fetch(
+                    "SELECT id, canonical_name, data->>'entity_type' as entity_type "
+                    "FROM entity_profiles WHERE canonical_name ILIKE $1 LIMIT 10",
+                    pattern,
+                )
+                results["entities"] = [
+                    {"id": str(r["id"]), "canonical_name": r["canonical_name"],
+                     "entity_type": r["entity_type"] or "unknown"}
+                    for r in rows
+                ]
+            except Exception as exc:
+                logger.debug("Search entities failed: %s", exc)
+
+            # Events: search title
+            try:
+                rows = await conn.fetch(
+                    "SELECT id, title, category FROM events "
+                    "WHERE title ILIKE $1 ORDER BY created_at DESC LIMIT 10",
+                    pattern,
+                )
+                results["events"] = [
+                    {"id": str(r["id"]), "title": r["title"], "category": r["category"] or "other"}
+                    for r in rows
+                ]
+            except Exception as exc:
+                logger.debug("Search events failed: %s", exc)
+
+            # Facts: search subject or value
+            try:
+                rows = await conn.fetch(
+                    "SELECT id, subject, predicate, value FROM facts "
+                    "WHERE (subject ILIKE $1 OR value ILIKE $1) "
+                    "AND superseded_by IS NULL LIMIT 10",
+                    pattern,
+                )
+                results["facts"] = [
+                    {"id": str(r["id"]), "subject": r["subject"],
+                     "predicate": r["predicate"], "value": r["value"]}
+                    for r in rows
+                ]
+            except Exception as exc:
+                logger.debug("Search facts failed: %s", exc)
+
+            # Situations: search name
+            try:
+                rows = await conn.fetch(
+                    "SELECT id, name, status FROM situations "
+                    "WHERE name ILIKE $1 LIMIT 10",
+                    pattern,
+                )
+                results["situations"] = [
+                    {"id": str(r["id"]), "title": r["name"], "status": r["status"] or "active"}
+                    for r in rows
+                ]
+            except Exception as exc:
+                logger.debug("Search situations failed: %s", exc)
+
+    except Exception as exc:
+        logger.warning("Global search failed: %s", exc)
+
+    return _json(results)

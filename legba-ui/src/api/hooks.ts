@@ -6,6 +6,7 @@ import type {
   EventDetail,
   EntitySummary,
   EntityDetail,
+  EntityMergeResult,
   SourceSummary,
   SourceDetail,
   Goal,
@@ -29,6 +30,12 @@ import type {
   EntityDistribution,
   SourceHealth,
   FactDistribution,
+  ScorecardData,
+  SearchResults,
+  EventGeoCollection,
+  EventFacets,
+  PredicateCount,
+  EntityTypeCount,
 } from './types'
 
 // ── Dashboard ──
@@ -41,9 +48,28 @@ export function useDashboard() {
   })
 }
 
+// ── Scorecard ──
+
+export function useScorecard() {
+  return useQuery({
+    queryKey: ['scorecard'],
+    queryFn: () => api.get<ScorecardData>('/api/v2/scorecard'),
+    refetchInterval: 120_000,
+  })
+}
+
 // ── Events ──
 
-export function useEvents(params: { offset?: number; limit?: number; category?: string; q?: string }) {
+export function useEvents(params: {
+  offset?: number
+  limit?: number
+  category?: string
+  q?: string
+  source?: string
+  start_date?: string
+  end_date?: string
+  min_confidence?: number
+}) {
   return useQuery({
     queryKey: ['events', params],
     queryFn: () => {
@@ -52,8 +78,20 @@ export function useEvents(params: { offset?: number; limit?: number; category?: 
       if (params.limit) sp.set('limit', String(params.limit))
       if (params.category) sp.set('category', params.category)
       if (params.q) sp.set('q', params.q)
+      if (params.source) sp.set('source', params.source)
+      if (params.start_date) sp.set('start_date', params.start_date)
+      if (params.end_date) sp.set('end_date', params.end_date)
+      if (params.min_confidence != null) sp.set('min_confidence', String(params.min_confidence))
       return api.get<PaginatedResponse<EventSummary>>(`/api/v2/events?${sp}`)
     },
+  })
+}
+
+export function useEventFacets() {
+  return useQuery({
+    queryKey: ['events', 'facets'],
+    queryFn: () => api.get<EventFacets>('/api/v2/events/facets'),
+    staleTime: 60_000,
   })
 }
 
@@ -94,6 +132,52 @@ export function useEntity(entityId: string | null) {
     queryKey: ['entity', entityId],
     queryFn: () => api.get<EntityDetail>(`/api/v2/entities/${entityId}`),
     enabled: !!entityId,
+  })
+}
+
+export function useSearchEntities(query: string) {
+  return useQuery({
+    queryKey: ['entities', 'search', query],
+    queryFn: () => {
+      const sp = new URLSearchParams()
+      sp.set('q', query)
+      sp.set('limit', '10')
+      return api.get<PaginatedResponse<EntitySummary>>(`/api/v2/entities?${sp}`)
+    },
+    enabled: query.length >= 2,
+  })
+}
+
+export function useMergePreview(keepId: string | null, removeId: string | null) {
+  return useQuery({
+    queryKey: ['entity-merge-preview', keepId, removeId],
+    queryFn: () =>
+      api.post<EntityMergeResult>('/api/entities/merge', {
+        keep_id: keepId,
+        remove_id: removeId,
+        preview: true,
+      }),
+    enabled: !!keepId && !!removeId,
+  })
+}
+
+export function useMergeEntities() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ keepId, removeId }: { keepId: string; removeId: string }) =>
+      api.post<EntityMergeResult>('/api/entities/merge', {
+        keep_id: keepId,
+        remove_id: removeId,
+        preview: false,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['entities'] })
+      qc.invalidateQueries({ queryKey: ['entity'] })
+      qc.invalidateQueries({ queryKey: ['graph'] })
+      qc.invalidateQueries({ queryKey: ['facts'] })
+      qc.invalidateQueries({ queryKey: ['events'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
 }
 
@@ -209,6 +293,22 @@ export function useFacts(params: { offset?: number; limit?: number; q?: string; 
   })
 }
 
+export function useFactPredicates() {
+  return useQuery({
+    queryKey: ['facts', 'predicates'],
+    queryFn: () => api.get<PredicateCount[]>('/api/v2/facts/predicates'),
+    staleTime: 60_000,
+  })
+}
+
+export function useEntityTypes() {
+  return useQuery({
+    queryKey: ['entities', 'types'],
+    queryFn: () => api.get<EntityTypeCount[]>('/api/v2/entities/types'),
+    staleTime: 60_000,
+  })
+}
+
 // ── Memory ──
 
 export function useMemory(params: { collection?: string; q?: string; offset?: string }) {
@@ -302,6 +402,14 @@ export function useGeoData() {
   })
 }
 
+export function useEventGeoData() {
+  return useQuery({
+    queryKey: ['events', 'geo'],
+    queryFn: () => api.get<EventGeoCollection>('/api/v2/events/geo'),
+    staleTime: 60_000,
+  })
+}
+
 // ── Journal ──
 
 export function useJournal() {
@@ -325,6 +433,16 @@ export function useReports() {
     queryKey: ['reports'],
     queryFn: () => api.get<ReportEntry[]>('/api/reports'),
     staleTime: 60_000,
+  })
+}
+
+// ── Global Search ──
+
+export function useGlobalSearch(query: string) {
+  return useQuery({
+    queryKey: ['search', query],
+    queryFn: () => api.get<SearchResults>(`/api/v2/search?q=${encodeURIComponent(query)}`),
+    enabled: query.length >= 2,
   })
 }
 

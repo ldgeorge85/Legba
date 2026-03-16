@@ -13,12 +13,11 @@ Legba is a persistent AI agent that runs indefinitely — ingesting global event
 
 ```
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
-├── Docker Compose (project: legba, 11 containers)
+├── Docker Compose (project: legba, 12 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
 │   ├── Agent (ephemeral) — One container per cycle, 6 cycle types, self-modifiable code
 │   ├── Operator UI v1    — Web console with CRUD + consultation (FastAPI + htmx, :8501)
 │   ├── Operator UI v2    — Multi-panel intelligence workstation (React + Dockview, :8503)
-│   ├── Ingestion Service — Standalone feed fetcher, dedup, entity auto-linking
 │   ├── Redis             — Transient state, journal, reports
 │   ├── Postgres + AGE    — Structured data, entity graph (Cypher)
 │   ├── Qdrant            — Semantic search (episodic memory)
@@ -44,7 +43,7 @@ Cycle types (priority order):
   Otherwise:       NORMAL        — goal-directed PLAN → REASON+ACT
 ```
 
-- **WAKE**: Load config, connect services, register 58 tools, drain inbox
+- **WAKE**: Load config, connect services, register 57 tools, drain inbox
 - **ORIENT**: Retrieve memories, goals, graph inventory, source health, ingestion gap tracking, journal leads
 - **PLAN** (normal cycles): LLM selects focus and approach, outputs expected tool list
 - **REASON+ACT**: Tool loop (up to 20 steps) — LLM reasons, calls tools, feeds results back
@@ -53,8 +52,6 @@ Cycle types (priority order):
 - **PERSIST**: Store episode, track ingestion, auto-complete goals, promote memories, heartbeat, exit
 
 Each specialized cycle type uses a **filtered tool set** — only tools relevant to that cycle's purpose are available, preventing the agent from drifting into unrelated work.
-
-**Ingestion Service:** A standalone deterministic feed fetcher runs alongside the agent, polling 160+ sources on configurable intervals. It handles RSS/JSON/GeoJSON/CSV parsing, 3-tier deduplication, event normalization (15 source-specific normalizers), and automatic entity linking (title-based matching against known entity profiles). The agent's ACQUIRE cycles supplement this with manual source discovery and entity resolution.
 
 ## Quick Start
 
@@ -91,10 +88,9 @@ docker compose -p legba exec supervisor \
 | Metric | Value |
 |--------|-------|
 | Python source files | 100+ |
-| Tests | 241 |
-| Built-in tools | 58 across 17 modules |
-| Platform services | 8 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, Airflow, Ingestion) |
-| Source normalizers | 15 (RSS, GeoJSON, NWS, USGS, GDELT, Event Registry, etc.) |
+| Tests | 237 |
+| Built-in tools | 57 across 17 modules |
+| Platform services | 7 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, Airflow) |
 | Canonical relationship types | 30 |
 | LLM context window | 128k tokens (120k budget) |
 | Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |
@@ -153,7 +149,9 @@ docker compose -p legba up -d supervisor
 | [DESIGN.md](docs/DESIGN.md) | Implementation design — decisions, data flows, component interactions |
 | [CODE_MAP.md](docs/CODE_MAP.md) | Complete code map — every file, function flows, dependencies |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Ops runbook — deployment, resets, monitoring, debugging, backups |
+| [PROMPT_DUMP.md](docs/PROMPT_DUMP.md) | Full assembled prompts for each cycle phase |
 | [PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md) | Prompt engineering notes |
+| [PLAN_V2.md](docs/PLAN_V2.md) | V2 architecture plan — cycle types, data pipeline, intelligence capabilities |
 | [GRACEFUL_SHUTDOWN.md](docs/GRACEFUL_SHUTDOWN.md) | Shutdown protocol details |
 | [PROGRESS_AUDIT.md](docs/PROGRESS_AUDIT.md) | Review of 586 autonomous cycles — tool usage evolution, operational metrics, journal analysis |
 | [EXECUTIVE_SUMMARY.md](docs/EXECUTIVE_SUMMARY.md) | High-level overview of the platform |

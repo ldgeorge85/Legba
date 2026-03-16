@@ -12,6 +12,7 @@ import {
   Eye,
   Network,
   FileText,
+  Download,
 } from 'lucide-react'
 
 interface StatCardProps {
@@ -68,6 +69,44 @@ export function DashboardPanel() {
         <StatCard label="Relationships" value={data.relationships} icon={<Network size={18} />} onClick={() => openPanel('graph')} />
         <StatCard label="Facts" value={data.facts} icon={<FileText size={18} />} />
       </div>
+
+      {/* Ingestion Service Status */}
+      {data.ingestion && (
+        <div className="bg-card border border-border rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Download size={14} className="text-muted-foreground" />
+            <h3 className="text-sm font-medium">Ingestion Service</h3>
+            <span className={cn(
+              'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full',
+              data.ingestion.active
+                ? 'bg-emerald-500/10 text-emerald-400'
+                : 'bg-zinc-500/10 text-zinc-400'
+            )}>
+              <span className={cn(
+                'w-1.5 h-1.5 rounded-full',
+                data.ingestion.active ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'
+              )} />
+              {data.ingestion.active ? 'Running' : 'Offline'}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div>
+              <p className="text-lg font-semibold">{data.ingestion.events_1h}</p>
+              <p className="text-[10px] text-muted-foreground">Events / 1h</p>
+            </div>
+            <div>
+              <p className="text-lg font-semibold">{data.ingestion.events_24h}</p>
+              <p className="text-[10px] text-muted-foreground">Events / 24h</p>
+            </div>
+            <div>
+              <p className={cn('text-lg font-semibold', data.ingestion.errors_1h > 0 && 'text-amber-400')}>
+                {data.ingestion.errors_1h}
+              </p>
+              <p className="text-[10px] text-muted-foreground">Errors / 1h</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Recent Events */}
       <div className="bg-card border border-border rounded-lg p-3">

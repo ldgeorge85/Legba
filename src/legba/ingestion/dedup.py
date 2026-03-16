@@ -54,11 +54,13 @@ class DedupResult:
 
 
 class DedupEngine:
-    """Stateful dedup engine with in-memory title cache for batch efficiency.
+    """Stateful dedup engine with batch-optimized DB lookups.
 
-    Loads recent event titles from Postgres at startup, then checks new
-    entries against the cache without per-entry DB queries for tier 3.
-    Tiers 1 and 2 still hit the DB (indexed lookups, fast).
+    Loads recent event titles from Postgres at startup for tier 3
+    (Jaccard similarity) in-memory checks. For tiers 1 and 2
+    (GUID / source_url), provides both single-entry check() and
+    batch check_batch() — the latter reduces 2N queries to 2 using
+    ANY() array matching.
     """
 
     def __init__(self, pool: asyncpg.Pool, cache_size: int = 500):
@@ -150,6 +152,91 @@ class DedupEngine:
                         )
 
         return DedupResult(is_duplicate=False)
+
+    async def check_batch(
+        self, entries: list[tuple[str, str, str]],
+    ) -> list[DedupResult]:
+        """Batch dedup check against existing events — 2 DB queries instead of 2N.
+
+        Fetches all matching GUIDs and source_urls in two bulk queries, then
+        performs in-memory matching. Tier 3 (title similarity) was already
+        in-memory via the title cache.
+
+        Args:
+            entries: List of (guid, source_url, title) tuples.
+
+        Returns:
+            List of DedupResult, one per entry, in the same order as input.
+        """
+        results = [DedupResult() for _ in entries]
+
+        # Collect non-empty GUIDs and source_urls for bulk lookup
+        guids = [e[0] for e in entries if e[0]]
+        urls = [e[1] for e in entries if e[1]]
+
+        # Tier 1 bulk: fetch all matching GUIDs in one query
+        existing_guids: dict[str, str] = {}  # guid -> title
+        if guids:
+            try:
+                rows = await self._pool.fetch(
+                    "SELECT guid, title FROM events WHERE guid = ANY($1::text[])",
+                    guids,
+                )
+                for row in rows:
+                    existing_guids[row["guid"]] = row["title"] or ""
+            except Exception as e:
+                logger.warning("Batch GUID lookup failed, falling back: %s", e)
+
+        # Tier 2 bulk: fetch all matching source_urls in one query
+        existing_urls: dict[str, str] = {}  # source_url -> title
+        if urls:
+            try:
+                rows = await self._pool.fetch(
+                    "SELECT source_url, title FROM events WHERE source_url = ANY($1::text[])",
+                    urls,
+                )
+                for row in rows:
+                    existing_urls[row["source_url"]] = row["title"] or ""
+            except Exception as e:
+                logger.warning("Batch URL lookup failed, falling back: %s", e)
+
+        # Now check each entry against the bulk results + title cache
+        for i, (guid, source_url, title) in enumerate(entries):
+            # Tier 1: GUID match
+            if guid and guid in existing_guids:
+                results[i] = DedupResult(
+                    is_duplicate=True,
+                    match_tier="guid",
+                    matched_title=existing_guids[guid],
+                )
+                continue
+
+            # Tier 2: source_url match
+            if source_url and source_url in existing_urls:
+                results[i] = DedupResult(
+                    is_duplicate=True,
+                    match_tier="source_url",
+                    matched_title=existing_urls[source_url],
+                )
+                continue
+
+            # Tier 3: Jaccard title similarity (in-memory cache)
+            if title:
+                words = _title_words(title)
+                if words:
+                    threshold = 0.4 if len(words) <= 5 else 0.5
+                    for cached_words, cached_title in self._title_cache:
+                        sim = _jaccard(words, cached_words)
+                        if sim >= threshold:
+                            results[i] = DedupResult(
+                                is_duplicate=True,
+                                match_tier="title_similarity",
+                                matched_title=cached_title,
+                                similarity=sim,
+                            )
+                            break
+
+        return results
 
     async def check_batch_internal(self, entries: list[tuple[str, str, str]]) -> dict[int, DedupResult]:
         """Check entries against each other within a batch (prevents same-batch dupes).

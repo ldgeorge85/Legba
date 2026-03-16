@@ -20,6 +20,7 @@ export type PanelType =
   | 'journal'
   | 'facts'
   | 'reports'
+  | 'scorecard'
 
 export interface PanelRequest {
   type: PanelType

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -158,15 +160,24 @@ class StorageLayer:
             return False
 
     async def _increment_counters(self) -> None:
-        """Increment Redis ingestion counters."""
+        """Increment Redis ingestion counters using sorted sets.
+
+        Each event is recorded as a ZADD entry with timestamp score.
+        Old entries are pruned on every call via ZREMRANGEBYSCORE.
+        Readers use ZCOUNT(now - window, now) to get accurate counts.
+        """
         if not self._redis:
             return
         try:
+            now = time.time()
+            member = f"{now}:{os.urandom(4).hex()}"
             pipe = self._redis.pipeline()
-            pipe.incr("legba:ingest:events_1h")
-            pipe.expire("legba:ingest:events_1h", 3600)
-            pipe.incr("legba:ingest:events_24h")
-            pipe.expire("legba:ingest:events_24h", 86400)
+            # Add entry to both sorted sets
+            pipe.zadd("legba:ingest:events_1h", {member: now})
+            pipe.zadd("legba:ingest:events_24h", {member: now})
+            # Prune entries older than their respective windows
+            pipe.zremrangebyscore("legba:ingest:events_1h", "-inf", now - 3600)
+            pipe.zremrangebyscore("legba:ingest:events_24h", "-inf", now - 86400)
             await pipe.execute()
         except Exception:
             pass
@@ -396,12 +407,14 @@ class StorageLayer:
                 auto_pause_threshold,
             )
 
-            # Increment Redis error counter
+            # Increment Redis error counter (sorted set)
             if self._redis:
                 try:
+                    now = time.time()
+                    member = f"{now}:{os.urandom(4).hex()}"
                     pipe = self._redis.pipeline()
-                    pipe.incr("legba:ingest:errors_1h")
-                    pipe.expire("legba:ingest:errors_1h", 3600)
+                    pipe.zadd("legba:ingest:errors_1h", {member: now})
+                    pipe.zremrangebyscore("legba:ingest:errors_1h", "-inf", now - 3600)
                     await pipe.execute()
                 except Exception:
                     pass

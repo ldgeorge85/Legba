@@ -9,7 +9,7 @@ from collections import defaultdict
 from uuid import UUID
 
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ..app import get_stores, templates
 from ...shared.schemas.entity_profiles import EntityType
@@ -447,3 +447,43 @@ async def remove_assertion(
         return HTMLResponse('<div class="text-green-400 text-sm p-2">Assertion removed.</div>')
     except Exception as e:
         return HTMLResponse(f'<div class="text-red-400 text-sm p-2">Error: {e}</div>', status_code=500)
+
+
+# ------------------------------------------------------------------
+# Entity merge
+# ------------------------------------------------------------------
+
+@router.post("/api/entities/merge")
+async def merge_entities(request: Request):
+    """Merge two entities. Body: {keep_id, remove_id, preview: bool}
+
+    When preview=true (default), returns counts of what would change.
+    When preview=false, executes the merge: reassigns event links and
+    facts, deletes the old profile and versions, remaps graph edges.
+    """
+    stores = get_stores(request)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "Invalid JSON body"}, status_code=400)
+
+    keep_id = body.get("keep_id")
+    remove_id = body.get("remove_id")
+    preview = body.get("preview", True)
+
+    if not keep_id or not remove_id:
+        return JSONResponse(
+            {"success": False, "error": "Both keep_id and remove_id are required"},
+            status_code=400,
+        )
+
+    result = await stores.structured.merge_entities(
+        keep_id=keep_id,
+        remove_id=remove_id,
+        preview=preview,
+        graph_store=stores.graph,
+    )
+
+    status = 200 if result.get("success") else 400
+    return JSONResponse(result, status_code=status)

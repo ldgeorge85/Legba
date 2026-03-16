@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useEntities } from '@/api/hooks'
+import { useEntities, useEntityTypes } from '@/api/hooks'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useSelectionStore } from '@/stores/selection'
 import { cn, entityTypeColor } from '@/lib/utils'
@@ -8,15 +8,21 @@ import { TimeAgo } from '@/components/common/TimeAgo'
 import { Search, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const PAGE_SIZE = 50
-const ENTITY_TYPES = ['person', 'organization', 'location', 'country', 'event', 'concept', 'weapon', 'military_unit', 'infrastructure']
+const ENTITY_TYPES_FALLBACK = ['person', 'organization', 'location', 'country', 'event', 'concept', 'weapon', 'military_unit', 'infrastructure']
 
 export function EntitiesPanel() {
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
   const [entityType, setEntityType] = useState('')
   const { data, isLoading } = useEntities({ offset, limit: PAGE_SIZE, q: search || undefined, type: entityType || undefined })
+  const { data: entityTypeCounts } = useEntityTypes()
   const openPanel = useWorkspaceStore((s) => s.openPanel)
   const select = useSelectionStore((s) => s.select)
+
+  // Use dynamic types from API, fall back to hardcoded list
+  const typeOptions = entityTypeCounts && entityTypeCounts.length > 0
+    ? entityTypeCounts.map((t) => ({ value: t.type, label: `${t.type} (${t.count})` }))
+    : ENTITY_TYPES_FALLBACK.map((t) => ({ value: t, label: t }))
 
   return (
     <div className="flex flex-col h-full">
@@ -37,8 +43,8 @@ export function EntitiesPanel() {
           className="text-sm bg-secondary border border-border rounded px-2 py-1 focus:outline-none"
         >
           <option value="">All types</option>
-          {ENTITY_TYPES.map((t) => (
-            <option key={t} value={t}>{t}</option>
+          {typeOptions.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
       </div>

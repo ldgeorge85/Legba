@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 
 from fastapi import APIRouter, Request
 
@@ -47,12 +48,13 @@ async def _fetch_stats(request: Request) -> dict:
         if heartbeat:
             ingestion["running"] = True
             ingestion["heartbeat"] = heartbeat
-            ev1h = await redis.get("legba:ingest:events_1h")
-            ev24h = await redis.get("legba:ingest:events_24h")
-            err1h = await redis.get("legba:ingest:errors_1h")
-            ingestion["events_1h"] = int(ev1h) if ev1h else 0
-            ingestion["events_24h"] = int(ev24h) if ev24h else 0
-            ingestion["errors_1h"] = int(err1h) if err1h else 0
+            now = time.time()
+            ev1h = await redis.zcount("legba:ingest:events_1h", now - 3600, now)
+            ev24h = await redis.zcount("legba:ingest:events_24h", now - 86400, now)
+            err1h = await redis.zcount("legba:ingest:errors_1h", now - 3600, now)
+            ingestion["events_1h"] = ev1h
+            ingestion["events_24h"] = ev24h
+            ingestion["errors_1h"] = err1h
     except Exception:
         pass
 

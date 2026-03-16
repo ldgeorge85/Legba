@@ -18,9 +18,11 @@ import {
   Crosshair,
   FileText,
   BookMarked,
+  Gauge,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkspaceStore, type PanelType } from '@/stores/workspace'
+import { GlobalSearch } from '@/components/GlobalSearch'
 
 interface NavItem {
   type: PanelType
@@ -47,6 +49,7 @@ const navItems: NavItem[] = [
   { type: 'cycle-monitor', label: 'Cycles', icon: <Crosshair size={18} />, group: 'System' },
   { type: 'journal', label: 'Journal', icon: <BookOpen size={18} />, group: 'System' },
   { type: 'reports', label: 'Reports', icon: <BookMarked size={18} />, group: 'System' },
+  { type: 'scorecard', label: 'Scorecard', icon: <Gauge size={18} />, group: 'System' },
 ]
 
 export function Sidebar() {
@@ -76,6 +79,9 @@ export function Sidebar() {
           {sidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
         </button>
       </div>
+
+      {/* Search */}
+      <GlobalSearch collapsed={sidebarCollapsed} />
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-2">

@@ -26,6 +26,7 @@ import { EventStreamPanel } from '@/panels/EventStreamPanel'
 import { TimelinePanel } from '@/panels/TimelinePanel'
 import { FactsPanel } from '@/panels/FactsPanel'
 import { ReportsPanel } from '@/panels/ReportsPanel'
+import { ScorecardPanel } from '@/panels/ScorecardPanel'
 
 const PANEL_TITLES: Record<PanelType, string> = {
   dashboard: 'Dashboard',
@@ -47,6 +48,7 @@ const PANEL_TITLES: Record<PanelType, string> = {
   journal: 'Journal',
   facts: 'Facts',
   reports: 'Reports',
+  scorecard: 'Scorecard',
 }
 
 function PanelContent({ type, params }: { type: PanelType; params?: Record<string, string> }) {
@@ -70,6 +72,7 @@ function PanelContent({ type, params }: { type: PanelType; params?: Record<strin
     case 'journal': return <JournalPanel />
     case 'facts': return <FactsPanel />
     case 'reports': return <ReportsPanel />
+    case 'scorecard': return <ScorecardPanel />
     default: return <div className="p-4 text-muted-foreground">Unknown panel type</div>
   }
 }

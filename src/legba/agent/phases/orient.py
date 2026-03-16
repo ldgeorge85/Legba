@@ -201,9 +201,11 @@ class OrientMixin:
                 heartbeat = await redis.get("legba:ingest:heartbeat")
                 if heartbeat:
                     self._ingestion_heartbeat_detected = True
-                    events_1h = await redis.get("legba:ingest:events_1h") or "0"
-                    events_24h = await redis.get("legba:ingest:events_24h") or "0"
-                    errors_1h = await redis.get("legba:ingest:errors_1h") or "0"
+                    import time as _time
+                    _now = _time.time()
+                    events_1h = await redis.zcount("legba:ingest:events_1h", _now - 3600, _now)
+                    events_24h = await redis.zcount("legba:ingest:events_24h", _now - 86400, _now)
+                    errors_1h = await redis.zcount("legba:ingest:errors_1h", _now - 3600, _now)
 
                     # Count active sources
                     active_sources = 0

@@ -5,9 +5,10 @@ Handles category inference, timestamp parsing, and source-specific mappings.
 
 from __future__ import annotations
 
+import calendar
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from legba.shared.schemas.events import Event, EventCategory, create_event
@@ -112,6 +113,12 @@ _TIMESTAMP_FORMATS = [
     "%a, %d %b %Y %H:%M:%S %Z",
     "%d %b %Y %H:%M:%S %z",
     "%B %d, %Y",
+    "%d %B %Y",
+    "%Y%m%dT%H%M%S",          # GDELT seendate format
+    "%Y/%m/%d %H:%M:%S",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y",
+    "%d-%m-%Y",
 ]
 
 
@@ -140,6 +147,118 @@ def parse_timestamp(raw: str) -> datetime | None:
         return dt
     except Exception:
         pass
+
+    return None
+
+
+def _struct_time_to_datetime(st) -> datetime | None:
+    """Convert a feedparser time.struct_time to a timezone-aware datetime."""
+    if st is None:
+        return None
+    try:
+        ts = calendar.timegm(st)
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _sanity_check(dt: datetime | None) -> datetime | None:
+    """Discard timestamps that are too far in the future or past."""
+    if dt is None:
+        return None
+    now = datetime.now(timezone.utc)
+    # Ensure timezone-aware comparison
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if dt > now + timedelta(days=1):
+        return None  # Future date (>1 day ahead)
+    if dt < now - timedelta(days=365):
+        return None  # More than 1 year in the past
+    return dt
+
+
+# RSS date fields to try, in priority order (feedparser struct_time fields)
+_RSS_STRUCT_FIELDS = ("published_parsed", "updated_parsed", "created_parsed")
+
+# API/JSON raw_data date fields to try, in priority order
+_API_DATE_FIELDS = (
+    "dateTime", "datetime", "date_time",       # Event Registry, etc.
+    "seendate", "seen_date",                    # GDELT
+    "event_date", "eventDate",                  # Various APIs
+    "published", "publishedAt", "published_at", # Common
+    "pubDate",
+    "timestamp", "time",
+    "date",
+    "created_at", "createdAt",
+    "updated_at", "updatedAt",
+    "acq_date",                                 # NASA FIRMS
+    "date_start",                               # UCDP
+    "disaster_start_date",                      # IFRC
+    "onset", "effective",                       # NWS
+    "dateAdded",                                # CISA
+)
+
+
+def _extract_entry_timestamp(entry: FetchedEntry) -> datetime | None:
+    """Aggressively extract the best event timestamp from a FetchedEntry.
+
+    Tries, in order:
+    1. feedparser struct_time fields from raw_data (most reliable for RSS)
+    2. entry.published string field
+    3. Additional string date fields from raw_data
+    4. Epoch-millisecond 'time' field (USGS style)
+
+    All results are sanity-checked before returning.
+    """
+    raw = entry.raw_data or {}
+
+    # 1. feedparser struct_time fields (pre-parsed, most reliable for RSS)
+    for field in _RSS_STRUCT_FIELDS:
+        st = raw.get(field)
+        if st is not None:
+            dt = _sanity_check(_struct_time_to_datetime(st))
+            if dt is not None:
+                return dt
+
+    # 2. The entry.published string (already extracted by fetcher)
+    if entry.published:
+        dt = _sanity_check(parse_timestamp(entry.published))
+        if dt is not None:
+            return dt
+
+    # 3. Try additional string date fields from raw_data
+    for field in _API_DATE_FIELDS:
+        val = raw.get(field)
+        if val is None:
+            continue
+        if isinstance(val, str) and val.strip():
+            dt = _sanity_check(parse_timestamp(val.strip()))
+            if dt is not None:
+                return dt
+        elif isinstance(val, (int, float)):
+            # Epoch seconds or milliseconds
+            try:
+                ts = float(val)
+                # If > 1e12, assume milliseconds
+                if ts > 1e12:
+                    ts = ts / 1000
+                dt = _sanity_check(
+                    datetime.fromtimestamp(ts, tz=timezone.utc)
+                )
+                if dt is not None:
+                    return dt
+            except (ValueError, TypeError, OverflowError, OSError):
+                continue
+
+    # 4. Check nested 'date' dict (ReliefWeb style: {"original": "...", "created": "..."})
+    date_obj = raw.get("date")
+    if isinstance(date_obj, dict):
+        for sub_key in ("original", "created", "changed"):
+            sub_val = date_obj.get(sub_key, "")
+            if sub_val and isinstance(sub_val, str):
+                dt = _sanity_check(parse_timestamp(sub_val))
+                if dt is not None:
+                    return dt
 
     return None
 
@@ -179,7 +298,7 @@ def normalize_entry(
         title = "(untitled)"
 
     category = infer_category(title, summary, source_category)
-    timestamp = parse_timestamp(entry.published)
+    timestamp = _extract_entry_timestamp(entry)
 
     # Extract actors/locations from tags if available
     actors: list[str] = list(entry.authors) if entry.authors else []

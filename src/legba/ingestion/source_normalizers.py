@@ -79,8 +79,9 @@ def normalize_gdelt(entry: FetchedEntry) -> SourceOverrides | None:
         overrides["locations"] = [country]
 
     # seendate → timestamp (GDELT format: YYYYMMDDTHHmmSS)
+    # Always prefer seendate over entry.published — it's the actual observation time
     seendate = raw.get("seendate", "")
-    if seendate and not entry.published:
+    if seendate:
         try:
             dt = datetime.strptime(seendate.replace("Z", ""), "%Y%m%dT%H%M%S")
             overrides["event_timestamp"] = dt.replace(tzinfo=timezone.utc)

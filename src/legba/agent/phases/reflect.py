@@ -61,12 +61,30 @@ class ReflectMixin:
             self._reflection_data = {}
             self.logger.log_error(f"Reflection failed: {e}")
 
+        # Graph quality checks — warn on vague defaults so we can track frequency
+        entities = self._reflection_data.get("entities_discovered", [])
+        relationships = self._reflection_data.get("relationships", [])
+        if entities:
+            unknown_types = [e for e in entities if e.get("type", "").lower() == "unknown"]
+            if unknown_types:
+                self.logger.log_error(
+                    f"Graph quality: {len(unknown_types)} entities with 'Unknown' type — "
+                    f"names: {[e.get('name', '?') for e in unknown_types[:5]]}"
+                )
+        if relationships:
+            vague_rels = [r for r in relationships if r.get("relationship", "").lower() in ("relatedto", "related_to")]
+            if vague_rels:
+                self.logger.log_error(
+                    f"Graph quality: {len(vague_rels)} relationships using 'RelatedTo' — "
+                    f"pairs: {[(r.get('from_entity', '?'), r.get('to_entity', '?')) for r in vague_rels[:5]]}"
+                )
+
         significance = float(self._reflection_data.get("significance", 0.0))
         self.logger.log("reflect_complete",
                         reflection_length=len(self._reflection),
                         significance=significance,
                         facts_extracted=len(self._reflection_data.get("facts_learned", [])),
-                        entities_extracted=len(self._reflection_data.get("entities_discovered", [])))
+                        entities_extracted=len(entities))
 
     def _parse_reflection(self: AgentCycle, text: str) -> dict:
         """Parse structured JSON from the reflection response.

@@ -3,6 +3,7 @@ import Graph from 'graphology'
 import Sigma from 'sigma'
 import forceAtlas2 from 'graphology-layout-forceatlas2'
 import { random } from 'graphology-layout'
+import louvain from 'graphology-communities-louvain'
 import { useEgoGraph, useGraph } from '@/api/hooks'
 import type { GraphData, GraphNode } from '@/api/types'
 import { useSelectionStore } from '@/stores/selection'
@@ -19,6 +20,26 @@ const TYPE_COLORS: Record<string, string> = {
   military_unit: '#f43f5e',
 }
 const DEFAULT_COLOR = '#6b7280'
+
+// Distinct palette for community coloring (12 colors)
+const COMMUNITY_PALETTE = [
+  '#f59e0b', // amber
+  '#3b82f6', // blue
+  '#ef4444', // red
+  '#22c55e', // green
+  '#8b5cf6', // violet
+  '#ec4899', // pink
+  '#06b6d4', // cyan
+  '#f97316', // orange
+  '#14b8a6', // teal
+  '#a855f7', // purple
+  '#84cc16', // lime
+  '#e11d48', // rose
+]
+
+function getCommunityColor(community: number): string {
+  return COMMUNITY_PALETTE[community % COMMUNITY_PALETTE.length]
+}
 
 function getNodeColor(type: string): string {
   return TYPE_COLORS[type.toLowerCase()] ?? DEFAULT_COLOR
@@ -104,7 +125,33 @@ function Tooltip({ text, x, y }: { text: string; x: number; y: number }) {
 }
 
 // ── Legend component ──
-function Legend({ types }: { types: Set<string> }) {
+function Legend({
+  types,
+  communityMode,
+  communityCount,
+}: {
+  types: Set<string>
+  communityMode: boolean
+  communityCount: number
+}) {
+  if (communityMode) {
+    if (communityCount === 0) return null
+    const entries = Array.from({ length: communityCount }, (_, i) => i)
+    return (
+      <div className="absolute bottom-3 left-3 z-40 flex flex-wrap gap-x-3 gap-y-1 px-2 py-1.5 rounded bg-background/80 backdrop-blur-sm border border-border text-[10px] text-muted-foreground">
+        {entries.map((c) => (
+          <span key={c} className="flex items-center gap-1">
+            <span
+              className="inline-block w-2 h-2 rounded-full"
+              style={{ backgroundColor: getCommunityColor(c) }}
+            />
+            C{c}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
   if (types.size === 0) return null
   const entries = Array.from(types).sort()
   return (
@@ -140,6 +187,8 @@ export function GraphPanel() {
 
   const [searchQuery, setSearchQuery] = useState('')
   const [showEgo, setShowEgo] = useState(true)
+  const [showCommunities, setShowCommunities] = useState(false)
+  const [communityCount, setCommunityCount] = useState(0)
   const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null)
   // This state is only used to trigger re-renders for the UI, the ref is
   // what the reducers actually read
@@ -259,9 +308,11 @@ export function GraphPanel() {
     }
 
     graphRef.current = builtGraph
-    // Reset search highlight when graph data changes
+    // Reset search highlight and community state when graph data changes
     highlightedNodesRef.current = new Set()
     bestMatchRef.current = null
+    setShowCommunities(false)
+    setCommunityCount(0)
 
     const sigma = new Sigma(builtGraph, containerRef.current, {
       allowInvalidContainer: true,
@@ -377,6 +428,48 @@ export function GraphPanel() {
     // select and openPanel are stable zustand refs, safe to include
   }, [builtGraph, select, openPanel])
 
+  // ── Community detection toggle ──
+  // Runs Louvain on the current graph and recolors nodes without recreating Sigma
+  useEffect(() => {
+    const g = graphRef.current
+    const sigma = sigmaRef.current
+    if (!g || !sigma) {
+      setCommunityCount(0)
+      return
+    }
+
+    if (showCommunities) {
+      // Need at least 1 edge for meaningful community detection
+      if (g.size === 0) {
+        setCommunityCount(0)
+        return
+      }
+
+      // Run Louvain — assigns 'community' attribute to each node
+      louvain.assign(g)
+
+      // Count distinct communities
+      const communities = new Set<number>()
+      g.forEachNode((_node, attrs) => {
+        communities.add(attrs.community as number)
+      })
+      setCommunityCount(communities.size)
+
+      // Recolor nodes by community
+      g.forEachNode((node, attrs) => {
+        g.setNodeAttribute(node, 'color', getCommunityColor(attrs.community as number))
+      })
+    } else {
+      // Restore entity-type coloring
+      setCommunityCount(0)
+      g.forEachNode((node, attrs) => {
+        g.setNodeAttribute(node, 'color', getNodeColor(attrs.entityType as string))
+      })
+    }
+
+    sigma.refresh()
+  }, [showCommunities, builtGraph])
+
   // Stats line
   const stats = graphData
     ? `${graphData.nodes.length} nodes, ${graphData.edges.length} edges`
@@ -419,6 +512,42 @@ export function GraphPanel() {
             {useEgo ? 'Ego graph' : 'Full graph'}
           </button>
         )}
+
+        {/* Community detection toggle */}
+        <button
+          onClick={() => setShowCommunities((v) => !v)}
+          className={`h-7 px-2.5 text-xs rounded border transition-colors flex items-center gap-1.5 ${
+            showCommunities
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+          }`}
+          title="Toggle Louvain community detection"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="6" cy="6" r="3" />
+            <circle cx="18" cy="6" r="3" />
+            <circle cx="12" cy="18" r="3" />
+            <line x1="8.5" y1="7.5" x2="10.5" y2="16" />
+            <line x1="15.5" y1="7.5" x2="13.5" y2="16" />
+            <line x1="9" y1="6" x2="15" y2="6" />
+          </svg>
+          Communities
+          {showCommunities && communityCount > 0 && (
+            <span className="ml-0.5 px-1.5 py-0 rounded-full bg-primary-foreground/20 text-[10px] leading-4 font-medium">
+              {communityCount}
+            </span>
+          )}
+        </button>
 
         {/* Stats summary */}
         <span className="ml-auto text-[11px] text-muted-foreground">
@@ -473,7 +602,7 @@ export function GraphPanel() {
         {tooltip && <Tooltip text={tooltip.text} x={tooltip.x} y={tooltip.y} />}
 
         {/* Legend */}
-        <Legend types={entityTypes} />
+        <Legend types={entityTypes} communityMode={showCommunities} communityCount={communityCount} />
       </div>
     </div>
   )

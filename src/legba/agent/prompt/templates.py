@@ -478,6 +478,7 @@ After storing events, you MUST resolve the key entities mentioned in them:
 - For each batch of events you store, pick the 3-5 most important ones and call entity_resolve for the main actors, countries, and organizations mentioned in the title
 - An event without entity links is analytically invisible — it cannot be found through entity or graph queries, and it won't appear in reports
 - Focus on entities already in your graph first (countries, major actors), then new entities if they appear in multiple events
+- When resolving entities, always specify the entity type (person, organization, country, location, etc.). Never use "Unknown" or "other" as the type.
 - Example: after storing "Iran strikes Israeli oil tanker in Strait of Hormuz", resolve: Iran, Israel, Strait of Hormuz
 
 ### 4. Situation Linking
@@ -1090,6 +1091,11 @@ Rules:
   Do NOT use variant forms (hostile_to, is hostile to, etc.) — use the canonical form above.
   Values must be entity names only — do NOT append dates like "(since 2026-03-08)".
   Skip facts you have already stored in previous cycles — check your memory first.
+
+### Graph Quality Rules
+- NEVER use "Unknown" as an entity type. Pick the closest of: person, organization, country, location, concept, military_unit, weapon, event.
+- NEVER use "RelatedTo" as a relationship type. Pick a specific relationship from the canonical types: LeaderOf, MemberOf, PartOf, LocatedIn, OperatesIn, HostileTo, AlliedWith, BordersWith, SanctionedBy, TradesWith, FundedBy, SuppliedBy, etc.
+- If you cannot determine the specific type, omit the entity/relationship rather than using a vague default.
 - memories_to_promote: list of episode IDs from working memory that are important enough to preserve long-term. These are facts, patterns, or insights that will still matter 100 cycles from now. Can be empty list.
 - Output ONLY the JSON. Start with {{ end with }}."""
 
@@ -1233,6 +1239,12 @@ CRITICAL RULES — VIOLATION OF THESE INVALIDATES THE REPORT:
 ### Recent Events (from event store)
 {recent_events}
 
+### High-Novelty Events (prioritize these in your report)
+These events are from under-represented categories or regions and deserve extra attention.
+Under-represented categories and regions should get MORE coverage, not less — they represent
+emerging or overlooked developments that a decision-maker needs to know about.
+{novelty_events}
+
 ### Coverage Regions
 {coverage_regions}
 
@@ -1242,39 +1254,57 @@ The following is your journal — your experiential perspective. Use it to infor
 
 {narrative}
 
-## Required structure (use markdown)
+## REPORT STRUCTURE (Required Sections — use markdown)
 
 # Current World Assessment — Cycle {cycle_number}
 
-## Executive Summary
-(2-3 sentences: the world right now, based on the events and relationships in your data)
+## 1. What Changed Since Last Report
+- Lead with the most significant HIGH-NOVELTY events from the list above — these represent under-covered categories/regions that need attention
+- New developments not in your previous assessment
+- Situations that have escalated (higher intensity, more events, new actors)
+- Situations that have de-escalated (reduced activity, ceasefire, resolution)
+- Corrections to your previous assessment (stale leaders, wrong relationships, outdated facts)
+- If this is your first report, write "Initial assessment — no prior report to compare against."
 
-## Regional Situation
+## 2. Executive Summary
+(2-3 paragraphs)
+- Lead with the SINGLE most significant change since last report (prefer high-novelty events when they are also significant)
+- Briefly cover 2-3 other notable developments
+- If nothing has changed, say so in one sentence and explain why
+
+## 3. Regional Situation
 For each region where you have events or entity data, write a subsection:
 ### [Region Name]
 - Key actors (ONLY those in your entity profiles), current posture, recent developments
 - Relationships and tensions (ONLY those in your graph)
 - Trend assessment (escalating, stable, de-escalating) based on event patterns
+- Note if coverage has IMPROVED or DEGRADED since last report
+- Regions with no new events since last report get ONE sentence, not a paragraph
 
-## Emerging Patterns
+## 4. Emerging Patterns & Watch Items
 - Cross-domain connections visible in your event and relationship data
 - Escalation/de-escalation indicators from sequential events
-- Patterns you observe across your stored data
-
-## Watch Items
 - Situations that could develop based on the trajectory of stored events
 - Your confidence level and what data supports it
 - Gaps that concern you
 
-## Coverage Assessment
+## 5. Coverage Assessment
 - What regions/domains are well-covered vs sparse (based on entity and event counts)
+- Entity link rate and fact freshness from scorecard if available
 - Source quality concerns
 - Where you need more information
 
-## Analyst Hypotheses (OPTIONAL — clearly labeled as inference)
+## 6. Analyst Hypotheses (OPTIONAL — clearly labeled as inference)
 - Connections you believe are likely but CANNOT trace to specific data above
 - Each hypothesis must state what evidence would confirm or refute it
 - Do NOT present these as facts — this section exists to separate inference from evidence
+
+DIFFERENTIAL REPORT RULES:
+- Do NOT repeat the same analysis as your previous report. If a region is unchanged, write ONE sentence.
+- Spend your words on what is NEW or CHANGED.
+- If your previous report said X and the data now shows Y, explicitly correct it.
+- Every claim must reference a specific event, entity, or fact from Section 1.
+- If you have a previous assessment in Section 2, your report MUST address what has changed since that assessment.
 
 Be specific — cite entity names and events from your data. If a region has only 1-2 data points, say so rather than extrapolating."""
 

@@ -219,6 +219,27 @@ export interface GeoNode {
   entity_id: string
 }
 
+export interface EventGeoFeature {
+  type: 'Feature'
+  geometry: {
+    type: 'Point'
+    coordinates: [number, number]
+  }
+  properties: {
+    id: string
+    title: string
+    category: string
+    confidence: number
+    timestamp: string | null
+    location_name: string
+  }
+}
+
+export interface EventGeoCollection {
+  type: 'FeatureCollection'
+  features: EventGeoFeature[]
+}
+
 export interface JournalEntry {
   cycle: number
   timestamp: string
@@ -277,6 +298,61 @@ export interface SourceHealth {
 export interface FactDistribution {
   buckets: { range: string; count: number }[]
   top_predicates: { predicate: string; count: number }[]
+}
+
+// Facets
+export interface EventFacets {
+  categories: Record<string, number>
+  sources: Record<string, number>
+  timeline: Record<string, number>
+  confidence_buckets: Record<string, number>
+}
+
+export interface PredicateCount {
+  predicate: string
+  count: number
+}
+
+export interface EntityTypeCount {
+  type: string
+  count: number
+}
+
+// Scorecard
+export interface ScorecardData {
+  cycle: number
+  data: {
+    coverage_by_category: Record<string, number>
+    coverage_by_region: Record<string, number>
+    entity_link_rate: number
+    fact_freshness_pct: number
+    stale_facts: number
+    source_health: Record<string, number>
+    top_entities: Record<string, number>
+    graph: { nodes: number; edges: number }
+    timestamp: string
+  }
+}
+
+// Global search
+export interface SearchResults {
+  entities: Array<{id: string; canonical_name: string; entity_type: string}>;
+  events: Array<{id: string; title: string; category: string}>;
+  facts: Array<{id: string; subject: string; predicate: string; value: string}>;
+  situations: Array<{id: string; title: string; status: string}>;
+}
+
+// Entity merge
+export interface EntityMergeResult {
+  success: boolean
+  keep_name?: string
+  remove_name?: string
+  events_moved?: number
+  facts_moved?: number
+  links_dupes_skipped?: number
+  versions_deleted?: number
+  graph_edges_moved?: number
+  error?: string
 }
 
 // Paginated response

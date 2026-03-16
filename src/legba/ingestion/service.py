@@ -284,16 +284,25 @@ class IngestionService:
             batch_entries = [(e.guid, e.source_url, e.title) for e in events]
             batch_dupes = await self._dedup.check_batch_internal(batch_entries)
 
-            # Dedup against existing events
-            stored = 0
-            deduped = 0
-            for i, event in enumerate(events):
-                if i in batch_dupes:
-                    deduped += 1
-                    continue
+            # Batch dedup against existing events (2 DB queries instead of 2N)
+            # Only check entries that survived batch-internal dedup
+            candidates = [
+                (i, events[i])
+                for i in range(len(events))
+                if i not in batch_dupes
+            ]
+            if candidates:
+                candidate_entries = [
+                    (ev.guid, ev.source_url, ev.title) for _, ev in candidates
+                ]
+                batch_results = await self._dedup.check_batch(candidate_entries)
+            else:
+                batch_results = []
 
-                dup = await self._dedup.check(event.guid, event.source_url, event.title)
-                if dup.is_duplicate:
+            stored = 0
+            deduped = len(batch_dupes)
+            for j, (i, event) in enumerate(candidates):
+                if batch_results[j].is_duplicate:
                     deduped += 1
                     continue
 
@@ -349,8 +358,27 @@ class IngestionService:
 
         import os
         resolved = dict(auth_config)
+        auth_type = resolved.get("type", "")
 
-        # Support env var references: {"value": "$ACLED_API_KEY"}
+        # Bearer / OAuth2: resolve token, client_id, client_secret env refs.
+        # Token exchange itself happens in fetcher._get_oauth_token at fetch time.
+        if auth_type == "bearer":
+            for key in ("token", "client_id", "client_secret"):
+                val = resolved.get(key, "")
+                if isinstance(val, str) and val.startswith("$"):
+                    env_key = val[1:]
+                    resolved[key] = os.getenv(env_key, "")
+                    # Don't warn for missing token when token_url is set (OAuth2 flow)
+                    if not resolved[key] and key == "token" and resolved.get("token_url"):
+                        continue
+                    if not resolved[key]:
+                        logger.warning("Auth env var %s not set", env_key)
+            # Bearer is valid if we have a static token OR a token_url for OAuth2
+            if resolved.get("token") or resolved.get("token_url"):
+                return resolved
+            return None
+
+        # api_key / query_param: resolve single "value" field
         value = resolved.get("value", "")
         if isinstance(value, str) and value.startswith("$"):
             env_key = value[1:]

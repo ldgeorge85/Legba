@@ -1247,3 +1247,314 @@ class StructuredStore:
                 return [EntityProfile.model_validate_json(row["data"]) for row in rows]
         except Exception:
             return []
+
+    # --- Entity merge ---
+
+    async def merge_entities(
+        self,
+        keep_id: str,
+        remove_id: str,
+        preview: bool = False,
+        graph_store=None,
+    ) -> dict:
+        """Merge remove_id entity into keep_id entity.
+
+        Consolidates event links, facts, profile versions, and optionally
+        graph vertices/edges.  When preview=True returns counts of what
+        would change without modifying data.
+
+        Args:
+            keep_id:     UUID string of the entity to keep.
+            remove_id:   UUID string of the entity to absorb and delete.
+            preview:     If True, only return counts -- no mutations.
+            graph_store:  Optional GraphStore instance for AGE edge remapping.
+
+        Returns dict with keys:
+            keep_name, remove_name, events_moved, facts_moved,
+            links_dupes_skipped, versions_deleted, graph_edges_moved,
+            success, error
+        """
+        if not self._available:
+            return {"success": False, "error": "Structured store not available"}
+
+        from uuid import UUID as _UUID
+        try:
+            keep_uuid = _UUID(keep_id)
+            remove_uuid = _UUID(remove_id)
+        except (ValueError, AttributeError) as exc:
+            return {"success": False, "error": f"Invalid UUID: {exc}"}
+
+        if keep_uuid == remove_uuid:
+            return {"success": False, "error": "keep_id and remove_id must be different"}
+
+        try:
+            async with self._pool.acquire() as conn:
+                # Verify both entities exist
+                keep_row = await conn.fetchrow(
+                    "SELECT id, canonical_name FROM entity_profiles WHERE id = $1",
+                    keep_uuid,
+                )
+                remove_row = await conn.fetchrow(
+                    "SELECT id, canonical_name FROM entity_profiles WHERE id = $1",
+                    remove_uuid,
+                )
+                if not keep_row:
+                    return {"success": False, "error": f"Keep entity {keep_id} not found"}
+                if not remove_row:
+                    return {"success": False, "error": f"Remove entity {remove_id} not found"}
+
+                keep_name = keep_row["canonical_name"]
+                remove_name = remove_row["canonical_name"]
+
+                # --- Count affected rows ---
+                events_to_move = await conn.fetchval(
+                    "SELECT count(*) FROM event_entity_links WHERE entity_id = $1",
+                    remove_uuid,
+                )
+                # Links that would be dupes (already linked to keep entity for same event+role)
+                dupe_links = await conn.fetchval(
+                    """SELECT count(*) FROM event_entity_links r
+                       WHERE r.entity_id = $1
+                         AND EXISTS (
+                           SELECT 1 FROM event_entity_links k
+                           WHERE k.entity_id = $2
+                             AND k.event_id = r.event_id
+                             AND k.role = r.role
+                         )""",
+                    remove_uuid, keep_uuid,
+                )
+                facts_to_move = await conn.fetchval(
+                    "SELECT count(*) FROM facts WHERE LOWER(subject) = LOWER($1)",
+                    remove_name,
+                )
+                # Facts that would collide (same triple already exists for keep)
+                dupe_facts = await conn.fetchval(
+                    """SELECT count(*) FROM facts f
+                       WHERE LOWER(f.subject) = LOWER($1)
+                         AND EXISTS (
+                           SELECT 1 FROM facts k
+                           WHERE LOWER(k.subject) = LOWER($2)
+                             AND LOWER(k.predicate) = LOWER(f.predicate)
+                             AND LOWER(k.value) = LOWER(f.value)
+                         )""",
+                    remove_name, keep_name,
+                )
+                versions_to_delete = await conn.fetchval(
+                    "SELECT count(*) FROM entity_profile_versions WHERE entity_id = $1",
+                    remove_uuid,
+                )
+
+                # Graph edge count (if graph store available)
+                graph_edges_to_move = 0
+                if graph_store and graph_store.available:
+                    try:
+                        async with graph_store._pool.acquire() as gconn:
+                            remove_esc = graph_store._escape(remove_name)
+                            # Outgoing edges
+                            out_rows = await graph_store._cypher(gconn, f"""
+                                MATCH (n {{name: '{remove_esc}'}})-[r]->()
+                                RETURN count(r) AS cnt
+                            """, cols="cnt agtype")
+                            # Incoming edges
+                            in_rows = await graph_store._cypher(gconn, f"""
+                                MATCH ()-[r]->(n {{name: '{remove_esc}'}})
+                                RETURN count(r) AS cnt
+                            """, cols="cnt agtype")
+                            out_cnt = int(out_rows[0]["cnt"]) if out_rows else 0
+                            in_cnt = int(in_rows[0]["cnt"]) if in_rows else 0
+                            graph_edges_to_move = out_cnt + in_cnt
+                    except Exception as ge:
+                        logger.warning("Graph edge count failed: %s", ge)
+
+                result = {
+                    "keep_name": keep_name,
+                    "remove_name": remove_name,
+                    "events_to_move": events_to_move,
+                    "events_moved": events_to_move - dupe_links,
+                    "links_dupes_skipped": dupe_links,
+                    "facts_to_move": facts_to_move,
+                    "facts_moved": facts_to_move - dupe_facts,
+                    "facts_dupes_skipped": dupe_facts,
+                    "versions_deleted": versions_to_delete,
+                    "graph_edges_to_move": graph_edges_to_move,
+                    "preview": preview,
+                    "success": True,
+                }
+
+                if preview:
+                    return result
+
+            # --- Execute merge in a transaction ---
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    # 1. Move event_entity_links: reassign to keep, skip dupes
+                    await conn.execute(
+                        """UPDATE event_entity_links
+                           SET entity_id = $1
+                           WHERE entity_id = $2
+                             AND NOT EXISTS (
+                               SELECT 1 FROM event_entity_links k
+                               WHERE k.entity_id = $1
+                                 AND k.event_id = event_entity_links.event_id
+                                 AND k.role = event_entity_links.role
+                             )""",
+                        keep_uuid, remove_uuid,
+                    )
+
+                    # 2. Delete remaining event_entity_links for remove (dupes)
+                    await conn.execute(
+                        "DELETE FROM event_entity_links WHERE entity_id = $1",
+                        remove_uuid,
+                    )
+
+                    # 3. Move facts: update subject to keep_name, skip dupes
+                    #    The unique index on (lower(subject), lower(predicate), lower(value))
+                    #    would block conflicting updates, so we exclude them.
+                    await conn.execute(
+                        """UPDATE facts
+                           SET subject = $1, updated_at = NOW()
+                           WHERE LOWER(subject) = LOWER($2)
+                             AND NOT EXISTS (
+                               SELECT 1 FROM facts k
+                               WHERE LOWER(k.subject) = LOWER($1)
+                                 AND LOWER(k.predicate) = LOWER(facts.predicate)
+                                 AND LOWER(k.value) = LOWER(facts.value)
+                             )""",
+                        keep_name, remove_name,
+                    )
+
+                    # 4. Delete remaining dupe facts (subject still matches remove)
+                    await conn.execute(
+                        "DELETE FROM facts WHERE LOWER(subject) = LOWER($1)",
+                        remove_name,
+                    )
+
+                    # 5. Delete entity_profile_versions for remove
+                    await conn.execute(
+                        "DELETE FROM entity_profile_versions WHERE entity_id = $1",
+                        remove_uuid,
+                    )
+
+                    # 6. Merge aliases: add remove_name as alias on keep profile
+                    keep_data_row = await conn.fetchrow(
+                        "SELECT data FROM entity_profiles WHERE id = $1", keep_uuid,
+                    )
+                    if keep_data_row:
+                        keep_data = (
+                            json.loads(keep_data_row["data"])
+                            if isinstance(keep_data_row["data"], str)
+                            else keep_data_row["data"]
+                        )
+                        aliases = keep_data.get("aliases", [])
+                        if remove_name not in aliases:
+                            aliases.append(remove_name)
+                            keep_data["aliases"] = aliases
+                            await conn.execute(
+                                "UPDATE entity_profiles SET data = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                                json.dumps(keep_data, default=str), keep_uuid,
+                            )
+
+                    # 7. Delete the old entity profile
+                    await conn.execute(
+                        "DELETE FROM entity_profiles WHERE id = $1",
+                        remove_uuid,
+                    )
+
+                logger.info(
+                    "Entity merge complete: %s (%s) merged into %s (%s)",
+                    remove_name, remove_id, keep_name, keep_id,
+                )
+
+            # --- Graph merge (outside Postgres transaction) ---
+            graph_edges_moved = 0
+            if graph_store and graph_store.available:
+                try:
+                    graph_edges_moved = await self._merge_graph_vertices(
+                        graph_store, keep_name, remove_name,
+                    )
+                except Exception as ge:
+                    logger.warning("Graph merge failed (Postgres merge succeeded): %s", ge)
+                    result["graph_error"] = str(ge)
+
+            result["graph_edges_moved"] = graph_edges_moved
+            return result
+
+        except Exception as exc:
+            logger.error("Entity merge failed: %s", exc)
+            return {"success": False, "error": str(exc)}
+
+    @staticmethod
+    async def _merge_graph_vertices(
+        graph_store, keep_name: str, remove_name: str,
+    ) -> int:
+        """Remap all edges from remove vertex to keep vertex, then delete remove.
+
+        Returns the number of edges remapped.
+        """
+        edges_moved = 0
+        keep_esc = graph_store._escape(keep_name)
+        remove_esc = graph_store._escape(remove_name)
+
+        async with graph_store._pool.acquire() as conn:
+            # Get all outgoing edges from remove vertex
+            out_edges = await graph_store._cypher(conn, f"""
+                MATCH (old {{name: '{remove_esc}'}})-[r]->(target)
+                RETURN type(r) AS rel_type, target.name AS target_name
+            """, cols="rel_type agtype, target_name agtype")
+
+            for edge in out_edges:
+                target_name = edge.get("target_name", "")
+                rel_type = edge.get("rel_type", "")
+                if not target_name or not rel_type or target_name == keep_name:
+                    continue
+                rel_label = graph_store._sanitize_label(rel_type)
+                target_esc = graph_store._escape(str(target_name))
+                # Create edge from keep to target (MERGE to avoid dupes)
+                await graph_store._cypher(conn, f"""
+                    MATCH (k {{name: '{keep_esc}'}}), (t {{name: '{target_esc}'}})
+                    MERGE (k)-[r:{rel_label}]->(t)
+                    RETURN r
+                """, cols="r agtype")
+                edges_moved += 1
+
+            # Get all incoming edges to remove vertex
+            in_edges = await graph_store._cypher(conn, f"""
+                MATCH (source)-[r]->(old {{name: '{remove_esc}'}})
+                RETURN source.name AS source_name, type(r) AS rel_type
+            """, cols="source_name agtype, rel_type agtype")
+
+            for edge in in_edges:
+                source_name = edge.get("source_name", "")
+                rel_type = edge.get("rel_type", "")
+                if not source_name or not rel_type or source_name == keep_name:
+                    continue
+                rel_label = graph_store._sanitize_label(rel_type)
+                source_esc = graph_store._escape(str(source_name))
+                # Create edge from source to keep (MERGE to avoid dupes)
+                await graph_store._cypher(conn, f"""
+                    MATCH (s {{name: '{source_esc}'}}), (k {{name: '{keep_esc}'}})
+                    MERGE (s)-[r:{rel_label}]->(k)
+                    RETURN r
+                """, cols="r agtype")
+                edges_moved += 1
+
+            # Delete all edges connected to remove vertex, then delete vertex
+            try:
+                await graph_store._cypher(conn, f"""
+                    MATCH (old {{name: '{remove_esc}'}})-[r]-()
+                    DELETE r
+                    RETURN count(r) AS cnt
+                """, cols="cnt agtype")
+            except Exception:
+                pass  # No edges left is fine
+
+            try:
+                await graph_store._cypher(conn, f"""
+                    MATCH (old {{name: '{remove_esc}'}})
+                    DELETE old
+                    RETURN count(old) AS cnt
+                """, cols="cnt agtype")
+            except Exception:
+                pass  # Vertex may not exist in graph
+
+        return edges_moved

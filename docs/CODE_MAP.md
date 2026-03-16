@@ -734,7 +734,7 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 **Purpose:** Manages the agent Docker container.
 
 **Key class: `LifecycleManager`**
-- `launch_cycle(challenge, timeout)` — docker-compose run with timeout
+- `launch_cycle(challenge, timeout)` — docker compose run with timeout
 - **Graceful shutdown:** writes `stop_flag.json` to shared volume at soft timeout; agent pings back, gets extension (up to 2 extensions, EXTENSION_FACTOR 0.5)
 - **Monitoring:** polls container status at POLL_INTERVAL (2s)
 

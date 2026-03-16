@@ -1,7 +1,8 @@
-"""INTROSPECTION phase — deep self-assessment, analysis reports."""
+"""INTROSPECTION phase — deep self-assessment, analysis reports, operator scorecard."""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -286,10 +287,166 @@ class IntrospectMixin:
             journal_data = await self.memory.registers.get_json(self._JOURNAL_KEY) or {}
             narrative = journal_data.get("consolidation", "")
 
-            # Append previous assessment for report evolution/comparison
+            # Append previous assessment for differential report generation
             narrative_with_prev = narrative
             if previous_assessment:
-                narrative_with_prev += f"\n\n## YOUR PREVIOUS ASSESSMENT (cycle {last_report_cycle})\n{previous_assessment}\n\nCRITICAL: Focus on what has CHANGED since cycle {last_report_cycle}. Do not repeat the same analysis."
+                narrative_with_prev += (
+                    f"\n\n## YOUR PREVIOUS ASSESSMENT (cycle {last_report_cycle})\n"
+                    f"{previous_assessment}\n\n"
+                    f"Your new report MUST address what has changed since this assessment. "
+                    f"Use section '1. What Changed Since Last Report' to highlight new developments, "
+                    f"escalations, de-escalations, and corrections. Do NOT repeat unchanged analysis — "
+                    f"summarize unchanged regions in one sentence each."
+                )
+
+            # --- Leader / volatile-fact freshness audit ---
+            # Facts with volatile predicates that haven't been updated in 200+
+            # cycles are likely stale (leadership changes, regime turnover, etc.).
+            # Inject a warning so the report generator knows not to trust them.
+            stale_leaders: list[dict] = []
+            try:
+                if self.memory.structured and self.memory.structured._available:
+                    async with self.memory.structured._pool.acquire() as conn:
+                        rows = await conn.fetch(
+                            "SELECT subject, predicate, value, source_cycle "
+                            "FROM facts "
+                            "WHERE predicate IN ("
+                            "  'LeaderOf', 'HeadOfState', 'HeadOfGovernment', "
+                            "  'President', 'PrimeMinister'"
+                            ") "
+                            "AND superseded_by IS NULL "
+                            "AND source_cycle < $1 "
+                            "ORDER BY source_cycle ASC LIMIT 20",
+                            self.state.cycle_number - 200,
+                        )
+                        stale_leaders = [dict(r) for r in rows]
+            except Exception:
+                pass
+
+            if stale_leaders:
+                stale_text = "\n\n### STALE LEADER FACTS (verify before citing)\n"
+                stale_text += (
+                    "The following leader/head-of-state facts have not been "
+                    "updated in 200+ cycles and may be outdated. Do NOT cite "
+                    "these in the report unless you can corroborate them from "
+                    "recent events or entity profiles above.\n"
+                )
+                for sl in stale_leaders:
+                    stale_text += (
+                        f"- {sl['subject']} {sl['predicate']} "
+                        f"{sl['value']} (from cycle {sl['source_cycle']})\n"
+                    )
+                entity_profiles_text += stale_text
+
+            # --- Novelty scoring: surface under-represented events ---
+            novelty_events_text = ""
+            try:
+                if self.memory and self.memory.structured and self.memory.structured._available:
+                    async with self.memory.structured._pool.acquire() as conn:
+                        # All-time category distribution
+                        cat_totals = await conn.fetch(
+                            "SELECT category, COUNT(*) AS cnt FROM events GROUP BY category"
+                        )
+                        total_events_all = sum(r["cnt"] for r in cat_totals) if cat_totals else 0
+                        cat_pct = {
+                            r["category"]: r["cnt"] / max(total_events_all, 1)
+                            for r in cat_totals
+                        } if cat_totals else {}
+
+                        # All-time region distribution (via source geo_origin)
+                        region_totals = await conn.fetch(
+                            "SELECT s.geo_origin, COUNT(e.id) AS cnt "
+                            "FROM events e JOIN sources s ON e.source_id = s.id "
+                            "GROUP BY s.geo_origin"
+                        )
+                        total_with_region = sum(r["cnt"] for r in region_totals) if region_totals else 0
+                        region_pct = {
+                            (r["geo_origin"] or "unknown"): r["cnt"] / max(total_with_region, 1)
+                            for r in region_totals
+                        } if region_totals else {}
+
+                        # Recent events (48h) with region info
+                        recent_for_novelty = await conn.fetch(
+                            "SELECT e.id, e.data->>'title' AS title, "
+                            "e.category, e.created_at, "
+                            "s.geo_origin "
+                            "FROM events e "
+                            "LEFT JOIN sources s ON e.source_id = s.id "
+                            "WHERE e.created_at > NOW() - INTERVAL '48 hours' "
+                            "ORDER BY e.created_at DESC LIMIT 200"
+                        )
+
+                        # Entities seen in last 100 events (for entity novelty)
+                        known_entities: set[str] = set()
+                        try:
+                            known_rows = await conn.fetch(
+                                "SELECT DISTINCT ep.canonical_name "
+                                "FROM event_entity_links eel "
+                                "JOIN entity_profiles ep ON eel.entity_id = ep.id "
+                                "WHERE eel.event_id IN ("
+                                "  SELECT id FROM events ORDER BY created_at DESC LIMIT 100"
+                                ")"
+                            )
+                            known_entities = {r["canonical_name"] for r in known_rows}
+                        except Exception:
+                            pass
+
+                        # Score each recent event
+                        scored = []
+                        for ev in recent_for_novelty:
+                            # Category novelty: rarer category = higher score
+                            cat_freq = cat_pct.get(ev["category"], 0.5)
+                            cat_novelty = 1.0 - cat_freq
+
+                            # Region novelty: rarer region = higher score
+                            region = ev["geo_origin"] or "unknown"
+                            region_freq = region_pct.get(region, 0.5)
+                            region_novelty = 1.0 - region_freq
+
+                            # Entity novelty: check if event links to unseen entities
+                            entity_novelty = 0.0
+                            try:
+                                ev_entities = await conn.fetch(
+                                    "SELECT ep.canonical_name "
+                                    "FROM event_entity_links eel "
+                                    "JOIN entity_profiles ep ON eel.entity_id = ep.id "
+                                    "WHERE eel.event_id = $1",
+                                    ev["id"],
+                                )
+                                if ev_entities:
+                                    unseen = sum(
+                                        1 for r in ev_entities
+                                        if r["canonical_name"] not in known_entities
+                                    )
+                                    entity_novelty = unseen / len(ev_entities)
+                            except Exception:
+                                pass
+
+                            # Composite: weight category 40%, region 30%, entity 30%
+                            novelty = round(
+                                0.4 * cat_novelty + 0.3 * region_novelty + 0.3 * entity_novelty,
+                                3,
+                            )
+                            scored.append({
+                                "title": ev["title"],
+                                "category": ev["category"],
+                                "region": region,
+                                "novelty": novelty,
+                            })
+
+                        scored.sort(key=lambda x: x["novelty"], reverse=True)
+                        top_novel = scored[:10]
+
+                        if top_novel:
+                            lines = []
+                            for item in top_novel:
+                                lines.append(
+                                    f"- [novelty={item['novelty']:.2f}] [{item['category']}] "
+                                    f"({item['region']}) {item['title']}"
+                                )
+                            novelty_events_text = "\n".join(lines)
+            except Exception:
+                pass  # Best-effort — don't break the report if novelty scoring fails
 
             report_messages = self.assembler.assemble_analysis_report_prompt(
                 cycle_number=self.state.cycle_number,
@@ -300,6 +457,7 @@ class IntrospectMixin:
                 entity_count=entity_count,
                 coverage_regions=coverage_regions,
                 narrative=narrative_with_prev,
+                novelty_events=novelty_events_text,
             )
 
             response = await self.llm.complete(
@@ -346,6 +504,9 @@ class IntrospectMixin:
             self.logger.log("analysis_report_complete",
                             report_length=len(report_content))
 
+            # Compute and store operator scorecard
+            await self._compute_scorecard()
+
         except Exception as e:
             self.logger.log_error(f"Analysis report generation failed: {e}")
 
@@ -369,3 +530,115 @@ class IntrospectMixin:
             )
         except Exception:
             pass  # Best-effort — don't break the cycle if archiving fails
+
+    async def _compute_scorecard(self: AgentCycle) -> None:
+        """Compute operator scorecard with hard diagnostic telemetry.
+
+        Collects coverage by region/category, entity link rate, fact freshness,
+        source health, top entities, and graph stats. Stored in Redis for the
+        UI to serve via /api/v2/scorecard.
+        """
+        scorecard: dict = {}
+        try:
+            if not (self.memory and self.memory.structured and self.memory.structured._available):
+                self.logger.log("scorecard_skip", reason="structured store unavailable")
+                return
+
+            async with self.memory.structured._pool.acquire() as conn:
+                # --- Coverage by category (last 48h) ---
+                rows = await conn.fetch(
+                    "SELECT category, COUNT(*) AS cnt FROM events "
+                    "WHERE created_at > NOW() - INTERVAL '48 hours' "
+                    "GROUP BY category ORDER BY cnt DESC"
+                )
+                scorecard["coverage_by_category"] = {r["category"]: r["cnt"] for r in rows}
+
+                # --- Coverage by region (source geo_origin, last 48h) ---
+                rows = await conn.fetch(
+                    "SELECT s.geo_origin, COUNT(e.id) AS cnt FROM events e "
+                    "JOIN sources s ON e.source_id = s.id "
+                    "WHERE e.created_at > NOW() - INTERVAL '48 hours' "
+                    "GROUP BY s.geo_origin ORDER BY cnt DESC"
+                )
+                scorecard["coverage_by_region"] = {
+                    r["geo_origin"] or "unknown": r["cnt"] for r in rows
+                }
+
+                # --- Entity link rate ---
+                total_events = await conn.fetchval("SELECT COUNT(*) FROM events") or 0
+                linked_events = await conn.fetchval(
+                    "SELECT COUNT(DISTINCT event_id) FROM event_entity_links"
+                ) or 0
+                scorecard["entity_link_rate"] = round(
+                    linked_events / max(total_events, 1) * 100, 1
+                )
+
+                # --- Fact freshness ---
+                total_facts = await conn.fetchval(
+                    "SELECT COUNT(*) FROM facts WHERE superseded_by IS NULL"
+                ) or 0
+                stale_facts = await conn.fetchval(
+                    "SELECT COUNT(*) FROM facts WHERE superseded_by IS NULL "
+                    "AND source_cycle < $1",
+                    self.state.cycle_number - 200,
+                ) or 0
+                scorecard["fact_freshness_pct"] = round(
+                    (total_facts - stale_facts) / max(total_facts, 1) * 100, 1
+                )
+                scorecard["stale_facts"] = stale_facts
+
+                # --- Source health ---
+                rows = await conn.fetch(
+                    "SELECT status, COUNT(*) AS cnt FROM sources GROUP BY status"
+                )
+                scorecard["source_health"] = {r["status"]: r["cnt"] for r in rows}
+
+                # --- Top entities by event involvement ---
+                rows = await conn.fetch(
+                    "SELECT ep.canonical_name, COUNT(eel.event_id) AS event_count "
+                    "FROM entity_profiles ep "
+                    "JOIN event_entity_links eel ON ep.id = eel.entity_id "
+                    "GROUP BY ep.canonical_name ORDER BY event_count DESC LIMIT 10"
+                )
+                scorecard["top_entities"] = {
+                    r["canonical_name"]: r["event_count"] for r in rows
+                }
+
+            # --- Graph stats (via Cypher, outside the PG connection) ---
+            try:
+                if self.memory.graph and self.memory.graph.available:
+                    node_result = await self.memory.graph.execute_cypher(
+                        "MATCH (n) RETURN count(n) AS cnt"
+                    )
+                    edge_result = await self.memory.graph.execute_cypher(
+                        "MATCH ()-[r]->() RETURN count(r) AS cnt"
+                    )
+                    node_count = 0
+                    edge_count = 0
+                    if node_result and "cnt" in node_result[0]:
+                        val = node_result[0]["cnt"]
+                        node_count = int(val) if val is not None else 0
+                    if edge_result and "cnt" in edge_result[0]:
+                        val = edge_result[0]["cnt"]
+                        edge_count = int(val) if val is not None else 0
+                    scorecard["graph"] = {"nodes": node_count, "edges": edge_count}
+            except Exception:
+                scorecard["graph"] = {"nodes": 0, "edges": 0}
+
+            # --- Timestamp ---
+            scorecard["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+            # --- Store in Redis ---
+            await self.memory.registers.set_json("scorecard", scorecard)
+            await self.memory.registers.set(
+                "scorecard_cycle", str(self.state.cycle_number)
+            )
+
+            self.logger.log("scorecard_complete",
+                            categories=len(scorecard.get("coverage_by_category", {})),
+                            regions=len(scorecard.get("coverage_by_region", {})),
+                            entity_link_rate=scorecard.get("entity_link_rate"),
+                            fact_freshness_pct=scorecard.get("fact_freshness_pct"))
+
+        except Exception as e:
+            self.logger.log_error(f"Scorecard computation failed: {e}")

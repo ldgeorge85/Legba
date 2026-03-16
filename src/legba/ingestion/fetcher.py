@@ -6,9 +6,12 @@ No LLM, no tool registry — just async fetch and parse.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -25,6 +28,67 @@ _BROWSER_USER_AGENT = (
 )
 
 _MAX_SUMMARY_CHARS = 800
+
+# OAuth2 token cache: {cache_key: (token, expires_at_epoch)}
+_token_cache: dict[str, tuple[str, float]] = {}
+
+
+def _resolve_env(value: str) -> str:
+    """Resolve a $ENV_VAR reference to its value, or return as-is."""
+    if isinstance(value, str) and value.startswith("$"):
+        return os.getenv(value[1:], "")
+    return value
+
+
+async def _get_oauth_token(auth_config: dict) -> str:
+    """Get OAuth2 token via client credentials grant. Caches until expiry."""
+    token_url = auth_config.get("token_url", "")
+    if not token_url:
+        return ""
+
+    cache_key = token_url
+
+    # Check cache (with 60s buffer before expiry)
+    if cache_key in _token_cache:
+        token, expires_at = _token_cache[cache_key]
+        if time.time() < expires_at - 60:
+            return token
+
+    client_id = _resolve_env(auth_config.get("client_id", ""))
+    client_secret = _resolve_env(auth_config.get("client_secret", ""))
+
+    if not client_id or not client_secret:
+        logger.warning("OAuth2 client_id or client_secret not resolved for %s", token_url)
+        return ""
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(token_url, data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            })
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error("OAuth2 token exchange failed for %s: %s", token_url, e)
+        return ""
+
+    token = data.get("access_token", "")
+    if not token:
+        logger.error("OAuth2 response missing access_token from %s", token_url)
+        return ""
+
+    expires_in = data.get("expires_in", 3600)
+    _token_cache[cache_key] = (token, time.time() + expires_in)
+    logger.info("OAuth2 token acquired from %s (expires in %ds)", token_url, expires_in)
+    return token
+
+# Retry config for transient HTTP errors (429, 502, 503)
+_RETRY_STATUS_CODES = {429, 502, 503}
+_MAX_RETRIES = 3
+_BACKOFF_SCHEDULE = [5, 15, 45]  # seconds — exponential-ish
+_MAX_RETRY_AFTER = 60  # cap Retry-After header at 60s
 
 _JSON_COLLECTION_KEYS = (
     "articles", "results", "data", "items", "events", "reports",
@@ -128,7 +192,11 @@ def _json_item_to_entry(item: dict) -> FetchedEntry:
     )
     published = _first(
         "published", "publishedAt", "published_at", "pubDate",
-        "date", "created_at", "createdAt", "timestamp", "time",
+        "dateTime", "datetime", "date_time",
+        "seendate", "seen_date",
+        "event_date", "eventDate",
+        "date", "timestamp", "time",
+        "created_at", "createdAt",
         "updated_at", "updatedAt",
     )
     guid = _first("id", "guid", "_id", "uuid") or link
@@ -249,6 +317,8 @@ async def fetch_source(
         query_template: URL pattern with {placeholders}
         auth_config: {"type": "api_key", "header": "X-Api-Key", "value": "..."}
                      or {"type": "query_param", "key": "api_key", "value": "..."}
+                     or {"type": "bearer", "token": "..."} (static token)
+                     or {"type": "bearer", "token_url": "...", "client_id": "...", "client_secret": "..."} (OAuth2 client credentials)
         last_fetch: Last successful fetch time (for incremental queries)
         timeout: HTTP timeout in seconds
         limit: Max entries to return
@@ -270,6 +340,13 @@ async def fetch_source(
             # Append to URL
             sep = "&" if "?" in fetch_url else "?"
             fetch_url = f"{fetch_url}{sep}{auth_config['key']}={auth_config.get('value', '')}"
+        elif auth_type == "bearer":
+            # Static token or OAuth2 client credentials exchange
+            token = _resolve_env(auth_config.get("token", ""))
+            if not token and auth_config.get("token_url"):
+                token = await _get_oauth_token(auth_config)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
 
     result = FetchResult()
 
@@ -289,6 +366,29 @@ async def fetch_source(
                     follow_redirects=True,
                 ) as browser_client:
                     resp = await browser_client.get(fetch_url)
+
+            # Retry on transient errors (429 rate-limit, 502/503 server errors)
+            if resp.status_code in _RETRY_STATUS_CODES:
+                for attempt in range(_MAX_RETRIES):
+                    wait = _BACKOFF_SCHEDULE[attempt]
+                    # Honour Retry-After header if present (429 often includes it)
+                    retry_after = resp.headers.get("retry-after")
+                    if retry_after:
+                        try:
+                            wait = min(int(retry_after), _MAX_RETRY_AFTER)
+                        except ValueError:
+                            # Retry-After can be an HTTP-date — ignore, use backoff
+                            pass
+
+                    logger.warning(
+                        "HTTP %d from %s — retry %d/%d in %ds",
+                        resp.status_code, fetch_url, attempt + 1, _MAX_RETRIES, wait,
+                    )
+                    await asyncio.sleep(wait)
+
+                    resp = await client.get(fetch_url)
+                    if resp.status_code not in _RETRY_STATUS_CODES:
+                        break
 
             result.http_status = resp.status_code
             resp.raise_for_status()
@@ -425,6 +525,15 @@ async def fetch_source(
             summary = summary[:_MAX_SUMMARY_CHARS] + "..."
         entry_guid = entry.get("id", "") or entry.get("guid", "") or entry.get("link", "")
 
+        # Capture feedparser's pre-parsed struct_time fields for the normalizer.
+        # These are more reliable than string parsing since feedparser handles
+        # many date formats internally.
+        raw_data: dict = {}
+        for ts_field in ("published_parsed", "updated_parsed", "created_parsed"):
+            ts_val = entry.get(ts_field)
+            if ts_val is not None:
+                raw_data[ts_field] = ts_val
+
         result.entries.append(FetchedEntry(
             title=entry.get("title", ""),
             link=entry.get("link", ""),
@@ -433,6 +542,7 @@ async def fetch_source(
             published=entry.get("published", ""),
             authors=[a.get("name", "") for a in entry.get("authors", [])],
             tags=[t.get("term", "") for t in entry.get("tags", [])],
+            raw_data=raw_data,
         ))
 
     # Last-resort JSON fallback for RSS with 0 entries

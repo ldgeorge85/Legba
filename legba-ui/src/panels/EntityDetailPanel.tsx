@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { useEntity } from '@/api/hooks'
 import { useSelectionStore } from '@/stores/selection'
 import { cn, entityTypeColor, formatConfidence } from '@/lib/utils'
 import { Badge } from '@/components/common/Badge'
 import { TimeAgo } from '@/components/common/TimeAgo'
+import { EntityMergeModal } from '@/components/EntityMergeModal'
+import { Merge } from 'lucide-react'
 
 interface Props {
   entityId: string | null
@@ -12,6 +15,7 @@ export function EntityDetailPanel({ entityId: propId }: Props) {
   const selected = useSelectionStore((s) => s.selected)
   const id = propId ?? (selected?.type === 'entity' ? selected.id : null)
   const { data, isLoading } = useEntity(id)
+  const [showMergeModal, setShowMergeModal] = useState(false)
 
   if (!id) return <div className="p-4 text-sm text-muted-foreground">Select an entity to view details</div>
   if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading...</div>
@@ -23,6 +27,15 @@ export function EntityDetailPanel({ entityId: propId }: Props) {
         <div className="flex items-center gap-2 mb-1">
           <Badge className={cn(entityTypeColor(data.entity_type))}>{data.entity_type}</Badge>
           <span className="text-xs text-muted-foreground font-mono">{data.entity_id.slice(0, 8)}</span>
+          <div className="flex-1" />
+          <button
+            onClick={() => setShowMergeModal(true)}
+            className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+            title="Merge this entity into another"
+          >
+            <Merge className="h-3 w-3" />
+            Merge Into...
+          </button>
         </div>
         <h2 className="text-lg font-semibold">{data.name}</h2>
         {data.aliases.length > 0 && (
@@ -67,6 +80,14 @@ export function EntityDetailPanel({ entityId: propId }: Props) {
             ))}
           </div>
         </div>
+      )}
+
+      {showMergeModal && (
+        <EntityMergeModal
+          removeId={data.entity_id}
+          removeName={data.name}
+          onClose={() => setShowMergeModal(false)}
+        />
       )}
     </div>
   )

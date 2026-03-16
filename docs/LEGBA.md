@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Continuously operating autonomous intelligence platform.*
-*Last updated: 2026-03-15 | Ingestion service, data quality hardening, batch entity linking*
+*Last updated: 2026-03-15 | Ingestion service, source normalizers, production metrics, doc polish*
 
 ---
 
@@ -13,7 +13,7 @@ The operator provides a seed goal. The agent then operates indefinitely: ingesti
 
 **Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events, producing structured briefings, detecting patterns, and flagging significant developments.
 
-**Key numbers:** 100+ Python source files, 241 tests, **58 built-in tools** across 17 builtin modules, 8 platform services, 11 Docker containers.
+**Key numbers:** 100+ Python source files, 241 tests, **57 built-in tools** across 17 builtin modules, 7 platform services, 10 Docker containers.
 
 ---
 
@@ -37,7 +37,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - PYTHONPATH=/agent/src (self-modifiable)
 |   |   - Cycle: WAKE > ORIENT > [cycle type routing] > REFLECT > NARRATE > PERSIST
 |   |   - cycle.py orchestrator + 13 phase mixins (phases/ directory)
-|   |   - 58 built-in tools + cycle_complete pseudo-tool
+|   |   - 57 built-in tools + cycle_complete pseudo-tool
 |   |
 |   +-- Platform Services (long-lived)
 |   |   - Redis :6379         -- Transient state (counters, flags, registers)
@@ -47,15 +47,6 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - OpenSearch :9200    -- Bulk data, full-text search, aggregations
 |   |   - OpenSearch Audit :9201 -- Audit logs (agent cannot access)
 |   |   - Airflow :8080       -- Scheduled pipelines, DAG orchestration
-|   |
-|   +-- Ingestion Service :8600
-|   |   - Standalone deterministic source fetcher
-|   |   - 3-tier dedup (GUID, source_url, Jaccard title similarity)
-|   |   - 15 source-specific normalizers (RSS, GeoJSON, NWS, USGS, GDELT, etc.)
-|   |   - Auto entity linking (title → entity profile matching)
-|   |   - Batch entity linker (periodic, word-boundary regex, conservative)
-|   |   - Source health tracking (success/failure counters, exponential backoff)
-|   |   - NATS publishing for real-time event notifications
 |   |
 |   +-- Operator Console v1 :8501  -- Web UI + consultation (FastAPI + htmx)
 |   +-- Operator Console v2 :8503  -- Multi-panel workstation (React + Dockview + Sigma.js + MapLibre)
@@ -162,7 +153,7 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 58 tools, drain inbox
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 57 tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (priority order):
    a. EVOLVE (every 30)        -- self-improvement, prompt/tool evaluation, operational scorecard
@@ -172,9 +163,18 @@ The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) 
    e. ACQUIRE (every 3)        -- dedicated source fetching, event ingestion, entity resolution
    f. NORMAL                   -- goal-directed PLAN → REASON+ACT
 4. REFLECT   -- LLM evaluates: significance (calibrated 0-1 scale), facts learned, entities, goal progress
-              -- Facts are auto-superseded when a new fact with the same subject+predicate but different value is stored
 5. NARRATE   -- LLM writes 1-3 journal entries + extracts investigation leads
 6. PERSIST   -- Store episode, track ingestion, auto-complete goals, promote memories, heartbeat, exit
+```
+
+```python
+# Cycle type selection (evaluated in priority order):
+if cycle_number % 30 == 0:  EVOLVE
+elif cycle_number % 15 == 0: INTROSPECTION
+elif cycle_number % 10 == 0: ANALYSIS
+elif cycle_number % 5 == 0:  RESEARCH
+elif cycle_number % 3 == 0:  ACQUIRE
+else:                        NORMAL
 ```
 
 **Cycle type distribution (per 30-cycle window):** ~3% evolve, ~7% introspection, ~7% analysis, ~13% research, ~27% acquire, ~43% normal. Each specialized cycle type uses a filtered tool set — only tools relevant to that cycle's purpose are available.
@@ -308,6 +308,8 @@ Full "state of the world" intelligence assessments generated during introspectio
 
 Reports are substantial documents (1000-3000+ words). Stored in Redis (`report_history`, `latest_report`). Published to NATS outbound for the messages page.
 
+**Analyst Hypotheses:** Reports include a separate "Analyst Hypotheses" section, clearly delineated from factual content. Hypotheses are labeled inferences with explicit confirm/refute criteria (e.g., "If X happens within Y timeframe, this hypothesis is confirmed"). This section is the only place inferential reasoning is permitted — fact sections are restricted to data-grounded statements only (anti-inferential-leakage rules ban words like "implicit", "implied", "inferred", "suggests", "appears to be").
+
 **Data grounding (quality fix 2026-03-07):** Reports are built from queried data, not LLM memory. The report generation queries:
 - Actual graph relationships (LeaderOf, HostileTo, AlliedWith, etc.) with entity names
 - Entity profiles with summaries from Postgres
@@ -315,8 +317,6 @@ Reports are substantial documents (1000-3000+ words). Stored in Redis (`report_h
 - Coverage regions from graph Country nodes
 
 The prompt explicitly forbids fabrication: the LLM may only reference entities, leaders, events, and relationships present in the injected data. Journal narrative is included but clearly labeled as "experiential perspective for voice/continuity only — not a source of facts."
-
-Reports now include the previous report's executive summary for continuity — the agent must focus on what has CHANGED since the last assessment rather than repeating the same analysis.
 
 - **UI:** `/reports` page with list + detail views, full markdown rendering.
 
@@ -470,7 +470,7 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 ---
 
-## 5. Tool System (58 Tools)
+## 5. Tool System (57 Tools)
 
 ### Core (17 tools)
 | Tool | Category |
@@ -534,13 +534,13 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 The PLAN phase outputs a `Tools:` line listing which tools the agent expects to use. During REASON, only those tools get full parameter definitions in the system prompt; all others are listed as name + description only, with `explain_tool` available for on-demand lookup. This significantly reduces context usage (~5-10k tokens saved per cycle).
 
-### Tool Utilization (as of cycle 57)
+### Tool Utilization
 
-**Heavily used (>20 calls/17 cycles):** entity_resolve, event_store, http_request, feed_parse, graph_query, entity_profile, graph_store, source_add, source_update, event_search, source_list, entity_inspect
+**Core working set (~15 tools used most cycles):** entity_resolve, event_store, http_request, feed_parse, graph_query, entity_profile, graph_store, source_add, source_update, event_search, source_list, entity_inspect, memory_query, memory_store, goal_list
 
-**Lightly used:** memory_query, memory_store, explain_tool, goal_list, note_to_self, nats_publish, goal_create, goal_update
+**Cycle-type-specific tools:** Analytics tools (anomaly_detect, temporal_query, graph_analyze, correlate) used during ANALYSIS cycles. Filesystem tools (fs_read, fs_write, code_test) used during EVOLVE cycles. Orchestration tools available but rarely invoked autonomously.
 
-**Never used (registered but not yet invoked by the agent):** All analytics tools, all orchestration tools, all raw OpenSearch tools, most NATS tools, spawn_subagent, fs_read/write/list, exec, code_test, memory_promote, memory_supersede, goal_decompose, source_remove
+**Observed pattern:** The agent converges on its core working set organically. Specialized tools see use primarily during their designated cycle types.
 
 ---
 
@@ -576,35 +576,40 @@ event_store("Russia launches missile at Ukraine")
       > creates EventEntityLink(event_id, entity_id, role="target")
 ```
 
-### Ingestion Service (Standalone)
+### Ingestion Service
 
-The ingestion service (`src/legba/ingestion/`) runs as a persistent container alongside the agent, handling automated data acquisition:
+Autonomous background service that continuously fetches, normalizes, and stores events from registered sources without consuming agent cycles. Runs as a separate container alongside the agent. When active (`INGESTION_SERVICE_ACTIVE=true`), ACQUIRE cycles are repurposed for source discovery instead of direct fetching.
 
-**Architecture:**
-- Scheduler polls `sources` table for feeds due for fetching (based on `next_fetch_at`)
-- Concurrent fetching (configurable max workers, default 4)
-- Source-specific normalizers for 15+ feed types (RSS, Atom, JSON APIs, GeoJSON, CSV)
-- 3-tier dedup: GUID exact → source_url exact → adaptive Jaccard title similarity
-- Events stored to both Postgres and OpenSearch
-- Entity auto-linking: matches entity names in event titles against `entity_profiles.canonical_name`
-- Batch entity linker: runs every ~30 minutes, processes up to 200 unlinked events using word-boundary regex matching
-- Source health: tracks success/failure counts, exponential backoff on failures, auto-error at 10 consecutive failures
+**Source type normalizers** — specialized parsers for structured APIs (dispatched by source name prefix). Generic RSS/Atom feeds use the default normalizer.
 
-**Key normalizers:**
-- NWS weather alerts (area-specific titles, alert ID as source_url)
-- USGS earthquakes (magnitude + place in title)
-- GDELT (country extraction from sourceCountry)
-- Event Registry (topic mapping)
-- NASA EONET (natural events)
-- Generic RSS/Atom (feedparser-based)
+| Source Type | API/Format | Normalizer |
+|------------|-----------|------------|
+| GDELT | REST JSON (DOC API) | `normalize_gdelt()` |
+| USGS Earthquakes | GeoJSON | `normalize_usgs_earthquake()` |
+| NASA EONET | REST JSON | `normalize_eonet()` |
+| NWS Alerts | GeoJSON | `normalize_nws_alert()` |
+| ACLED | REST JSON (OAuth) | `normalize_acled()` |
+| CISA KEV | Static JSON | `normalize_cisa_kev()` |
+| ReliefWeb | REST JSON | `normalize_reliefweb()` |
+| IFRC | REST JSON | `normalize_ifrc()` |
+| NVD CVE | REST JSON | `normalize_nvd()` |
+| NASA FIRMS | CSV | `normalize_firms()` |
+| UCDP | REST JSON | `normalize_ucdp()` |
+| Frankfurter | REST JSON (FX rates) | `normalize_frankfurter()` |
+| CDC | RSS | (default) |
+| WHO | OData JSON | (default) |
+| Event Registry | REST JSON | (default) |
+| RSS feeds | RSS/Atom | (default) |
 
-**Category inference:** Keyword-based regex classification into 9 categories (conflict, political, disaster, health, economic, technology, environment, social, other). Source-level category overrides take priority.
-
-**Relationship to agent:** The agent's ACQUIRE cycles are aware of the ingestion service (auto-detected via Redis heartbeat). When active, ACQUIRE shifts to source discovery and management rather than manual fetching. The agent still handles entity resolution, fact extraction, and analytical processing that requires LLM judgment.
+See `src/legba/ingestion/source_normalizers.py` for normalizer implementations.
 
 ---
 
 ## 7. Operator Console UI
+
+**V1** (FastAPI + htmx on `:8501`) is the legacy console. **V2** (React + Dockview on `:8503`) is the recommended operator interface. V1 is feature-frozen; all new development targets V2.
+
+### Operator Console v1 — Legacy
 
 Server-rendered web interface for inspecting, managing, and consulting Legba.
 
@@ -800,6 +805,34 @@ ssh -L 8501:localhost:8501 -L 5601:localhost:5601 -L 8080:localhost:8080 user@<y
 | LEGBA_AGENT_CONTAINER | legba-agent-cycle | Agent container name |
 | LEGBA_VOLUME_PREFIX | legba | Volume name prefix |
 
+**Consultation engine** (separate LLM config for `/consult`, falls back to main LLM config):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| CONSULT_LLM_PROVIDER | (LLM_PROVIDER) | Provider for consult: `vllm` or `anthropic` |
+| CONSULT_API_BASE | (OPENAI_BASE_URL) | Consultation LLM API endpoint |
+| CONSULT_API_KEY | (OPENAI_API_KEY) | Consultation LLM API key |
+| CONSULT_MODEL | (OPENAI_MODEL) | Consultation model name |
+| CONSULT_MAX_TOKENS | (LLM_MAX_TOKENS) | Max output tokens for consultation |
+| CONSULT_TEMPERATURE | (LLM_TEMPERATURE) | Sampling temperature for consultation |
+| CONSULT_TIMEOUT | (LLM timeout) | Request timeout (seconds) |
+
+**Ingestion service** (background event fetcher):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| INGESTION_SERVICE_ACTIVE | false | When `true`, ACQUIRE cycles become source discovery instead of direct fetching |
+| INGESTION_CHECK_INTERVAL | 30 | Seconds between scheduler ticks |
+| INGESTION_MAX_WORKERS | 4 | Concurrent source fetches |
+| INGESTION_HTTP_TIMEOUT | 30 | Per-source fetch timeout (seconds) |
+| INGESTION_DEDUP_CACHE_SIZE | 500 | Recent events kept in memory for Jaccard dedup |
+| INGESTION_BATCH_SIZE | 50 | Max events per source fetch before store |
+| INGESTION_HEALTH_PORT | 8600 | Health/metrics HTTP port |
+| INGESTION_AUTO_PAUSE_THRESHOLD | 10 | Consecutive failures before auto-pause |
+| INGESTION_LOG_LEVEL | INFO | Log level |
+
+**Ingestion Redis keys:** `ingestion:activity` (recent fetch log), `ingestion:status` (service health), `last_ingestion_cycle` (gap tracking).
+
 ---
 
 ## 10. Logging & Debugging
@@ -870,9 +903,11 @@ for f in sorted(os.listdir('/logs/archive/cycle_000NNN')):
 
 ### Planned
 
-| Phase | What |
-|-------|------|
-| Entity Merge | UI for merging duplicate entities (consolidate profiles, re-link events, merge graph nodes) |
+See `docs/WORKLOG.md` for the current work queue.
+
+### Production Metrics
+
+As of cycle 1100+: 8,000+ events, 1,600+ facts, 500+ entities, 650+ graph nodes, 1,300+ edges. Sub-1% error rate across 1,100+ autonomous cycles. See `docs/PROGRESS_AUDIT.md` for detailed analysis.
 
 ---
 
@@ -895,7 +930,7 @@ legba/
 |   |   +-- main.py                  -- Entry point
 |   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 13 phase mixins
 |   |   +-- phases/                  -- Phase mixin modules
-|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (58 tools)
+|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (57 tools)
 |   |   |   +-- orient.py           -- OrientMixin: memory/context + ingestion gap tracking + journal leads
 |   |   |   +-- plan.py             -- PlanMixin: LLM planning + tool selection
 |   |   |   +-- act.py              -- ActMixin: tool loop execution
@@ -914,23 +949,12 @@ legba/
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 17 modules (58 tools) + geo.py utility
+|   |   |   +-- builtins/            -- 17 modules (57 tools) + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/
 |   |       +-- templates.py         -- All prompt templates (includes information layers framing)
 |   |       +-- assembler.py         -- Context assembly + token budget + world briefing injection
-|   +-- ingestion/
-|   |   +-- __init__.py
-|   |   +-- __main__.py          -- Entry point
-|   |   +-- config.py            -- IngestionConfig from env
-|   |   +-- service.py           -- Main service loop, tick scheduler
-|   |   +-- fetcher.py           -- RSS/JSON/GeoJSON/CSV fetching + parsing
-|   |   +-- normalizer.py        -- Event normalization, category inference
-|   |   +-- source_normalizers.py -- 15 source-specific normalizers
-|   |   +-- dedup.py             -- 3-tier dedup engine (GUID, URL, Jaccard)
-|   |   +-- storage.py           -- Postgres/OpenSearch storage + entity auto-linking
-|   |   +-- scheduler.py         -- Source scheduling (next_fetch_at management)
 |   +-- supervisor/
 |   |   +-- main.py, lifecycle.py, heartbeat.py, comms.py, cli.py, audit.py, drain.py
 |   +-- ui/

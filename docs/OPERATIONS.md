@@ -201,18 +201,84 @@ docker compose -p legba exec supervisor python -m legba.supervisor.cli --shared 
 
 All UI is behind SSH tunnel:
 ```bash
-ssh -L 8501:localhost:8501 -L 5601:localhost:5601 -L 8080:localhost:8080 user@<your-host>
+ssh -L 8501:localhost:8501 -L 8503:localhost:8503 -L 5601:localhost:5601 -L 8080:localhost:8080 user@<your-host>
 ```
 
 | UI | URL | Purpose |
 |----|-----|---------|
-| Operator Console | http://localhost:8501 | Dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph |
+| Operator Console v2 | http://localhost:8503 | **Recommended.** Multi-panel workstation (React + Dockview). Graph, map, timeline, analytics, consult. |
+| Operator Console v1 | http://localhost:8501 | Legacy (FastAPI + htmx). Feature-frozen — no new development. |
 | OpenSearch Dashboards | http://localhost:5601 | Ad-hoc data exploration |
 | Airflow | http://localhost:8080 | DAG management |
 
 ---
 
-## 8. Disk Space Management
+## 8. Failure Modes
+
+What happens when each service is unavailable:
+
+| Service | Impact | Recovery | Agent Behavior |
+|---------|--------|----------|----------------|
+| **Redis** | Cycle state lost, journal/reports inaccessible, ingestion counters dead | `docker compose -p legba restart redis` | Agent crashes at WAKE (can't read cycle_number). Supervisor restarts it. |
+| **Postgres** | No structured data: events, entities, facts, goals, sources all unavailable | `docker compose -p legba restart postgres` | Agent crashes at WAKE (service connection). Data persists in volume. |
+| **Qdrant** | No episodic memory (short-term, long-term, fact embeddings) | `docker compose -p legba restart qdrant` | Agent runs but ORIENT has no memory context. Degrades gracefully — continues without memories. |
+| **OpenSearch** | No full-text search, no event index, no journal archive | `docker compose -p legba restart opensearch` | Agent runs but `os_search` and `event_search` tools fail. Degrades gracefully. |
+| **OpenSearch Audit** | Audit logging stops. No cycle history in audit index. | `docker compose -p legba restart opensearch-audit` | Agent unaffected (audit is supervisor-side). Supervisor logs warning but continues. |
+| **NATS** | No operator messaging, no pub/sub events | `docker compose -p legba restart nats` | Agent runs but inbox is empty. No operator directives delivered. Messages queue until NATS recovers. |
+| **Airflow** | No scheduled pipeline execution | `docker compose -p legba restart airflow` | Agent unaffected (Airflow is optional). DAGs don't run until restored. |
+| **Ingestion service** | No automated feed fetching. Agent falls back to manual ACQUIRE. | `docker compose -p legba restart ingestion` | Agent detects missing heartbeat in ORIENT. ACQUIRE cycles do their own feed_parse calls. |
+| **LLM API** | No reasoning capability. Cycle fails. | Check API endpoint health | Supervisor detects heartbeat failure after timeout. Retries next cycle. No data loss. |
+| **UI v1/v2** | No operator console. Agent unaffected. | `docker compose -p legba restart ui` / `ui-v2` | Zero impact on agent. Data continues accumulating. |
+
+**Multi-service failure**: If Postgres AND Redis are both down, the agent cannot start at all. Supervisor will retry indefinitely. All other combinations degrade gracefully.
+
+**Host reboot**: All containers restart via `restart: unless-stopped`. Agent resumes from last persisted cycle_number in Redis. No data loss (all volumes are persistent).
+
+---
+
+## 9. Safe Operations During Active Cycles
+
+### Safe (no disruption)
+- Reading any database (Postgres, Redis, Qdrant, OpenSearch)
+- Running queries via UI console or `psql`
+- Sending operator messages via CLI
+- Building Docker images (`docker compose -p legba build ...`)
+- Taking backups (`scripts/backup.sh` is live-safe)
+- Viewing logs
+- Restarting UI containers (`ui`, `ui-v2`)
+- Restarting Airflow
+
+### Safe with brief interruption
+- Restarting OpenSearch (agent degrades for ~30s during restart)
+- Restarting NATS (messages may be lost during restart window)
+- Restarting Qdrant (memory queries fail briefly)
+
+### Requires supervisor stop first
+- Clearing agent code volume (Hot Deploy procedure)
+- Restarting Postgres (agent will crash mid-cycle if Postgres drops)
+- Restarting Redis (agent will crash mid-cycle)
+- Running schema migrations (safe but better with agent paused)
+- Bulk data operations (DELETE, UPDATE on events/entities/facts)
+
+### Never do while running
+- `docker compose -p legba down -v` (destroys all data)
+- `docker volume rm legba_*` (same)
+- Modifying `.env` without restarting affected containers
+
+---
+
+## 10. UI v2 Deploy
+
+```bash
+docker compose -p legba build ui-v2
+docker compose -p legba up -d ui-v2
+```
+
+No agent disruption. The v2 UI runs independently.
+
+---
+
+## 11. Disk Space Management
 
 The host has 74GB total. Main consumers:
 - Docker images (~15GB active)
@@ -229,7 +295,7 @@ docker image prune -f             # Clean dangling images
 
 ---
 
-## 9. Troubleshooting
+## 12. Troubleshooting
 
 ### Agent Won't Start
 ```bash
@@ -257,7 +323,7 @@ docker volume ls --format '{{.Name}}' | grep legba | xargs -r docker volume rm
 
 ---
 
-## 10. Configuration Reference
+## 13. Configuration Reference
 
 ### Key .env Variables
 | Key | Default | Description |

@@ -697,6 +697,7 @@ class PromptAssembler:
         narrative: str,
         key_relationships: str = "",
         entity_profiles: str = "",
+        novelty_events: str = "",
     ) -> list[Message]:
         """Build the message list for the full analysis report during introspection."""
         report_text = templates.ANALYSIS_REPORT_PROMPT.format(
@@ -705,6 +706,7 @@ class PromptAssembler:
             key_relationships=key_relationships or "(no relationships queried)",
             entity_profiles=entity_profiles or f"({entity_count} entities, no detailed profiles available)",
             recent_events=recent_events or "(no recent events)",
+            novelty_events=novelty_events or "(no novelty scoring available)",
             entity_count=entity_count,
             coverage_regions=coverage_regions or "(coverage unknown)",
             narrative=narrative or "(no narrative perspective yet)",
@@ -712,10 +714,11 @@ class PromptAssembler:
         return [
             Message(role="system", content=(
                 "reasoning: high\n\n"
-                "You are Legba — autonomous intelligence analyst. Produce a comprehensive "
+                "You are Legba — autonomous intelligence analyst. Produce a differential "
                 "Current World Assessment based on everything you know. Write for a decision-maker "
-                "who needs to understand the global situation immediately. Be specific, cite entities "
-                "and relationships from your knowledge. Use markdown formatting."
+                "who needs to understand what has CHANGED since the last report. Lead with changes, "
+                "not repetition. Be specific, cite entities and relationships from your knowledge. "
+                "Use markdown formatting. Follow the numbered section structure exactly."
             )),
             Message(role="user", content=report_text),
         ]

@@ -179,9 +179,10 @@ TIER_1_SOURCES = [
         description="Global Disaster Alert and Coordination System — real-time disaster alerts",
         tags=["gdacs", "disaster", "humanitarian", "real-time"],
     ),
+    # Requires pre-approved appname — register at reliefweb.int
     SourceDef(
         name="ReliefWeb Reports",
-        url="https://api.reliefweb.int/v1/reports?appname=legba&limit=50&sort[]=date:desc&format=json",
+        url="https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date:desc",
         source_type="api",
         category="social",
         fetch_interval_minutes=30,
@@ -190,6 +191,7 @@ TIER_1_SOURCES = [
         coverage_scope="global",
         description="UN OCHA ReliefWeb — humanitarian reports and situation updates",
         tags=["reliefweb", "humanitarian", "un"],
+        initial_status="paused",
     ),
     SourceDef(
         name="IFRC Emergencies",
@@ -219,7 +221,7 @@ TIER_1_SOURCES = [
     # --- Health ---
     SourceDef(
         name="WHO Disease Outbreaks",
-        url="https://www.who.int/api/news/diseaseoutbreaknews",
+        url="https://www.who.int/api/news/diseaseoutbreaknews?$orderby=PublicationDate%20desc&$top=50",
         source_type="api",
         category="health",
         fetch_interval_minutes=60,
@@ -228,6 +230,34 @@ TIER_1_SOURCES = [
         coverage_scope="global",
         description="WHO disease outbreak news and emergency declarations",
         tags=["who", "health", "outbreak", "pandemic"],
+    ),
+    SourceDef(
+        name="CDC Travel Health Notices",
+        url="https://wwwnc.cdc.gov/travel/rss/notices.xml",
+        source_type="rss",
+        category="health",
+        fetch_interval_minutes=120,
+        reliability=0.9,
+        bias_label="center",
+        ownership_type="state",
+        geo_origin="US",
+        coverage_scope="global",
+        description="CDC global disease outbreak travel notices with alert levels",
+        tags=["health", "disease", "outbreak", "cdc"],
+    ),
+    SourceDef(
+        name="CDC US Outbreaks",
+        url="https://tools.cdc.gov/api/v2/resources/media/285676.rss",
+        source_type="rss",
+        category="health",
+        fetch_interval_minutes=120,
+        reliability=0.9,
+        bias_label="center",
+        ownership_type="state",
+        geo_origin="US",
+        coverage_scope="national",
+        description="Active US outbreak investigations - Salmonella, Measles, etc.",
+        tags=["health", "disease", "outbreak", "cdc", "us"],
     ),
     SourceDef(
         name="ProMED Disease Alerts",
@@ -240,6 +270,7 @@ TIER_1_SOURCES = [
         coverage_scope="global",
         description="International Society for Infectious Diseases — early disease outbreak detection",
         tags=["health", "disease", "outbreak"],
+        initial_status="paused",  # Consistently failing
     ),
 
     # --- Cyber / Security ---
@@ -555,6 +586,8 @@ REGIONAL_SOURCES = [
 # ============================================================================
 
 TIER_2_SOURCES = [
+    # ACLED migrated to OAuth 2.0 (Sept 2025). Requires env vars:
+    #   ACLED_CLIENT_ID, ACLED_CLIENT_SECRET
     SourceDef(
         name="ACLED Conflict Events",
         url="https://acleddata.com/api/acled/read",
@@ -566,9 +599,9 @@ TIER_2_SOURCES = [
         coverage_scope="global",
         description="Armed Conflict Location and Event Data — structured conflict events with actors, fatalities, locations",
         tags=["acled", "conflict", "violence", "protest"],
-        query_template="https://acleddata.com/api/acled/read?limit=200&event_date={date_today}|{date_today}&event_date_where=BETWEEN&key=$ACLED_API_KEY&email=$ACLED_EMAIL",
-        auth_config={"type": "query_param", "key": "key", "value": "$ACLED_API_KEY"},
-        initial_status="paused",  # ACLED migrated to OAuth 2.0 (Sept 2025), query param auth sunsetted
+        query_template="https://acleddata.com/api/acled/read?limit=200&event_date={date_today}|{date_today}&event_date_where=BETWEEN",
+        auth_config={"type": "bearer", "token_url": "https://api.acleddata.com/oauth/token", "client_id": "$ACLED_CLIENT_ID", "client_secret": "$ACLED_CLIENT_SECRET"},
+        initial_status="paused",  # Credentials not yet configured
     ),
     SourceDef(
         name="NASA FIRMS — Global Thermal Anomalies",

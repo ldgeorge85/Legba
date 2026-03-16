@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useFacts } from '@/api/hooks'
+import { useFacts, useFactPredicates } from '@/api/hooks'
 import { api } from '@/api/client'
 import { TimeAgo } from '@/components/common/TimeAgo'
 import { Search, ChevronLeft, ChevronRight, X } from 'lucide-react'
@@ -10,7 +10,9 @@ const PAGE_SIZE = 50
 export function FactsPanel() {
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
-  const { data, isLoading } = useFacts({ offset, limit: PAGE_SIZE, q: search || undefined })
+  const [predicate, setPredicate] = useState('')
+  const { data, isLoading } = useFacts({ offset, limit: PAGE_SIZE, q: search || undefined, predicate: predicate || undefined })
+  const { data: predicates } = useFactPredicates()
   const queryClient = useQueryClient()
   const deleteMutation = useMutation({
     mutationFn: (factId: string) => api.delete(`/api/v2/facts/${factId}`),
@@ -31,6 +33,18 @@ export function FactsPanel() {
             className="w-full pl-7 pr-2 py-1 text-sm bg-secondary border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
+        <select
+          value={predicate}
+          onChange={(e) => { setPredicate(e.target.value); setOffset(0) }}
+          className="text-sm bg-secondary border border-border rounded px-2 py-1 focus:outline-none max-w-[180px]"
+        >
+          <option value="">All predicates</option>
+          {predicates?.map((p) => (
+            <option key={p.predicate} value={p.predicate}>
+              {p.predicate} ({p.count})
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Table */}
