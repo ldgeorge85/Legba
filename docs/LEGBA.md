@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Continuously operating autonomous intelligence platform.*
-*Last updated: 2026-03-15 | Ingestion service, source normalizers, production metrics, doc polish*
+*Last updated: 2026-03-16 | Entity merge, scorecard, analytics, search, prediction tracking, NER, graph cleanup*
 
 ---
 
@@ -13,7 +13,7 @@ The operator provides a seed goal. The agent then operates indefinitely: ingesti
 
 **Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events, producing structured briefings, detecting patterns, and flagging significant developments.
 
-**Key numbers:** 100+ Python source files, 241 tests, **57 built-in tools** across 17 builtin modules, 7 platform services, 10 Docker containers.
+**Key numbers:** 100+ Python source files, 237 tests, **60 built-in tools** across 18 builtin modules, 7 platform services, 12 Docker containers.
 
 ---
 
@@ -153,7 +153,7 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 57 tools, drain inbox
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 60 tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (priority order):
    a. EVOLVE (every 30)        -- self-improvement, prompt/tool evaluation, operational scorecard
@@ -930,7 +930,7 @@ legba/
 |   |   +-- main.py                  -- Entry point
 |   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 13 phase mixins
 |   |   +-- phases/                  -- Phase mixin modules
-|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (57 tools)
+|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (60 tools)
 |   |   |   +-- orient.py           -- OrientMixin: memory/context + ingestion gap tracking + journal leads
 |   |   |   +-- plan.py             -- PlanMixin: LLM planning + tool selection
 |   |   |   +-- act.py              -- ActMixin: tool loop execution
@@ -949,7 +949,7 @@ legba/
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 17 modules (57 tools) + geo.py utility
+|   |   |   +-- builtins/            -- 17 modules (60 tools) + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/
@@ -961,7 +961,7 @@ legba/
 |       +-- app.py, stores.py, messages.py, static/
 |       +-- routes/                    -- dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph, facts, memory, watchlist, situations, consult, analytics
 |       +-- templates/                 -- Jinja2 (base.html + per-page dirs)
-+-- tests/                           -- 241 tests (unit + integration + graph)
++-- tests/                           -- 237 tests (unit + integration + graph)
 +-- docs/
     +-- LEGBA.md                     -- This document (platform reference)
     +-- CODE_MAP.md                  -- Full code map with function flows
