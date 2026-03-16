@@ -53,6 +53,14 @@ Cycle types (priority order):
 
 Each specialized cycle type uses a **filtered tool set** — only tools relevant to that cycle's purpose are available, preventing the agent from drifting into unrelated work.
 
+## Operator Console
+
+<p align="center">
+  <img src="docs/screenshot1.png" alt="Legba v2 Operator Console" width="100%">
+</p>
+
+Multi-panel intelligence workstation (React + Dockview). Dashboard, knowledge graph, geospatial map, AI consultation, world assessment reports, live event feed, timeline, analytics — all in a persistent, rearrangeable layout.
+
 ## Quick Start
 
 ```bash
@@ -92,7 +100,7 @@ docker compose -p legba exec supervisor \
 | Metric | Value |
 |--------|-------|
 | Python source files | 100+ |
-| Tests | 237 |
+| Tests | 118 |
 | Built-in tools | 63 across 18 modules |
 | Platform services | 7 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, Airflow) |
 | Canonical relationship types | 30 |
@@ -149,16 +157,12 @@ docker compose -p legba up -d supervisor
 | Document | Description |
 |----------|-------------|
 | [LEGBA.md](docs/LEGBA.md) | Full platform reference — architecture, prompts, memory, tools, config |
-| [UI_V2.md](docs/UI_V2.md) | UI v2 operator console — panels, cross-panel interactions, API, deployment |
 | [DESIGN.md](docs/DESIGN.md) | Implementation design — decisions, data flows, component interactions |
 | [CODE_MAP.md](docs/CODE_MAP.md) | Complete code map — every file, function flows, dependencies |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Ops runbook — deployment, resets, monitoring, debugging, backups |
+| [UI_V2.md](docs/UI_V2.md) | UI v2 operator console — panels, API, deployment |
+| [DATA_SOURCES.md](docs/DATA_SOURCES.md) | Global data source catalog (76+ sources) |
 | [PROMPT_DUMP.md](docs/PROMPT_DUMP.md) | Full assembled prompts for each cycle phase |
-| [PROMPT_GUIDE.md](docs/PROMPT_GUIDE.md) | Prompt engineering notes |
-| [PLAN_V2.md](docs/PLAN_V2.md) | V2 architecture plan — cycle types, data pipeline, intelligence capabilities |
-| [GRACEFUL_SHUTDOWN.md](docs/GRACEFUL_SHUTDOWN.md) | Shutdown protocol details |
-| [PROGRESS_AUDIT.md](docs/PROGRESS_AUDIT.md) | Review of 586 autonomous cycles — tool usage evolution, operational metrics, journal analysis |
-| [EXECUTIVE_SUMMARY.md](docs/EXECUTIVE_SUMMARY.md) | High-level overview of the platform |
 
 ## Testing
 
