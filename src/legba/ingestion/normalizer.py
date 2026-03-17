@@ -1,4 +1,4 @@
-"""Event normalizer — converts FetchedEntry to Event schema.
+"""Signal normalizer — converts FetchedEntry to Signal schema.
 
 Handles category inference, timestamp parsing, and source-specific mappings.
 """
@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from legba.shared.schemas.events import Event, EventCategory, create_event
+from legba.shared.schemas.signals import Signal, SignalCategory, create_signal
 
 from .fetcher import FetchedEntry
 from .source_normalizers import get_source_normalizer
@@ -73,25 +73,25 @@ def extract_entities_ner(text: str) -> tuple[list[str], list[str]]:
 # Category inference from title/summary keywords
 # ---------------------------------------------------------------------------
 
-_CATEGORY_RULES: list[tuple[EventCategory, re.Pattern]] = [
-    (EventCategory.CONFLICT, re.compile(
+_CATEGORY_RULES: list[tuple[SignalCategory, re.Pattern]] = [
+    (SignalCategory.CONFLICT, re.compile(
         r"\b(attack|strike|bomb|missile|war|clash|fighting|military|troops|"
         r"airstrike|offensive|invasion|killed|casualties|ceasefire|insurgent|"
         r"militia|shelling|drone strike|combat|armed|hostil|weapon|"
         r"threat|threaten|retaliat|escalat|siege|blockade|ambush|raid|assault|"
         r"sniper|artillery|naval|convoy|deploy|incursion|rebel|guerrilla|"
         r"separatist|extremist|terror)\b", re.I)),
-    (EventCategory.DISASTER, re.compile(
+    (SignalCategory.DISASTER, re.compile(
         r"\b(earthquake|tsunami|flood|hurricane|typhoon|cyclone|tornado|"
         r"wildfire|eruption|volcano|landslide|avalanche|drought|famine|"
         r"magnitude|seismic|storm surge|devastat|catastroph|"
         r"warning|alert|blizzard|hail|ice storm|heat wave|fire weather|"
         r"freezing|squall|dust storm|surge|mudslide|sinkhole)\b", re.I)),
-    (EventCategory.HEALTH, re.compile(
+    (SignalCategory.HEALTH, re.compile(
         r"\b(outbreak|pandemic|epidemic|virus|disease|WHO|vaccine|"
         r"infection|cases|deaths|hospital|health crisis|malaria|cholera|"
         r"ebola|bird flu|avian|mpox|covid|tuberculosis|measles)\b", re.I)),
-    (EventCategory.ECONOMIC, re.compile(
+    (SignalCategory.ECONOMIC, re.compile(
         r"\b(GDP|inflation|trade|tariff|sanction|economy|market|stock|"
         r"recession|currency|debt|IMF|World Bank|commodity|oil price|"
         r"interest rate|fiscal|monetary|deficit|surplus|unemployment|"
@@ -99,7 +99,7 @@ _CATEGORY_RULES: list[tuple[EventCategory, re.Pattern]] = [
         r"supply chain|shortage|subsid|manufactur|industri|labor|wage|"
         r"employ|growth|contraction|downturn|boom|rally|crash|"
         r"bitcoin|crypto|fintech)\b", re.I)),
-    (EventCategory.POLITICAL, re.compile(
+    (SignalCategory.POLITICAL, re.compile(
         r"\b(election|president|parliament|legislation|treaty|diplomat|"
         r"summit|minister|government|opposition|protest|demonstrat|"
         r"referendum|coup|impeach|policy|bilateral|UN|NATO|EU|"
@@ -108,14 +108,14 @@ _CATEGORY_RULES: list[tuple[EventCategory, re.Pattern]] = [
         r"pledge|announce|warn|threaten|statement|response|tension|crisis|"
         r"ally|alliance|negotiate|agreement|deal|talks|meeting|"
         r"unilateral|ceasefire|truce)\b", re.I)),
-    (EventCategory.TECHNOLOGY, re.compile(
+    (SignalCategory.TECHNOLOGY, re.compile(
         r"\b(cyber|hack|breach|vulnerability|CVE|malware|ransomware|"
         r"zero-day|APT|exploit|CISA|infrastructure attack|data leak)\b", re.I)),
-    (EventCategory.ENVIRONMENT, re.compile(
+    (SignalCategory.ENVIRONMENT, re.compile(
         r"\b(climate|emission|deforestation|pollution|carbon|renewable|"
         r"biodiversity|conservation|environmental|glacier|ice sheet|"
         r"sea level|ozone|species extinct)\b", re.I)),
-    (EventCategory.SOCIAL, re.compile(
+    (SignalCategory.SOCIAL, re.compile(
         r"\b(human rights|refugee|migration|displacement|humanitarian|"
         r"civil liberties|press freedom|censorship|minority|indigenous|"
         r"protest|rally|march|unrest|riot|demonstration|strike action|"
@@ -124,20 +124,20 @@ _CATEGORY_RULES: list[tuple[EventCategory, re.Pattern]] = [
 ]
 
 
-def infer_category(title: str, summary: str = "", source_category: str = "") -> EventCategory:
-    """Infer event category from text content.
+def infer_category(title: str, summary: str = "", source_category: str = "") -> SignalCategory:
+    """Infer signal category from text content.
 
     Priority: source-level category > keyword matching > OTHER
     """
     # If source has a declared category, use it
     if source_category:
         try:
-            return EventCategory(source_category.lower())
+            return SignalCategory(source_category.lower())
         except ValueError:
             pass
 
     text = f"{title} {summary}"
-    best_category = EventCategory.OTHER
+    best_category = SignalCategory.OTHER
     best_score = 0
 
     for category, pattern in _CATEGORY_RULES:
@@ -325,8 +325,8 @@ def normalize_entry(
     source_name: str = "",
     source_category: str = "",
     source_language: str = "en",
-) -> Event:
-    """Convert a FetchedEntry into an Event object.
+) -> Signal:
+    """Convert a FetchedEntry into a Signal object.
 
     If a source-specific normalizer exists (matched by source_name), it runs
     after generic normalization and overrides fields it knows about.
@@ -339,7 +339,7 @@ def normalize_entry(
         source_language: Source-level language
 
     Returns:
-        Event ready for dedup check and storage
+        Signal ready for dedup check and storage
     """
     title = (entry.title or "").strip()
     summary = (entry.summary or "").strip()
@@ -365,7 +365,7 @@ def normalize_entry(
         if ner_locations:
             locations = ner_locations
 
-    event = create_event(
+    sig = create_signal(
         title=title,
         summary=summary,
         event_timestamp=timestamp,
@@ -391,11 +391,11 @@ def normalize_entry(
                         if key == "category":
                             # Convert string back to enum
                             try:
-                                value = EventCategory(value)
+                                value = SignalCategory(value)
                             except ValueError:
                                 continue
-                        setattr(event, key, value)
+                        setattr(sig, key, value)
             except Exception as e:
                 logger.warning("Source normalizer failed for %s: %s", source_name, e)
 
-    return event
+    return sig

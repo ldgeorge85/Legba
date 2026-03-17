@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Continuously operating autonomous intelligence platform.*
-*Last updated: 2026-03-16 | Entity merge, scorecard, analytics, search, prediction tracking, NER, graph cleanup*
+*Last updated: 2026-03-16 | Signals/events refactor, CURATE cycle, deterministic clustering, two-tier data model*
 
 ---
 
@@ -11,9 +11,9 @@ Legba is an autonomous AI agent that runs continuously, pursuing open-ended goal
 
 The operator provides a seed goal. The agent then operates indefinitely: ingesting data, building a knowledge graph, producing analytical products, and expanding its own capabilities.
 
-**Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events, producing structured briefings, detecting patterns, and flagging significant developments.
+**Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform with a two-tier data model. Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). The agent curates, correlates, and analyzes events to produce structured briefings, detect patterns, and flag significant developments.
 
-**Key numbers:** 100+ Python source files, 237 tests, **63 built-in tools** across 18 builtin modules, 7 platform services, 12 Docker containers.
+**Key numbers:** 100+ Python source files, 118 tests, **63 built-in tools** across 18 builtin modules, ~14,000 signals, 112 active sources, 7 platform services, 12 Docker containers.
 
 ---
 
@@ -156,11 +156,11 @@ The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) 
 1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 63 tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (priority order):
-   a. EVOLVE (every 30)        -- self-improvement, prompt/tool evaluation, operational scorecard
+   a. EVOLVE (every 30)        -- self-improvement, source discovery, operational scorecard
    b. INTROSPECTION (every 15) -- mission review, deep audit, journal consolidation, analysis report
    c. ANALYSIS (every 10)      -- pattern detection, graph mining, anomaly detection, trend analysis
    d. RESEARCH (every 5)       -- entity enrichment via Wikipedia/reference, gap-filling
-   e. ACQUIRE (every 3)        -- dedicated source fetching, event ingestion, entity resolution
+   e. CURATE (every 3)         -- event curation from clustered signals, entity resolution
    f. NORMAL                   -- goal-directed PLAN → REASON+ACT
 4. REFLECT   -- LLM evaluates: significance (calibrated 0-1 scale), facts learned, entities, goal progress
 5. NARRATE   -- LLM writes 1-3 journal entries + extracts investigation leads
@@ -173,11 +173,11 @@ if cycle_number % 30 == 0:  EVOLVE
 elif cycle_number % 15 == 0: INTROSPECTION
 elif cycle_number % 10 == 0: ANALYSIS
 elif cycle_number % 5 == 0:  RESEARCH
-elif cycle_number % 3 == 0:  ACQUIRE
+elif cycle_number % 3 == 0:  CURATE
 else:                        NORMAL
 ```
 
-**Cycle type distribution (per 30-cycle window):** ~3% evolve, ~7% introspection, ~7% analysis, ~13% research, ~27% acquire, ~43% normal. Each specialized cycle type uses a filtered tool set — only tools relevant to that cycle's purpose are available.
+**Cycle type distribution (per 30-cycle window):** ~3% evolve, ~7% introspection, ~7% analysis, ~13% research, ~27% curate, ~43% normal. Each specialized cycle type uses a filtered tool set — only tools relevant to that cycle's purpose are available.
 
 Each step in the REASON+ACT loop rebuilds the full [system, user] message pair (no multi-turn growth). A sliding window keeps the 8 most recent tool results in full, condensing older ones to one-line summaries. Re-grounding prompts inject every 8 steps to keep the LLM on track.
 
@@ -203,25 +203,26 @@ The research prompt includes an **entity health summary** — a SQL-generated ta
 4. **Strengthen graph** — add missing relationships discovered during research
 5. **Resolve conflicts** — fix contradictory facts, merge near-duplicates
 
-Research cycles use a restricted tool set (no feed ingestion): `http_request`, graph tools, memory tools, entity tools, `os_search`, event query tools, `cycle_complete`.
+Research cycles use a restricted tool set (no feed ingestion): `http_request`, graph tools, memory tools, entity tools, `os_search`, signal/event query tools, `cycle_complete`.
 
-### Acquire Cycles (every 3 cycles)
+### Curate Cycles (every 3 cycles)
 
-Every 3 cycles (when not research/analysis/introspection), the agent runs a dedicated data ingestion phase:
+Every 3 cycles (when not research/analysis/introspection), the agent runs a dedicated event curation phase. With the ingestion service active, raw signals are already being collected continuously. CURATE cycles focus on reviewing candidate events produced by deterministic clustering and promoting them into the events table.
 
 ```
-WAKE → ORIENT → ACQUIRE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
+WAKE → ORIENT → CURATE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
 ```
 
-The acquire prompt includes a **source status summary** — a SQL-generated list of active sources sorted by never-fetched first, then least-recently-fetched. The agent:
-1. Fetches unfetched sources first (highest priority)
-2. Stores events with proper dedup (source_url, title similarity)
-3. Resolves entities from newly ingested events
-4. Updates source metadata after fetch (success/failure)
+The curate prompt includes candidate events (signal clusters) and the agent:
+1. Reviews candidate events from deterministic clustering
+2. Creates or updates derived events (`event_create`, `event_update`)
+3. Links supporting signals to events (`event_link_signal`)
+4. Resolves entities from newly curated events
+5. Adjusts severity, category, and event type as needed
 
-Acquire cycles use a restricted tool set (data ingestion focus): `feed_parse`, `http_request`, event tools, `entity_resolve`, `entity_profile`, source tools, `graph_store`, watchlist/situation query tools.
+Curate cycles use a restricted tool set (curation focus): signal tools (`signal_query`, `signal_search`), event tools (`event_create`, `event_update`, `event_query`, `event_link_signal`), `entity_resolve`, `entity_profile`, source tools, `graph_store`, watchlist/situation query tools.
 
-**Ingestion gap tracking:** Redis tracks `last_ingestion_cycle`. When no events have been stored for >5 cycles, a warning is injected into the PLAN context via ORIENT.
+**Ingestion gap tracking:** Redis tracks `last_ingestion_cycle`. When no signals have been stored for >5 cycles, a warning is injected into the PLAN context via ORIENT.
 
 ### Analysis Cycles (every 10 cycles)
 
@@ -243,11 +244,11 @@ The agent:
 
 **Differential reporting**: Each analysis cycle stores a snapshot (event/entity/relationship counts, category distribution, top entities, situation states) to Redis. The next analysis cycle compares against the previous snapshot and highlights changes: new events/entities, growing categories, new top entities, situation status changes.
 
-Analysis cycles use: graph tools, memory tools, entity tools, event query tools, analytics tools (`anomaly_detect`, `temporal_query`), watchlist/situation tools (can create new watches/situations based on findings).
+Analysis cycles use: graph tools, memory tools, entity tools, signal/event query tools, analytics tools (`anomaly_detect`, `temporal_query`), watchlist/situation tools (can create new watches/situations based on findings).
 
 ### Evolve Cycles (every 30 cycles)
 
-The highest-priority cycle type. Every 30 cycles, the agent runs a structured self-improvement phase:
+The highest-priority cycle type. Every 30 cycles, the agent runs a structured self-improvement and source discovery phase:
 
 ```
 WAKE → ORIENT → EVOLVE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
@@ -261,13 +262,14 @@ The evolve prompt builds an **operational context** from:
 - Coverage breadth (distinct locations in recent events)
 - Previous evolve log (what was changed last time, did it help?)
 
-The agent then works through 4 structured phases:
+The agent then works through 5 structured phases:
 1. **Operational Scorecard** — assess source coverage, entity freshness, reporting quality, tool usage patterns
-2. **Prompt & Tool Evaluation** — read own prompt templates, check for consistently unfollowed instructions, unused tools, tool call failure patterns
-3. **Implement Improvements** — modify prompts, add normalization rules, adjust parameters, create goals for structural fixes
-4. **Track Changes** — log what changed and why to `evolve_log` Redis key, compare with previous evolve cycle results
+2. **Source Discovery** — identify coverage gaps, find new sources, register via `source_add`
+3. **Prompt & Tool Evaluation** — read own prompt templates, check for consistently unfollowed instructions, unused tools, tool call failure patterns
+4. **Implement Improvements** — modify prompts, add normalization rules, adjust parameters, create goals for structural fixes
+5. **Track Changes** — log what changed and why to `evolve_log` Redis key, compare with previous evolve cycle results
 
-Evolve cycles use: filesystem tools (`fs_read`, `fs_write`, `fs_list`, `code_test`), graph tools, memory tools, entity tools, event query tools, `os_search`, `source_list`, goal tools, inline tools (`note_to_self`, `explain_tool`, `cycle_complete`).
+Evolve cycles use: filesystem tools (`fs_read`, `fs_write`, `fs_list`, `code_test`), graph tools, memory tools, entity tools, event/signal query tools, `os_search`, source tools (`source_list`, `source_add`, `source_update`), goal tools, inline tools (`note_to_self`, `explain_tool`, `cycle_complete`).
 
 Changes are stored in Redis `evolve_log` as a structured record with cycle number, timestamp, changes list, and assessment summary.
 
@@ -427,7 +429,8 @@ Note: System and user messages are combined into a single `{"role": "user"}` mes
 | Narrate | `NARRATE_PROMPT` | NARRATE phase (reasoning: high) |
 | Journal consolidation | `JOURNAL_CONSOLIDATION_PROMPT` | Introspection (reasoning: high) |
 | Analysis report | `ANALYSIS_REPORT_PROMPT` | Introspection |
-| Evolve | `EVOLVE_PROMPT` | Every 30 cycles (self-improvement, operational scorecard) |
+| Curate | `CURATE_PROMPT` | Every 3 cycles (event curation from clustered signals) |
+| Evolve | `EVOLVE_PROMPT` | Every 30 cycles (self-improvement, source discovery, operational scorecard) |
 | Liveness | `LIVENESS_PROMPT` | PERSIST phase |
 
 ---
@@ -439,7 +442,7 @@ Note: System and user messages are combined into a single `{"role": "user"}` mes
 | **Registers** | Redis | Cycle state, counters, flags, journal, reports | Sync per-cycle |
 | **Short-term episodic** | Qdrant | Recent actions/observations (1 per cycle) | Embedding similarity |
 | **Long-term episodic** | Qdrant | Significant past events, lessons (auto-promoted at significance ≥ 0.6) | Embedding similarity (decayed) |
-| **Structured knowledge** | Postgres | Facts, goals, modifications, sources, events, entity profiles | SQL queries |
+| **Structured knowledge** | Postgres | Facts, goals, modifications, sources, signals, events, entity profiles | SQL queries |
 | **Entity graph** | Apache AGE | Entities + relationships (Cypher topology) | Cypher queries |
 | **Entity profiles** | Postgres (JSONB) | Rich profiles with versioned assertions | SQL + JSONB |
 | **Bulk data** | OpenSearch | Documents, event indices, aggregations | Full-text + structured search |
@@ -506,13 +509,16 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 ### SA: Source & Feed Tools (5 tools)
 `feed_parse`, `source_add`, `source_list`, `source_update`, `source_remove`
 
-### SA: Event Tools (3 tools)
-`event_store` (dual Postgres + OpenSearch, auto geo-resolution, post-store intelligence hooks), `event_query`, `event_search`
+### SA: Signal Tools (3 tools)
+`signal_store` (aliased as `event_store` for backward compat; stores raw signals to Postgres + OpenSearch with auto geo-resolution), `signal_query`, `signal_search`
 
-**Post-store hooks** (best-effort, appended to event_store response):
-- **Watchlist auto-matching**: checks new events against active watch patterns, creates triggers automatically
-- **Situation suggestions**: scores event relevance against active situations by entity/region/category overlap
-- **Novelty scoring**: rates how unexpected the event is based on actor familiarity and category rarity
+**Post-store hooks** (best-effort, appended to signal_store response):
+- **Watchlist auto-matching**: checks new signals against active watch patterns, creates triggers automatically
+- **Situation suggestions**: scores signal relevance against active situations by entity/region/category overlap
+- **Novelty scoring**: rates how unexpected the signal is based on actor familiarity and category rarity
+
+### SA: Event Tools (4 tools)
+`event_create` (derive event from signals, assign severity/type/category), `event_update` (modify event metadata, severity, status), `event_query` (filter by severity, type, category, time range), `event_link_signal` (associate additional signals with an event)
 
 ### SA: Entity Intelligence Tools (3 tools)
 `entity_profile` (with tags), `entity_inspect`, `entity_resolve`
@@ -539,7 +545,7 @@ The PLAN phase outputs a `Tools:` line listing which tools the agent expects to 
 
 ### Tool Utilization
 
-**Core working set (~15 tools used most cycles):** entity_resolve, event_store, http_request, feed_parse, graph_query, entity_profile, graph_store, source_add, source_update, event_search, source_list, entity_inspect, memory_query, memory_store, goal_list
+**Core working set (~15 tools used most cycles):** entity_resolve, signal_store, event_create, event_query, http_request, feed_parse, graph_query, entity_profile, graph_store, source_add, source_update, signal_search, source_list, entity_inspect, memory_query, memory_store, goal_list
 
 **Cycle-type-specific tools:** Analytics tools (anomaly_detect, temporal_query, graph_analyze, correlate) used during ANALYSIS cycles. Filesystem tools (fs_read, fs_write, code_test) used during EVOLVE cycles. Orchestration tools available but rarely invoked autonomously.
 
@@ -549,17 +555,45 @@ The PLAN phase outputs a `Tools:` line listing which tools the agent expects to 
 
 ## 6. Situational Awareness Mission
 
-### Event Pipeline
-Sources > `feed_parse` > `event_store` (dual Postgres + OpenSearch) > `entity_resolve` (link actors/locations) > `graph_store` (relationship topology).
+### Two-Tier Data Model
 
-Events have: title, summary, full_content, event_timestamp, source_id, source_url, guid, category (conflict/political/economic/technology/health/environment/social/disaster/other), actors[], locations[], tags[], confidence, language.
+Legba separates raw ingested material from derived real-world occurrences:
 
-**Deduplication pipeline (3-tier):**
+- **Signals** (`signals` table) — raw data items from sources: RSS items, API responses, alerts. Each signal has a source, timestamp, title, content, and metadata. Signals are the ground-truth input layer, created by the ingestion service without LLM involvement.
+- **Events** (`events` table) — derived real-world occurrences. Each event represents something that happened in the world, potentially supported by multiple signals. Events have: title, summary, category, event_type (incident/development/shift/threshold), severity (critical/high/medium/low/routine), time_start, time_end, signal_count, source_method (auto/agent/manual).
+- **Signal-Event Links** (`signal_event_links` table) — many-to-many relationship connecting signals to the events they support.
+
+### Signal + Event Pipeline
+
+```
+Source → Ingestion Service → Signal (raw) → Deterministic Clustering → Candidate Event
+                                                                            ↓
+                                              CURATE cycle → Agent reviews → Event (derived)
+                                                                            ↓
+                                                          entity_resolve → graph_store
+```
+
+1. **Ingestion**: Sources are fetched continuously by the ingestion service. Each item becomes a signal in the `signals` table.
+2. **Clustering**: The ingestion service groups related signals into candidate events using deterministic clustering (entity overlap + title similarity + temporal proximity + category matching). No LLM required.
+3. **Curation**: During CURATE cycles, the agent reviews candidate events, creates/updates events, links signals, assigns severity and event_type, and resolves entities.
+4. **Enrichment**: Entity resolution links actors and locations. Graph edges capture relationship topology.
+
+### Signal Deduplication (3-tier)
 1. RSS GUID fast-path (exact match on `guid` column)
 2. Source URL exact match (same article from same source)
-3. Title similarity — adaptive threshold (40% for short titles ≤5 words, 50% otherwise) within ±1 day window (200 events) or last 300 events when no timestamp
+3. Title similarity — adaptive threshold (40% for short titles ≤5 words, 50% otherwise) within ±1 day window (200 signals) or last 300 signals when no timestamp
 
-Time-partitioned OpenSearch indices: `legba-events-YYYY.MM`.
+### Deterministic Clustering
+
+The ingestion service clusters signals into candidate events without LLM involvement:
+- **Entity overlap** — signals mentioning the same actors/locations are grouped
+- **Title similarity** — Jaccard similarity on title tokens
+- **Temporal proximity** — signals within a configurable time window
+- **Category matching** — signals in the same category are preferred for grouping
+
+Candidate events are stored for agent review during CURATE cycles.
+
+Time-partitioned OpenSearch indices: `legba-signals-YYYY.MM`.
 
 ### Source Management
 Sources have multi-dimensional trust metadata: reliability (0-1), bias_label, ownership_type, geo_origin, timeliness (0-1), coverage_scope.
@@ -572,7 +606,8 @@ Sources have multi-dimensional trust metadata: reliability (0-1), bias_label, ow
 
 ### Entity Resolution Flow
 ```
-event_store("Russia launches missile at Ukraine")
+signal_store("Russia launches missile at Ukraine")  → signal record
+event_create(title="Russian missile strike on Ukraine", signals=[signal_id])  → event record
   > entity_resolve(name="Russia", event_id=..., role="actor")
       > resolves to EntityProfile(canonical_name="Russia", type=country)
   > entity_resolve(name="Ukraine", event_id=..., role="target")
@@ -581,7 +616,9 @@ event_store("Russia launches missile at Ukraine")
 
 ### Ingestion Service
 
-Autonomous background service that continuously fetches, normalizes, and stores events from registered sources without consuming agent cycles. Runs as a separate container alongside the agent. When active (`INGESTION_SERVICE_ACTIVE=true`), ACQUIRE cycles are repurposed for source discovery instead of direct fetching.
+Autonomous background service that continuously fetches, normalizes, and stores **signals** from registered sources without consuming agent cycles. Runs as a separate container alongside the agent. The service also performs **deterministic clustering** — grouping related signals into candidate events based on entity overlap, title similarity, temporal proximity, and category matching.
+
+When active (`INGESTION_SERVICE_ACTIVE=true`), CURATE cycles replace the old ACQUIRE cycle — the agent curates events from clustered signals rather than fetching sources directly. Source discovery moves to EVOLVE cycles.
 
 **Source type normalizers** — specialized parsers for structured APIs (dispatched by source name prefix). Generic RSS/Atom feeds use the default normalizer.
 
@@ -625,7 +662,8 @@ Server-rendered web interface for inspecting, managing, and consulting Legba.
 | Consult | `/consult` | LLM + all stores (tool-calling loop). Interactive operator chat. | Read + Write |
 | Dashboard | `/` | Redis, Postgres, response.json. Auto-refreshes 30s. | Read |
 | Entity Explorer | `/entities`, `/entities/{id}` | Postgres entity profiles with search + type filter | Read, add/remove assertions |
-| Event Explorer | `/events`, `/events/{id}` | Postgres + OpenSearch full-text search | Read, edit metadata, delete |
+| Signal Explorer | `/signals`, `/signals/{id}` | Postgres + OpenSearch full-text search | Read, edit metadata, delete |
+| Event Explorer | `/events`, `/events/{id}` | Derived events with severity/type filtering | Read, edit metadata, delete |
 | Source Registry | `/sources`, `/sources/{id}` | Postgres source table with status/type filters | Read, full edit |
 | Facts | `/facts` | Postgres structured facts | Read, inline edit, delete |
 | Goals | `/goals` | Postgres goal tree with status/progress | Read |
@@ -676,12 +714,13 @@ Interactive agentic chat interface at `/consult`. The operator converses directl
 - Empty response recovery (re-prompts on empty content) and 400 retry for GPT-OSS Harmony multi-message errors
 - Separate from the main agent cycle — does not interfere with autonomous operations
 
-**13 consultation tools:**
+**15 consultation tools:**
 
 | Tool | Purpose | Access |
 |------|---------|--------|
-| `search_events` | Full-text event search (OpenSearch) | Read |
-| `query_events` | Structured event query (Postgres) | Read |
+| `search_signals` | Full-text signal search (OpenSearch) | Read |
+| `query_signals` | Structured signal query (Postgres) | Read |
+| `query_events` | Derived event query (Postgres, filter by severity/type) | Read |
 | `inspect_entity` | Entity profile + assertions + recent events | Read |
 | `search_facts` | Fact search by subject/predicate/value | Read |
 | `query_graph` | Cypher graph queries (Apache AGE) | Read |
@@ -704,12 +743,12 @@ Multi-panel intelligence workstation built with React, running as a separate con
 
 **Access:** `ssh -L 8503:localhost:8503 user@<your-host>` then `http://localhost:8503`
 
-**19 panels across 6 groups:**
+**21 panels across 6 groups:**
 
 | Group | Panels |
 |-------|--------|
 | Overview | Dashboard (KPIs, recent events, sparklines) |
-| Intelligence | Events (search, filter, paginated), Entities (search, type filter), Sources (CRUD), Goals (tree, status edit), Facts (search, delete) |
+| Intelligence | Signals (raw feed, search, filter), Events (derived, severity badges, type/category filter), Entities (search, type filter), Sources (CRUD), Goals (tree, status edit), Facts (search, delete) |
 | Visualization | Knowledge Graph (Sigma.js, ForceAtlas2, ego graph, search highlight), Geospatial Map (MapLibre, dark tiles, fly-to), Timeline (vis-timeline, category colors) |
 | Real-Time | Live Feed (SSE stream), Consult (AI chat, markdown rendered) |
 | Tracking | Situations (status filter), Watchlist (CRUD, entity/keyword tracking) |
@@ -824,12 +863,12 @@ ssh -L 8501:localhost:8501 -L 5601:localhost:5601 -L 8080:localhost:8080 user@<y
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| INGESTION_SERVICE_ACTIVE | false | When `true`, ACQUIRE cycles become source discovery instead of direct fetching |
+| INGESTION_SERVICE_ACTIVE | false | When `true`, CURATE cycles replace ACQUIRE (agent curates events from signals) |
 | INGESTION_CHECK_INTERVAL | 30 | Seconds between scheduler ticks |
 | INGESTION_MAX_WORKERS | 4 | Concurrent source fetches |
 | INGESTION_HTTP_TIMEOUT | 30 | Per-source fetch timeout (seconds) |
-| INGESTION_DEDUP_CACHE_SIZE | 500 | Recent events kept in memory for Jaccard dedup |
-| INGESTION_BATCH_SIZE | 50 | Max events per source fetch before store |
+| INGESTION_DEDUP_CACHE_SIZE | 500 | Recent signals kept in memory for Jaccard dedup |
+| INGESTION_BATCH_SIZE | 50 | Max signals per source fetch before store |
 | INGESTION_HEALTH_PORT | 8600 | Health/metrics HTTP port |
 | INGESTION_AUTO_PAUSE_THRESHOLD | 10 | Consecutive failures before auto-pause |
 | INGESTION_LOG_LEVEL | INFO | Log level |
@@ -895,14 +934,15 @@ for f in sorted(os.listdir('/logs/archive/cycle_000NNN')):
 | Research Cycles | Dedicated research phase every 5 cycles — entity enrichment via Wikipedia/reference sources, entity health summary, gap-filling, conflict resolution |
 | UI CRUD | Operator console CRUD: fact delete/edit, memory delete, entity assertion add/remove, event delete/edit, graph edge add/remove, source full edit (htmx inline) |
 | Cycle Decomposition | cycle.py split from 2005 lines to 192-line orchestrator + 10 phase mixin modules (phases/ directory) |
-| V2 Cycle Architecture | 6 cycle types (EVOLVE/INTROSPECTION/ANALYSIS/RESEARCH/ACQUIRE/NORMAL) with filtered tool sets. 13 phase mixins. Dedicated data ingestion (ACQUIRE, every 3 cycles), analytics (ANALYSIS, every 10 cycles), and self-improvement (EVOLVE, every 30 cycles). Ingestion gap tracking, journal lead extraction, investigation feed-forward. |
+| V2 Cycle Architecture | 6 cycle types (EVOLVE/INTROSPECTION/ANALYSIS/RESEARCH/CURATE/NORMAL) with filtered tool sets. 13 phase mixins. Dedicated event curation (CURATE, every 3 cycles), analytics (ANALYSIS, every 10 cycles), and self-improvement + source discovery (EVOLVE, every 30 cycles). Ingestion gap tracking, journal lead extraction, investigation feed-forward. |
 | Data Pipeline Hardening | 3-tier event dedup (GUID → source_url → adaptive Jaccard), source domain dedup relaxed (path-prefix instead of domain-level), entity completeness depth-weighted (assertions/3 per section), graph fuzzy match limit 100→500 |
 | Watchlists & Situations | Persistent watch patterns (entities, keywords, categories, regions) with trigger tracking. Situation tracking (persistent narratives with status, event accumulation, intensity scoring). Both with full agent tools + operator UI CRUD. |
-| EVOLVE Cycle | Self-improvement cycle (every 30, highest priority). Operational scorecard, prompt/tool evaluation, implement improvements, change tracking via `evolve_log`. 18-tool filtered set including filesystem + code_test for self-modification. |
+| EVOLVE Cycle | Self-improvement + source discovery cycle (every 30, highest priority). Operational scorecard, source discovery, prompt/tool evaluation, implement improvements, change tracking via `evolve_log`. 18-tool filtered set including filesystem + code_test for self-modification. |
 | Report Grounding | Anti-inferential-leakage rules in analysis reports — banned "implicit"/"implied"/"inferred"/"suggests"/"appears to be" in fact sections. Separate "Analyst Hypotheses" section for labeled inference. |
 | Source Rotation | Mandatory stale source fetching in ACQUIRE cycles — must fetch ≥2 sources not fetched in last 30 cycles. Coverage diversity directive (≥2 regions/types per acquire). |
 | Entity Freshness | Leader freshness priority in RESEARCH cycles — re-verify leader assertions >100 cycles old. Stale entity stats in EVOLVE context. |
 | JSON API Endpoints | `/api/reports` and `/api/journal` — raw JSON endpoints for programmatic access to reports and journal data. |
+| Signals/Events Refactor | Two-tier data model: `signals` (raw ingested material) and `events` (derived real-world occurrences) with many-to-many `signal_event_links`. Events have severity, event_type, time range, signal count. Deterministic clustering in ingestion service. ACQUIRE → CURATE cycle, source discovery to EVOLVE. New agent tools: `event_create`, `event_update`, `event_query`, `event_link_signal`, `signal_store`, `signal_query`, `signal_search`. UI: Signals panel + Events panel with severity badges. |
 
 ### Planned
 
@@ -910,7 +950,7 @@ See `docs/WORKLOG.md` for the current work queue.
 
 ### Production Metrics
 
-As of cycle 1100+: 8,000+ events, 1,600+ facts, 500+ entities, 650+ graph nodes, 1,300+ edges. Sub-1% error rate across 1,100+ autonomous cycles. See `docs/PROGRESS_AUDIT.md` for detailed analysis.
+As of cycle 1234+: ~14,000 signals, 1,764 facts, 501 entities, 661 graph nodes, 1,306 edges, 112 active sources. Sub-1% error rate across 1,200+ autonomous cycles.
 
 ---
 
@@ -927,7 +967,7 @@ legba/
 |   +-- world_briefing.txt           -- World state briefing (mid-2024 to Feb 2026)
 +-- src/legba/
 |   +-- shared/
-|   |   +-- schemas/                 -- Pydantic models (cycle, goals, memory, tools, events, entities, sources, comms, modifications)
+|   |   +-- schemas/                 -- Pydantic models (cycle, goals, memory, tools, signals, events, entities, sources, comms, modifications)
 |   |   +-- config.py               -- LegbaConfig (temperature default 1.0)
 |   +-- agent/
 |   |   +-- main.py                  -- Entry point
@@ -942,7 +982,7 @@ legba/
 |   |   |   +-- persist.py          -- PersistMixin: storage, goals, ingestion tracking, heartbeat
 |   |   |   +-- introspect.py       -- IntrospectMixin: mission review, reports
 |   |   |   +-- research.py         -- ResearchMixin: entity enrichment
-|   |   |   +-- acquire.py          -- AcquireMixin: dedicated source fetching + event ingestion
+|   |   |   +-- curate.py           -- CurateMixin: event curation from clustered signals
 |   |   |   +-- analyze.py          -- AnalyzeMixin: pattern detection, graph mining, anomaly detection
 |   |   |   +-- evolve.py           -- EvolveMixin: self-improvement, operational scorecard, change tracking
 |   |   +-- log.py                   -- CycleLogger (JSONL structured logging)
@@ -964,7 +1004,7 @@ legba/
 |       +-- app.py, stores.py, messages.py, static/
 |       +-- routes/                    -- dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph, facts, memory, watchlist, situations, consult, analytics
 |       +-- templates/                 -- Jinja2 (base.html + per-page dirs)
-+-- tests/                           -- 237 tests (unit + integration + graph)
++-- tests/                           -- 118 tests (unit + integration + graph)
 +-- docs/
     +-- LEGBA.md                     -- This document (platform reference)
     +-- CODE_MAP.md                  -- Full code map with function flows

@@ -1,7 +1,7 @@
 """
 Core Agent Cycle
 
-WAKE → ORIENT → [EVOLVE|ACQUIRE|ANALYZE|RESEARCH|INTROSPECTION|PLAN→ACT] → REFLECT → NARRATE → PERSIST
+WAKE → ORIENT → [EVOLVE|CURATE/ACQUIRE|ANALYZE|RESEARCH|INTROSPECTION|PLAN→ACT] → REFLECT → NARRATE → PERSIST
 
 One cycle = one execution of this module. The supervisor manages the lifecycle:
 it launches the agent for a single cycle, the agent runs through all phases,
@@ -15,7 +15,8 @@ Cycle type routing (evaluated in priority order):
   - Every 15 cycles: INTROSPECTION (deep audit, reports, journal consolidation)
   - Every 10 cycles: ANALYSIS (analytics, pattern detection, graph mining)
   - Every 5 cycles:  RESEARCH (entity enrichment, gap-filling)
-  - Every 3 cycles:  ACQUIRE (dedicated source fetching + event ingestion)
+  - Every 3 cycles:  CURATE (signal triage, event curation — when ingestion service active)
+                      ACQUIRE (legacy source fetching — when ingestion service inactive)
   - Otherwise:       NORMAL (goal-directed, mixed)
 """
 
@@ -55,10 +56,11 @@ from .phases.introspect import IntrospectMixin
 from .phases.research import ResearchMixin
 from .phases.acquire import AcquireMixin
 from .phases.analyze import AnalyzeMixin
+from .phases.curate import CurateMixin
 from .phases.evolve import EvolveMixin
 
 # Re-export constants for backward compatibility
-from .phases import REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL, ANALYSIS_INTERVAL, EVOLVE_INTERVAL
+from .phases import REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL, CURATE_INTERVAL, ANALYSIS_INTERVAL, EVOLVE_INTERVAL
 
 
 class AgentCycle(
@@ -72,6 +74,7 @@ class AgentCycle(
     IntrospectMixin,
     ResearchMixin,
     AcquireMixin,
+    CurateMixin,
     AnalyzeMixin,
     EvolveMixin,
 ):
@@ -137,7 +140,10 @@ class AgentCycle(
                 await self._reflect()
                 await self._narrate()
             elif self._is_acquire_cycle():
-                await self._acquire()
+                if self._ingestion_service_active():
+                    await self._curate()
+                else:
+                    await self._acquire()
                 await self._reflect()
                 await self._narrate()
             else:

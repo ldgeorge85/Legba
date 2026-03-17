@@ -8,6 +8,7 @@ import {
 import { useWorkspaceStore, type PanelType } from '@/stores/workspace'
 import { ErrorBoundary } from '@/components/common/ErrorBoundary'
 import { DashboardPanel } from '@/panels/DashboardPanel'
+import { SignalsPanel } from '@/panels/SignalsPanel'
 import { EventsPanel } from '@/panels/EventsPanel'
 import { EventDetailPanel } from '@/panels/EventDetailPanel'
 import { EntitiesPanel } from '@/panels/EntitiesPanel'
@@ -31,6 +32,7 @@ import { ProposedEdgesPanel } from '@/panels/ProposedEdgesPanel'
 
 const PANEL_TITLES: Record<PanelType, string> = {
   dashboard: 'Dashboard',
+  signals: 'Signals',
   events: 'Events',
   'event-detail': 'Event Detail',
   entities: 'Entities',
@@ -56,6 +58,7 @@ const PANEL_TITLES: Record<PanelType, string> = {
 function PanelContent({ type, params }: { type: PanelType; params?: Record<string, string> }) {
   switch (type) {
     case 'dashboard': return <DashboardPanel />
+    case 'signals': return <SignalsPanel />
     case 'events': return <EventsPanel />
     case 'event-detail': return <EventDetailPanel eventId={params?.id ?? null} />
     case 'entities': return <EntitiesPanel />

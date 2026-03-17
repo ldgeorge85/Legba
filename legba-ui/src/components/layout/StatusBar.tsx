@@ -13,6 +13,7 @@ export function StatusBar() {
       {data && (
         <>
           <span>Cycle {data.current_cycle}</span>
+          <span>{data.signals} signals</span>
           <span>{data.events} events</span>
           <span>{data.entities} entities</span>
           <span>{data.relationships} relationships</span>

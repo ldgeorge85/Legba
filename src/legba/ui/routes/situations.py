@@ -34,12 +34,12 @@ async def _ensure_tables(pool) -> None:
             )
         """)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS situation_events (
+            CREATE TABLE IF NOT EXISTS situation_signals (
                 situation_id UUID NOT NULL REFERENCES situations(id),
-                event_id UUID NOT NULL REFERENCES events(id),
+                signal_id UUID NOT NULL REFERENCES signals(id),
                 relevance REAL NOT NULL DEFAULT 1.0,
                 added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (situation_id, event_id)
+                PRIMARY KEY (situation_id, signal_id)
             )
         """)
 
@@ -156,10 +156,10 @@ async def situation_detail(request: Request, situation_id: UUID):
 
                 # Fetch linked events (ordered by event time for timeline consistency)
                 event_rows = await conn.fetch(
-                    "SELECT e.id, e.data, se.relevance, se.added_at "
-                    "FROM situation_events se "
-                    "JOIN events e ON e.id = se.event_id "
-                    "WHERE se.situation_id = $1 "
+                    "SELECT e.id, e.data, ss.relevance, ss.added_at "
+                    "FROM situation_signals ss "
+                    "JOIN signals e ON e.id = ss.signal_id "
+                    "WHERE ss.situation_id = $1 "
                     "ORDER BY e.event_timestamp DESC NULLS LAST",
                     situation_id,
                 )
@@ -290,9 +290,9 @@ async def delete_situation(request: Request, situation_id: UUID):
     stores = get_stores(request)
     try:
         async with stores.structured._pool.acquire() as conn:
-            # Delete event links first (FK)
+            # Delete signal links first (FK)
             await conn.execute(
-                "DELETE FROM situation_events WHERE situation_id = $1", situation_id,
+                "DELETE FROM situation_signals WHERE situation_id = $1", situation_id,
             )
             await conn.execute("DELETE FROM situations WHERE id = $1", situation_id)
 

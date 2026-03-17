@@ -1,4 +1,4 @@
-"""3-tier event deduplication engine.
+"""3-tier signal deduplication engine.
 
 Extracted from agent event_tools.py, adapted for batch processing.
 
@@ -88,24 +88,26 @@ class DedupResult:
 class DedupEngine:
     """Stateful dedup engine with batch-optimized DB lookups.
 
-    Loads recent event titles from Postgres at startup for tier 3
+    Loads recent signal titles from Postgres at startup for tier 3
     (Jaccard similarity) in-memory checks. For tiers 1 and 2
     (GUID / source_url), provides both single-entry check() and
     batch check_batch() — the latter reduces 2N queries to 2 using
     ANY() array matching.
     """
 
-    def __init__(self, pool: asyncpg.Pool, cache_size: int = 500):
+    def __init__(self, pool: asyncpg.Pool, cache_size: int = 500, qdrant_client=None, embed_fn=None):
         self._pool = pool
         self._cache_size = cache_size
+        self._qdrant = qdrant_client
+        self._embed_fn = embed_fn
         # In-memory cache: list of (title_words_set, original_title)
         self._title_cache: list[tuple[set[str], str]] = []
 
     async def load_cache(self) -> None:
-        """Load recent event titles into memory for Jaccard dedup."""
+        """Load recent signal titles into memory for Jaccard dedup."""
         try:
             rows = await self._pool.fetch(
-                "SELECT title FROM events ORDER BY created_at DESC LIMIT $1",
+                "SELECT title FROM signals ORDER BY created_at DESC LIMIT $1",
                 self._cache_size,
             )
             self._title_cache = [
@@ -119,7 +121,7 @@ class DedupEngine:
             self._title_cache = []
 
     def add_to_cache(self, title: str) -> None:
-        """Add a newly stored event title to the in-memory cache."""
+        """Add a newly stored signal title to the in-memory cache."""
         words = _title_words(title)
         if words:
             self._title_cache.insert(0, (words, title))
@@ -142,7 +144,7 @@ class DedupEngine:
         if guid:
             try:
                 row = await self._pool.fetchrow(
-                    "SELECT title FROM events WHERE guid = $1 LIMIT 1", guid,
+                    "SELECT title FROM signals WHERE guid = $1 LIMIT 1", guid,
                 )
                 if row:
                     return DedupResult(
@@ -157,7 +159,7 @@ class DedupEngine:
         if source_url:
             try:
                 row = await self._pool.fetchrow(
-                    "SELECT title FROM events WHERE source_url = $1 LIMIT 1", source_url,
+                    "SELECT title FROM signals WHERE source_url = $1 LIMIT 1", source_url,
                 )
                 if row:
                     return DedupResult(
@@ -168,7 +170,16 @@ class DedupEngine:
             except Exception:
                 pass
 
-        # Tier 3: Jaccard title similarity (in-memory)
+        # Tier 3: Vector similarity (Qdrant) — if available
+        if title and self._qdrant:
+            try:
+                vec_result = await self._check_vector_similarity(title)
+                if vec_result:
+                    return vec_result
+            except Exception:
+                pass
+
+        # Tier 4: Jaccard title similarity (in-memory fallback)
         if title:
             words = _title_words(title)
             if words:
@@ -185,10 +196,43 @@ class DedupEngine:
 
         return DedupResult(is_duplicate=False)
 
+    async def _check_vector_similarity(self, title: str) -> DedupResult | None:
+        """Check for semantic duplicates via Qdrant vector search.
+
+        Embeds the title, searches for nearest neighbors with cosine >= 0.92.
+        Higher threshold than Jaccard because embeddings capture semantic
+        equivalence — "Iran strikes Israel" and "Tehran launches attack on
+        Israeli targets" are near-identical vectors even though word overlap
+        is moderate.
+        """
+        if not self._qdrant or not self._embed_fn:
+            return None
+
+        vector = await self._embed_fn(title)
+        if not vector:
+            return None
+
+        from legba.ingestion.storage import SIGNALS_COLLECTION
+        hits = await self._qdrant.search(
+            collection_name=SIGNALS_COLLECTION,
+            query_vector=vector,
+            limit=1,
+            score_threshold=0.92,
+        )
+        if hits:
+            matched_title = hits[0].payload.get("title", "")
+            return DedupResult(
+                is_duplicate=True,
+                match_tier="vector_similarity",
+                matched_title=matched_title,
+                similarity=hits[0].score,
+            )
+        return None
+
     async def check_batch(
         self, entries: list[tuple[str, str, str]],
     ) -> list[DedupResult]:
-        """Batch dedup check against existing events — 2 DB queries instead of 2N.
+        """Batch dedup check against existing signals — 2 DB queries instead of 2N.
 
         Fetches all matching GUIDs and source_urls in two bulk queries, then
         performs in-memory matching. Tier 3 (title similarity) was already
@@ -211,7 +255,7 @@ class DedupEngine:
         if guids:
             try:
                 rows = await self._pool.fetch(
-                    "SELECT guid, title FROM events WHERE guid = ANY($1::text[])",
+                    "SELECT guid, title FROM signals WHERE guid = ANY($1::text[])",
                     guids,
                 )
                 for row in rows:
@@ -224,7 +268,7 @@ class DedupEngine:
         if urls:
             try:
                 rows = await self._pool.fetch(
-                    "SELECT source_url, title FROM events WHERE source_url = ANY($1::text[])",
+                    "SELECT source_url, title FROM signals WHERE source_url = ANY($1::text[])",
                     urls,
                 )
                 for row in rows:

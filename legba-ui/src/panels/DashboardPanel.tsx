@@ -60,6 +60,7 @@ export function DashboardPanel() {
     <div className="p-4 space-y-4 max-w-5xl">
       {/* KPI Grid */}
       <div className="grid grid-cols-4 gap-3">
+        <StatCard label="Signals" value={data.signals} icon={<Newspaper size={18} />} onClick={() => openPanel('signals')} />
         <StatCard label="Events" value={data.events} icon={<Newspaper size={18} />} onClick={() => openPanel('events')} />
         <StatCard label="Entities" value={data.entities} icon={<Users size={18} />} onClick={() => openPanel('entities')} />
         <StatCard label="Sources" value={data.sources} icon={<Globe size={18} />} onClick={() => openPanel('sources')} />
@@ -108,11 +109,11 @@ export function DashboardPanel() {
         </div>
       )}
 
-      {/* Recent Events */}
+      {/* Recent Signals */}
       <div className="bg-card border border-border rounded-lg p-3">
-        <h3 className="text-sm font-medium mb-2">Recent Events</h3>
+        <h3 className="text-sm font-medium mb-2">Recent Signals</h3>
         <div className="space-y-1">
-          {data.recent_events.slice(0, 10).map((event) => (
+          {(data.recent_signals ?? []).slice(0, 10).map((event) => (
             <div
               key={event.event_id}
               className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-secondary cursor-pointer text-sm"

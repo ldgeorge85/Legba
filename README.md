@@ -5,9 +5,9 @@
 <h1 align="center">Legba</h1>
 <p align="center"><em>Continuously operating autonomous intelligence platform.</em></p>
 
-Legba is a persistent AI agent that runs indefinitely — ingesting global event data, building a knowledge graph, producing analytical products, and improving itself over time. It is not a chatbot or task runner. It operates autonomously with minimal human intervention.
+Legba is a persistent AI agent that runs indefinitely — ingesting global signals, deriving real-world events, building a knowledge graph, producing analytical products, and improving itself over time. It is not a chatbot or task runner. It operates autonomously with minimal human intervention.
 
-**Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform that ingests, correlates, and analyzes global events from RSS feeds and APIs, producing structured briefings, detecting patterns, and flagging significant developments.
+**Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform with a two-tier data model: raw **signals** (RSS items, API responses, alerts) are ingested and clustered into derived **events** (real-world occurrences), then correlated and analyzed to produce structured briefings, detect patterns, and flag significant developments.
 
 ## Architecture
 
@@ -16,10 +16,11 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 ├── Docker Compose (project: legba, 12 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
 │   ├── Agent (ephemeral) — One container per cycle, 6 cycle types, self-modifiable code
+│   ├── Ingestion Service — Background signal fetching, normalization, deterministic clustering
 │   ├── Operator UI v1    — Web console with CRUD + consultation (FastAPI + htmx, :8501)
 │   ├── Operator UI v2    — Multi-panel intelligence workstation (React + Dockview, :8503)
 │   ├── Redis             — Transient state, journal, reports
-│   ├── Postgres + AGE    — Structured data, entity graph (Cypher)
+│   ├── Postgres + AGE    — Signals, events, entities, graph (Cypher)
 │   ├── Qdrant            — Semantic search (episodic memory)
 │   ├── NATS              — Event bus, messaging
 │   ├── OpenSearch x2     — Full-text search + isolated audit logs
@@ -35,11 +36,11 @@ Every cycle (~2-10 minutes), the agent runs one of **6 cycle types** (selected b
 WAKE → ORIENT → [cycle type routing] → REFLECT → NARRATE → PERSIST
 
 Cycle types (priority order):
-  Every 30 cycles: EVOLVE        — self-improvement, prompt/tool evaluation, operational scorecard
+  Every 30 cycles: EVOLVE        — self-improvement, source discovery, operational scorecard
   Every 15 cycles: INTROSPECTION — deep audit, journal consolidation, world assessment
   Every 10 cycles: ANALYSIS      — pattern detection, graph mining, anomaly detection
   Every 5 cycles:  RESEARCH      — entity enrichment via Wikipedia/reference sources
-  Every 3 cycles:  ACQUIRE       — dedicated source fetching, event ingestion
+  Every 3 cycles:  CURATE        — event curation from clustered signals, entity resolution
   Otherwise:       NORMAL        — goal-directed PLAN → REASON+ACT
 ```
 
@@ -59,7 +60,7 @@ Each specialized cycle type uses a **filtered tool set** — only tools relevant
   <img src="docs/screenshot1.png" alt="Legba v2 Operator Console" width="100%">
 </p>
 
-Multi-panel intelligence workstation (React + Dockview). Dashboard, knowledge graph, geospatial map, AI consultation, world assessment reports, live event feed, timeline, analytics — all in a persistent, rearrangeable layout.
+Multi-panel intelligence workstation (React + Dockview). Dashboard, knowledge graph, geospatial map, AI consultation, world assessment reports, live signal feed, derived events with severity badges, timeline, analytics — all in a persistent, rearrangeable layout.
 
 ## Quick Start
 
@@ -102,6 +103,7 @@ docker compose -p legba exec supervisor \
 | Python source files | 100+ |
 | Tests | 118 |
 | Built-in tools | 63 across 18 modules |
+| Signals ingested | ~14,000 |
 | Platform services | 7 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, Airflow) |
 | Canonical relationship types | 30 |
 | LLM context window | 128k tokens (120k budget) |

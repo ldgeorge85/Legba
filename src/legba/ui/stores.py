@@ -211,6 +211,15 @@ class StoreHolder:
         except Exception:
             return 0
 
+    async def count_signals(self) -> int:
+        if not self.structured._available:
+            return 0
+        try:
+            async with self.structured._pool.acquire() as conn:
+                return await conn.fetchval("SELECT count(*) FROM signals")
+        except Exception:
+            return 0
+
     async def count_events(self) -> int:
         if not self.structured._available:
             return 0
@@ -324,7 +333,7 @@ class StoreHolder:
             from ..shared.schemas.events import Event
             async with self.structured._pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT data FROM events WHERE id = $1", event_id
+                    "SELECT data FROM signals WHERE id = $1", event_id
                 )
                 if row:
                     return Event.model_validate_json(row["data"])

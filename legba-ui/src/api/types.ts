@@ -9,6 +9,7 @@ export interface IngestionStatus {
 
 export interface DashboardStats {
   entities: number
+  signals: number
   events: number
   sources: number
   goals: number
@@ -18,11 +19,33 @@ export interface DashboardStats {
   relationships: number
   current_cycle: number
   agent_status: string
-  recent_events: EventSummary[]
+  recent_signals: SignalSummary[]
   active_situations: SituationSummary[]
   ingestion?: IngestionStatus
 }
 
+// Signals — raw ingested material (was "events" before the refactor)
+export interface SignalSummary {
+  event_id: string
+  title: string
+  category: string
+  confidence: number
+  timestamp: string
+  source_name: string | null
+  created_at?: string
+}
+
+export interface SignalDetail extends SignalSummary {
+  description: string
+  source_url: string | null
+  source_id: string | null
+  tags: string[]
+  entities: EntityLink[]
+  raw_data: Record<string, unknown> | null
+  created_at: string
+}
+
+// Events — derived real-world occurrences (new)
 export interface EventSummary {
   event_id: string
   title: string
@@ -31,6 +54,12 @@ export interface EventSummary {
   timestamp: string
   source_name: string | null
   created_at?: string
+  severity: string | null
+  event_type: string | null
+  signal_count: number
+  time_start: string | null
+  time_end: string | null
+  source_method: string | null
 }
 
 export interface EventDetail extends EventSummary {
@@ -256,6 +285,8 @@ export interface ReportEntry {
 export interface JournalData {
   entries: JournalEntry[]
   consolidation?: string
+  consolidation_cycle?: number
+  consolidation_timestamp?: string
 }
 
 // Analytics types
@@ -302,6 +333,13 @@ export interface FactDistribution {
 
 // Facets
 export interface EventFacets {
+  categories: Record<string, number>
+  sources: Record<string, number>
+  timeline: Record<string, number>
+  confidence_buckets: Record<string, number>
+}
+
+export interface SignalFacets {
   categories: Record<string, number>
   sources: Record<string, number>
   timeline: Record<string, number>

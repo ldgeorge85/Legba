@@ -14,6 +14,9 @@ RESEARCH_INTERVAL = 5
 # Acquire cadence: dedicated data ingestion cycle every N cycles.
 ACQUIRE_INTERVAL = 3
 
+# Curate cadence: intelligence curation cycle every N cycles (replaces ACQUIRE when ingestion active).
+CURATE_INTERVAL = 3
+
 # Analysis cadence: analytical tools cycle every N cycles.
 ANALYSIS_INTERVAL = 10
 

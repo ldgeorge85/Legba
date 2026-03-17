@@ -38,7 +38,7 @@ async def events_timeseries(request: Request, days: int = Query(default=30, ge=1
                     DATE(COALESCE(event_timestamp, created_at)) AS day,
                     category,
                     COUNT(*) AS cnt
-                FROM events
+                FROM signals
                 WHERE COALESCE(event_timestamp, created_at) >= $1
                 GROUP BY day, category
                 ORDER BY day
@@ -342,10 +342,10 @@ async def situation_timeline(request: Request, id: str = Query(...)):
                     e.title,
                     e.category,
                     e.event_timestamp,
-                    se.relevance
-                FROM situation_events se
-                JOIN events e ON e.id = se.event_id
-                WHERE se.situation_id = $1
+                    ss.relevance
+                FROM situation_signals ss
+                JOIN signals e ON e.id = ss.signal_id
+                WHERE ss.situation_id = $1
                 ORDER BY e.event_timestamp ASC NULLS LAST
                 """,
                 situation_id,

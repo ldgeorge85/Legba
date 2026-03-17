@@ -74,7 +74,7 @@ async def dashboard(request: Request):
     import asyncio
     counts = await asyncio.gather(
         stores.count_entities(),
-        stores.count_events(),
+        stores.count_signals(),
         stores.count_sources(),
         stores.count_goals(),
         stores.count_facts(),
@@ -120,7 +120,7 @@ async def dashboard(request: Request):
         from ...shared.schemas.events import Event
         async with stores.structured._pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT data FROM events ORDER BY event_timestamp DESC NULLS LAST LIMIT 15"
+                "SELECT data FROM signals ORDER BY event_timestamp DESC NULLS LAST LIMIT 15"
             )
             for row in rows:
                 try:
@@ -167,9 +167,17 @@ async def dashboard(request: Request):
     except Exception:
         pass
 
+    # Count derived events separately
+    event_count = 0
+    try:
+        event_count = await stores.count_events()
+    except Exception:
+        pass
+
     return _json({
         "entities": _safe(counts[0]),
-        "events": _safe(counts[1]),
+        "signals": _safe(counts[1]),
+        "events": event_count,
         "sources": _safe(counts[2]),
         "goals": _safe(counts[3]),
         "facts": _safe(counts[4]),
@@ -178,19 +186,19 @@ async def dashboard(request: Request):
         "relationships": _safe(counts[7]),
         "current_cycle": cycle,
         "agent_status": agent_status,
-        "recent_events": recent_events,
+        "recent_signals": recent_events,
         "active_situations": active_situations,
         "ingestion": ingestion,
     })
 
 
 # ------------------------------------------------------------------
-# Events
+# Signals (raw ingested material, formerly "events")
 # ------------------------------------------------------------------
 
-@router.get("/events/facets")
-async def event_facets(request: Request):
-    """Aggregated facets for event filtering."""
+@router.get("/signals/facets")
+async def signal_facets(request: Request):
+    """Aggregated facets for signal filtering."""
     stores = get_stores(request)
     facets: dict = {}
 
@@ -201,13 +209,13 @@ async def event_facets(request: Request):
         async with stores.structured._pool.acquire() as conn:
             # Category counts
             rows = await conn.fetch(
-                "SELECT category, COUNT(*) as cnt FROM events GROUP BY category ORDER BY cnt DESC"
+                "SELECT category, COUNT(*) as cnt FROM signals GROUP BY category ORDER BY cnt DESC"
             )
             facets["categories"] = {r["category"]: r["cnt"] for r in rows}
 
             # Source counts (top 20)
             rows = await conn.fetch(
-                "SELECT s.name, COUNT(e.id) as cnt FROM events e "
+                "SELECT s.name, COUNT(e.id) as cnt FROM signals e "
                 "JOIN sources s ON e.source_id = s.id "
                 "GROUP BY s.name ORDER BY cnt DESC LIMIT 20"
             )
@@ -215,7 +223,7 @@ async def event_facets(request: Request):
 
             # Time distribution (events per day, last 30 days)
             rows = await conn.fetch(
-                "SELECT DATE(created_at) as day, COUNT(*) as cnt FROM events "
+                "SELECT DATE(created_at) as day, COUNT(*) as cnt FROM signals "
                 "WHERE created_at > NOW() - INTERVAL '30 days' GROUP BY day ORDER BY day"
             )
             facets["timeline"] = {str(r["day"]): r["cnt"] for r in rows}
@@ -230,7 +238,7 @@ async def event_facets(request: Request):
                 "    WHEN confidence >= 0.3 THEN '0.3-0.5' "
                 "    ELSE '0.0-0.3' "
                 "  END as bucket, COUNT(*) as cnt "
-                "FROM events GROUP BY bucket ORDER BY bucket"
+                "FROM signals GROUP BY bucket ORDER BY bucket"
             )
             facets["confidence_buckets"] = {r["bucket"]: r["cnt"] for r in rows}
 
@@ -241,8 +249,8 @@ async def event_facets(request: Request):
     return _json(facets)
 
 
-@router.get("/events")
-async def list_events(
+@router.get("/signals")
+async def list_signals(
     request: Request,
     offset: int = 0,
     limit: int = Query(default=50, le=200),
@@ -319,9 +327,9 @@ async def list_events(
 
     try:
         async with stores.structured._pool.acquire() as conn:
-            total = await conn.fetchval(f"SELECT count(*) FROM events {where}", *params)
+            total = await conn.fetchval(f"SELECT count(*) FROM signals {where}", *params)
             rows = await conn.fetch(
-                f"SELECT data FROM events {where} "
+                f"SELECT data FROM signals {where} "
                 f"ORDER BY event_timestamp DESC NULLS LAST, created_at DESC "
                 f"LIMIT ${idx} OFFSET ${idx + 1}",
                 *params, limit, offset,
@@ -338,9 +346,9 @@ async def list_events(
         return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
 
 
-@router.get("/events/geo")
-async def events_geo(request: Request):
-    """Events with geo coordinates for heatmap visualization."""
+@router.get("/signals/geo")
+async def signals_geo(request: Request):
+    """Signals with geo coordinates for heatmap visualization."""
     stores = get_stores(request)
     try:
         async with stores.structured._pool.acquire() as conn:
@@ -348,7 +356,7 @@ async def events_geo(request: Request):
                 """
                 SELECT id, title, category, confidence, event_timestamp,
                        data->'geo_coordinates' AS geo_coords
-                FROM events
+                FROM signals
                 WHERE data->'geo_coordinates' IS NOT NULL
                   AND jsonb_array_length(COALESCE(data->'geo_coordinates', '[]'::jsonb)) > 0
                 ORDER BY created_at DESC
@@ -393,10 +401,10 @@ async def events_geo(request: Request):
         return _json({"type": "FeatureCollection", "features": []})
 
 
-@router.get("/events/{event_id}")
-async def get_event(request: Request, event_id: UUID):
+@router.get("/signals/{signal_id}")
+async def get_signal(request: Request, signal_id: UUID):
     stores = get_stores(request)
-    ev = await stores.get_event(event_id)
+    ev = await stores.get_event(signal_id)
     if not ev:
         return _json({"error": "not found"}, 404)
 
@@ -405,7 +413,7 @@ async def get_event(request: Request, event_id: UUID):
     # Get linked entities
     entities = []
     try:
-        ents = await stores.structured.get_event_entities(event_id)
+        ents = await stores.structured.get_signal_entities(signal_id)
         entities = [
             {
                 "entity_id": str(e.get("entity_id", "")),
@@ -422,15 +430,163 @@ async def get_event(request: Request, event_id: UUID):
     return _json(data)
 
 
-@router.delete("/events/{event_id}")
-async def delete_event(request: Request, event_id: UUID):
+@router.delete("/signals/{signal_id}")
+async def delete_signal(request: Request, signal_id: UUID):
     stores = get_stores(request)
     try:
         async with stores.structured._pool.acquire() as conn:
-            await conn.execute("DELETE FROM event_entities WHERE event_id = $1", event_id)
-            await conn.execute("DELETE FROM events WHERE id = $1", event_id)
+            await conn.execute("DELETE FROM signal_entity_links WHERE signal_id = $1", signal_id)
+            await conn.execute("DELETE FROM signals WHERE id = $1", signal_id)
         return _json({"status": "deleted"})
     except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Events (derived real-world occurrences)
+# ------------------------------------------------------------------
+
+@router.get("/events/facets")
+async def event_facets(request: Request):
+    """Aggregated facets for derived events."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"categories": {}, "severities": {}, "types": {}})
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            cats = await conn.fetch(
+                "SELECT category, COUNT(*) as cnt FROM events GROUP BY category ORDER BY cnt DESC"
+            )
+            sevs = await conn.fetch(
+                "SELECT severity, COUNT(*) as cnt FROM events GROUP BY severity ORDER BY cnt DESC"
+            )
+            types = await conn.fetch(
+                "SELECT event_type, COUNT(*) as cnt FROM events GROUP BY event_type ORDER BY cnt DESC"
+            )
+        return _json({
+            "categories": {r["category"]: r["cnt"] for r in cats},
+            "severities": {r["severity"]: r["cnt"] for r in sevs},
+            "types": {r["event_type"]: r["cnt"] for r in types},
+        })
+    except Exception as exc:
+        logger.warning("Event facets query failed: %s", exc)
+        return _json({"categories": {}, "severities": {}, "types": {}})
+
+
+@router.get("/events")
+async def list_events(
+    request: Request,
+    offset: int = 0,
+    limit: int = Query(default=50, le=200),
+    category: str | None = None,
+    severity: str | None = None,
+    event_type: str | None = None,
+    min_signals: int | None = None,
+):
+    """List derived events with filters."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+    conditions, params, idx = [], [], 1
+    if category:
+        conditions.append(f"category = ${idx}")
+        params.append(category)
+        idx += 1
+    if severity:
+        conditions.append(f"severity = ${idx}")
+        params.append(severity)
+        idx += 1
+    if event_type:
+        conditions.append(f"event_type = ${idx}")
+        params.append(event_type)
+        idx += 1
+    if min_signals is not None:
+        conditions.append(f"signal_count >= ${idx}")
+        params.append(min_signals)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            total = await conn.fetchval(f"SELECT count(*) FROM events {where}", *params)
+            rows = await conn.fetch(
+                f"SELECT data FROM events {where} "
+                f"ORDER BY time_start DESC NULLS LAST, created_at DESC "
+                f"LIMIT ${idx} OFFSET ${idx + 1}",
+                *params, limit, offset,
+            )
+            items = []
+            for row in rows:
+                try:
+                    d = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+                    items.append({
+                        "event_id": d.get("id", ""),
+                        "title": d.get("title", ""),
+                        "category": d.get("category", "other"),
+                        "event_type": d.get("event_type", "incident"),
+                        "severity": d.get("severity", "medium"),
+                        "signal_count": d.get("signal_count", 0),
+                        "confidence": d.get("confidence", 0.5),
+                        "source_method": d.get("source_method", "auto"),
+                        "time_start": d.get("time_start"),
+                        "time_end": d.get("time_end"),
+                        "actors": (d.get("actors") or [])[:5],
+                        "locations": (d.get("locations") or [])[:5],
+                        "created_at": d.get("created_at"),
+                    })
+                except Exception:
+                    continue
+            return _json({"items": items, "total": total, "offset": offset, "limit": limit})
+    except Exception as exc:
+        logger.warning("Events query failed: %s", exc)
+        return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+
+@router.get("/events/{event_id}")
+async def get_event(request: Request, event_id: UUID):
+    """Get a single derived event with linked signals."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"error": "not available"}, 503)
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT data FROM events WHERE id = $1", event_id)
+            if not row:
+                return _json({"error": "not found"}, 404)
+
+            d = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+
+            # Get linked signals
+            signal_rows = await conn.fetch(
+                """
+                SELECT s.title, s.category, s.confidence, s.event_timestamp, sel.relevance
+                FROM signals s
+                JOIN signal_event_links sel ON s.id = sel.signal_id
+                WHERE sel.event_id = $1
+                ORDER BY sel.relevance DESC, s.event_timestamp DESC NULLS LAST
+                LIMIT 20
+                """,
+                event_id,
+            )
+            linked_signals = [
+                {
+                    "title": r["title"],
+                    "category": r["category"],
+                    "confidence": float(r["confidence"]) if r["confidence"] else 0.5,
+                    "timestamp": r["event_timestamp"].isoformat() if r["event_timestamp"] else None,
+                    "relevance": float(r["relevance"]),
+                }
+                for r in signal_rows
+            ]
+
+        d["linked_signals"] = linked_signals
+        return _json(d)
+    except Exception as exc:
+        logger.warning("Event detail query failed: %s", exc)
         return _json({"error": str(exc)}, 500)
 
 
@@ -605,7 +761,7 @@ async def delete_entity(request: Request, entity_id: str):
         return _json({"error": "invalid entity_id"}, 400)
     try:
         async with stores.structured._pool.acquire() as conn:
-            await conn.execute("DELETE FROM event_entities WHERE entity_id = $1", uid)
+            await conn.execute("DELETE FROM signal_entity_links WHERE entity_id = $1", uid)
             await conn.execute("DELETE FROM entity_profiles WHERE id = $1", uid)
         return _json({"status": "deleted"})
     except Exception as exc:
@@ -1554,7 +1710,7 @@ async def global_search(request: Request, q: str = Query(..., min_length=2)):
             # Events: search title
             try:
                 rows = await conn.fetch(
-                    "SELECT id, title, category FROM events "
+                    "SELECT id, title, category FROM signals "
                     "WHERE title ILIKE $1 ORDER BY created_at DESC LIMIT 10",
                     pattern,
                 )

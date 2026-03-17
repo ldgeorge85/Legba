@@ -253,7 +253,7 @@ class IntrospectMixin:
                         "SELECT data->>'title' AS title, data->>'category' AS category, "
                         "data->>'event_date' AS event_date, data->>'summary' AS summary, "
                         "data->>'actors' AS actors, data->>'locations' AS locations "
-                        "FROM events ORDER BY created_at DESC LIMIT 50"
+                        "FROM signals ORDER BY created_at DESC LIMIT 50"
                     )
                     await conn.close()
                     lines = []
@@ -365,7 +365,7 @@ class IntrospectMixin:
                     async with self.memory.structured._pool.acquire() as conn:
                         # All-time category distribution
                         cat_totals = await conn.fetch(
-                            "SELECT category, COUNT(*) AS cnt FROM events GROUP BY category"
+                            "SELECT category, COUNT(*) AS cnt FROM signals GROUP BY category"
                         )
                         total_events_all = sum(r["cnt"] for r in cat_totals) if cat_totals else 0
                         cat_pct = {
@@ -376,7 +376,7 @@ class IntrospectMixin:
                         # All-time region distribution (via source geo_origin)
                         region_totals = await conn.fetch(
                             "SELECT s.geo_origin, COUNT(e.id) AS cnt "
-                            "FROM events e JOIN sources s ON e.source_id = s.id "
+                            "FROM signals e JOIN sources s ON e.source_id = s.id "
                             "GROUP BY s.geo_origin"
                         )
                         total_with_region = sum(r["cnt"] for r in region_totals) if region_totals else 0
@@ -390,7 +390,7 @@ class IntrospectMixin:
                             "SELECT e.id, e.data->>'title' AS title, "
                             "e.category, e.created_at, "
                             "s.geo_origin "
-                            "FROM events e "
+                            "FROM signals e "
                             "LEFT JOIN sources s ON e.source_id = s.id "
                             "WHERE e.created_at > NOW() - INTERVAL '48 hours' "
                             "ORDER BY e.created_at DESC LIMIT 200"
@@ -401,10 +401,10 @@ class IntrospectMixin:
                         try:
                             known_rows = await conn.fetch(
                                 "SELECT DISTINCT ep.canonical_name "
-                                "FROM event_entity_links eel "
+                                "FROM signal_entity_links eel "
                                 "JOIN entity_profiles ep ON eel.entity_id = ep.id "
                                 "WHERE eel.event_id IN ("
-                                "  SELECT id FROM events ORDER BY created_at DESC LIMIT 100"
+                                "  SELECT id FROM signals ORDER BY created_at DESC LIMIT 100"
                                 ")"
                             )
                             known_entities = {r["canonical_name"] for r in known_rows}
@@ -428,7 +428,7 @@ class IntrospectMixin:
                             try:
                                 ev_entities = await conn.fetch(
                                     "SELECT ep.canonical_name "
-                                    "FROM event_entity_links eel "
+                                    "FROM signal_entity_links eel "
                                     "JOIN entity_profiles ep ON eel.entity_id = ep.id "
                                     "WHERE eel.event_id = $1",
                                     ev["id"],
@@ -587,7 +587,7 @@ class IntrospectMixin:
             async with self.memory.structured._pool.acquire() as conn:
                 # --- Coverage by category (last 48h) ---
                 rows = await conn.fetch(
-                    "SELECT category, COUNT(*) AS cnt FROM events "
+                    "SELECT category, COUNT(*) AS cnt FROM signals "
                     "WHERE created_at > NOW() - INTERVAL '48 hours' "
                     "GROUP BY category ORDER BY cnt DESC"
                 )
@@ -595,7 +595,7 @@ class IntrospectMixin:
 
                 # --- Coverage by region (source geo_origin, last 48h) ---
                 rows = await conn.fetch(
-                    "SELECT s.geo_origin, COUNT(e.id) AS cnt FROM events e "
+                    "SELECT s.geo_origin, COUNT(e.id) AS cnt FROM signals e "
                     "JOIN sources s ON e.source_id = s.id "
                     "WHERE e.created_at > NOW() - INTERVAL '48 hours' "
                     "GROUP BY s.geo_origin ORDER BY cnt DESC"
@@ -605,9 +605,9 @@ class IntrospectMixin:
                 }
 
                 # --- Entity link rate ---
-                total_events = await conn.fetchval("SELECT COUNT(*) FROM events") or 0
+                total_events = await conn.fetchval("SELECT COUNT(*) FROM signals") or 0
                 linked_events = await conn.fetchval(
-                    "SELECT COUNT(DISTINCT event_id) FROM event_entity_links"
+                    "SELECT COUNT(DISTINCT event_id) FROM signal_entity_links"
                 ) or 0
                 scorecard["entity_link_rate"] = round(
                     linked_events / max(total_events, 1) * 100, 1
@@ -644,7 +644,7 @@ class IntrospectMixin:
                 rows = await conn.fetch(
                     "SELECT ep.canonical_name, COUNT(eel.event_id) AS event_count "
                     "FROM entity_profiles ep "
-                    "JOIN event_entity_links eel ON ep.id = eel.entity_id "
+                    "JOIN signal_entity_links eel ON ep.id = eel.entity_id "
                     "GROUP BY ep.canonical_name ORDER BY event_count DESC LIMIT 10"
                 )
                 scorecard["top_entities"] = {

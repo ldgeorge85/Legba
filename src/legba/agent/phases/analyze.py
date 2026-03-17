@@ -116,7 +116,7 @@ class AnalyzeMixin:
                 # Event counts by category
                 cat_rows = await conn.fetch("""
                     SELECT category, count(*) as cnt
-                    FROM events
+                    FROM signals
                     GROUP BY category
                     ORDER BY cnt DESC
                 """)
@@ -133,7 +133,7 @@ class AnalyzeMixin:
                     SELECT ep.canonical_name, ep.entity_type,
                            COUNT(eel.event_id) as event_count
                     FROM entity_profiles ep
-                    LEFT JOIN event_entity_links eel ON eel.entity_id = ep.id
+                    LEFT JOIN signal_entity_links eel ON eel.entity_id = ep.id
                     GROUP BY ep.id, ep.canonical_name, ep.entity_type
                     HAVING COUNT(eel.event_id) > 0
                     ORDER BY COUNT(eel.event_id) DESC
@@ -149,7 +149,7 @@ class AnalyzeMixin:
                 current_snapshot["top_entities"] = top_entities
 
                 # Total counts for threshold checking
-                total_events = await conn.fetchval("SELECT count(*) FROM events")
+                total_events = await conn.fetchval("SELECT count(*) FROM signals")
                 total_entities = await conn.fetchval("SELECT count(*) FROM entity_profiles")
                 total_rels = 0
                 try:

@@ -195,7 +195,7 @@ class EvolveMixin:
                     SELECT DISTINCT jsonb_array_elements_text(
                         COALESCE(data->'locations', '[]'::jsonb)
                     ) as location
-                    FROM events
+                    FROM signals
                     WHERE created_at > NOW() - INTERVAL '7 days'
                 """)
                 regions = [r['location'] for r in region_rows] if region_rows else []

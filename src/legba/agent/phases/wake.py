@@ -176,6 +176,7 @@ class WakeMixin:
             selfmod_tools, nats_tools, opensearch_tools, analytics_tools,
             orchestration_tools, feed_tools, source_tools, event_tools,
             entity_tools, watchlist_tools, situation_tools, prediction_tools,
+            derived_event_tools,
         )
         from ..tools.subagent import run_subagent
         from ...shared.schemas.tools import ToolDefinition, ToolParameter
@@ -232,6 +233,12 @@ class WakeMixin:
             self.registry,
             structured=self.memory.structured,
             opensearch=self.opensearch,
+        )
+
+        # Derived event tools — create/update/query real-world occurrences
+        derived_event_tools.register(
+            self.registry,
+            structured=self.memory.structured,
         )
 
         # Entity intelligence tools — structured profiles + event linking

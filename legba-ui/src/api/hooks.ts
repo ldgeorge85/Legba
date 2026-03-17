@@ -2,6 +2,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import type {
   DashboardStats,
+  SignalSummary,
+  SignalDetail,
+  SignalFacets,
   EventSummary,
   EventDetail,
   EntitySummary,
@@ -58,17 +61,15 @@ export function useScorecard() {
   })
 }
 
-// ── Events ──
+// ── Events (derived real-world occurrences) ──
 
 export function useEvents(params: {
   offset?: number
   limit?: number
   category?: string
-  q?: string
-  source?: string
-  start_date?: string
-  end_date?: string
-  min_confidence?: number
+  severity?: string
+  event_type?: string
+  min_signals?: number
 }) {
   return useQuery({
     queryKey: ['events', params],
@@ -77,11 +78,9 @@ export function useEvents(params: {
       if (params.offset) sp.set('offset', String(params.offset))
       if (params.limit) sp.set('limit', String(params.limit))
       if (params.category) sp.set('category', params.category)
-      if (params.q) sp.set('q', params.q)
-      if (params.source) sp.set('source', params.source)
-      if (params.start_date) sp.set('start_date', params.start_date)
-      if (params.end_date) sp.set('end_date', params.end_date)
-      if (params.min_confidence != null) sp.set('min_confidence', String(params.min_confidence))
+      if (params.severity) sp.set('severity', params.severity)
+      if (params.event_type) sp.set('event_type', params.event_type)
+      if (params.min_signals != null) sp.set('min_signals', String(params.min_signals))
       return api.get<PaginatedResponse<EventSummary>>(`/api/v2/events?${sp}`)
     },
   })
@@ -103,11 +102,56 @@ export function useEvent(eventId: string | null) {
   })
 }
 
-export function useDeleteEvent() {
+// ── Signals (raw ingested material) ──
+
+export function useSignals(params: {
+  offset?: number
+  limit?: number
+  category?: string
+  q?: string
+  source?: string
+  start_date?: string
+  end_date?: string
+  min_confidence?: number
+}) {
+  return useQuery({
+    queryKey: ['signals', params],
+    queryFn: () => {
+      const sp = new URLSearchParams()
+      if (params.offset) sp.set('offset', String(params.offset))
+      if (params.limit) sp.set('limit', String(params.limit))
+      if (params.category) sp.set('category', params.category)
+      if (params.q) sp.set('q', params.q)
+      if (params.source) sp.set('source', params.source)
+      if (params.start_date) sp.set('start_date', params.start_date)
+      if (params.end_date) sp.set('end_date', params.end_date)
+      if (params.min_confidence != null) sp.set('min_confidence', String(params.min_confidence))
+      return api.get<PaginatedResponse<SignalSummary>>(`/api/v2/signals?${sp}`)
+    },
+  })
+}
+
+export function useSignalFacets() {
+  return useQuery({
+    queryKey: ['signals', 'facets'],
+    queryFn: () => api.get<SignalFacets>('/api/v2/signals/facets'),
+    staleTime: 60_000,
+  })
+}
+
+export function useSignal(signalId: string | null) {
+  return useQuery({
+    queryKey: ['signal', signalId],
+    queryFn: () => api.get<SignalDetail>(`/api/v2/signals/${signalId}`),
+    enabled: !!signalId,
+  })
+}
+
+export function useDeleteSignal() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (eventId: string) => api.delete(`/api/v2/events/${eventId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['events'] }),
+    mutationFn: (signalId: string) => api.delete(`/api/v2/signals/${signalId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['signals'] }),
   })
 }
 

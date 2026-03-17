@@ -124,9 +124,9 @@ class OrientMixin:
                 )
                 total_sources = await conn.fetchval("SELECT COUNT(*) FROM sources")
                 sources_with_events = await conn.fetchval(
-                    "SELECT COUNT(DISTINCT source_id) FROM events WHERE source_id IS NOT NULL"
+                    "SELECT COUNT(DISTINCT source_id) FROM signals WHERE source_id IS NOT NULL"
                 )
-                total_events = await conn.fetchval("SELECT COUNT(*) FROM events")
+                total_events = await conn.fetchval("SELECT COUNT(*) FROM signals")
                 await conn.close()
 
                 utilization = (sources_with_events / total_sources * 100) if total_sources else 0
@@ -243,7 +243,7 @@ class OrientMixin:
                         # Top categories from recent events
                         cat_rows = await conn.fetch("""
                             SELECT category, COUNT(*) as cnt
-                            FROM events
+                            FROM signals
                             WHERE created_at > NOW() - INTERVAL '1 hour'
                             GROUP BY category
                             ORDER BY cnt DESC
@@ -259,7 +259,7 @@ class OrientMixin:
                                    array_to_string(actors, ', ') as actors_str,
                                    array_to_string(locations, ', ') as locs_str,
                                    confidence
-                            FROM events
+                            FROM signals
                             WHERE created_at > NOW() - INTERVAL '2 hours'
                               AND confidence >= 0.7
                             ORDER BY confidence DESC, created_at DESC

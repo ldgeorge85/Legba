@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   Newspaper,
+  Rss,
   Users,
   Globe,
   Target,
@@ -34,6 +35,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { type: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} />, group: 'Overview' },
+  { type: 'signals', label: 'Signals', icon: <Rss size={18} />, group: 'Intelligence' },
   { type: 'events', label: 'Events', icon: <Newspaper size={18} />, group: 'Intelligence' },
   { type: 'entities', label: 'Entities', icon: <Users size={18} />, group: 'Intelligence' },
   { type: 'sources', label: 'Sources', icon: <Globe size={18} />, group: 'Intelligence' },

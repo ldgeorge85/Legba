@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useEvents, useEventFacets } from '@/api/hooks'
+import { useSignals, useSignalFacets } from '@/api/hooks'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useSelectionStore } from '@/stores/selection'
 import { cn, categoryColor } from '@/lib/utils'
@@ -28,7 +28,7 @@ const CATEGORIES = [
   'other',
 ]
 
-interface EventFilters {
+interface SignalFilters {
   categories: string[]
   source: string
   startDate: string
@@ -36,7 +36,7 @@ interface EventFilters {
   minConfidence: number
 }
 
-const DEFAULT_FILTERS: EventFilters = {
+const DEFAULT_FILTERS: SignalFilters = {
   categories: [],
   source: '',
   startDate: '',
@@ -53,10 +53,10 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced
 }
 
-export function EventsPanel() {
+export function SignalsPanel() {
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
-  const [filters, setFilters] = useState<EventFilters>(DEFAULT_FILTERS)
+  const [filters, setFilters] = useState<SignalFilters>(DEFAULT_FILTERS)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sectionsOpen, setSectionsOpen] = useState({
     categories: true,
@@ -66,17 +66,23 @@ export function EventsPanel() {
   })
 
   const debouncedFilters = useDebounce(filters, 300)
+  const debouncedSearch = useDebounce(search, 300)
 
-  const { data: facets } = useEventFacets()
+  const { data: facets } = useSignalFacets()
 
-  // Build query params for derived events API
+  // Build query params from debounced filters
   const queryParams = {
     offset,
     limit: PAGE_SIZE,
+    q: debouncedSearch || undefined,
     category: debouncedFilters.categories.length > 0 ? debouncedFilters.categories.join(',') : undefined,
+    source: debouncedFilters.source || undefined,
+    start_date: debouncedFilters.startDate || undefined,
+    end_date: debouncedFilters.endDate || undefined,
+    min_confidence: debouncedFilters.minConfidence > 0 ? debouncedFilters.minConfidence : undefined,
   }
 
-  const { data, isLoading } = useEvents(queryParams)
+  const { data, isLoading } = useSignals(queryParams)
   const openPanel = useWorkspaceStore((s) => s.openPanel)
   const select = useSelectionStore((s) => s.select)
 
@@ -171,7 +177,7 @@ export function EventsPanel() {
           />
           <input
             type="text"
-            placeholder="Search derived events..."
+            placeholder="Search signals..."
             value={search}
             onChange={(e) => {
               setSearch(e.target.value)
@@ -348,72 +354,52 @@ export function EventsPanel() {
           </div>
         )}
 
-        {/* Derived Events Table */}
+        {/* Signal Table */}
         <div className="flex-1 overflow-auto">
           {isLoading ? (
             <div className="p-4 text-sm text-muted-foreground">Loading...</div>
           ) : !data?.items.length ? (
-            <div className="p-4 text-sm text-muted-foreground">No events found</div>
+            <div className="p-4 text-sm text-muted-foreground">No signals found</div>
           ) : (
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-card border-b border-border z-10">
                 <tr className="text-left text-xs text-muted-foreground">
-                  <th className="px-3 py-2 font-medium">Severity</th>
                   <th className="px-3 py-2 font-medium">Category</th>
-                  <th className="px-3 py-2 font-medium">Type</th>
                   <th className="px-3 py-2 font-medium">Title</th>
-                  <th className="px-3 py-2 font-medium">Signals</th>
                   <th className="px-3 py-2 font-medium">Confidence</th>
                   <th className="px-3 py-2 font-medium">Time</th>
                 </tr>
               </thead>
               <tbody>
-                {data.items.map((event) => (
+                {data.items.map((signal) => (
                   <tr
-                    key={event.event_id}
+                    key={signal.event_id}
                     className="border-b border-border/50 hover:bg-secondary/50 cursor-pointer"
                     onClick={() => {
                       select({
                         type: 'event',
-                        id: event.event_id,
-                        name: event.title,
+                        id: signal.event_id,
+                        name: signal.title,
                       })
-                      openPanel('event-detail', { id: event.event_id })
+                      openPanel('event-detail', { id: signal.event_id })
                     }}
                   >
                     <td className="px-3 py-2">
-                      {event.severity ? (
-                        <SeverityBadge severity={event.severity} />
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground">--</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
                       <Badge
-                        className={cn('text-[10px]', categoryColor(event.category))}
+                        className={cn('text-[10px]', categoryColor(signal.category))}
                       >
-                        {event.category}
+                        {signal.category}
                       </Badge>
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">
-                      {event.event_type ?? '--'}
-                    </td>
-                    <td className="px-3 py-2 truncate max-w-[300px]">{event.title}</td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums text-center">
-                      {event.signal_count > 0 ? event.signal_count : '--'}
-                    </td>
+                    <td className="px-3 py-2 truncate max-w-[400px]">{signal.title}</td>
                     <td className="px-3 py-2 text-muted-foreground">
-                      {Math.round(event.confidence * 100)}%
+                      {Math.round(signal.confidence * 100)}%
                     </td>
                     <td className="px-3 py-2">
-                      {(event.time_start || event.timestamp) ? (
-                        <TimeAgo
-                          date={event.time_start || event.timestamp}
-                          className="text-xs text-muted-foreground"
-                        />
-                      ) : (
-                        <span className="text-xs text-muted-foreground">--</span>
-                      )}
+                      <TimeAgo
+                        date={signal.timestamp}
+                        className="text-xs text-muted-foreground"
+                      />
                     </td>
                   </tr>
                 ))}
@@ -426,7 +412,7 @@ export function EventsPanel() {
       {/* Pagination */}
       <div className="flex items-center justify-between px-3 py-1.5 border-t border-border text-xs text-muted-foreground shrink-0">
         <span>
-          {data ? `${data.total} event${data.total !== 1 ? 's' : ''}` : '--'}
+          {data ? `${data.total} signal${data.total !== 1 ? 's' : ''}` : '--'}
           {activeFilterCount > 0 && ' matching'}
         </span>
         {data && data.total > PAGE_SIZE && (
@@ -453,23 +439,6 @@ export function EventsPanel() {
         )}
       </div>
     </div>
-  )
-}
-
-const SEVERITY_COLORS: Record<string, string> = {
-  critical: 'bg-red-500/20 text-red-400 border-red-500/30',
-  high: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-  medium: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-  low: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-  info: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
-}
-
-function SeverityBadge({ severity }: { severity: string }) {
-  const color = SEVERITY_COLORS[severity.toLowerCase()] ?? SEVERITY_COLORS.info
-  return (
-    <span className={cn('inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded border', color)}>
-      {severity}
-    </span>
   )
 }
 

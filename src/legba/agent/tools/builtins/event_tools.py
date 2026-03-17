@@ -45,7 +45,7 @@ def _title_similarity(a: str, b: str) -> float:
 # Index management
 # ---------------------------------------------------------------------------
 
-_EVENTS_INDEX_MAPPINGS = {
+_SIGNALS_INDEX_MAPPINGS = {
     "properties": {
         "title": {"type": "text", "analyzer": "standard"},
         "summary": {"type": "text", "analyzer": "standard"},
@@ -67,22 +67,22 @@ _EVENTS_INDEX_MAPPINGS = {
 _ensured_indices: set[str] = set()
 
 
-async def _ensure_events_index(opensearch: OpenSearchStore, index_name: str) -> None:
+async def _ensure_signals_index(opensearch: OpenSearchStore, index_name: str) -> None:
     """Idempotent index creation with proper mappings."""
     if index_name in _ensured_indices:
         return
     await opensearch.create_index(
         index_name,
-        mappings=_EVENTS_INDEX_MAPPINGS,
+        mappings=_SIGNALS_INDEX_MAPPINGS,
         settings={"number_of_shards": 1, "number_of_replicas": 0},
     )
     _ensured_indices.add(index_name)
 
 
-def _events_index_name() -> str:
-    """Generate time-partitioned index name: legba-events-YYYY.MM"""
+def _signals_index_name() -> str:
+    """Generate time-partitioned index name: legba-signals-YYYY.MM"""
     now = datetime.now(timezone.utc)
-    return f"legba-events-{now.strftime('%Y.%m')}"
+    return f"legba-signals-{now.strftime('%Y.%m')}"
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ async def _check_watchlist_matches(structured: StructuredStore, event) -> list[d
                     from uuid import uuid4
                     await conn.execute(
                         "INSERT INTO watch_triggers "
-                        "(id, watch_id, event_id, watch_name, event_title, match_reasons, priority) "
+                        "(id, watch_id, signal_id, watch_name, event_title, match_reasons, priority) "
                         "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
                         uuid4(), row["id"], event.id,
                         row["name"], event.title,
@@ -284,10 +284,10 @@ async def _compute_novelty(structured: StructuredStore, event) -> dict | None:
                     factors.append(f"{unknown}_new_actors")
 
             # Category rarity
-            total = await conn.fetchval("SELECT count(*) FROM events")
+            total = await conn.fetchval("SELECT count(*) FROM signals")
             if total and total > 20:
                 cat_count = await conn.fetchval(
-                    "SELECT count(*) FROM events WHERE category = $1",
+                    "SELECT count(*) FROM signals WHERE category = $1",
                     event.category.value,
                 )
                 ratio = cat_count / total
@@ -473,7 +473,7 @@ def register(
                 from datetime import timedelta
                 cutoff = datetime.now(timezone.utc) - timedelta(days=7)
                 existing = await conn.fetchrow(
-                    "SELECT id, title FROM events WHERE lower(title) = $1 AND created_at >= $2 LIMIT 1",
+                    "SELECT id, title FROM signals WHERE lower(title) = $1 AND created_at >= $2 LIMIT 1",
                     title.lower(), cutoff,
                 )
                 if existing:
@@ -609,8 +609,8 @@ def register(
         os_result = None
         os_err = _check_os()
         if not os_err:
-            index_name = _events_index_name()
-            await _ensure_events_index(opensearch, index_name)
+            index_name = _signals_index_name()
+            await _ensure_signals_index(opensearch, index_name)
             os_doc = {
                 "title": event.title,
                 "summary": event.summary,
@@ -781,7 +781,7 @@ def register(
             query = {"bool": {"must": must}}
 
         result = await opensearch.search(
-            "legba-events-*",
+            "legba-signals-*",
             query,
             size=limit,
             sort=[{"_score": "desc"}, {"event_timestamp": {"order": "desc", "unmapped_type": "date"}}],

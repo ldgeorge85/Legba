@@ -73,7 +73,7 @@ async def event_stream(request: Request):
                         from ...shared.schemas.events import Event
                         async with stores.structured._pool.acquire() as conn:
                             rows = await conn.fetch(
-                                "SELECT data FROM events ORDER BY created_at DESC LIMIT $1",
+                                "SELECT data FROM signals ORDER BY created_at DESC LIMIT $1",
                                 event_count - last_event_count,
                             )
                             for row in rows:

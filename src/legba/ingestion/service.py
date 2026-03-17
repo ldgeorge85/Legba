@@ -1,7 +1,7 @@
 """Legba Ingestion Service — main entry point.
 
 Deterministic source fetcher. No LLM. Runs continuously, fetching
-sources on their configured intervals, deduplicating events, storing
+sources on their configured intervals, deduplicating signals, storing
 to Postgres + OpenSearch, and publishing notifications via NATS.
 
 Usage:
@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
 from datetime import datetime, timezone
@@ -45,7 +46,7 @@ class IngestionService:
         self._storage: StorageLayer | None = None
         self._dedup: DedupEngine | None = None
         self._tick_count = 0
-        self._events_total = 0
+        self._signals_total = 0
         self._start_time: datetime | None = None
         # Semaphore to limit concurrent fetches
         self._fetch_sem: asyncio.Semaphore | None = None
@@ -127,7 +128,44 @@ class IngestionService:
             self._os_client = AsyncOpenSearch(**os_kwargs)
             logger.info("Connected to OpenSearch at %s:%d", cfg.opensearch.host, cfg.opensearch.port)
         except Exception as e:
-            logger.warning("OpenSearch not available, events will only go to Postgres: %s", e)
+            logger.warning("OpenSearch not available, signals will only go to Postgres: %s", e)
+
+        # Qdrant (for signal embeddings)
+        qdrant_client = None
+        try:
+            qdrant_host = os.getenv("QDRANT_HOST", "localhost")
+            qdrant_port = int(os.getenv("QDRANT_PORT", "6333"))
+            from qdrant_client import AsyncQdrantClient
+            qdrant_client = AsyncQdrantClient(host=qdrant_host, port=qdrant_port)
+            await qdrant_client.get_collections()  # connection test
+            logger.info("Connected to Qdrant at %s:%d", qdrant_host, qdrant_port)
+        except Exception as e:
+            logger.warning("Qdrant not available, signal embeddings disabled: %s", e)
+            qdrant_client = None
+
+        # Embedding function (uses vLLM OpenAI-compatible endpoint)
+        embed_fn = None
+        embed_base = os.getenv("EMBEDDING_API_BASE") or os.getenv("OPENAI_BASE_URL", "")
+        embed_key = os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+        embed_model = os.getenv("MEMORY_EMBEDDING_MODEL", "embedding-inno1")
+        if embed_base and qdrant_client:
+            try:
+                import httpx
+                _embed_http = httpx.AsyncClient(
+                    base_url=embed_base.rstrip("/"),
+                    headers={"Authorization": f"Bearer {embed_key}", "Content-Type": "application/json"},
+                    timeout=httpx.Timeout(30),
+                )
+
+                async def _generate_embedding(text: str) -> list[float]:
+                    resp = await _embed_http.post("/embeddings", json={"model": embed_model, "input": text})
+                    resp.raise_for_status()
+                    return resp.json()["data"][0]["embedding"]
+
+                embed_fn = _generate_embedding
+                logger.info("Embedding enabled: model=%s via %s", embed_model, embed_base)
+            except Exception as e:
+                logger.warning("Embedding client setup failed: %s", e)
 
         # NATS
         try:
@@ -138,8 +176,13 @@ class IngestionService:
             self._nats = None
 
         # Initialize storage and dedup
-        self._storage = StorageLayer(self._pg_pool, self._os_client, self._redis)
-        self._dedup = DedupEngine(self._pg_pool, self.config.dedup_cache_size)
+        self._storage = StorageLayer(
+            self._pg_pool, self._os_client, self._redis,
+            qdrant_client=qdrant_client,
+            embedding_client=embed_fn,
+        )
+        await self._storage.ensure_qdrant_collection()
+        self._dedup = DedupEngine(self._pg_pool, self.config.dedup_cache_size, qdrant_client=qdrant_client, embed_fn=embed_fn)
 
     async def _ensure_schema(self) -> None:
         """Ensure ingestion-specific schema exists."""
@@ -202,7 +245,7 @@ class IngestionService:
         if self._tick_count % 20 == 0:  # Every ~10 minutes
             await self._dedup.load_cache()
 
-        # Batch entity linking — process unlinked events every ~30 minutes
+        # Batch entity linking — process unlinked signals every ~30 minutes
         if self._tick_count % 60 == 30:
             try:
                 linked = await self._storage.batch_link_entities(limit=200)
@@ -211,8 +254,19 @@ class IngestionService:
             except Exception as e:
                 logger.warning("Batch linker failed: %s", e)
 
+        # Signal-to-event clustering — every ~20 minutes (offset from entity linker)
+        if self._tick_count % 40 == 20:
+            try:
+                from .cluster import SignalClusterer
+                clusterer = SignalClusterer(self._pg_pool)
+                events_affected = await clusterer.cluster(window_hours=6)
+                if events_affected:
+                    logger.info("Signal clusterer: %d events created/updated", events_affected)
+            except Exception as e:
+                logger.warning("Signal clusterer failed: %s", e)
+
     async def _process_source(self, source: ScheduledSource) -> None:
-        """Fetch, dedup, store events from a single source."""
+        """Fetch, dedup, store signals from a single source."""
         async with self._fetch_sem:
             # Advance next_fetch_at immediately to prevent re-selection while processing
             try:
@@ -268,32 +322,32 @@ class IngestionService:
                 )
                 return
 
-            # Normalize entries to Events
-            events = []
+            # Normalize entries to Signals
+            signals = []
             for entry in result.entries:
-                event = normalize_entry(
+                sig = normalize_entry(
                     entry,
                     source_id=source.id,
                     source_name=source.name,
                     source_category=source.category,
                     source_language=source.language,
                 )
-                events.append(event)
+                signals.append(sig)
 
             # Batch-internal dedup (within this fetch)
-            batch_entries = [(e.guid, e.source_url, e.title) for e in events]
+            batch_entries = [(s.guid, s.source_url, s.title) for s in signals]
             batch_dupes = await self._dedup.check_batch_internal(batch_entries)
 
-            # Batch dedup against existing events (2 DB queries instead of 2N)
+            # Batch dedup against existing signals (2 DB queries instead of 2N)
             # Only check entries that survived batch-internal dedup
             candidates = [
-                (i, events[i])
-                for i in range(len(events))
+                (i, signals[i])
+                for i in range(len(signals))
                 if i not in batch_dupes
             ]
             if candidates:
                 candidate_entries = [
-                    (ev.guid, ev.source_url, ev.title) for _, ev in candidates
+                    (sig.guid, sig.source_url, sig.title) for _, sig in candidates
                 ]
                 batch_results = await self._dedup.check_batch(candidate_entries)
             else:
@@ -301,20 +355,20 @@ class IngestionService:
 
             stored = 0
             deduped = len(batch_dupes)
-            for j, (i, event) in enumerate(candidates):
+            for j, (i, sig) in enumerate(candidates):
                 if batch_results[j].is_duplicate:
                     deduped += 1
                     continue
 
                 # Geo resolution (best-effort)
-                await self._resolve_geo(event)
+                await self._resolve_geo(sig)
 
                 # Store
-                ok = await self._storage.store_event(event)
+                ok = await self._storage.store_signal(sig)
                 if ok:
                     stored += 1
-                    self._events_total += 1
-                    self._dedup.add_to_cache(event.title)
+                    self._signals_total += 1
+                    self._dedup.add_to_cache(sig.title)
 
             # Record source success
             await self._storage.record_source_success(source.id, stored)
@@ -323,7 +377,7 @@ class IngestionService:
             await self._storage.log_fetch_complete(
                 log_id,
                 status="success",
-                events_fetched=len(events),
+                events_fetched=len(signals),
                 events_stored=stored,
                 events_deduped=deduped,
                 duration_ms=result.fetch_duration_ms,
@@ -331,23 +385,23 @@ class IngestionService:
 
             logger.info(
                 "Done: %s — %d fetched, %d stored, %d deduped (%s)",
-                source.name, len(events), stored, deduped, result.parse_mode,
+                source.name, len(signals), stored, deduped, result.parse_mode,
             )
 
             # NATS notification
             if stored > 0:
-                await self._notify_nats(source, stored, deduped, events)
+                await self._notify_nats(source, stored, deduped, signals)
 
-    async def _resolve_geo(self, event: Event) -> None:
-        """Best-effort geo resolution for event locations."""
-        if not event.locations:
+    async def _resolve_geo(self, signal: Signal) -> None:
+        """Best-effort geo resolution for signal locations."""
+        if not signal.locations:
             return
         try:
             from legba.agent.tools.builtins.geo import resolve_locations
-            geo = resolve_locations(event.locations)
-            event.geo_countries = geo.get("countries", [])
-            event.geo_regions = geo.get("regions", [])
-            event.geo_coordinates = geo.get("coordinates", [])
+            geo = resolve_locations(signal.locations)
+            signal.geo_countries = geo.get("countries", [])
+            signal.geo_regions = geo.get("regions", [])
+            signal.geo_coordinates = geo.get("coordinates", [])
         except Exception:
             pass
 
@@ -394,18 +448,18 @@ class IngestionService:
         source: ScheduledSource,
         stored: int,
         deduped: int,
-        events: list,
+        signals: list,
     ) -> None:
         """Publish ingestion batch notification to NATS."""
         if not self._nats:
             return
         try:
-            categories = list(set(e.category.value for e in events if hasattr(e, "category")))
+            categories = list(set(s.category.value for s in signals if hasattr(s, "category")))
             msg = {
                 "source_id": str(source.id),
                 "source_name": source.name,
-                "events_stored": stored,
-                "events_deduped": deduped,
+                "signals_stored": stored,
+                "signals_deduped": deduped,
                 "categories": categories[:10],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
@@ -427,7 +481,7 @@ class IngestionService:
             if "/metrics" in request_line:
                 body = json.dumps({
                     "ticks": self._tick_count,
-                    "events_total": self._events_total,
+                    "signals_total": self._signals_total,
                     "uptime_seconds": int(
                         (datetime.now(timezone.utc) - self._start_time).total_seconds()
                     ) if self._start_time else 0,
@@ -439,7 +493,7 @@ class IngestionService:
                         (datetime.now(timezone.utc) - self._start_time).total_seconds()
                     ) if self._start_time else 0,
                     "ticks": self._tick_count,
-                    "events_total": self._events_total,
+                    "signals_total": self._signals_total,
                 })
 
             response = (
@@ -488,7 +542,7 @@ class IngestionService:
             except Exception:
                 pass
 
-        logger.info("Ingestion service stopped. Total events stored: %d", self._events_total)
+        logger.info("Ingestion service stopped. Total signals stored: %d", self._signals_total)
 
     def stop(self) -> None:
         """Signal the service to stop."""

@@ -1,7 +1,9 @@
-"""Storage layer — batch writes to Postgres + OpenSearch.
+"""Storage layer — batch writes to Postgres + OpenSearch + Qdrant.
 
-Handles event persistence, source tracking, ingestion logging, and
-metrics publishing to Redis.
+Handles signal persistence, source tracking, ingestion logging, and
+metrics publishing to Redis. Embeds signals at ingest time via the
+vLLM embedding endpoint and stores vectors in Qdrant for semantic
+dedup and clustering.
 """
 
 from __future__ import annotations
@@ -15,86 +17,102 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
-from legba.shared.schemas.events import Event
+from legba.shared.schemas.signals import Signal
 
 logger = logging.getLogger(__name__)
 
+# Qdrant collection for signal embeddings
+SIGNALS_COLLECTION = "legba_signals"
+VECTOR_DIMENSIONS = int(os.getenv("MEMORY_VECTOR_DIMENSIONS", "1024"))
+
 
 class StorageLayer:
-    """Batch event storage with dual-write (Postgres + OpenSearch)."""
+    """Batch signal storage with triple-write (Postgres + OpenSearch + Qdrant)."""
 
     def __init__(
         self,
         pg_pool: asyncpg.Pool,
         os_client=None,
         redis_client=None,
+        qdrant_client=None,
+        embedding_client=None,
     ):
         self._pool = pg_pool
         self._os = os_client
         self._redis = redis_client
+        self._qdrant = qdrant_client
+        self._embed = embedding_client
 
     # ------------------------------------------------------------------
-    # Event storage
+    # Signal storage
     # ------------------------------------------------------------------
 
-    async def store_event(self, event: Event) -> bool:
-        """Store a single event in Postgres + OpenSearch."""
-        pg_ok = await self._store_pg(event)
-        os_ok = await self._store_os(event) if self._os else True
+    async def store_signal(self, signal: Signal) -> bool:
+        """Store a single signal in Postgres + OpenSearch + Qdrant."""
+        pg_ok = await self._store_pg(signal)
+        os_ok = await self._store_os(signal) if self._os else True
 
         if pg_ok:
             await self._increment_counters()
+            # Best-effort vector embedding + Qdrant upsert
+            await self._embed_and_store_vector(signal)
             # Best-effort entity auto-linking
             try:
-                event_data = {
-                    "actors": event.actors,
-                    "locations": event.locations,
+                signal_data = {
+                    "actors": signal.actors,
+                    "locations": signal.locations,
                 }
                 linked = await self._auto_link_entities(
-                    str(event.id), event_data,
+                    str(signal.id), signal_data,
                 )
                 if linked:
                     logger.debug(
-                        "Auto-linked %d entities to event %s", linked, event.id,
+                        "Auto-linked %d entities to signal %s", linked, signal.id,
                     )
             except Exception as e:
-                logger.debug("Auto-link call failed for %s: %s", event.id, e)
+                logger.debug("Auto-link call failed for %s: %s", signal.id, e)
 
         return pg_ok
 
-    async def store_events_batch(self, events: list[Event]) -> tuple[int, int]:
-        """Store a batch of events. Returns (stored_count, failed_count)."""
+    # Backward-compat alias
+    store_event = store_signal
+
+    async def store_signals_batch(self, signals: list[Signal]) -> tuple[int, int]:
+        """Store a batch of signals. Returns (stored_count, failed_count)."""
         stored = 0
         failed = 0
-        for event in events:
-            ok = await self.store_event(event)
+        for sig in signals:
+            ok = await self.store_signal(sig)
             if ok:
                 stored += 1
             else:
                 failed += 1
         return stored, failed
 
-    async def _store_pg(self, event: Event) -> bool:
-        """Insert event into Postgres."""
+    # Backward-compat alias
+    store_events_batch = store_signals_batch
+
+    async def _store_pg(self, signal: Signal) -> bool:
+        """Insert signal into Postgres."""
         try:
             await self._pool.execute(
                 """
-                INSERT INTO events (id, data, title, source_id, source_url, category,
-                                    event_timestamp, language, confidence, guid, created_at, updated_at)
+                INSERT INTO signals (id, data, title, source_id, source_url, category,
+                                     event_timestamp, language, confidence, guid, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
                 ON CONFLICT (id) DO NOTHING
                 """,
-                event.id,
-                event.model_dump_json(),
-                event.title,
-                event.source_id,
-                event.source_url,
-                event.category.value,
-                event.event_timestamp,
-                event.language,
-                event.confidence,
-                getattr(event, "guid", ""),
-                event.created_at,
+                signal.id,
+                signal.model_dump_json(),
+                signal.title,
+                signal.source_id,
+                signal.source_url,
+                signal.category.value,
+                signal.event_timestamp,
+                signal.language,
+                signal.confidence,
+                getattr(signal, "guid", ""),
+                signal.created_at,
             )
             return True
         except asyncpg.ForeignKeyViolationError:
@@ -102,67 +120,124 @@ class StorageLayer:
             try:
                 await self._pool.execute(
                     """
-                    INSERT INTO events (id, data, title, source_id, source_url, category,
-                                        event_timestamp, language, confidence, guid, created_at, updated_at)
+                    INSERT INTO signals (id, data, title, source_id, source_url, category,
+                                         event_timestamp, language, confidence, guid, created_at, updated_at)
                     VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, NOW())
                     ON CONFLICT (id) DO NOTHING
                     """,
-                    event.id,
-                    event.model_dump_json(),
-                    event.title,
-                    event.source_url,
-                    event.category.value,
-                    event.event_timestamp,
-                    event.language,
-                    event.confidence,
-                    getattr(event, "guid", ""),
-                    event.created_at,
+                    signal.id,
+                    signal.model_dump_json(),
+                    signal.title,
+                    signal.source_url,
+                    signal.category.value,
+                    signal.event_timestamp,
+                    signal.language,
+                    signal.confidence,
+                    getattr(signal, "guid", ""),
+                    signal.created_at,
                 )
                 return True
             except Exception as e:
-                logger.error("Event store retry failed %s: %s", event.id, e)
+                logger.error("Signal store retry failed %s: %s", signal.id, e)
                 return False
         except Exception as e:
-            logger.error("Event store failed %s: %s", event.id, e)
+            logger.error("Signal store failed %s: %s", signal.id, e)
             return False
 
-    async def _store_os(self, event: Event) -> bool:
-        """Index event in OpenSearch."""
+    async def _store_os(self, signal: Signal) -> bool:
+        """Index signal in OpenSearch."""
         try:
             now = datetime.now(timezone.utc)
-            index_name = f"legba-events-{now.strftime('%Y.%m')}"
+            index_name = f"legba-signals-{now.strftime('%Y.%m')}"
 
             doc = {
-                "title": event.title,
-                "summary": event.summary,
-                "full_content": event.full_content,
-                "category": event.category.value,
-                "actors": event.actors,
-                "locations": event.locations,
-                "tags": event.tags,
-                "language": event.language,
-                "source_id": str(event.source_id) if event.source_id else None,
-                "source_url": event.source_url,
-                "confidence": event.confidence,
-                "event_timestamp": event.event_timestamp.isoformat() if event.event_timestamp else None,
-                "created_at": event.created_at.isoformat(),
-                "geo_countries": event.geo_countries,
+                "title": signal.title,
+                "summary": signal.summary,
+                "full_content": signal.full_content,
+                "category": signal.category.value,
+                "actors": signal.actors,
+                "locations": signal.locations,
+                "tags": signal.tags,
+                "language": signal.language,
+                "source_id": str(signal.source_id) if signal.source_id else None,
+                "source_url": signal.source_url,
+                "confidence": signal.confidence,
+                "event_timestamp": signal.event_timestamp.isoformat() if signal.event_timestamp else None,
+                "created_at": signal.created_at.isoformat(),
+                "geo_countries": signal.geo_countries,
             }
 
             await self._os.index(
                 index=index_name,
-                id=str(event.id),
+                id=str(signal.id),
                 body=doc,
             )
             return True
         except Exception as e:
-            logger.warning("OpenSearch index failed for %s: %s", event.id, e)
+            logger.warning("OpenSearch index failed for %s: %s", signal.id, e)
             return False
+
+    async def _embed_and_store_vector(self, signal: Signal) -> None:
+        """Generate embedding for a signal and upsert to Qdrant.
+
+        Best-effort — failures don't block signal storage. Embeds
+        title + summary (first 512 chars) for semantic search and dedup.
+        """
+        if not self._embed or not self._qdrant:
+            return
+        try:
+            # Combine title + summary for richer embedding
+            text = signal.title
+            if signal.summary:
+                text = f"{text}. {signal.summary[:512]}"
+
+            vector = await self._embed(text)
+            if not vector:
+                return
+
+            from qdrant_client.models import PointStruct
+            await self._qdrant.upsert(
+                collection_name=SIGNALS_COLLECTION,
+                points=[
+                    PointStruct(
+                        id=str(signal.id),
+                        vector=vector,
+                        payload={
+                            "title": signal.title,
+                            "category": signal.category.value,
+                            "source_url": signal.source_url,
+                            "created_at": signal.created_at.isoformat(),
+                        },
+                    )
+                ],
+            )
+        except Exception as e:
+            logger.debug("Embed/Qdrant upsert failed for %s: %s", signal.id, e)
+
+    async def ensure_qdrant_collection(self) -> None:
+        """Create the signals Qdrant collection if it doesn't exist."""
+        if not self._qdrant:
+            return
+        try:
+            from qdrant_client.models import Distance, VectorParams
+            collections = await self._qdrant.get_collections()
+            exists = any(c.name == SIGNALS_COLLECTION for c in collections.collections)
+            if not exists:
+                await self._qdrant.create_collection(
+                    collection_name=SIGNALS_COLLECTION,
+                    vectors_config=VectorParams(
+                        size=VECTOR_DIMENSIONS,
+                        distance=Distance.COSINE,
+                    ),
+                )
+                logger.info("Created Qdrant collection: %s (%d dims)", SIGNALS_COLLECTION, VECTOR_DIMENSIONS)
+        except Exception as e:
+            logger.warning("Qdrant collection setup failed: %s", e)
 
     async def _increment_counters(self) -> None:
         """Increment Redis ingestion counters using sorted sets.
 
-        Each event is recorded as a ZADD entry with timestamp score.
+        Each signal is recorded as a ZADD entry with timestamp score.
         Old entries are pruned on every call via ZREMRANGEBYSCORE.
         Readers use ZCOUNT(now - window, now) to get accurate counts.
         """
@@ -173,31 +248,31 @@ class StorageLayer:
             member = f"{now}:{os.urandom(4).hex()}"
             pipe = self._redis.pipeline()
             # Add entry to both sorted sets
-            pipe.zadd("legba:ingest:events_1h", {member: now})
-            pipe.zadd("legba:ingest:events_24h", {member: now})
+            pipe.zadd("legba:ingest:signals_1h", {member: now})
+            pipe.zadd("legba:ingest:signals_24h", {member: now})
             # Prune entries older than their respective windows
-            pipe.zremrangebyscore("legba:ingest:events_1h", "-inf", now - 3600)
-            pipe.zremrangebyscore("legba:ingest:events_24h", "-inf", now - 86400)
+            pipe.zremrangebyscore("legba:ingest:signals_1h", "-inf", now - 3600)
+            pipe.zremrangebyscore("legba:ingest:signals_24h", "-inf", now - 86400)
             await pipe.execute()
         except Exception:
             pass
 
-    async def _auto_link_entities(self, event_id: str, event_data: dict) -> int:
-        """Best-effort entity linking for ingested events.
+    async def _auto_link_entities(self, signal_id: str, signal_data: dict) -> int:
+        """Best-effort entity linking for ingested signals.
 
         Two strategies:
-        1. Match event actors/locations fields against entity profiles (works for
-           structured sources like NWS, USGS, and agent-created events).
-        2. Scan event title for known entity names (works for all events — most
+        1. Match signal actors/locations fields against entity profiles (works for
+           structured sources like NWS, USGS, and agent-created signals).
+        2. Scan signal title for known entity names (works for all signals — most
            RSS feeds put actor names in titles even though the <author> tag is
            just the journalist byline).
 
         Returns count of links created.
         """
         linked = 0
-        actors = event_data.get("actors") or []
-        locations = event_data.get("locations") or []
-        title = event_data.get("title") or ""
+        actors = signal_data.get("actors") or []
+        locations = signal_data.get("locations") or []
+        title = signal_data.get("title") or ""
 
         # Normalize: actors might be strings or lists
         if isinstance(actors, str):
@@ -220,9 +295,9 @@ class StorageLayer:
                 )
                 if row:
                     await self._pool.execute(
-                        "INSERT INTO event_entity_links (event_id, entity_id, role, confidence) "
+                        "INSERT INTO signal_entity_links (signal_id, entity_id, role, confidence) "
                         "VALUES ($1, $2, 'mentioned', 0.7) ON CONFLICT DO NOTHING",
-                        UUID(event_id), row["id"],
+                        UUID(signal_id), row["id"],
                     )
                     linked += 1
 
@@ -240,9 +315,9 @@ class StorageLayer:
                     ename = row["canonical_name"]
                     if ename.lower() in title_lower:
                         await self._pool.execute(
-                            "INSERT INTO event_entity_links (event_id, entity_id, role, confidence) "
+                            "INSERT INTO signal_entity_links (signal_id, entity_id, role, confidence) "
                             "VALUES ($1, $2, 'mentioned', 0.6) ON CONFLICT DO NOTHING",
-                            UUID(event_id), row["id"],
+                            UUID(signal_id), row["id"],
                         )
                         linked += 1
                         if linked >= 5:  # Cap to avoid over-linking
@@ -253,34 +328,34 @@ class StorageLayer:
         return linked
 
     # ------------------------------------------------------------------
-    # Batch entity linker — periodic post-processing of unlinked events
+    # Batch entity linker — periodic post-processing of unlinked signals
     # ------------------------------------------------------------------
 
     async def batch_link_entities(self, limit: int = 200) -> int:
-        """Link recently unlinked events to known entities via title matching.
+        """Link recently unlinked signals to known entities via title matching.
 
         Runs periodically (called from service tick). Conservative matching:
         - Only matches entity names >= 5 chars (avoids 'US' matching 'bus')
         - Uses word-boundary matching via regex (not substring)
         - Only high-confidence entity types (country, person, org, armed_group)
-        - Caps at 5 links per event to prevent noise
+        - Caps at 5 links per signal to prevent noise
         - Confidence 0.6 for title matches (lower than agent-created links at 0.8)
 
         Returns total number of new links created.
         """
         total_linked = 0
         try:
-            # Get recent events with zero entity links
+            # Get recent signals with zero entity links
             unlinked = await self._pool.fetch(
                 """
-                SELECT e.id, e.title
-                FROM events e
-                LEFT JOIN event_entity_links eel ON e.id = eel.event_id
-                WHERE eel.event_id IS NULL
-                  AND e.title IS NOT NULL
-                  AND length(e.title) >= 10
-                  AND e.created_at > NOW() - INTERVAL '48 hours'
-                ORDER BY e.created_at DESC
+                SELECT s.id, s.title
+                FROM signals s
+                LEFT JOIN signal_entity_links sel ON s.id = sel.signal_id
+                WHERE sel.signal_id IS NULL
+                  AND s.title IS NOT NULL
+                  AND length(s.title) >= 10
+                  AND s.created_at > NOW() - INTERVAL '48 hours'
+                ORDER BY s.created_at DESC
                 LIMIT $1
                 """,
                 limit,
@@ -312,30 +387,30 @@ class StorageLayer:
                 except re.error:
                     continue
 
-            # Match each unlinked event
-            for ev in unlinked:
-                title = ev["title"]
-                links_for_event = 0
+            # Match each unlinked signal
+            for sig in unlinked:
+                title = sig["title"]
+                links_for_signal = 0
                 for ent_id, ent_name, pat in patterns:
                     if pat.search(title):
                         try:
                             await self._pool.execute(
-                                "INSERT INTO event_entity_links "
-                                "(event_id, entity_id, role, confidence) "
+                                "INSERT INTO signal_entity_links "
+                                "(signal_id, entity_id, role, confidence) "
                                 "VALUES ($1, $2, 'mentioned', 0.6) "
                                 "ON CONFLICT DO NOTHING",
-                                ev["id"], ent_id,
+                                sig["id"], ent_id,
                             )
-                            links_for_event += 1
+                            links_for_signal += 1
                             total_linked += 1
                         except Exception:
                             pass
-                    if links_for_event >= 5:
+                    if links_for_signal >= 5:
                         break
 
             if total_linked > 0:
                 logger.info(
-                    "Batch entity linker: %d links created for %d events",
+                    "Batch entity linker: %d links created for %d signals",
                     total_linked, len(unlinked),
                 )
         except Exception as e:

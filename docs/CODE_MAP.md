@@ -1,8 +1,8 @@
 # Legba Code Map
 
-**Generated:** 2026-03-10
-**Total Python files:** 93
-**Total lines of Python:** ~18,200
+**Generated:** 2026-03-16
+**Total Python files:** 97
+**Total lines of Python:** ~19,500
 
 ---
 
@@ -21,7 +21,8 @@ src/legba/
       comms.py                       (89 lines)  — Inbox/Outbox/NATS message schemas
       cycle.py                       (58 lines)  — Challenge/CycleResponse/CycleState
       entity_profiles.py             (147 lines) — EntityProfile, Assertion, EntityType
-      events.py                      (105 lines) — Event, EventCategory, create_event
+      signals.py                     (118 lines) — Signal, SignalCategory, create_signal (was events.py)
+      derived_events.py              (85 lines)  — DerivedEvent, EventType, EventSeverity, SignalEventLink
       goals.py                       (141 lines) — Goal hierarchy: Goal, Milestone, GoalType
       memory.py                      (93 lines)  — Episode, Fact, Entity, Relationship
       modifications.py               (115 lines) — Self-modification tracking schemas
@@ -45,6 +46,7 @@ src/legba/
       persist.py                     (362 lines) — PersistMixin: save state, liveness check, heartbeat
       introspect.py                  (319 lines) — IntrospectMixin: deep review, analysis reports
       research.py                    (157 lines) — ResearchMixin: entity enrichment, health summary
+      curate.py                      (166 lines) — CurateMixin: signal review, event creation, editorial judgment
 
     llm/
       __init__.py
@@ -86,7 +88,8 @@ src/legba/
         orchestration_tools.py       (189 lines) — workflow_define, workflow_trigger, workflow_status, workflow_list
         feed_tools.py                (167 lines) — feed_parse (RSS/Atom with UA retry)
         source_tools.py              (356 lines) — source_register, source_list, source_update, source_get
-        event_tools.py               (483 lines) — event_store, event_query, event_search
+        event_tools.py               (483 lines) — signal_store, signal_query, signal_search (was event_store/query/search)
+        derived_event_tools.py       (435 lines) — event_create, event_update, event_query, event_link_signal
         entity_tools.py              (473 lines) — entity_profile, entity_inspect, entity_resolve
         selfmod_tools.py             (110 lines) — code_test (syntax + import validation)
         geo.py                       (177 lines) — Location normalization (pycountry + GeoNames)
@@ -135,6 +138,22 @@ src/legba/
       reports.py                     (47 lines)  — GET /reports
       facts.py                       (161 lines) — CRUD /facts: list, paginated rows, delete, inline edit
       memory.py                      (87 lines)  — GET /memory + DELETE episodes from Qdrant
+
+  ingestion/
+    __init__.py
+    __main__.py                      (5 lines)   — Entry point
+    config.py                        (50 lines)  — Ingestion-specific config
+    service.py                       (540 lines) — IngestionService: tick loop, batch entity linking
+    scheduler.py                     (130 lines) — Source fetch scheduling
+    fetcher.py                       (588 lines) — HTTP/RSS fetching with retry
+    normalizer.py                    (401 lines) — Content normalization pipeline
+    source_normalizers.py            (922 lines) — Per-source format normalizers
+    dedup.py                         (329 lines) — 3-tier signal dedup (GUID → source_url → Jaccard)
+    storage.py                       (498 lines) — Signal storage to Postgres + OpenSearch
+    cluster.py                       (531 lines) — SignalClusterer: deterministic signal-to-event clustering
+
+scripts/
+  migrate_signals_events.sql         (131 lines) — DDL migration: events→signals, events_derived→events
 ```
 
 ---
@@ -206,13 +225,25 @@ src/legba/
 - `Entity` — Graph entity (AGE): name, entity_type, properties
 - `Relationship` — Directed graph edge: source_id, target_id, relation_type, properties
 
-#### `shared/schemas/events.py`
-**Purpose:** Event schemas for world events extracted from news sources.
+#### `shared/schemas/signals.py` (was `events.py`)
+**Purpose:** Signal schemas — raw ingested material from external sources (RSS items, API responses, feed entries). Signals are the atomic unit of collection; events are derived from them.
 
 **Key classes:**
-- `EventCategory` enum — conflict, political, economic, technology, health, environment, social, disaster, other
-- `Event` — Full event: title, summary, full_content, raw_content, event_timestamp, source_id/source_url, category, confidence, actors[], locations[], tags[], geo_countries[] (ISO alpha-2), geo_regions[], geo_coordinates[{name, lat, lon}]
-- `create_event()` — Factory function
+- `SignalCategory` enum — conflict, political, economic, technology, health, environment, social, disaster, other
+- `EventCategory` — Backward-compat alias for `SignalCategory`
+- `Signal` — Full signal: title, summary, full_content, raw_content, event_timestamp, source_id/source_url, category, confidence, actors[], locations[], tags[], geo_countries[] (ISO alpha-2), geo_regions[], geo_coordinates[{name, lat, lon}], guid, language
+- `Event` — Backward-compat alias for `Signal`
+- `create_signal()` — Factory function
+- `create_event()` — Backward-compat alias for `create_signal()`
+
+#### `shared/schemas/derived_events.py`
+**Purpose:** Derived event schemas — real-world occurrences derived from one or more signals. Events are the primary analytical unit; reports, situations, and graph analysis operate on events, not raw signals.
+
+**Key classes:**
+- `EventType` enum — incident (discrete), development (ongoing), shift (state change), threshold (metric crossing)
+- `EventSeverity` enum — critical, high, medium, low, routine
+- `DerivedEvent` — Full event: title, summary, category (SignalCategory), event_type, severity, time_start/time_end (temporal window), locations[], geo_countries[], geo_coordinates[], actors[], tags[], confidence, signal_count, source_method ("auto"/"agent"/"manual"), source_cycle
+- `SignalEventLink` — Many-to-many junction: signal_id, event_id, relevance (0.0-1.0)
 
 #### `shared/schemas/entity_profiles.py`
 **Purpose:** Versioned, sourced entity profiles forming the "Persistent World Model."
@@ -221,7 +252,7 @@ src/legba/
 - `EntityType` enum — 15 types: country, organization, person, location, military_unit, political_party, armed_group, international_org, corporation, media_outlet, event_series, concept, commodity, infrastructure, other
 - `Assertion` — Sourced claim: key, value, confidence, source_event_id, source_url, observed_at, superseded flag
 - `EntityProfile` — Versioned profile: canonical_name, entity_type, aliases, summary, sections (dict of Assertion lists), tags, completeness_score, event_link_count, version
-- `EventEntityLink` — Junction table: event_id, entity_id, role (actor|location|target|mentioned), confidence
+- `SignalEntityLink` — Junction table (was `EventEntityLink`): signal_id, entity_id, role (actor|location|target|mentioned), confidence
 
 **Key functions:**
 - `EntityProfile.compute_completeness()` — Heuristic score based on expected sections for entity type
@@ -473,18 +504,19 @@ Three parsing strategies (tried in order):
 **External deps:** `qdrant-client`
 
 #### `memory/structured.py` (~600 lines)
-**Purpose:** PostgreSQL-backed store for goals, facts, sources, events, entity profiles.
+**Purpose:** PostgreSQL-backed store for goals, facts, sources, signals, events, entity profiles.
 
 **Key class: `StructuredStore`**
 - `connect()` — Creates asyncpg pool + runs `_ensure_tables()`
-- **Tables created:** goals, facts, modifications, sources, events, entity_profiles, entity_profile_versions, event_entity_links
+- **Tables created:** goals, facts, modifications, sources, signals, events, signal_event_links, entity_profiles, entity_profile_versions, signal_entity_links, event_entity_links, situation_signals, situation_events
 - **Additive migrations:** Source reliability tracking columns (safe to re-run)
 
 **Goal operations:** `save_goal`, `get_goal`, `get_active_goals`, `get_all_goals`, `get_deferred_goals`
 **Fact operations:** `store_fact`, `query_facts(subject, limit)`, `query_facts_recent(current_cycle, lookback, limit)`, `supersede_fact(old_id, new_fact)`
 **Source operations:** `save_source`, `get_source`, `get_sources(status, source_type, limit)`, `find_source_by_url(url)`, `record_source_fetch(source_id, success, error, events_count)`, `increment_source_event_count(source_id)`
-**Event operations:** `save_event`, `get_event`, `get_events(limit, category, source_id)`, `find_duplicate_event(title, event_timestamp)`
-**Entity profile operations:** `save_entity_profile`, `get_entity_profile(id)`, `get_entity_profile_by_name(name)`, `search_entity_profiles(query, entity_type, limit)`, `save_event_entity_link`, `get_event_entity_links(event_id)`
+**Signal operations:** `save_signal`, `get_signal`, `get_signals(limit, category, source_id)`, `check_signal_guid(guid)`, `query_signals(limit, category, source_id)`, `find_duplicate_signal(title, event_timestamp)`
+**Derived event operations:** `save_derived_event`, `get_derived_event`, `query_derived_events(category, event_type, severity, since, until, min_signal_count, source_method, limit)`, `link_signal_to_event(signal_id, event_id, relevance)`
+**Entity profile operations:** `save_entity_profile`, `get_entity_profile(id)`, `get_entity_profile_by_name(name)`, `search_entity_profiles(query, entity_type, limit)`, `save_signal_entity_link`, `get_signal_entity_links(signal_id)`
 
 **External deps:** `asyncpg`
 
@@ -596,7 +628,8 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 | `orchestration_tools.py` | `workflow_define`, `workflow_trigger`, `workflow_status`, `workflow_list` | Airflow DAG deployment, triggering, monitoring |
 | `feed_tools.py` | `feed_parse` | RSS/Atom feed parsing with feedparser, browser UA retry on 403/405, source reliability tracking via `record_source_fetch()` |
 | `source_tools.py` | `source_register`, `source_list`, `source_update`, `source_get` | Source registry CRUD with dedup (checks existing URL, limit 500), auto-pause at 5 consecutive failures |
-| `event_tools.py` | `event_store`, `event_query`, `event_search` | Event storage to Postgres + OpenSearch. Auto geo-resolution via `geo.py`. Duplicate detection (>=50% word overlap within +/-1 day). `increment_source_event_count` on store |
+| `event_tools.py` | `signal_store`, `signal_query`, `signal_search` | Signal storage to Postgres + OpenSearch (was event_store/query/search). Auto geo-resolution via `geo.py`. 3-tier dedup. `increment_source_event_count` on store |
+| `derived_event_tools.py` | `event_create`, `event_update`, `event_query`, `event_link_signal` | Derived event CRUD. Agent-created events start at confidence 0.7. Link signals as evidence |
 | `entity_tools.py` | `entity_profile`, `entity_inspect`, `entity_resolve` | Entity profile CRUD in Postgres + AGE sync. Profile versioning. Event-entity linking |
 | `selfmod_tools.py` | `code_test` | Syntax check + import validation before self-modifications |
 | `geo.py` | (internal, not a tool) | Location normalization: `resolve_locations(locations)` using pycountry + GeoNames cities15000 gazetteer. Returns `{countries, regions, coordinates}` |
@@ -607,7 +640,7 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 - `explain_tool` — Get full parameter details for any tool on demand
 - `spawn_subagent` — Delegate work to a sub-agent with its own context window
 
-**Total registered tools: 43+**
+**Total registered tools: 47+**
 
 ---
 
@@ -825,6 +858,83 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 
 ---
 
+### 2.15 `src/legba/ingestion/` — Ingestion Service
+
+Deterministic (no LLM) service that runs independently of the agent cycle. Fetches sources on schedule, normalizes content, deduplicates, stores signals, and clusters them into events.
+
+#### `ingestion/service.py` (540 lines)
+**Purpose:** Main ingestion tick loop. Runs every ~60s: fetch due sources, normalize, deduplicate, store signals, batch entity linking via spaCy NER, run clustering every 20 minutes.
+
+#### `ingestion/dedup.py` (329 lines)
+**Purpose:** 3-tier signal deduplication. GUID fast-path, source_url match, Jaccard title similarity with source suffix/prefix stripping.
+
+**Key functions:**
+- `check_duplicate(signal, pool)` — Returns True if duplicate
+- `_title_words(title)` — Tokenize + lowercase + strip stop words
+- `_jaccard(a, b)` — Jaccard similarity between two sets
+- `_strip_source_suffixes(title)` — Remove " - Reuters", "BBC News: " etc. before comparison
+
+#### `ingestion/cluster.py` (531 lines)
+**Purpose:** Deterministic signal-to-event clustering engine. Groups related signals into derived events using entity overlap, title similarity, temporal proximity, and category matching.
+
+**Key class: `SignalClusterer`**
+- `__init__(pool)` — Takes asyncpg pool
+- `cluster(window_hours=6, max_signals=500)` — One clustering pass: fetch unclustered signals, extract features, score pairwise similarity, single-linkage clustering (threshold 0.4), create/merge events
+- `_fetch_unclustered(window_hours, limit)` — SQL: signals with no signal_event_links entry, excluding 'other' category
+- `_handle_cluster(feats)` — Multi-signal cluster: find merge target or create new event
+- `_find_merge_target(actors, locations, time_start, time_end, category)` — Entity overlap >= 0.3 against existing events
+- `_reinforce_event(existing, feats, ...)` — Bump signal_count, extend time_end, increase confidence (cap 0.8)
+- `_create_event_from_cluster(feats, ...)` — New event: title from highest-confidence signal, modal category, mean confidence capped at 0.6
+- `_create_singleton_event(feat)` — 1:1 event for structured sources (NWS, USGS, GDACS, etc.)
+
+**Key functions:**
+- `_similarity(a_entities, b_entities, a_words, b_words, a_ts, b_ts, a_cat, b_cat)` — Composite: entity overlap 0.3 + title Jaccard 0.3 + temporal proximity 0.2 + category match 0.2
+- `_single_linkage_cluster(n, sim_fn, threshold)` — Union-Find based single-linkage
+
+**Constants:** `_CLUSTER_THRESHOLD = 0.4`, `_AUTO_CONFIDENCE_CAP = 0.6`, `_REINFORCED_CONFIDENCE_CAP = 0.8`, `_STRUCTURED_SOURCES` (NWS, USGS, GDACS, NASA EONET, EMSC, IFRC, ACLED)
+
+#### `ingestion/storage.py` (498 lines)
+**Purpose:** Signal storage to Postgres + OpenSearch. Handles geo-resolution, entity extraction.
+
+#### `ingestion/fetcher.py` (588 lines)
+**Purpose:** HTTP/RSS fetching with retry, browser UA fallback, timeout handling.
+
+#### `ingestion/normalizer.py` (401 lines)
+**Purpose:** Content normalization pipeline: HTML stripping, encoding fix, truncation.
+
+#### `ingestion/source_normalizers.py` (922 lines)
+**Purpose:** Per-source format normalizers for structured APIs (USGS, GDACS, NASA EONET, etc.).
+
+---
+
+### 2.16 `src/legba/agent/phases/curate.py` — CURATE Phase
+
+**Purpose:** Intelligence curation phase that replaces ACQUIRE when the ingestion service is active. The agent reviews unclustered signals, refines auto-created events, and enriches entity profiles with editorial judgment.
+
+**Key class: `CurateMixin`**
+- `_curate()` — Main curate phase: build context (unclustered signals + low-confidence events + trending events + data overview), assemble prompt with CURATE_TOOLS, run tool loop with filtered executor
+- `_build_curate_context()` — SQL queries for: unclustered signals (top 20 by confidence), auto-created events with signal_count <= 2 (top 15), trending events (signal_count > 2, top 5), total counts
+
+**CURATE_TOOLS available:** `signal_query`, `signal_search`, `event_create`, `event_update`, `event_query`, `event_link_signal`, `entity_profile`, `entity_inspect`, `entity_resolve`, `graph_store`, `graph_query`, `memory_query`, `note_to_self`, `explain_tool`, `cycle_complete`
+
+---
+
+### 2.17 `scripts/migrate_signals_events.sql` — Database Migration
+
+**Purpose:** DDL migration for the signals/events refactor. Renames `events` -> `signals`, `events_derived` -> `events`, renames junction tables and foreign keys accordingly.
+
+**Key operations:**
+1. `events` table renamed to `signals` (raw ingested material)
+2. `events_derived` table renamed to `events` (derived real-world occurrences)
+3. `event_entity_links` renamed to `signal_entity_links` (column `event_id` -> `signal_id`)
+4. New `event_entity_links` table created for derived events
+5. `situation_events` renamed to `situation_signals` (column `event_id` -> `signal_id`)
+6. New `situation_events` table created for derived events
+7. `watch_triggers.event_id` renamed to `signal_id`, new `event_id` column added
+8. All indexes renamed for clarity
+
+---
+
 ## 3. Normal Cycle Function Call Flow
 
 ```
@@ -967,6 +1077,41 @@ AgentCycle.run():
 
 ---
 
+## 4b. CURATE Cycle Function Call Flow (Every 3 Cycles, When Ingestion Active)
+
+Replaces ACQUIRE when the ingestion service is running. The agent applies editorial judgment to raw signals and auto-created events rather than doing its own source fetching.
+
+```
+AgentCycle.run():
+  _wake()          (same as normal)
+  _orient()        (same as normal)
+
+  --- Curate branch (ingestion active, cycle_number % 3 == 0) ---
+
+  _curate()
+    _build_curate_context()
+      ├── SQL: Unclustered signals (no event link, not junk, top 20 by confidence)
+      ├── SQL: Auto-created events with signal_count <= 2 (top 15)
+      ├── SQL: Trending events with signal_count > 2 (top 5)
+      └── SQL: Total signals, events, unlinked count
+
+    PromptAssembler.assemble_curate_prompt(
+      curate_context=...,
+      allowed_tools=CURATE_TOOLS
+    )
+    Create filtered executor (blocks non-curate tools)
+    LLMClient.reason_with_tools(curate_messages, curate_executor)
+
+  _reflect()       (same as normal)
+  _narrate()       (same as normal)
+  _persist()       (same as normal)
+```
+
+**CURATE_TOOLS allowed set:**
+`signal_query`, `signal_search`, `event_create`, `event_update`, `event_query`, `event_link_signal`, `entity_profile`, `entity_inspect`, `entity_resolve`, `graph_store`, `graph_query`, `memory_query`, `note_to_self`, `explain_tool`, `cycle_complete`
+
+---
+
 ## 5. LLM Call Flow
 
 ```
@@ -1062,6 +1207,7 @@ client.py:reason_with_tools(messages, tool_executor, max_steps=20)
 | Data | `pydantic` | all schemas |
 | Country lookup | `pycountry` | geo.py |
 | NLP | `yake` | analytics_tools.py |
+| NLP | `spacy` | ingestion/service.py (NER for entity extraction) |
 | ML | `scikit-learn`, `numpy` | analytics_tools.py |
 | Config | `python-dotenv` | config.py |
 | Web framework | `FastAPI`, `uvicorn`, `jinja2` | ui/ |
@@ -1087,7 +1233,19 @@ client.py:reason_with_tools(messages, tool_executor, max_steps=20)
    | (vector)|    | (structured)|   | (fulltext) |
    |         |    |   + AGE     |   |            |
    +---------+    | (graph ext) |   +-----------+
-                  +-------------+
+                  +------+------+
+                         |
+               +---------+---------+
+               |  Signal/Event     |
+               |  Two-Tier Model   |
+               |                   |
+               | signals (raw)     |
+               |   ↓ clustering    |
+               | events (derived)  |
+               |   ↓ signal_event  |
+               |     _links (M:N)  |
+               +-------------------+
+
         |                |                |
    +----+----+    +------+------+   +-----+-----+
    |  Redis  |    |    NATS     |   |  Airflow  |
@@ -1102,9 +1260,31 @@ client.py:reason_with_tools(messages, tool_executor, max_steps=20)
    (challenge/          (response.json
     response)            logs, outbox)
 
-   +-----------+
-   |    UI     |  FastAPI + htmx
-   | (read-only|  Reads all stores
-   |  console) |
-   +-----------+
+   +-----------+        +-----------+
+   |    UI     |        | Ingestion |
+   | (read-only|        | Service   |
+   |  console) |        | (no LLM)  |
+   +-----------+        +-----------+
+   FastAPI + htmx       Fetch → Dedup → Signal
+   Reads all stores     Cluster → Event (every 20m)
 ```
+
+### Database Tables (Post-Migration)
+
+| Table | Purpose |
+|-------|---------|
+| `signals` | Raw ingested material (was `events`) |
+| `events` | Derived real-world occurrences (was `events_derived`) |
+| `signal_event_links` | Many-to-many: signals evidencing events |
+| `signal_entity_links` | Signal-entity junction (was `event_entity_links`) |
+| `event_entity_links` | Event-entity junction (new, for derived events) |
+| `entity_profiles` | Versioned entity profiles |
+| `entity_profile_versions` | Profile version history |
+| `situations` | Tracked situations |
+| `situation_signals` | Situation-signal junction (was `situation_events`) |
+| `situation_events` | Situation-event junction (new, for derived events) |
+| `watch_triggers` | Alert triggers: `signal_id` + `event_id` columns |
+| `goals` | Goal hierarchy |
+| `facts` | Structured facts |
+| `modifications` | Self-modification audit trail |
+| `sources` | Source registry with trust metadata |

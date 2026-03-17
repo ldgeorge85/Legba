@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 export type PanelType =
   | 'dashboard'
+  | 'signals'
   | 'events'
   | 'event-detail'
   | 'entities'

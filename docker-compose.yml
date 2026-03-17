@@ -178,6 +178,8 @@ services:
       INGESTION_CHECK_INTERVAL: "30"
       INGESTION_MAX_WORKERS: "4"
       INGESTION_LOG_LEVEL: "INFO"
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
     ports:
       - "8600:8600"
     depends_on:
@@ -188,6 +190,8 @@ services:
       opensearch:
         condition: service_healthy
       nats:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8600/health || exit 1"]

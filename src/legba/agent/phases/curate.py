@@ -1,0 +1,166 @@
+"""CURATE phase — intelligence curation: turn raw signals into analytical events."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from ...shared.schemas.comms import InboxMessage
+
+if TYPE_CHECKING:
+    from ..cycle import AgentCycle
+
+
+class CurateMixin:
+    """Curate cycle: editorial judgment on raw signals, event creation, entity linking."""
+
+    async def _curate(self: AgentCycle) -> None:
+        """Curate cycle: review unclustered signals, refine auto-events, enrich entities."""
+        self.logger.log_phase("curate")
+
+        curate_context = await self._build_curate_context()
+
+        from ..prompt import templates as _tpl
+        allowed_tools = _tpl.CURATE_TOOLS
+
+        inbox_messages = [InboxMessage(**m) for m in self.state.inbox_messages]
+        curate_messages = self.assembler.assemble_curate_prompt(
+            cycle_number=self.state.cycle_number,
+            seed_goal=self.state.seed_goal,
+            active_goals=[g.model_dump() for g in self._active_goals],
+            curate_context=curate_context,
+            allowed_tools=allowed_tools,
+            inbox_messages=inbox_messages if inbox_messages else None,
+        )
+
+        async def curate_executor(tool_name: str, arguments: dict) -> str:
+            if tool_name not in allowed_tools:
+                return (f"Tool '{tool_name}' is not available during curate cycles. "
+                        f"Available tools: {', '.join(sorted(allowed_tools))}")
+            return await self.executor.execute(tool_name, arguments)
+
+        self._cycle_plan = "CURATE CYCLE: Review unclustered signals, refine auto-events, entity enrichment."
+
+        try:
+            self._final_response, self._conversation = await self.llm.reason_with_tools(
+                messages=curate_messages,
+                tool_executor=curate_executor,
+                purpose="curate",
+                max_steps=self.config.agent.max_reasoning_steps,
+                stop_check=self._make_stop_checker(),
+            )
+
+            self.state.actions_taken = sum(
+                1 for m in self._conversation
+                if m.role == "user" and m.content.startswith("[Tool Result:")
+            )
+
+            self.logger.log("curate_complete",
+                           actions=self.state.actions_taken,
+                           response_length=len(self._final_response))
+        except Exception as e:
+            self._final_response = f"Curate cycle failed: {e}"
+            self._conversation = []
+            self.logger.log_error(f"Curate cycle failed: {e}")
+
+    async def _build_curate_context(self: AgentCycle) -> str:
+        """Gather signal/event data for the curate prompt."""
+        lines = []
+        try:
+            async with self.memory.structured._pool.acquire() as conn:
+                # 1. Unclustered strong signals (no linked event, not junk)
+                unclustered = await conn.fetch("""
+                    SELECT s.id, s.title, s.category, s.confidence,
+                           s.actors, s.locations, s.source_url,
+                           s.created_at
+                    FROM signals s
+                    LEFT JOIN signal_event_links sel ON sel.signal_id = s.id
+                    WHERE sel.signal_id IS NULL
+                      AND s.category != 'other'
+                      AND (s.actors IS NOT NULL OR s.locations IS NOT NULL)
+                    ORDER BY s.confidence DESC
+                    LIMIT 20
+                """)
+
+                if unclustered:
+                    lines.append("### Unclustered Signals (no linked event)")
+                    lines.append(f"({len(unclustered)} shown, highest confidence first)\n")
+                    for r in unclustered:
+                        actors = r['actors'] or ''
+                        locations = r['locations'] or ''
+                        lines.append(
+                            f"- **[{r['id']}]** ({r['category']}, conf={r['confidence']:.2f}) "
+                            f"{r['title'][:120]}"
+                        )
+                        if actors or locations:
+                            parts = []
+                            if actors:
+                                parts.append(f"actors: {actors[:80]}")
+                            if locations:
+                                parts.append(f"locations: {locations[:80]}")
+                            lines.append(f"  {' | '.join(parts)}")
+                    lines.append("")
+                else:
+                    lines.append("### Unclustered Signals\n(None found — all signals are linked to events)\n")
+
+                # 2. Recent auto-created events with low signal count
+                low_confidence_events = await conn.fetch("""
+                    SELECT e.id, e.title, e.severity, e.event_type,
+                           e.signal_count, e.confidence, e.created_at
+                    FROM events e
+                    WHERE e.source = 'auto'
+                      AND e.signal_count <= 2
+                    ORDER BY e.created_at DESC
+                    LIMIT 15
+                """)
+
+                if low_confidence_events:
+                    lines.append("### Auto-Created Events (low signal count, need review)")
+                    lines.append(f"({len(low_confidence_events)} shown)\n")
+                    for r in low_confidence_events:
+                        sev = r['severity'] or 'unset'
+                        etype = r['event_type'] or 'unset'
+                        lines.append(
+                            f"- **[{r['id']}]** (signals={r['signal_count']}, "
+                            f"conf={r['confidence']:.2f}, sev={sev}, type={etype}) "
+                            f"{r['title'][:120]}"
+                        )
+                    lines.append("")
+
+                # 3. Trending events (high signal count)
+                trending = await conn.fetch("""
+                    SELECT e.id, e.title, e.severity, e.event_type,
+                           e.signal_count, e.confidence
+                    FROM events e
+                    WHERE e.signal_count > 2
+                    ORDER BY e.signal_count DESC
+                    LIMIT 5
+                """)
+
+                if trending:
+                    lines.append("### Trending Events (high signal count)")
+                    for r in trending:
+                        sev = r['severity'] or 'unset'
+                        lines.append(
+                            f"- **[{r['id']}]** (signals={r['signal_count']}, sev={sev}) "
+                            f"{r['title'][:120]}"
+                        )
+                    lines.append("")
+
+                # 4. Overall counts for context
+                total_signals = await conn.fetchval("SELECT count(*) FROM signals")
+                total_events = await conn.fetchval("SELECT count(*) FROM events")
+                unlinked_count = await conn.fetchval("""
+                    SELECT count(*) FROM signals s
+                    LEFT JOIN signal_event_links sel ON sel.signal_id = s.id
+                    WHERE sel.signal_id IS NULL
+                """)
+
+                lines.append("### Data Overview")
+                lines.append(f"- Total signals: {total_signals}")
+                lines.append(f"- Total derived events: {total_events}")
+                lines.append(f"- Unlinked signals: {unlinked_count}")
+
+        except Exception as e:
+            lines.append(f"(Could not load curate context: {e})")
+
+        return "\n".join(lines)

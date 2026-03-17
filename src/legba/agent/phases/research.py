@@ -95,7 +95,7 @@ class ResearchMixin:
                            ep.completeness_score,
                            COUNT(eel.event_id) as event_count
                     FROM entity_profiles ep
-                    LEFT JOIN event_entity_links eel ON eel.entity_id = ep.id
+                    LEFT JOIN signal_entity_links eel ON eel.entity_id = ep.id
                     GROUP BY ep.id, ep.canonical_name, ep.entity_type, ep.completeness_score
                     ORDER BY
                         COUNT(eel.event_id) DESC,

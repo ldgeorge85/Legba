@@ -1,7 +1,7 @@
 # Legba — Implementation Design
 
 *Key design decisions, data flows, and component interactions.*
-*Last updated: 2026-03-11*
+*Last updated: 2026-03-16*
 
 ---
 
@@ -62,9 +62,9 @@ This saves ~5-10k tokens per cycle without limiting the agent's capabilities.
 | Registers | Redis | Per-cycle | Counters, flags, cycle state, journal, reports |
 | Short-term episodic | Qdrant | ~50 cycles | Recent actions/observations (1 per cycle) |
 | Long-term episodic | Qdrant | Indefinite | Significant events auto-promoted at significance >= 0.6 |
-| Structured | Postgres | Indefinite | Facts, goals, sources, events, entity profiles |
+| Structured | Postgres | Indefinite | Facts, goals, sources, signals, events, entity profiles |
 | Graph | Apache AGE | Indefinite | Entity relationships (Cypher queries) |
-| Bulk | OpenSearch | Indefinite | Full-text search, event indices, aggregations |
+| Bulk | OpenSearch | Indefinite | Full-text search, signal/event indices, aggregations |
 | Journal archive | OpenSearch | Indefinite | Permanent record of all journal entries and consolidations (`legba-journal` index) |
 
 ### Why Separate Stores
@@ -73,7 +73,7 @@ Each store serves a different access pattern:
 - **Qdrant** for "what's relevant to what I'm doing now?" (embedding similarity with time decay)
 - **Postgres** for "what do I know about entity X?" (structured queries, JSONB profiles)
 - **AGE** for "how are these entities connected?" (Cypher pattern matching)
-- **OpenSearch** for "find all events mentioning this term" (full-text search + aggregations)
+- **OpenSearch** for "find all signals/events mentioning this term" (full-text search + aggregations)
 - **Redis** for "what happened last cycle?" (fast key-value, no persistence guarantees needed)
 
 ### Entity Resolution Cascade
@@ -97,7 +97,7 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 
 ### Module Structure
 
-`cycle.py` is a thin orchestrator (~195 lines) that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
+`cycle.py` is a thin orchestrator (~195 lines) that inherits from 14 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
 
 | Mixin | File | Phase |
 |-------|------|-------|
@@ -110,7 +110,8 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 | `PersistMixin` | `phases/persist.py` | Memory storage, goal completion, heartbeat |
 | `IntrospectMixin` | `phases/introspect.py` | Mission review, analysis reports |
 | `ResearchMixin` | `phases/research.py` | Entity enrichment cycles |
-| `AcquireMixin` | `phases/acquire.py` | Dedicated source fetching + event ingestion |
+| `AcquireMixin` | `phases/acquire.py` | Dedicated source fetching + signal ingestion (legacy; only when ingestion service not active) |
+| `CurateMixin` | `phases/curate.py` | Signal review, event creation, editorial judgment (replaces ACQUIRE when ingestion active) |
 | `AnalyzeMixin` | `phases/analyze.py` | Pattern detection, graph mining, anomaly detection |
 | `EvolveMixin` | `phases/evolve.py` | Self-improvement, operational scorecard, change tracking |
 
@@ -217,32 +218,111 @@ _wake() → _orient() →
     └── _persist()
 ```
 
----
+### Acquire Cycle (every 3, legacy)
 
-## 5. Data Flow: Event Pipeline
+Only used when the ingestion service is not active. The agent fetches sources directly and stores signals. When the ingestion service handles collection, ACQUIRE is replaced by CURATE.
+
+### Curate Cycle (every 3, when ingestion active)
+
+Replaces ACQUIRE when the ingestion service handles source fetching. The agent applies editorial judgment to raw signals and auto-created events:
 
 ```
-RSS Feed → feed_parse(source_id) → structured entries
-                │
-                ├── Record source fetch (success/failure tracking)
-                │
-                └── event_store(title, summary, actors, locations, ...)
-                      ├── GUID fast-path dedup (exact match on RSS guid/Atom id)
-                      ├── Title dedup (50% word overlap within ±1 day, or last 100 events if no timestamp)
-                      ├── Geo resolution (pycountry + GeoNames → ISO codes + coordinates)
-                      ├── Store in Postgres (structured queries)
-                      ├── Store in OpenSearch (full-text, time-partitioned: legba-events-YYYY.MM)
-                      └── Increment source event count
+_wake() → _orient() →
+  _curate()
+    ├── _build_curate_context()
+    │   ├── Unclustered signals (no linked event, top 20 by confidence)
+    │   ├── Auto-created events with signal_count <= 2 (top 15, need review)
+    │   ├── Trending events with signal_count > 2 (top 5)
+    │   └── Data overview (total signals, events, unlinked count)
+    ├── assemble_curate_prompt() with restricted tools:
+    │   signal_query, signal_search, event_create, event_update,
+    │   event_query, event_link_signal, entity_profile, entity_inspect,
+    │   entity_resolve, graph_store, graph_query, memory_query
+    ├── reason_with_tools() → full tool loop with curate tools
+    ├── _reflect()
+    ├── _narrate()
+    └── _persist()
+```
 
-      entity_resolve(name, event_id, role)
+The agent can: link unclustered signals to existing events (`event_link_signal`), create new events from signals the clusterer missed (`event_create`, confidence 0.7), refine auto-created events by improving titles, adjusting severity, or adding summaries (`event_update`), and enrich entity profiles.
+
+---
+
+## 5. Data Flow: Signal-to-Event Pipeline
+
+Legba uses a two-tier information model: **signals** (raw ingested material) and **events** (derived real-world occurrences). Signals are atomic collection units; events are the analytical units that reports, situations, and graph analysis operate on.
+
+### Signal Ingestion
+
+```
+Source → Fetch → Normalize → Dedup → Signal (Postgres + OpenSearch)
+                                         │
+                                         ├── signal_entity_links (spaCy NER)
+                                         └── Increment source signal count
+
+      entity_resolve(name, signal_id, role)
             ├── Resolution cascade (exact → alias → fuzzy → stub)
             ├── Create/update EntityProfile in Postgres
-            └── Create EventEntityLink junction
+            └── Create SignalEntityLink junction
 
       graph_store(entity, relate_to, relation_type, since)
             ├── Normalize relationship type (70+ aliases → 30 canonical)
             ├── Fuzzy entity matching (prevent duplicates)
             └── Upsert vertex + MERGE edge in AGE
+```
+
+### 3-Tier Signal Dedup
+
+1. **GUID fast-path** — Exact match on RSS guid / Atom id. Instant rejection.
+2. **Source URL dedup** — Exact match on source_url after normalization.
+3. **Jaccard similarity** — Title words with source suffix/prefix stripping (e.g., " - Reuters", "BBC News: "). 50% word overlap within +/-1 day, or last 100 signals if no timestamp.
+
+### Deterministic Clustering (every 20 min)
+
+```
+Unclustered Signals (no signal_event_links entry)
+      │
+      ├── Extract features: actors, locations, title words, timestamp, category
+      │
+      ├── Score pairwise similarity (composite):
+      │     entity overlap    0.3
+      │     title Jaccard     0.3
+      │     temporal proximity 0.2  (linear decay over 48h)
+      │     category match    0.2
+      │
+      ├── Single-linkage clustering (threshold: 0.4)
+      │
+      ├── Multi-signal clusters → Create or merge-into Event
+      │     ├── Title: highest-confidence signal's title
+      │     ├── Time window: min(timestamps) → max(timestamps)
+      │     ├── Category: modal across signals
+      │     ├── Confidence: mean, capped at 0.6 (auto-created)
+      │     └── Link all signals via signal_event_links
+      │
+      └── Singletons:
+            ├── Structured sources (NWS, USGS, GDACS, etc.) → auto-promote to 1:1 Event
+            └── RSS singletons → wait for agent or next clustering window
+```
+
+### Event Reinforcement
+
+When new signals cluster into an existing event:
+- `signal_count` is bumped
+- Confidence increases: `min(0.8, 0.4 + 0.05 * signal_count)`
+- `time_end` is extended to `max(timestamps)`
+- Actors/locations sets are merged
+- Threshold alerts logged at 3, 5, 10, 20 signals
+
+### Agent Curation (CURATE cycle)
+
+```
+Clustered Events + Unclustered Signals
+      │
+      └── Agent CURATE cycle (editorial judgment)
+            ├── Review unclustered signals → event_create (conf 0.7) or event_link_signal
+            ├── Refine auto-events → event_update (title, severity, event_type, summary)
+            ├── Enrich entity profiles from signal/event context
+            └── Triage low-confidence events
 ```
 
 ---
@@ -318,6 +398,12 @@ Six guidance modules are appended to the system prompt in PLAN, REASON, and INTR
 - Supervisor writes `stop_flag.json` on soft timeout (300s default)
 - Agent checks between tool steps → breaks to REFLECT → PERSIST
 - Agent can write `stop_ping.json` to extend deadline (up to 2 extensions of 300s each)
+
+### Event Confidence Caps
+- Auto-created events (clustering): capped at confidence 0.6
+- Agent-created events (CURATE tools): capped at confidence 0.7
+- Reinforced events (signal_count growth): capped at 0.8
+- Only the operator (via UI or manual DB update) can set confidence above 0.8
 
 ### Full Audit Trail
 - Every prompt, response, tool call, and error logged to JSONL

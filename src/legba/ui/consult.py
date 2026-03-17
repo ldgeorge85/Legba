@@ -551,7 +551,7 @@ async def _handle_query_events(stores: StoreHolder, args: dict) -> str:
     where = " AND ".join(conditions) if conditions else "TRUE"
     sql = (
         f"SELECT title, category, event_timestamp, data "
-        f"FROM events WHERE {where} "
+        f"FROM signals WHERE {where} "
         f"ORDER BY event_timestamp DESC LIMIT {limit}"
     )
     try:
@@ -1203,7 +1203,7 @@ async def _handle_update_event(stores: StoreHolder, args: dict) -> str:
 
     try:
         async with stores.structured._pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT data FROM events WHERE id = $1", eid)
+            row = await conn.fetchrow("SELECT data FROM signals WHERE id = $1", eid)
             if not row:
                 return f"No event found with id '{event_id}'."
 
@@ -1219,7 +1219,7 @@ async def _handle_update_event(stores: StoreHolder, args: dict) -> str:
                 data["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
 
             await conn.execute(
-                "UPDATE events SET data = $1::jsonb, updated_at = now() WHERE id = $2",
+                "UPDATE signals SET data = $1::jsonb, updated_at = now() WHERE id = $2",
                 json.dumps(data, default=str), eid,
             )
         return f"Event '{event_id}' updated."
@@ -1243,8 +1243,8 @@ async def _handle_delete_event(stores: StoreHolder, args: dict) -> str:
 
     try:
         async with stores.structured._pool.acquire() as conn:
-            await conn.execute("DELETE FROM event_entity_links WHERE event_id = $1", eid)
-            await conn.execute("DELETE FROM events WHERE id = $1", eid)
+            await conn.execute("DELETE FROM signal_entity_links WHERE signal_id = $1", eid)
+            await conn.execute("DELETE FROM signals WHERE id = $1", eid)
 
         if stores.opensearch and stores.opensearch.available:
             try:
@@ -1505,7 +1505,7 @@ async def _handle_delete_situation(stores: StoreHolder, args: dict) -> str:
 
     try:
         async with stores.structured._pool.acquire() as conn:
-            await conn.execute("DELETE FROM situation_events WHERE situation_id = $1", sid)
+            await conn.execute("DELETE FROM situation_signals WHERE situation_id = $1", sid)
             await conn.execute("DELETE FROM situations WHERE id = $1", sid)
         return f"Situation '{situation_id}' deleted."
     except Exception as e:
@@ -1533,14 +1533,14 @@ async def _handle_link_event_to_situation(stores: StoreHolder, args: dict) -> st
     try:
         async with stores.structured._pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO situation_events (situation_id, event_id, relevance) "
-                "VALUES ($1, $2, $3) ON CONFLICT (situation_id, event_id) DO UPDATE SET relevance = $3, added_at = NOW()",
+                "INSERT INTO situation_signals (situation_id, signal_id, relevance) "
+                "VALUES ($1, $2, $3) ON CONFLICT (situation_id, signal_id) DO UPDATE SET relevance = $3, added_at = NOW()",
                 sid, eid, relevance,
             )
             # Count actual rows instead of blind increment
             now = datetime.now(timezone.utc)
             actual_count = await conn.fetchval(
-                "SELECT count(*) FROM situation_events WHERE situation_id = $1",
+                "SELECT count(*) FROM situation_signals WHERE situation_id = $1",
                 sid,
             )
             await conn.execute(

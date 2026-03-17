@@ -60,9 +60,9 @@ async def _query_events_paged(stores, q, category, offset):
 
     try:
         async with stores.structured._pool.acquire() as conn:
-            total = await conn.fetchval(f"SELECT count(*) FROM events {where}", *params)
+            total = await conn.fetchval(f"SELECT count(*) FROM signals {where}", *params)
             rows = await conn.fetch(
-                f"SELECT data FROM events {where} "
+                f"SELECT data FROM signals {where} "
                 f"ORDER BY event_timestamp DESC NULLS LAST, created_at DESC "
                 f"LIMIT ${idx} OFFSET ${idx + 1}",
                 *params, PAGE_SIZE, offset,
@@ -207,8 +207,8 @@ async def _fetch_linked_situations(stores, event_id: UUID) -> list[dict]:
             rows = await conn.fetch(
                 "SELECT s.id, s.name, s.status, s.category, s.intensity_score "
                 "FROM situations s "
-                "JOIN situation_events se ON s.id = se.situation_id "
-                "WHERE se.event_id = $1 "
+                "JOIN situation_signals ss ON s.id = ss.situation_id "
+                "WHERE ss.signal_id = $1 "
                 "ORDER BY s.intensity_score DESC",
                 event_id,
             )
@@ -254,7 +254,7 @@ async def _fetch_related_events(
             # Same source events
             if source_id:
                 rows = await conn.fetch(
-                    "SELECT id, data FROM events "
+                    "SELECT id, data FROM signals "
                     "WHERE source_id = $1 AND id != $2 "
                     "ORDER BY created_at DESC LIMIT 5",
                     source_id, event_id,
@@ -281,7 +281,7 @@ async def _fetch_related_events(
                 remaining = 5 - len(results)
                 # Use ANY to find events sharing at least one actor
                 actor_rows = await conn.fetch(
-                    "SELECT id, data FROM events "
+                    "SELECT id, data FROM signals "
                     "WHERE data->'actors' ?| $1 AND id != $2 "
                     "ORDER BY created_at DESC LIMIT $3",
                     actors, event_id, remaining + len(results),
@@ -322,10 +322,10 @@ async def delete_event(request: Request, event_id: UUID):
         async with stores.structured._pool.acquire() as conn:
             # Delete entity links first (FK cascade)
             await conn.execute(
-                "DELETE FROM event_entity_links WHERE event_id = $1", event_id,
+                "DELETE FROM signal_entity_links WHERE signal_id = $1", event_id,
             )
             # Delete the event
-            await conn.execute("DELETE FROM events WHERE id = $1", event_id)
+            await conn.execute("DELETE FROM signals WHERE id = $1", event_id)
 
         # Also delete from OpenSearch (best-effort)
         if stores.opensearch and stores.opensearch.available:
@@ -358,7 +358,7 @@ async def update_event_metadata(
     try:
         async with stores.structured._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT data FROM events WHERE id = $1", event_id,
+                "SELECT data FROM signals WHERE id = $1", event_id,
             )
             if not row:
                 return HTMLResponse('<div class="text-red-400 text-sm p-2">Event not found.</div>', status_code=404)
@@ -369,7 +369,7 @@ async def update_event_metadata(
             data["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
 
             await conn.execute(
-                "UPDATE events SET data = $1::jsonb, updated_at = now() WHERE id = $2",
+                "UPDATE signals SET data = $1::jsonb, updated_at = now() WHERE id = $2",
                 json.dumps(data, default=str), event_id,
             )
 

@@ -109,7 +109,7 @@ class StructuredStore:
                 CREATE INDEX IF NOT EXISTS idx_sources_type ON sources(source_type);
                 CREATE INDEX IF NOT EXISTS idx_sources_geo ON sources(geo_origin);
 
-                CREATE TABLE IF NOT EXISTS events (
+                CREATE TABLE IF NOT EXISTS signals (
                     id UUID PRIMARY KEY,
                     data JSONB NOT NULL,
                     title TEXT NOT NULL,
@@ -123,14 +123,14 @@ class StructuredStore:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
 
-                ALTER TABLE events ADD COLUMN IF NOT EXISTS guid TEXT NOT NULL DEFAULT '';
+                ALTER TABLE signals ADD COLUMN IF NOT EXISTS guid TEXT NOT NULL DEFAULT '';
 
-                CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_id);
-                CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
-                CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(event_timestamp);
-                CREATE INDEX IF NOT EXISTS idx_events_language ON events(language);
-                CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
-                CREATE INDEX IF NOT EXISTS idx_events_guid ON events(guid) WHERE guid != '';
+                CREATE INDEX IF NOT EXISTS idx_signals_source ON signals(source_id);
+                CREATE INDEX IF NOT EXISTS idx_signals_category ON signals(category);
+                CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(event_timestamp);
+                CREATE INDEX IF NOT EXISTS idx_signals_language ON signals(language);
+                CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
+                CREATE INDEX IF NOT EXISTS idx_signals_guid ON signals(guid) WHERE guid != '';
 
                 CREATE TABLE IF NOT EXISTS entity_profiles (
                     id UUID PRIMARY KEY,
@@ -167,19 +167,19 @@ class StructuredStore:
                 CREATE INDEX IF NOT EXISTS idx_epv_created
                     ON entity_profile_versions (entity_id, created_at DESC);
 
-                CREATE TABLE IF NOT EXISTS event_entity_links (
-                    event_id UUID NOT NULL REFERENCES events(id),
+                CREATE TABLE IF NOT EXISTS signal_entity_links (
+                    signal_id UUID NOT NULL REFERENCES signals(id),
                     entity_id UUID NOT NULL REFERENCES entity_profiles(id),
                     role TEXT NOT NULL DEFAULT 'mentioned',
                     confidence REAL NOT NULL DEFAULT 0.8,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (event_id, entity_id, role)
+                    PRIMARY KEY (signal_id, entity_id, role)
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_eel_entity
-                    ON event_entity_links (entity_id);
-                CREATE INDEX IF NOT EXISTS idx_eel_event
-                    ON event_entity_links (event_id);
+                CREATE INDEX IF NOT EXISTS idx_sel_entity
+                    ON signal_entity_links (entity_id);
+                CREATE INDEX IF NOT EXISTS idx_sel_signal_entity
+                    ON signal_entity_links (signal_id);
             """)
             # --- Additive migrations (safe to re-run) ---
             await conn.execute("""
@@ -190,13 +190,13 @@ class StructuredStore:
                 ALTER TABLE sources ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER DEFAULT 0;
                 ALTER TABLE sources ADD COLUMN IF NOT EXISTS last_successful_fetch_at TIMESTAMPTZ;
 
-                -- Event source_url index for fast dedup
-                CREATE INDEX IF NOT EXISTS idx_events_source_url
-                    ON events(source_url) WHERE source_url != '';
+                -- Signal source_url index for fast dedup
+                CREATE INDEX IF NOT EXISTS idx_signals_source_url
+                    ON signals(source_url) WHERE source_url != '';
 
                 -- GUID unique constraint (catch racing stores)
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_events_guid_unique
-                    ON events(guid) WHERE guid IS NOT NULL AND guid != '';
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_guid_unique
+                    ON signals(guid) WHERE guid IS NOT NULL AND guid != '';
 
                 -- Watchlist table
                 CREATE TABLE IF NOT EXISTS watchlist (
@@ -214,7 +214,8 @@ class StructuredStore:
                 CREATE TABLE IF NOT EXISTS watch_triggers (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     watch_id UUID NOT NULL REFERENCES watchlist(id) ON DELETE CASCADE,
-                    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    signal_id UUID NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+                    event_id UUID REFERENCES events(id) ON DELETE SET NULL,
                     watch_name TEXT NOT NULL DEFAULT '',
                     event_title TEXT NOT NULL DEFAULT '',
                     match_reasons JSONB NOT NULL DEFAULT '[]',
@@ -239,7 +240,16 @@ class StructuredStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_situations_status ON situations(status);
 
-                -- Situation-event links
+                -- Situation-signal links (legacy, renamed from situation_events)
+                CREATE TABLE IF NOT EXISTS situation_signals (
+                    situation_id UUID NOT NULL REFERENCES situations(id) ON DELETE CASCADE,
+                    signal_id UUID NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+                    relevance REAL NOT NULL DEFAULT 1.0,
+                    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (situation_id, signal_id)
+                );
+
+                -- Situation-event links (derived events)
                 CREATE TABLE IF NOT EXISTS situation_events (
                     situation_id UUID NOT NULL REFERENCES situations(id) ON DELETE CASCADE,
                     event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
@@ -313,6 +323,41 @@ class StructuredStore:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_proposed_edges_status ON proposed_edges(status);
+
+                -- Derived events: real-world occurrences from signal clustering
+                CREATE TABLE IF NOT EXISTS events (
+                    id UUID PRIMARY KEY,
+                    data JSONB NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    category TEXT NOT NULL DEFAULT 'other',
+                    event_type TEXT NOT NULL DEFAULT 'incident',
+                    severity TEXT NOT NULL DEFAULT 'medium',
+                    time_start TIMESTAMPTZ,
+                    time_end TIMESTAMPTZ,
+                    confidence REAL NOT NULL DEFAULT 0.5,
+                    signal_count INTEGER NOT NULL DEFAULT 0,
+                    source_method TEXT NOT NULL DEFAULT 'auto',
+                    source_cycle INTEGER,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_derived_events_category ON events(category);
+                CREATE INDEX IF NOT EXISTS idx_derived_events_type ON events(event_type);
+                CREATE INDEX IF NOT EXISTS idx_derived_events_severity ON events(severity);
+                CREATE INDEX IF NOT EXISTS idx_derived_events_time_start ON events(time_start);
+                CREATE INDEX IF NOT EXISTS idx_derived_events_created ON events(created_at);
+
+                -- Signal-event junction (many-to-many)
+                CREATE TABLE IF NOT EXISTS signal_event_links (
+                    signal_id UUID NOT NULL,
+                    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    relevance REAL NOT NULL DEFAULT 1.0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (signal_id, event_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_sel_event ON signal_event_links(event_id);
+                CREATE INDEX IF NOT EXISTS idx_sel_signal ON signal_event_links(signal_id);
             """)
 
     # --- Goal operations ---
@@ -759,21 +804,21 @@ class StructuredStore:
         except Exception as e:
             logger.error("increment_source_event_count failed for source %s: %s", source_id, e)
 
-    # --- Event operations ---
+    # --- Signal operations (raw ingested material, formerly "events") ---
 
-    async def save_event(self, event) -> bool:
-        """Upsert an Event into the events table."""
+    async def save_signal(self, signal) -> bool:
+        """Upsert a Signal into the signals table."""
         if not self._available:
             return False
         try:
-            from ...shared.schemas.events import Event
-            if not isinstance(event, Event):
+            from ...shared.schemas.signals import Signal
+            if not isinstance(signal, Signal):
                 return False
             async with self._pool.acquire() as conn:
                 await conn.execute(
                     """
-                    INSERT INTO events (id, data, title, source_id, source_url, category,
-                                        event_timestamp, language, confidence, guid, created_at, updated_at)
+                    INSERT INTO signals (id, data, title, source_id, source_url, category,
+                                         event_timestamp, language, confidence, guid, created_at, updated_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
                     ON CONFLICT (id) DO UPDATE SET
                         data = EXCLUDED.data,
@@ -783,31 +828,30 @@ class StructuredStore:
                         confidence = EXCLUDED.confidence,
                         updated_at = NOW()
                     """,
-                    event.id,
-                    event.model_dump_json(),
-                    event.title,
-                    event.source_id,
-                    event.source_url,
-                    event.category.value,
-                    event.event_timestamp,
-                    event.language,
-                    event.confidence,
-                    getattr(event, 'guid', ''),
-                    event.created_at,
+                    signal.id,
+                    signal.model_dump_json(),
+                    signal.title,
+                    signal.source_id,
+                    signal.source_url,
+                    signal.category.value,
+                    signal.event_timestamp,
+                    signal.language,
+                    signal.confidence,
+                    getattr(signal, 'guid', ''),
+                    signal.created_at,
                 )
             return True
         except asyncpg.ForeignKeyViolationError:
-            # source_id references a non-existent source — retry without it
             logger.warning(
-                "save_event FK violation for event %s (source_id=%s), retrying with source_id=NULL",
-                event.id, event.source_id,
+                "save_signal FK violation for signal %s (source_id=%s), retrying with source_id=NULL",
+                signal.id, signal.source_id,
             )
             try:
                 async with self._pool.acquire() as conn:
                     await conn.execute(
                         """
-                        INSERT INTO events (id, data, title, source_id, source_url, category,
-                                            event_timestamp, language, confidence, guid, created_at, updated_at)
+                        INSERT INTO signals (id, data, title, source_id, source_url, category,
+                                             event_timestamp, language, confidence, guid, created_at, updated_at)
                         VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, $9, $10, NOW())
                         ON CONFLICT (id) DO UPDATE SET
                             data = EXCLUDED.data,
@@ -817,33 +861,36 @@ class StructuredStore:
                             confidence = EXCLUDED.confidence,
                             updated_at = NOW()
                         """,
-                        event.id,
-                        event.model_dump_json(),
-                        event.title,
-                        event.source_url,
-                        event.category.value,
-                        event.event_timestamp,
-                        event.language,
-                        event.confidence,
-                        getattr(event, 'guid', ''),
-                        event.created_at,
+                        signal.id,
+                        signal.model_dump_json(),
+                        signal.title,
+                        signal.source_url,
+                        signal.category.value,
+                        signal.event_timestamp,
+                        signal.language,
+                        signal.confidence,
+                        getattr(signal, 'guid', ''),
+                        signal.created_at,
                     )
                 return True
             except Exception as e2:
-                logger.error("save_event retry failed for event %s: %s", event.id, e2)
+                logger.error("save_signal retry failed for signal %s: %s", signal.id, e2)
                 return False
         except Exception as e:
-            logger.error("save_event failed for event %s: %s", event.id, e)
+            logger.error("save_signal failed for signal %s: %s", signal.id, e)
             return False
 
-    async def check_event_guid(self, guid: str) -> dict | None:
-        """Check if an event with this GUID already exists. Returns {id, title} or None."""
+    # Backward-compat alias
+    save_event = save_signal
+
+    async def check_signal_guid(self, guid: str) -> dict | None:
+        """Check if a signal with this GUID already exists. Returns {id, title} or None."""
         if not self._available or not guid:
             return None
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT id, title FROM events WHERE guid = $1 LIMIT 1",
+                    "SELECT id, title FROM signals WHERE guid = $1 LIMIT 1",
                     guid,
                 )
                 if row:
@@ -852,14 +899,17 @@ class StructuredStore:
             pass
         return None
 
-    async def check_event_source_url(self, source_url: str) -> dict | None:
-        """Check if an event with this source_url already exists."""
+    # Backward-compat alias
+    check_event_guid = check_signal_guid
+
+    async def check_signal_source_url(self, source_url: str) -> dict | None:
+        """Check if a signal with this source_url already exists."""
         if not self._available or not source_url:
             return None
         try:
             async with self._pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT id, title FROM events WHERE source_url = $1 LIMIT 1",
+                    "SELECT id, title FROM signals WHERE source_url = $1 LIMIT 1",
                     source_url,
                 )
                 if row:
@@ -868,22 +918,28 @@ class StructuredStore:
             pass
         return None
 
-    async def get_recent_events_for_dedup(self, limit: int = 100) -> list:
-        """Get recent events (by created_at) for title-similarity dedup."""
+    # Backward-compat alias
+    check_event_source_url = check_signal_source_url
+
+    async def get_recent_signals_for_dedup(self, limit: int = 100) -> list:
+        """Get recent signals (by created_at) for title-similarity dedup."""
         if not self._available:
             return []
         try:
-            from ...shared.schemas.events import Event
+            from ...shared.schemas.signals import Signal
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT data FROM events ORDER BY created_at DESC LIMIT $1",
+                    "SELECT data FROM signals ORDER BY created_at DESC LIMIT $1",
                     limit,
                 )
-            return [Event.model_validate_json(row["data"]) for row in rows]
+            return [Signal.model_validate_json(row["data"]) for row in rows]
         except Exception:
             return []
 
-    async def query_events(
+    # Backward-compat alias
+    get_recent_events_for_dedup = get_recent_signals_for_dedup
+
+    async def query_signals(
         self,
         category: str | None = None,
         source_id: UUID | None = None,
@@ -892,11 +948,11 @@ class StructuredStore:
         language: str | None = None,
         limit: int = 20,
     ) -> list:
-        """Query events with optional filters."""
+        """Query signals with optional filters."""
         if not self._available:
             return []
         try:
-            from ...shared.schemas.events import Event
+            from ...shared.schemas.signals import Signal
             conditions: list[str] = []
             params: list[Any] = []
             idx = 1
@@ -927,13 +983,273 @@ class StructuredStore:
 
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
-                    f"SELECT data FROM events {where} "
+                    f"SELECT data FROM signals {where} "
                     f"ORDER BY event_timestamp DESC NULLS LAST, created_at DESC LIMIT ${idx}",
                     *params,
                 )
-                return [Event.model_validate_json(row["data"]) for row in rows]
+                return [Signal.model_validate_json(row["data"]) for row in rows]
         except Exception:
             return []
+
+    # Backward-compat alias
+    query_events = query_signals
+
+    # --- Derived Event operations (real-world occurrences from signals) ---
+
+    async def save_derived_event(self, event) -> bool:
+        """Insert or update a derived event in events."""
+        if not self._available:
+            return False
+        try:
+            from ...shared.schemas.derived_events import DerivedEvent
+            if not isinstance(event, DerivedEvent):
+                return False
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO events (id, data, title, summary, category,
+                                                event_type, severity, time_start, time_end,
+                                                confidence, signal_count, source_method,
+                                                source_cycle, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+                    ON CONFLICT (id) DO UPDATE SET
+                        data = EXCLUDED.data,
+                        title = EXCLUDED.title,
+                        summary = EXCLUDED.summary,
+                        category = EXCLUDED.category,
+                        event_type = EXCLUDED.event_type,
+                        severity = EXCLUDED.severity,
+                        time_start = EXCLUDED.time_start,
+                        time_end = EXCLUDED.time_end,
+                        confidence = EXCLUDED.confidence,
+                        signal_count = EXCLUDED.signal_count,
+                        source_method = EXCLUDED.source_method,
+                        source_cycle = EXCLUDED.source_cycle,
+                        updated_at = NOW()
+                    """,
+                    event.id,
+                    event.model_dump_json(),
+                    event.title,
+                    event.summary,
+                    event.category.value,
+                    event.event_type.value,
+                    event.severity.value,
+                    event.time_start,
+                    event.time_end,
+                    event.confidence,
+                    event.signal_count,
+                    event.source_method,
+                    event.source_cycle,
+                    event.created_at,
+                )
+            return True
+        except Exception as e:
+            logger.error("save_derived_event failed for %s: %s", event.id, e)
+            return False
+
+    async def link_signal_to_event(
+        self, signal_id: UUID, event_id: UUID, relevance: float = 1.0,
+    ) -> bool:
+        """Create a signal-event link."""
+        if not self._available:
+            return False
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO signal_event_links (signal_id, event_id, relevance) "
+                    "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                    signal_id, event_id, relevance,
+                )
+            return True
+        except Exception as e:
+            logger.debug("link_signal_to_event failed: %s", e)
+            return False
+
+    async def get_event_signals(self, event_id: UUID) -> list:
+        """Get signals linked to a derived event."""
+        if not self._available:
+            return []
+        try:
+            from ...shared.schemas.signals import Signal
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT s.data, sel.relevance
+                    FROM signals s
+                    JOIN signal_event_links sel ON s.id = sel.signal_id
+                    WHERE sel.event_id = $1
+                    ORDER BY sel.relevance DESC, s.event_timestamp DESC NULLS LAST
+                    """,
+                    event_id,
+                )
+            return [
+                {"signal": Signal.model_validate_json(r["data"]), "relevance": r["relevance"]}
+                for r in rows
+            ]
+        except Exception:
+            return []
+
+    async def get_signal_events(self, signal_id: UUID) -> list:
+        """Get derived events that a signal is linked to."""
+        if not self._available:
+            return []
+        try:
+            from ...shared.schemas.derived_events import DerivedEvent
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT ed.data, sel.relevance
+                    FROM events ed
+                    JOIN signal_event_links sel ON ed.id = sel.event_id
+                    WHERE sel.signal_id = $1
+                    ORDER BY sel.relevance DESC
+                    """,
+                    signal_id,
+                )
+            return [
+                {"event": DerivedEvent.model_validate_json(r["data"]), "relevance": r["relevance"]}
+                for r in rows
+            ]
+        except Exception:
+            return []
+
+    async def query_derived_events(
+        self,
+        category: str | None = None,
+        event_type: str | None = None,
+        severity: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        min_signal_count: int | None = None,
+        source_method: str | None = None,
+        limit: int = 20,
+    ) -> list:
+        """Query derived events with optional filters."""
+        if not self._available:
+            return []
+        try:
+            from ...shared.schemas.derived_events import DerivedEvent
+            conditions: list[str] = []
+            params: list = []
+            idx = 1
+
+            if category:
+                conditions.append(f"category = ${idx}")
+                params.append(category)
+                idx += 1
+            if event_type:
+                conditions.append(f"event_type = ${idx}")
+                params.append(event_type)
+                idx += 1
+            if severity:
+                conditions.append(f"severity = ${idx}")
+                params.append(severity)
+                idx += 1
+            if since:
+                conditions.append(f"time_start >= ${idx}")
+                params.append(since)
+                idx += 1
+            if until:
+                conditions.append(f"time_start <= ${idx}")
+                params.append(until)
+                idx += 1
+            if min_signal_count is not None:
+                conditions.append(f"signal_count >= ${idx}")
+                params.append(min_signal_count)
+                idx += 1
+            if source_method:
+                conditions.append(f"source_method = ${idx}")
+                params.append(source_method)
+                idx += 1
+
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            params.append(limit)
+
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"SELECT data FROM events {where} "
+                    f"ORDER BY time_start DESC NULLS LAST, created_at DESC LIMIT ${idx}",
+                    *params,
+                )
+                return [DerivedEvent.model_validate_json(row["data"]) for row in rows]
+        except Exception:
+            return []
+
+    async def find_overlapping_events(
+        self,
+        actors: list[str],
+        locations: list[str],
+        time_start: datetime | None,
+        time_end: datetime | None,
+        category: str | None = None,
+    ) -> list:
+        """Find existing derived events that overlap with given actors/locations/time.
+
+        Used by the clustering algorithm to merge signals into existing events
+        rather than creating duplicates.
+        """
+        if not self._available:
+            return []
+        try:
+            from ...shared.schemas.derived_events import DerivedEvent
+            conditions = ["1=1"]
+            params: list = []
+            idx = 1
+
+            # Time overlap: event's window overlaps with our window
+            if time_start:
+                conditions.append(f"(time_end IS NULL OR time_end >= ${idx})")
+                params.append(time_start - __import__("datetime").timedelta(hours=24))
+                idx += 1
+            if time_end:
+                conditions.append(f"(time_start IS NULL OR time_start <= ${idx})")
+                params.append(time_end + __import__("datetime").timedelta(hours=24))
+                idx += 1
+            if category:
+                conditions.append(f"category = ${idx}")
+                params.append(category)
+                idx += 1
+
+            where = "WHERE " + " AND ".join(conditions)
+
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"SELECT data FROM events {where} "
+                    f"ORDER BY created_at DESC LIMIT 50",
+                    *params,
+                )
+
+            # Filter by entity overlap in Python (JSONB queries for array overlap are clunky)
+            our_entities = set(a.lower() for a in actors + locations if a)
+            if not our_entities:
+                return []
+
+            results = []
+            for row in rows:
+                ev = DerivedEvent.model_validate_json(row["data"])
+                ev_entities = set(
+                    a.lower() for a in (ev.actors + ev.locations) if a
+                )
+                if not ev_entities:
+                    continue
+                overlap = len(our_entities & ev_entities) / len(our_entities | ev_entities)
+                if overlap >= 0.3:
+                    results.append({"event": ev, "overlap": overlap})
+
+            return sorted(results, key=lambda x: x["overlap"], reverse=True)
+        except Exception:
+            return []
+
+    async def count_derived_events(self) -> int:
+        """Count total derived events."""
+        if not self._available:
+            return 0
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT COUNT(*) as cnt FROM events")
+                return row["cnt"] if row else 0
+        except Exception:
+            return 0
 
     # --- Entity Profile operations ---
 
@@ -1205,9 +1521,9 @@ class StructuredStore:
             async with self._pool.acquire() as conn:
                 await conn.execute(
                     """
-                    INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
+                    INSERT INTO signal_entity_links (signal_id, entity_id, role, confidence)
                     VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (event_id, entity_id, role) DO UPDATE SET
+                    ON CONFLICT (signal_id, entity_id, role) DO UPDATE SET
                         confidence = EXCLUDED.confidence
                     """,
                     link.event_id,
@@ -1219,26 +1535,26 @@ class StructuredStore:
         except Exception:
             return False
 
-    async def get_entity_events(self, entity_id: UUID, limit: int = 20) -> list[dict]:
-        """Get events linked to an entity."""
+    async def get_entity_signals(self, entity_id: UUID, limit: int = 20) -> list[dict]:
+        """Get signals linked to an entity."""
         if not self._available:
             return []
         try:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT e.data AS event_data, l.role, l.confidence
-                    FROM event_entity_links l
-                    JOIN events e ON e.id = l.event_id
+                    SELECT s.data AS signal_data, l.role, l.confidence
+                    FROM signal_entity_links l
+                    JOIN signals s ON s.id = l.signal_id
                     WHERE l.entity_id = $1
-                    ORDER BY e.event_timestamp DESC NULLS LAST, e.created_at DESC
+                    ORDER BY s.event_timestamp DESC NULLS LAST, s.created_at DESC
                     LIMIT $2
                     """,
                     entity_id, limit,
                 )
                 return [
                     {
-                        "event": json.loads(row["event_data"]),
+                        "event": json.loads(row["signal_data"]),  # key kept as "event" for compat
                         "role": row["role"],
                         "confidence": row["confidence"],
                     }
@@ -1247,8 +1563,11 @@ class StructuredStore:
         except Exception:
             return []
 
-    async def get_event_entities(self, event_id: UUID) -> list[dict]:
-        """Get entities linked to an event."""
+    # Backward-compat alias
+    get_entity_events = get_entity_signals
+
+    async def get_signal_entities(self, signal_id: UUID) -> list[dict]:
+        """Get entities linked to a signal."""
         if not self._available:
             return []
         try:
@@ -1256,11 +1575,11 @@ class StructuredStore:
                 rows = await conn.fetch(
                     """
                     SELECT p.data AS profile_data, l.role, l.confidence
-                    FROM event_entity_links l
+                    FROM signal_entity_links l
                     JOIN entity_profiles p ON p.id = l.entity_id
-                    WHERE l.event_id = $1
+                    WHERE l.signal_id = $1
                     """,
-                    event_id,
+                    signal_id,
                 )
                 return [
                     {
@@ -1272,6 +1591,9 @@ class StructuredStore:
                 ]
         except Exception:
             return []
+
+    # Backward-compat alias
+    get_event_entities = get_signal_entities
 
     async def get_stale_entities(self, stale_days: float = 7.0, limit: int = 20) -> list:
         """Get entity profiles not updated in N days."""
@@ -1373,15 +1695,15 @@ class StructuredStore:
 
                 # --- Count affected rows ---
                 events_to_move = await conn.fetchval(
-                    "SELECT count(*) FROM event_entity_links WHERE entity_id = $1",
+                    "SELECT count(*) FROM signal_entity_links WHERE entity_id = $1",
                     remove_uuid,
                 )
                 # Links that would be dupes (already linked to keep entity for same event+role)
                 dupe_links = await conn.fetchval(
-                    """SELECT count(*) FROM event_entity_links r
+                    """SELECT count(*) FROM signal_entity_links r
                        WHERE r.entity_id = $1
                          AND EXISTS (
-                           SELECT 1 FROM event_entity_links k
+                           SELECT 1 FROM signal_entity_links k
                            WHERE k.entity_id = $2
                              AND k.event_id = r.event_id
                              AND k.role = r.role
@@ -1452,23 +1774,23 @@ class StructuredStore:
             # --- Execute merge in a transaction ---
             async with self._pool.acquire() as conn:
                 async with conn.transaction():
-                    # 1. Move event_entity_links: reassign to keep, skip dupes
+                    # 1. Move signal_entity_links: reassign to keep, skip dupes
                     await conn.execute(
-                        """UPDATE event_entity_links
+                        """UPDATE signal_entity_links
                            SET entity_id = $1
                            WHERE entity_id = $2
                              AND NOT EXISTS (
-                               SELECT 1 FROM event_entity_links k
+                               SELECT 1 FROM signal_entity_links k
                                WHERE k.entity_id = $1
-                                 AND k.event_id = event_entity_links.event_id
-                                 AND k.role = event_entity_links.role
+                                 AND k.signal_id = signal_entity_links.signal_id
+                                 AND k.role = signal_entity_links.role
                              )""",
                         keep_uuid, remove_uuid,
                     )
 
-                    # 2. Delete remaining event_entity_links for remove (dupes)
+                    # 2. Delete remaining signal_entity_links for remove (dupes)
                     await conn.execute(
-                        "DELETE FROM event_entity_links WHERE entity_id = $1",
+                        "DELETE FROM signal_entity_links WHERE entity_id = $1",
                         remove_uuid,
                     )
 
@@ -1811,11 +2133,11 @@ class StructuredStore:
                         s.events_produced_count,
                         s.fetch_success_count,
                         s.fetch_failure_count,
-                        COUNT(DISTINCT eel.event_id) AS linked_events,
-                        COUNT(DISTINCT e.id) AS total_events
+                        COUNT(DISTINCT eel.signal_id) AS linked_signals,
+                        COUNT(DISTINCT e.id) AS total_signals
                     FROM sources s
-                    LEFT JOIN events e ON e.source_id = s.id
-                    LEFT JOIN event_entity_links eel ON eel.event_id = e.id
+                    LEFT JOIN signals e ON e.source_id = s.id
+                    LEFT JOIN signal_entity_links eel ON eel.signal_id = e.id
                     WHERE s.status = 'active'
                     GROUP BY s.id, s.events_produced_count,
                              s.fetch_success_count, s.fetch_failure_count

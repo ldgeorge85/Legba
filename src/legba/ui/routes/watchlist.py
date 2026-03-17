@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS watchlist (
 CREATE TABLE IF NOT EXISTS watch_triggers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     watch_id UUID NOT NULL REFERENCES watchlist(id) ON DELETE CASCADE,
-    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    signal_id UUID NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
     watch_name TEXT NOT NULL DEFAULT '',
     event_title TEXT NOT NULL DEFAULT '',
     match_reasons JSONB NOT NULL DEFAULT '[]',
@@ -127,7 +127,7 @@ async def recent_triggers(request: Request):
             async with stores.structured._pool.acquire() as conn:
                 await _ensure_tables(conn)
                 rows = await conn.fetch(
-                    "SELECT wt.id, wt.watch_id, wt.event_id, wt.data, wt.triggered_at, "
+                    "SELECT wt.id, wt.watch_id, wt.signal_id AS event_id, wt.data, wt.triggered_at, "
                     "w.name AS watch_name, w.priority "
                     "FROM watch_triggers wt "
                     "JOIN watchlist w ON w.id = wt.watch_id "
