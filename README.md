@@ -158,6 +158,7 @@ docker compose -p legba up -d supervisor
 
 | Document | Description |
 |----------|-------------|
+| [Executive Summary](docs/EXECUTIVE_SUMMARY.md) | High-level overview — what it is, how it works, key numbers |
 | [LEGBA.md](docs/LEGBA.md) | Full platform reference — architecture, prompts, memory, tools, config |
 | [DESIGN.md](docs/DESIGN.md) | Implementation design — decisions, data flows, component interactions |
 | [CODE_MAP.md](docs/CODE_MAP.md) | Complete code map — every file, function flows, dependencies |
