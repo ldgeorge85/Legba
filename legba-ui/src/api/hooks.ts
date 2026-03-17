@@ -36,6 +36,7 @@ import type {
   ScorecardData,
   SearchResults,
   EventGeoCollection,
+  SignalGeoCollection,
   EventFacets,
   PredicateCount,
   EntityTypeCount,
@@ -70,6 +71,7 @@ export function useEvents(params: {
   severity?: string
   event_type?: string
   min_signals?: number
+  q?: string
 }) {
   return useQuery({
     queryKey: ['events', params],
@@ -81,6 +83,7 @@ export function useEvents(params: {
       if (params.severity) sp.set('severity', params.severity)
       if (params.event_type) sp.set('event_type', params.event_type)
       if (params.min_signals != null) sp.set('min_signals', String(params.min_signals))
+      if (params.q) sp.set('q', params.q)
       return api.get<PaginatedResponse<EventSummary>>(`/api/v2/events?${sp}`)
     },
   })
@@ -468,6 +471,14 @@ export function useEventGeoData() {
   return useQuery({
     queryKey: ['events', 'geo'],
     queryFn: () => api.get<EventGeoCollection>('/api/v2/events/geo'),
+    staleTime: 60_000,
+  })
+}
+
+export function useSignalGeoData() {
+  return useQuery({
+    queryKey: ['signals', 'geo'],
+    queryFn: () => api.get<SignalGeoCollection>('/api/v2/signals/geo'),
     staleTime: 60_000,
   })
 }

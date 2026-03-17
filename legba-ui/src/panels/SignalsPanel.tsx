@@ -396,10 +396,14 @@ export function SignalsPanel() {
                       {Math.round(signal.confidence * 100)}%
                     </td>
                     <td className="px-3 py-2">
-                      <TimeAgo
-                        date={signal.timestamp}
-                        className="text-xs text-muted-foreground"
-                      />
+                      {signal.timestamp ? (
+                        <TimeAgo
+                          date={signal.timestamp}
+                          className="text-xs text-muted-foreground"
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">--</span>
+                      )}
                     </td>
                   </tr>
                 ))}

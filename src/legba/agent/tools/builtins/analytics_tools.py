@@ -823,7 +823,7 @@ def register(
                 rows = await conn.fetch(f"""
                     SELECT date_trunc('{bucket}', e.created_at) AS bucket_start,
                            count(*) AS event_count
-                    FROM events e
+                    FROM signals e
                     WHERE {where}
                     GROUP BY bucket_start
                     ORDER BY bucket_start
@@ -840,7 +840,7 @@ def register(
                 # Category breakdown
                 cat_rows = await conn.fetch(f"""
                     SELECT category, count(*) AS cnt
-                    FROM events e
+                    FROM signals e
                     WHERE {where}
                     GROUP BY category
                     ORDER BY cnt DESC

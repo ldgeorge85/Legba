@@ -319,7 +319,7 @@ async def entity_detail(request: Request, entity_id: UUID):
         situations = []
 
     # Parse linked events into template-friendly dicts
-    from ...shared.schemas.events import Event
+    from ...shared.schemas.signals import Signal as Event
     linked_events = []
     for raw in linked_events_raw:
         try:

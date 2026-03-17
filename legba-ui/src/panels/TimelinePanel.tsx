@@ -20,6 +20,13 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 const DENSITY_BUCKETS = 24
 
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: '#ef4444',
+  high: '#f97316',
+  medium: '#eab308',
+  low: '#3b82f6',
+}
+
 interface SelectedEvent {
   event_id: string
   title: string
@@ -28,6 +35,7 @@ interface SelectedEvent {
   created_at?: string
   description?: string
   source_name?: string | null
+  severity?: string | null
 }
 
 // Density bar component rendered above the timeline
@@ -203,16 +211,18 @@ export function TimelinePanel() {
         if (isNaN(ms)) continue
         allTimestamps.push({ ms, cat })
         const color = CATEGORY_COLORS[cat] ?? CATEGORY_COLORS.other
+        const sevColor = ev.severity && ev.severity !== 'medium' ? SEVERITY_COLORS[ev.severity] : null
         // Short label for timeline items — keeps things compact at overview zoom
         const label = ev.title.length > 28 ? ev.title.slice(0, 25) + '...' : ev.title
+        const sevStyle = sevColor ? `border-left: 3px solid ${sevColor};` : ''
         processed.push({
           id: ev.event_id,
           group: cat,
           content: `<span class="tl-item-label" style="color:#e2e8f0">${label}</span>`,
           start: ms,
           type: 'point',
-          title: ev.title,
-          style: `background:${color}30; border-color:${color}; color:${color}; font-size:11px; cursor:pointer;`,
+          title: `${ev.title}${ev.severity ? ` [${ev.severity}]` : ''}`,
+          style: `background:${color}30; border-color:${color}; color:${color}; font-size:11px; cursor:pointer; ${sevStyle}`,
         })
       }
       if (processed.length === 0 || allTimestamps.length === 0) return
@@ -428,6 +438,17 @@ export function TimelinePanel() {
                 >
                   {selectedEvent.category}
                 </span>
+                {selectedEvent.severity && selectedEvent.severity !== 'medium' && (
+                  <span
+                    className="shrink-0 mt-0.5 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase"
+                    style={{
+                      backgroundColor: (SEVERITY_COLORS[selectedEvent.severity] ?? '#6b7280') + '25',
+                      color: SEVERITY_COLORS[selectedEvent.severity] ?? '#6b7280',
+                    }}
+                  >
+                    {selectedEvent.severity}
+                  </span>
+                )}
                 <h3 className="text-sm font-medium text-foreground leading-tight flex-1">{selectedEvent.title}</h3>
                 <button
                   onClick={() => setSelectedEvent(null)}

@@ -193,19 +193,68 @@ class IntrospectMixin:
             if not entity_profiles_text:
                 entity_profiles_text = f"({entity_count} entities in graph, but no detailed profiles with summaries available)"
 
-            # --- Get previous report for evolution/comparison ---
-            last_report = await self.memory.registers.get_json("latest_report") or {}
-            last_report_content = last_report.get("content", "")
-            last_report_cycle = last_report.get("cycle", 0)
-            # Extract executive summary (first ~1500 chars after "## Executive Summary")
-            previous_assessment = ""
-            if last_report_content:
-                idx = last_report_content.find("## Executive Summary")
-                if idx >= 0:
-                    end_idx = last_report_content.find("\n## ", idx + 20)
-                    previous_assessment = last_report_content[idx:end_idx if end_idx > 0 else idx + 1500].strip()
-                if not previous_assessment:
-                    previous_assessment = last_report_content[:1500]
+            # --- Temporal reference reports (3-point layering) ---
+            # Pull 3 reference points from report history for temporal depth:
+            #   last:  most recent (~3h ago) → what changed just now
+            #   24h:   closest to 24h ago   → regional trajectory
+            #   7d:    closest to 7d ago    → longer arc patterns
+            report_history = await self.memory.registers.get_json("report_history") or []
+
+            def _extract_section(content: str, header: str, max_chars: int = 1000) -> str:
+                idx = content.find(header)
+                if idx < 0:
+                    return ""
+                end_idx = content.find("\n## ", idx + len(header))
+                section = content[idx:end_idx if end_idx > 0 else idx + max_chars].strip()
+                return section[:max_chars]
+
+            def _find_closest_report(history: list, hours_ago: int) -> dict:
+                if not history:
+                    return {}
+                from datetime import timedelta
+                target = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+                best = history[0]
+                best_delta = float("inf")
+                for r in history:
+                    ts_str = r.get("timestamp", "")
+                    if not ts_str:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                        delta = abs((ts - target).total_seconds())
+                        if delta < best_delta:
+                            best_delta = delta
+                            best = r
+                    except (ValueError, TypeError):
+                        continue
+                return best
+
+            # Last report (most recent)
+            ref_last = report_history[-1] if report_history else {}
+            ref_last_content = ref_last.get("content", "")
+            ref_last_cycle = ref_last.get("cycle", 0)
+            ref_last_exec = _extract_section(ref_last_content, "## 2. Executive Summary", 800)
+            if not ref_last_exec:
+                ref_last_exec = _extract_section(ref_last_content, "## Executive Summary", 800)
+            # Fallback for previous_assessment compat
+            previous_assessment = ref_last_exec or ref_last_content[:1500]
+            last_report_cycle = ref_last_cycle
+
+            # 24h reference
+            ref_24h = _find_closest_report(report_history, hours_ago=24)
+            ref_24h_content = ref_24h.get("content", "")
+            ref_24h_cycle = ref_24h.get("cycle", 0)
+            ref_24h_regional = _extract_section(ref_24h_content, "## 3. Regional Situation", 1200)
+            if not ref_24h_regional:
+                ref_24h_regional = _extract_section(ref_24h_content, "## Regional", 1200)
+
+            # 7d reference
+            ref_7d = _find_closest_report(report_history, hours_ago=168)
+            ref_7d_content = ref_7d.get("content", "")
+            ref_7d_cycle = ref_7d.get("cycle", 0)
+            ref_7d_patterns = _extract_section(ref_7d_content, "## 4. Emerging Patterns", 1000)
+            if not ref_7d_patterns:
+                ref_7d_patterns = _extract_section(ref_7d_content, "## Emerging", 1000)
 
             # --- Recent events with full detail ---
             recent_events = ""
@@ -289,16 +338,54 @@ class IntrospectMixin:
             journal_data = await self.memory.registers.get_json(self._JOURNAL_KEY) or {}
             narrative = journal_data.get("consolidation", "")
 
-            # Append previous assessment for differential report generation
+            # Build temporal context — 3 reference points woven into narrative
             narrative_with_prev = narrative
-            if previous_assessment:
+
+            temporal_sections = []
+            if ref_last_exec:
+                hours_ago = "?"
+                try:
+                    ts = datetime.fromisoformat(str(ref_last.get("timestamp", "")).replace("Z", "+00:00"))
+                    hours_ago = f"{(datetime.now(timezone.utc) - ts).total_seconds() / 3600:.0f}"
+                except (ValueError, TypeError):
+                    pass
+                temporal_sections.append(
+                    f"### Your Last Assessment ({hours_ago}h ago, cycle {ref_last_cycle})\n"
+                    f"{ref_last_exec}"
+                )
+
+            if ref_24h_regional and ref_24h_cycle != ref_last_cycle:
+                temporal_sections.append(
+                    f"### Your Assessment ~24 Hours Ago (cycle {ref_24h_cycle})\n"
+                    f"Regional highlights:\n{ref_24h_regional}"
+                )
+
+            if ref_7d_patterns and ref_7d_cycle not in (ref_last_cycle, ref_24h_cycle):
+                temporal_sections.append(
+                    f"### Your Assessment ~7 Days Ago (cycle {ref_7d_cycle})\n"
+                    f"Patterns and watch items:\n{ref_7d_patterns}"
+                )
+
+            if temporal_sections:
+                narrative_with_prev += (
+                    "\n\n## TEMPORAL CONTEXT\n\n"
+                    + "\n\n".join(temporal_sections)
+                    + "\n\n"
+                    "Use these reference points to provide temporal depth:\n"
+                    "- Executive Summary: what changed in the last few hours (vs Last Assessment)\n"
+                    "- Regional Situation: how each region's trajectory has evolved over 24h "
+                    "(escalating, stable, de-escalating — cite the 24h reference)\n"
+                    "- Emerging Patterns: what trends are visible over the 7-day arc "
+                    "(acceleration, reversal, persistence — cite the 7d reference)\n\n"
+                    "Your report MUST stand alone as a complete SA document. "
+                    "The temporal references add depth, not replace content."
+                )
+            elif previous_assessment:
+                # Fallback if no report history yet
                 narrative_with_prev += (
                     f"\n\n## YOUR PREVIOUS ASSESSMENT (cycle {last_report_cycle})\n"
                     f"{previous_assessment}\n\n"
-                    f"Your new report MUST address what has changed since this assessment. "
-                    f"Use section '1. What Changed Since Last Report' to highlight new developments, "
-                    f"escalations, de-escalations, and corrections. Do NOT repeat unchanged analysis — "
-                    f"summarize unchanged regions in one sentence each."
+                    f"Address what has changed since this assessment."
                 )
 
             # --- Leader / volatile-fact freshness audit ---

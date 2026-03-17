@@ -65,24 +65,24 @@ async def event_stream(request: Request):
                         phase = phase_val if isinstance(phase_val, str) else phase_val.decode()
                     yield f"event: agent:status\ndata: {json.dumps({'status': status, 'cycle': current_cycle, 'phase': phase})}\n\n"
 
-                # Check for new events (event count changed)
+                # Check for new signals (signal count changed)
                 try:
-                    event_count = await stores.count_events()
-                    if last_event_count is not None and event_count > last_event_count:
-                        # Fetch latest events
-                        from ...shared.schemas.events import Event
+                    signal_count = await stores.count_signals()
+                    if last_event_count is not None and signal_count > last_event_count:
+                        # Fetch latest signals
+                        from ...shared.schemas.signals import Signal
                         async with stores.structured._pool.acquire() as conn:
                             rows = await conn.fetch(
                                 "SELECT data FROM signals ORDER BY created_at DESC LIMIT $1",
-                                event_count - last_event_count,
+                                signal_count - last_event_count,
                             )
                             for row in rows:
                                 try:
-                                    ev = Event.model_validate_json(row["data"])
-                                    yield f"event: event:new\ndata: {json.dumps({'event_id': str(ev.id), 'title': ev.title, 'category': ev.category if isinstance(ev.category, str) else ev.category.value, 'timestamp': ev.event_timestamp.isoformat() if ev.event_timestamp else ''})}\n\n"
+                                    sig = Signal.model_validate_json(row["data"])
+                                    yield f"event: event:new\ndata: {json.dumps({'event_id': str(sig.id), 'title': sig.title, 'category': sig.category if isinstance(sig.category, str) else sig.category.value, 'timestamp': sig.event_timestamp.isoformat() if sig.event_timestamp else ''})}\n\n"
                                 except Exception:
                                     continue
-                    last_event_count = event_count
+                    last_event_count = signal_count
                 except Exception:
                     pass
 

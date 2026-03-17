@@ -16,7 +16,11 @@ from .sources import (
     Source, SourceType, SourceStatus, BiasLabel, OwnershipType,
     CoverageScope, create_source,
 )
-from .events import Event, EventCategory, create_event
+from .signals import Signal, SignalCategory, create_signal
+# Backward-compat aliases
+Event = Signal
+EventCategory = SignalCategory
+create_event = create_signal
 from .entity_profiles import (
     EntityProfile, EntityType, Assertion, EventEntityLink,
 )

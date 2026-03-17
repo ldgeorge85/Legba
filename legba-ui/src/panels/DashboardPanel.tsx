@@ -1,4 +1,4 @@
-import { useDashboard, useEventTimeseries } from '@/api/hooks'
+import { useDashboard, useEventTimeseries, useEvents } from '@/api/hooks'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { cn, categoryColor } from '@/lib/utils'
 import { TimeAgo } from '@/components/common/TimeAgo'
@@ -14,6 +14,14 @@ import {
   FileText,
   Download,
 } from 'lucide-react'
+
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: 'bg-red-500/20 text-red-400 border-red-500/30',
+  high: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+  medium: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+  low: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  info: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
+}
 
 interface StatCardProps {
   label: string
@@ -40,6 +48,7 @@ function StatCard({ label, value, icon, onClick }: StatCardProps) {
 export function DashboardPanel() {
   const { data, isLoading } = useDashboard()
   const { data: timeseries } = useEventTimeseries(7)
+  const { data: recentEvents } = useEvents({ limit: 5 })
   const openPanel = useWorkspaceStore((s) => s.openPanel)
 
   if (isLoading) {
@@ -92,12 +101,12 @@ export function DashboardPanel() {
           </div>
           <div className="grid grid-cols-3 gap-3 text-center">
             <div>
-              <p className="text-lg font-semibold">{data.ingestion.events_1h}</p>
-              <p className="text-[10px] text-muted-foreground">Events / 1h</p>
+              <p className="text-lg font-semibold">{data.ingestion.signals_1h}</p>
+              <p className="text-[10px] text-muted-foreground">Signals / 1h</p>
             </div>
             <div>
-              <p className="text-lg font-semibold">{data.ingestion.events_24h}</p>
-              <p className="text-[10px] text-muted-foreground">Events / 24h</p>
+              <p className="text-lg font-semibold">{data.ingestion.signals_24h}</p>
+              <p className="text-[10px] text-muted-foreground">Signals / 24h</p>
             </div>
             <div>
               <p className={cn('text-lg font-semibold', data.ingestion.errors_1h > 0 && 'text-amber-400')}>
@@ -108,6 +117,40 @@ export function DashboardPanel() {
           </div>
         </div>
       )}
+
+      {/* Recent Events */}
+      <div className="bg-card border border-border rounded-lg p-3">
+        <h3 className="text-sm font-medium mb-2">Recent Events</h3>
+        {(!recentEvents || recentEvents.items.length === 0) ? (
+          <p className="text-sm text-muted-foreground">No derived events yet</p>
+        ) : (
+          <div className="space-y-1">
+            {recentEvents.items.map((ev) => (
+              <div
+                key={ev.event_id}
+                className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-secondary cursor-pointer text-sm"
+                onClick={() => openPanel('event-detail', { id: ev.event_id })}
+              >
+                {ev.severity ? (
+                  <span className={cn(
+                    'inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded border',
+                    SEVERITY_COLORS[ev.severity.toLowerCase()] ?? SEVERITY_COLORS.info
+                  )}>
+                    {ev.severity}
+                  </span>
+                ) : (
+                  <span className="inline-flex px-1.5 py-0.5 text-[10px] text-muted-foreground">--</span>
+                )}
+                <span className="flex-1 truncate">{ev.title}</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">{ev.signal_count} signals</span>
+                <Badge className={cn('text-[10px]', categoryColor(ev.category))}>
+                  {ev.category}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Recent Signals */}
       <div className="bg-card border border-border rounded-lg p-3">

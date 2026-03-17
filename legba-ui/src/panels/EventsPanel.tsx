@@ -30,18 +30,14 @@ const CATEGORIES = [
 
 interface EventFilters {
   categories: string[]
-  source: string
-  startDate: string
-  endDate: string
-  minConfidence: number
+  severity: string
+  eventType: string
 }
 
 const DEFAULT_FILTERS: EventFilters = {
   categories: [],
-  source: '',
-  startDate: '',
-  endDate: '',
-  minConfidence: 0,
+  severity: '',
+  eventType: '',
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -60,12 +56,12 @@ export function EventsPanel() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sectionsOpen, setSectionsOpen] = useState({
     categories: true,
-    dates: true,
-    confidence: true,
-    sources: false,
+    severity: true,
+    type: true,
   })
 
   const debouncedFilters = useDebounce(filters, 300)
+  const debouncedSearch = useDebounce(search, 300)
 
   const { data: facets } = useEventFacets()
 
@@ -73,7 +69,10 @@ export function EventsPanel() {
   const queryParams = {
     offset,
     limit: PAGE_SIZE,
+    q: debouncedSearch || undefined,
     category: debouncedFilters.categories.length > 0 ? debouncedFilters.categories.join(',') : undefined,
+    severity: debouncedFilters.severity || undefined,
+    event_type: debouncedFilters.eventType || undefined,
   }
 
   const { data, isLoading } = useEvents(queryParams)
@@ -83,10 +82,8 @@ export function EventsPanel() {
   // Count active filters
   const activeFilterCount =
     (filters.categories.length > 0 ? 1 : 0) +
-    (filters.source ? 1 : 0) +
-    (filters.startDate ? 1 : 0) +
-    (filters.endDate ? 1 : 0) +
-    (filters.minConfidence > 0 ? 1 : 0)
+    (filters.severity ? 1 : 0) +
+    (filters.eventType ? 1 : 0)
 
   const toggleCategory = useCallback(
     (cat: string) => {
@@ -120,28 +117,16 @@ export function EventsPanel() {
       })
     })
   }
-  if (filters.source) {
+  if (filters.severity) {
     activeChips.push({
-      label: `source: ${filters.source}`,
-      onRemove: () => setFilters((f) => ({ ...f, source: '' })),
+      label: `severity: ${filters.severity}`,
+      onRemove: () => setFilters((f) => ({ ...f, severity: '' })),
     })
   }
-  if (filters.startDate) {
+  if (filters.eventType) {
     activeChips.push({
-      label: `from: ${filters.startDate}`,
-      onRemove: () => setFilters((f) => ({ ...f, startDate: '' })),
-    })
-  }
-  if (filters.endDate) {
-    activeChips.push({
-      label: `to: ${filters.endDate}`,
-      onRemove: () => setFilters((f) => ({ ...f, endDate: '' })),
-    })
-  }
-  if (filters.minConfidence > 0) {
-    activeChips.push({
-      label: `conf >= ${Math.round(filters.minConfidence * 100)}%`,
-      onRemove: () => setFilters((f) => ({ ...f, minConfidence: 0 })),
+      label: `type: ${filters.eventType}`,
+      onRemove: () => setFilters((f) => ({ ...f, eventType: '' })),
     })
   }
 
@@ -250,96 +235,52 @@ export function EventsPanel() {
               })}
             </FilterSection>
 
-            {/* Date Range */}
+            {/* Severity */}
             <FilterSection
-              title="Date Range"
-              open={sectionsOpen.dates}
-              onToggle={() => toggleSection('dates')}
-            >
-              <div className="px-3 py-1 space-y-1.5">
-                <div>
-                  <label className="text-[10px] text-muted-foreground">From</label>
-                  <input
-                    type="date"
-                    value={filters.startDate}
-                    onChange={(e) => {
-                      setFilters((f) => ({ ...f, startDate: e.target.value }))
-                      setOffset(0)
-                    }}
-                    className="w-full text-xs bg-secondary border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-muted-foreground">To</label>
-                  <input
-                    type="date"
-                    value={filters.endDate}
-                    onChange={(e) => {
-                      setFilters((f) => ({ ...f, endDate: e.target.value }))
-                      setOffset(0)
-                    }}
-                    className="w-full text-xs bg-secondary border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
-              </div>
-            </FilterSection>
-
-            {/* Confidence */}
-            <FilterSection
-              title="Confidence"
-              open={sectionsOpen.confidence}
-              onToggle={() => toggleSection('confidence')}
-            >
-              <div className="px-3 py-1 space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-muted-foreground">Minimum</span>
-                  <span className="text-[10px] text-foreground font-mono tabular-nums">
-                    {Math.round(filters.minConfidence * 100)}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={filters.minConfidence}
-                  onChange={(e) => {
-                    setFilters((f) => ({
-                      ...f,
-                      minConfidence: parseFloat(e.target.value),
-                    }))
-                    setOffset(0)
-                  }}
-                  className="w-full h-1.5 accent-primary cursor-pointer"
-                />
-                <div className="flex justify-between text-[9px] text-muted-foreground">
-                  <span>0%</span>
-                  <span>50%</span>
-                  <span>100%</span>
-                </div>
-              </div>
-            </FilterSection>
-
-            {/* Sources */}
-            <FilterSection
-              title="Source"
-              open={sectionsOpen.sources}
-              onToggle={() => toggleSection('sources')}
+              title="Severity"
+              open={sectionsOpen.severity}
+              onToggle={() => toggleSection('severity')}
             >
               <div className="px-3 py-1">
                 <select
-                  value={filters.source}
+                  value={filters.severity}
                   onChange={(e) => {
-                    setFilters((f) => ({ ...f, source: e.target.value }))
+                    setFilters((f) => ({ ...f, severity: e.target.value }))
                     setOffset(0)
                   }}
                   className="w-full text-xs bg-secondary border border-border rounded px-2 py-1 focus:outline-none"
                 >
-                  <option value="">All sources</option>
-                  {facets?.sources &&
-                    Object.entries(facets.sources).map(([name, count]) => (
-                      <option key={name} value={name}>
-                        {name} ({count})
+                  <option value="">All severities</option>
+                  {facets?.severities &&
+                    Object.entries(facets.severities).map(([sev, count]) => (
+                      <option key={sev} value={sev}>
+                        {sev} ({count})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </FilterSection>
+
+            {/* Event Type */}
+            <FilterSection
+              title="Event Type"
+              open={sectionsOpen.type}
+              onToggle={() => toggleSection('type')}
+            >
+              <div className="px-3 py-1">
+                <select
+                  value={filters.eventType}
+                  onChange={(e) => {
+                    setFilters((f) => ({ ...f, eventType: e.target.value }))
+                    setOffset(0)
+                  }}
+                  className="w-full text-xs bg-secondary border border-border rounded px-2 py-1 focus:outline-none"
+                >
+                  <option value="">All types</option>
+                  {facets?.types &&
+                    Object.entries(facets.types).map(([t, count]) => (
+                      <option key={t} value={t}>
+                        {t} ({count})
                       </option>
                     ))}
                 </select>

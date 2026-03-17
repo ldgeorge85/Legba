@@ -202,12 +202,22 @@ async def _fetch_path(stores, from_name: str, to_name: str) -> dict:
 
     try:
         async with graph._pool.acquire() as conn:
-            # Get shortest path (AGE supports variable-length paths)
-            path_rows = await graph._cypher(conn, f"""
-                MATCH p = (a {{name: '{from_esc}'}})-[*1..10]-(b {{name: '{to_esc}'}})
-                RETURN p
-                LIMIT 1
-            """, cols="p agtype")
+            # Set a statement timeout to prevent runaway queries
+            await conn.execute("SET statement_timeout = '5s'")
+            # Shortest path — try depth 1, then 2, then 3 (avoid combinatorial explosion)
+            path_rows = None
+            for max_depth in (1, 2, 3, 4):
+                try:
+                    path_rows = await graph._cypher(conn, f"""
+                        MATCH p = (a {{name: '{from_esc}'}})-[*1..{max_depth}]-(b {{name: '{to_esc}'}})
+                        RETURN p
+                        LIMIT 1
+                    """, cols="p agtype")
+                    if path_rows:
+                        break
+                except Exception:
+                    continue
+            await conn.execute("RESET statement_timeout")
 
             if not path_rows:
                 return {"nodes": [], "edges": [], "rel_types": [], "node_types": [], "path_found": False}

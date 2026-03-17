@@ -42,7 +42,8 @@ _STRUCTURED_SOURCES = frozenset({
 })
 
 # Similarity threshold for clustering (single-linkage)
-_CLUSTER_THRESHOLD = 0.4
+# Raised from 0.4 to 0.5 to prevent mega-buckets from high-frequency entities
+_CLUSTER_THRESHOLD = 0.5
 
 # Max auto-created event confidence
 _AUTO_CONFIDENCE_CAP = 0.6
@@ -98,10 +99,17 @@ def _single_linkage_cluster(
     n: int,
     sim_fn,
     threshold: float,
+    max_cluster_size: int = 30,
 ) -> list[list[int]]:
-    """Single-linkage clustering. Returns list of clusters (lists of indices)."""
+    """Single-linkage clustering with size cap.
+
+    Returns list of clusters (lists of indices). Clusters are capped at
+    max_cluster_size to prevent mega-buckets from high-frequency entities
+    like 'Iran' or 'US' absorbing everything.
+    """
     # Union-Find
     parent = list(range(n))
+    size = [1] * n  # Track cluster sizes
 
     def find(x):
         while parent[x] != x:
@@ -112,7 +120,13 @@ def _single_linkage_cluster(
     def union(a, b):
         ra, rb = find(a), find(b)
         if ra != rb:
-            parent[ra] = rb
+            # Cap: don't merge if result would exceed max_cluster_size
+            if size[ra] + size[rb] > max_cluster_size:
+                return
+            if size[ra] < size[rb]:
+                ra, rb = rb, ra  # Merge smaller into larger
+            parent[rb] = ra
+            size[ra] += size[rb]
 
     for i in range(n):
         for j in range(i + 1, n):
@@ -184,9 +198,10 @@ class SignalClusterer:
                 # Multi-signal cluster → create or merge event
                 events_affected += await self._handle_cluster(cluster_feats)
             else:
-                # Singleton → auto-promote if from structured source
+                # Singleton → auto-promote if from structured source AND substantive
+                # Skip routine weather (environment category = Moderate/Minor NWS alerts)
                 feat = cluster_feats[0]
-                if feat["source_name"] in _STRUCTURED_SOURCES:
+                if feat["source_name"] in _STRUCTURED_SOURCES and feat["category"] != "environment":
                     events_affected += await self._create_singleton_event(feat)
 
         if events_affected:
@@ -225,9 +240,12 @@ class SignalClusterer:
 
     async def _handle_cluster(self, feats: list[dict]) -> int:
         """Create or merge a multi-signal cluster into an event."""
-        # Collect cluster-level features
+        # Collect cluster-level features including geo
         all_actors = set()
         all_locations = set()
+        all_geo_countries = set()
+        all_geo_coords = []
+        seen_coord_keys = set()
         timestamps = []
         categories = []
         confidences = []
@@ -240,6 +258,15 @@ class SignalClusterer:
             for loc in (data.get("locations") or []):
                 if loc and len(loc) >= 3:
                     all_locations.add(loc)
+            for gc in (data.get("geo_countries") or []):
+                if gc:
+                    all_geo_countries.add(gc)
+            for coord in (data.get("geo_coordinates") or []):
+                if coord and coord.get("lat") is not None:
+                    key = f"{coord.get('lat'):.4f},{coord.get('lon'):.4f}"
+                    if key not in seen_coord_keys:
+                        seen_coord_keys.add(key)
+                        all_geo_coords.append(coord)
             if f["timestamp"]:
                 timestamps.append(f["timestamp"])
             categories.append(f["category"])
@@ -337,6 +364,22 @@ class SignalClusterer:
             merged_actors = list(set(old_data.get("actors") or []) | new_actors)
             merged_locations = list(set(old_data.get("locations") or []) | new_locations)
 
+            # Extend geo from new signals
+            existing_countries = set(old_data.get("geo_countries") or [])
+            existing_coords = old_data.get("geo_coordinates") or []
+            seen_keys = {f"{c.get('lat',0):.4f},{c.get('lon',0):.4f}" for c in existing_coords if c}
+            for f in feats:
+                fd = f["data"]
+                for gc in (fd.get("geo_countries") or []):
+                    if gc:
+                        existing_countries.add(gc)
+                for coord in (fd.get("geo_coordinates") or []):
+                    if coord and coord.get("lat") is not None:
+                        key = f"{coord.get('lat'):.4f},{coord.get('lon'):.4f}"
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            existing_coords.append(coord)
+
             # Extend time window
             time_end = max(timestamps) if timestamps else None
 
@@ -346,6 +389,8 @@ class SignalClusterer:
             # Update the JSONB data
             old_data["actors"] = merged_actors
             old_data["locations"] = merged_locations
+            old_data["geo_countries"] = list(existing_countries)
+            old_data["geo_coordinates"] = existing_coords[:10]
             old_data["signal_count"] = new_count
             old_data["confidence"] = confidence
 
@@ -382,6 +427,10 @@ class SignalClusterer:
                     str(event_id)[:8], new_count, crossed,
                     old_data.get("title", ""),
                 )
+
+            # Auto-link to active situations (merged entity set)
+            category = old_data.get("category", "")
+            await self._auto_link_situations(event_id, new_actors, new_locations, category)
 
             return 1
         except Exception as e:
@@ -429,8 +478,8 @@ class SignalClusterer:
                 "actors": list(all_actors),
                 "locations": list(all_locations),
                 "tags": [],
-                "geo_countries": [],
-                "geo_coordinates": [],
+                "geo_countries": list(all_geo_countries),
+                "geo_coordinates": all_geo_coords[:10],  # cap at 10 coords per event
                 "confidence": confidence,
                 "signal_count": signal_count,
                 "source_method": "auto",
@@ -466,10 +515,63 @@ class SignalClusterer:
                     f["id"], event_id,
                 )
 
+            # Auto-link to active situations
+            await self._auto_link_situations(event_id, all_actors, all_locations, category)
+
             return 1
         except Exception as e:
             logger.warning("create_event_from_cluster failed: %s", e)
             return 0
+
+    async def _auto_link_situations(
+        self,
+        event_id: UUID,
+        actors: set[str] | list[str],
+        locations: set[str] | list[str],
+        category: str,
+    ) -> None:
+        """Link an event to active situations that share entities."""
+        try:
+            rows = await self._pool.fetch(
+                "SELECT id, data FROM situations WHERE status = 'active'"
+            )
+            if not rows:
+                return
+
+            event_entities = {e.lower() for e in list(actors) + list(locations) if e and len(e) >= 3}
+            if not event_entities:
+                return
+
+            for row in rows:
+                data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+                key_entities = data.get("key_entities") or []
+                if not key_entities:
+                    continue
+
+                # Case-insensitive substring match: does any event entity appear
+                # in a situation entity or vice versa?
+                matched = False
+                for ke in key_entities:
+                    ke_low = ke.lower()
+                    for ee in event_entities:
+                        if ee in ke_low or ke_low in ee:
+                            matched = True
+                            break
+                    if matched:
+                        break
+
+                if matched:
+                    await self._pool.execute(
+                        "INSERT INTO situation_events (situation_id, event_id) "
+                        "VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        row["id"], event_id,
+                    )
+                    logger.info(
+                        "Auto-linked event %s to situation %s",
+                        str(event_id)[:8], str(row["id"])[:8],
+                    )
+        except Exception as e:
+            logger.debug("auto_link_situations error: %s", e)
 
     async def _create_singleton_event(self, feat: dict) -> int:
         """Create a 1:1 event for a singleton from a structured source."""
@@ -524,6 +626,11 @@ class SignalClusterer:
                 "VALUES ($1, $2, 1.0) ON CONFLICT DO NOTHING",
                 feat["id"], event_id,
             )
+
+            # Auto-link to active situations
+            actors = data.get("actors") or []
+            locations = data.get("locations") or []
+            await self._auto_link_situations(event_id, set(actors), set(locations), feat["category"])
 
             return 1
         except Exception as e:

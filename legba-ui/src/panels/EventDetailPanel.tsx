@@ -98,6 +98,32 @@ export function EventDetailPanel({ eventId: propId }: Props) {
           </div>
         </div>
       )}
+
+      {/* Supporting Signals */}
+      <div>
+        <h3 className="text-sm font-medium mb-1">Supporting Signals</h3>
+        {(!data.linked_signals || data.linked_signals.length === 0) ? (
+          <p className="text-sm text-muted-foreground">No linked signals</p>
+        ) : (
+          <div className="space-y-1">
+            {data.linked_signals.map((sig, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-2 px-2 py-1.5 rounded bg-secondary/40 text-sm"
+              >
+                <Badge className={cn('text-[10px]', categoryColor(sig.category))}>
+                  {sig.category}
+                </Badge>
+                <span className="flex-1 truncate">{sig.title}</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {Math.round(sig.confidence * 100)}%
+                </span>
+                <TimeAgo date={sig.timestamp} className="text-[10px] text-muted-foreground shrink-0" />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

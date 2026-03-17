@@ -117,7 +117,7 @@ async def dashboard(request: Request):
     # Recent events
     recent_events = []
     try:
-        from ...shared.schemas.events import Event
+        from ...shared.schemas.signals import Signal as Event
         async with stores.structured._pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT data FROM signals ORDER BY event_timestamp DESC NULLS LAST LIMIT 15"
@@ -136,17 +136,17 @@ async def dashboard(request: Request):
     try:
         hb = await stores.registers._redis.get("legba:ingest:heartbeat")
         now = time.time()
-        events_1h = await stores.registers._redis.zcount("legba:ingest:events_1h", now - 3600, now)
-        events_24h = await stores.registers._redis.zcount("legba:ingest:events_24h", now - 86400, now)
+        signals_1h = await stores.registers._redis.zcount("legba:ingest:signals_1h", now - 3600, now)
+        signals_24h = await stores.registers._redis.zcount("legba:ingest:signals_24h", now - 86400, now)
         errors_1h = await stores.registers._redis.zcount("legba:ingest:errors_1h", now - 3600, now)
         ingestion = {
             "active": hb is not None,
-            "events_1h": events_1h,
-            "events_24h": events_24h,
+            "signals_1h": signals_1h,
+            "signals_24h": signals_24h,
             "errors_1h": errors_1h,
         }
     except Exception:
-        ingestion = {"active": False, "events_1h": 0, "events_24h": 0, "errors_1h": 0}
+        ingestion = {"active": False, "signals_1h": 0, "signals_24h": 0, "errors_1h": 0}
 
     # Active situations
     active_situations = []
@@ -262,7 +262,7 @@ async def list_signals(
     min_confidence: float | None = None,
 ):
     stores = get_stores(request)
-    from ...shared.schemas.events import Event
+    from ...shared.schemas.signals import Signal as Event
 
     if q:
         os_query = {
@@ -271,7 +271,7 @@ async def list_signals(
                 "fields": ["title^2", "summary", "full_content", "actors", "locations"],
             }
         }
-        result = await stores.opensearch.search("legba-events-*", os_query, size=limit)
+        result = await stores.opensearch.search("legba-signals-*,legba-events-*", os_query, size=limit)
         events = []
         for hit in result.get("hits", []):
             try:
@@ -483,6 +483,7 @@ async def list_events(
     severity: str | None = None,
     event_type: str | None = None,
     min_signals: int | None = None,
+    q: str | None = None,
 ):
     """List derived events with filters."""
     stores = get_stores(request)
@@ -490,10 +491,21 @@ async def list_events(
         return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
 
     conditions, params, idx = [], [], 1
-    if category:
-        conditions.append(f"category = ${idx}")
-        params.append(category)
+    if q:
+        conditions.append(f"title ILIKE ${idx}")
+        params.append(f"%{q}%")
         idx += 1
+    if category:
+        cats = [c.strip() for c in category.split(",") if c.strip()]
+        if len(cats) == 1:
+            conditions.append(f"category = ${idx}")
+            params.append(cats[0])
+            idx += 1
+        elif cats:
+            placeholders = ", ".join(f"${idx + i}" for i in range(len(cats)))
+            conditions.append(f"category IN ({placeholders})")
+            params.extend(cats)
+            idx += len(cats)
     if severity:
         conditions.append(f"severity = ${idx}")
         params.append(severity)
@@ -543,6 +555,51 @@ async def list_events(
     except Exception as exc:
         logger.warning("Events query failed: %s", exc)
         return _json({"items": [], "total": 0, "offset": offset, "limit": limit})
+
+
+@router.get("/events/geo")
+async def events_geo(request: Request):
+    """Derived events with geo coordinates for map visualization."""
+    stores = get_stores(request)
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, data FROM events
+                WHERE data->'geo_coordinates' IS NOT NULL
+                  AND jsonb_array_length(COALESCE(data->'geo_coordinates', '[]'::jsonb)) > 0
+                ORDER BY created_at DESC
+                LIMIT 2000
+                """
+            )
+
+        features = []
+        for r in rows:
+            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+            geo_coords = d.get("geo_coordinates") or []
+            for coord in geo_coords:
+                lat, lon = coord.get("lat"), coord.get("lon")
+                if lat is None or lon is None:
+                    continue
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
+                    "properties": {
+                        "id": str(r["id"]),
+                        "title": d.get("title", ""),
+                        "category": d.get("category", "other"),
+                        "severity": d.get("severity", "medium"),
+                        "signal_count": d.get("signal_count", 0),
+                        "confidence": d.get("confidence", 0.5),
+                        "timestamp": d.get("time_start"),
+                        "location_name": coord.get("name", ""),
+                    },
+                })
+
+        return _json({"type": "FeatureCollection", "features": features})
+    except Exception as exc:
+        logger.warning("events/geo failed: %s", exc)
+        return _json({"type": "FeatureCollection", "features": []})
 
 
 @router.get("/events/{event_id}")

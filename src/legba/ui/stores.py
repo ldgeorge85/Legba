@@ -330,7 +330,7 @@ class StoreHolder:
         if not self.structured._available:
             return None
         try:
-            from ..shared.schemas.events import Event
+            from ..shared.schemas.signals import Signal as Event
             async with self.structured._pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "SELECT data FROM signals WHERE id = $1", event_id

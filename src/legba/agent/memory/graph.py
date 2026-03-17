@@ -129,12 +129,14 @@ class GraphStore:
         if val is None:
             return None
         s = str(val).strip()
-        # Strip AGE type suffix
-        for suffix in ("::vertex", "::edge", "::path",
+        # Strip AGE type suffixes — both outer and inner.
+        # Path objects contain nested ::vertex and ::edge suffixes:
+        #   [{...}::vertex, {...}::edge, {...}::vertex]::path
+        # Strip all of them so json.loads works.
+        for suffix in ("::path", "::vertex", "::edge",
                         "::numeric", "::integer", "::float", "::boolean"):
-            if s.endswith(suffix):
-                s = s[:-len(suffix)].strip()
-                break
+            s = s.replace(suffix, "")
+        s = s.strip()
         try:
             return json.loads(s)
         except (json.JSONDecodeError, TypeError):

@@ -444,7 +444,7 @@ def register(
         # Fast path 1: GUID exact match
         guid = args.get("guid", "")
         if guid:
-            existing = await structured.check_event_guid(guid)
+            existing = await structured.check_signal_guid(guid)
             if existing:
                 return json.dumps({
                     "status": "duplicate_detected",
@@ -457,7 +457,7 @@ def register(
         # Fast path 2: source_url exact match
         source_url = args.get("source_url", "")
         if source_url:
-            existing = await structured.check_event_source_url(source_url)
+            existing = await structured.check_signal_source_url(source_url)
             if existing:
                 return json.dumps({
                     "status": "duplicate_detected",
@@ -499,7 +499,7 @@ def register(
                 from datetime import timedelta
                 day_start = (check_dt - timedelta(days=1)).isoformat()
                 day_end = (check_dt + timedelta(days=1)).isoformat()
-                candidates = await structured.query_events(
+                candidates = await structured.query_signals(
                     since=datetime.fromisoformat(day_start),
                     until=datetime.fromisoformat(day_end),
                     limit=200,
@@ -520,7 +520,7 @@ def register(
         else:
             # Without timestamp: check last 300 events by title similarity
             try:
-                candidates = await structured.get_recent_events_for_dedup(limit=300)
+                candidates = await structured.get_recent_signals_for_dedup(limit=300)
                 for existing in candidates:
                     sim = _title_similarity(title, existing.title)
                     if sim >= sim_threshold:
@@ -535,7 +535,7 @@ def register(
                 pass
         # -------------------------------------------------------------------
 
-        from ....shared.schemas.events import create_event, EventCategory
+        from ....shared.schemas.signals import create_signal, SignalCategory
 
         kwargs: dict = {"title": title}
 
@@ -561,7 +561,7 @@ def register(
             kwargs["source_url"] = args["source_url"]
         if args.get("category"):
             try:
-                kwargs["category"] = EventCategory(args["category"])
+                kwargs["category"] = SignalCategory(args["category"])
             except ValueError:
                 return f"Error: Invalid category '{args['category']}'"
         if args.get("confidence") is not None:
@@ -589,21 +589,21 @@ def register(
         if args.get("guid"):
             kwargs["guid"] = args["guid"]
 
-        event = create_event(**kwargs)
+        signal = create_signal(**kwargs)
 
         # Auto-resolve locations to geo data
-        if event.locations:
+        if signal.locations:
             try:
                 from .geo import resolve_locations
-                geo = resolve_locations(event.locations)
-                event.geo_countries = geo["countries"]
-                event.geo_regions = geo["regions"]
-                event.geo_coordinates = geo["coordinates"]
+                geo = resolve_locations(signal.locations)
+                signal.geo_countries = geo["countries"]
+                signal.geo_regions = geo["regions"]
+                signal.geo_coordinates = geo["coordinates"]
             except Exception:
                 pass  # Geo resolution is best-effort
 
         # Store in Postgres
-        pg_ok = await structured.save_event(event)
+        pg_ok = await structured.save_signal(signal)
 
         # Store in OpenSearch (best-effort)
         os_result = None
@@ -612,53 +612,53 @@ def register(
             index_name = _signals_index_name()
             await _ensure_signals_index(opensearch, index_name)
             os_doc = {
-                "title": event.title,
-                "summary": event.summary,
-                "full_content": event.full_content,
-                "category": event.category.value,
-                "actors": event.actors,
-                "locations": event.locations,
-                "tags": event.tags,
-                "language": event.language,
-                "source_id": str(event.source_id) if event.source_id else None,
-                "source_url": event.source_url,
-                "confidence": event.confidence,
-                "event_timestamp": event.event_timestamp.isoformat() if event.event_timestamp else None,
-                "created_at": event.created_at.isoformat(),
-                "geo_countries": event.geo_countries,
+                "title": signal.title,
+                "summary": signal.summary,
+                "full_content": signal.full_content,
+                "category": signal.category.value,
+                "actors": signal.actors,
+                "locations": signal.locations,
+                "tags": signal.tags,
+                "language": signal.language,
+                "source_id": str(signal.source_id) if signal.source_id else None,
+                "source_url": signal.source_url,
+                "confidence": signal.confidence,
+                "event_timestamp": signal.event_timestamp.isoformat() if signal.event_timestamp else None,
+                "created_at": signal.created_at.isoformat(),
+                "geo_countries": signal.geo_countries,
             }
             os_result = await opensearch.index_document(
-                index_name, os_doc, doc_id=str(event.id),
+                index_name, os_doc, doc_id=str(signal.id),
             )
 
         # Increment events_produced_count on source (even if PG save
         # retried with source_id=NULL due to FK violation — the source
         # itself may still exist and should get credit).
-        if event.source_id:
+        if signal.source_id:
             try:
-                await structured.increment_source_event_count(event.source_id)
+                await structured.increment_source_event_count(signal.source_id)
             except Exception as e:
-                logger.error("Failed to increment event count for source %s: %s", event.source_id, e)
+                logger.error("Failed to increment event count for source %s: %s", signal.source_id, e)
 
         result = {
             "status": "stored" if pg_ok else "partial_failure",
-            "event_id": str(event.id),
-            "title": event.title,
+            "event_id": str(signal.id),
+            "title": signal.title,
             "postgres": "ok" if pg_ok else "failed",
             "opensearch": os_result.get("result", "skipped") if os_result else "unavailable",
         }
 
         # Include geo resolution results
-        if event.geo_countries:
-            result["geo_countries"] = event.geo_countries
-        if event.geo_coordinates:
-            result["geo_coordinates"] = event.geo_coordinates
+        if signal.geo_countries:
+            result["geo_countries"] = signal.geo_countries
+        if signal.geo_coordinates:
+            result["geo_coordinates"] = signal.geo_coordinates
 
         # Hint: nudge agent to resolve actors/locations to entity profiles
         unresolved = []
-        for actor in event.actors:
+        for actor in signal.actors:
             unresolved.append({"name": actor, "suggested_role": "actor"})
-        for loc in event.locations:
+        for loc in signal.locations:
             unresolved.append({"name": loc, "suggested_role": "location"})
         if unresolved:
             result["unresolved_entities"] = unresolved
@@ -670,12 +670,12 @@ def register(
         # --- Post-store intelligence hooks (best-effort) ---
         if pg_ok:
             # Watchlist auto-matching
-            watch_matches = await _check_watchlist_matches(structured, event)
+            watch_matches = await _check_watchlist_matches(structured, signal)
             if watch_matches:
                 result["watchlist_triggers"] = watch_matches
 
             # Situation suggestions
-            sit_suggestions = await _suggest_situations(structured, event)
+            sit_suggestions = await _suggest_situations(structured, signal)
             if sit_suggestions:
                 result["situation_suggestions"] = sit_suggestions
                 result["situation_hint"] = (
@@ -684,7 +684,7 @@ def register(
                 )
 
             # Novelty scoring
-            novelty = await _compute_novelty(structured, event)
+            novelty = await _compute_novelty(structured, signal)
             if novelty:
                 result["novelty"] = novelty
         # ---------------------------------------------------
@@ -722,7 +722,7 @@ def register(
             kwargs["language"] = args["language"]
         kwargs["limit"] = int(args.get("limit", 20))
 
-        events = await structured.query_events(**kwargs)
+        events = await structured.query_signals(**kwargs)
         if not events:
             return "No events found matching filters"
 

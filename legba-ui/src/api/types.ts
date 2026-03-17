@@ -2,8 +2,8 @@
 
 export interface IngestionStatus {
   active: boolean
-  events_1h: number
-  events_24h: number
+  signals_1h: number
+  signals_24h: number
   errors_1h: number
 }
 
@@ -62,12 +62,21 @@ export interface EventSummary {
   source_method: string | null
 }
 
+export interface LinkedSignal {
+  title: string
+  category: string
+  confidence: number
+  timestamp: string
+  relevance: number
+}
+
 export interface EventDetail extends EventSummary {
   description: string
   source_url: string | null
   source_id: string | null
   tags: string[]
   entities: EntityLink[]
+  linked_signals: LinkedSignal[]
   raw_data: Record<string, unknown> | null
   created_at: string
 }
@@ -258,6 +267,8 @@ export interface EventGeoFeature {
     id: string
     title: string
     category: string
+    severity: string
+    signal_count: number
     confidence: number
     timestamp: string | null
     location_name: string
@@ -267,6 +278,27 @@ export interface EventGeoFeature {
 export interface EventGeoCollection {
   type: 'FeatureCollection'
   features: EventGeoFeature[]
+}
+
+export interface SignalGeoFeature {
+  type: 'Feature'
+  geometry: {
+    type: 'Point'
+    coordinates: [number, number]
+  }
+  properties: {
+    id: string
+    title: string
+    category: string
+    confidence: number
+    timestamp: string | null
+    location_name: string
+  }
+}
+
+export interface SignalGeoCollection {
+  type: 'FeatureCollection'
+  features: SignalGeoFeature[]
 }
 
 export interface JournalEntry {
@@ -334,9 +366,8 @@ export interface FactDistribution {
 // Facets
 export interface EventFacets {
   categories: Record<string, number>
-  sources: Record<string, number>
-  timeline: Record<string, number>
-  confidence_buckets: Record<string, number>
+  severities: Record<string, number>
+  types: Record<string, number>
 }
 
 export interface SignalFacets {

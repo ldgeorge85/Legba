@@ -313,6 +313,13 @@ def normalize_cisa_kev(entry: FetchedEntry) -> SourceOverrides | None:
 def normalize_nws_alert(entry: FetchedEntry) -> SourceOverrides | None:
     """NWS/NOAA alert GeoJSON properties.
 
+    Normalizes NWS alerts so that the same weather phenomenon in the same
+    area clusters into one event regardless of alert level. The alert level
+    (Watch/Warning/Advisory) maps to severity tags, not the title.
+
+    Example: "Tornado Watch — Kent, DE" and "Tornado Warning — Kent, DE"
+    both become title "Tornado — Kent, DE" with different severity tags.
+
     Key fields: event, severity, certainty, urgency, areaDesc, headline,
     description, onset, expires, senderName
     """
@@ -322,29 +329,50 @@ def normalize_nws_alert(entry: FetchedEntry) -> SourceOverrides | None:
 
     overrides = {}
 
-    event = raw.get("event", "")
-    severity = raw.get("severity", "")
+    event = raw.get("event", "")       # e.g. "Tornado Watch", "Winter Storm Warning"
+    nws_severity = raw.get("severity", "")  # Extreme, Severe, Moderate, Minor
     area = raw.get("areaDesc", "")
 
-    if event:
-        area_short = area.split(";")[0].strip() if area else ""
-        if area_short:
-            overrides["title"] = f"{severity} {event} — {area_short}" if severity else f"{event} — {area_short}"
-        else:
-            overrides["title"] = f"{severity} {event}" if severity else event
+    # Strip alert type from event name to get the weather phenomenon.
+    # "Tornado Watch" → phenomenon="Tornado", alert_type="Watch"
+    # "Winter Storm Warning" → phenomenon="Winter Storm", alert_type="Warning"
+    # "Special Marine Warning" → phenomenon="Special Marine", alert_type="Warning"
+    alert_type = ""
+    phenomenon = event
+    for at in ("Emergency", "Warning", "Watch", "Advisory", "Statement"):
+        if event.endswith(f" {at}"):
+            phenomenon = event[: -(len(at) + 1)].strip()
+            alert_type = at
+            break
+
+    # Title: phenomenon + location (no severity prefix, no alert type)
+    # This makes "Tornado — Kent, DE" the clustering key regardless of watch vs warning
+    area_short = area.split(";")[0].strip() if area else ""
+    if phenomenon and area_short:
+        overrides["title"] = f"{phenomenon} — {area_short}"
+    elif phenomenon:
+        overrides["title"] = phenomenon
+    else:
+        overrides["title"] = event  # fallback to original
 
     if area:
-        # NWS areaDesc is semicolon-separated list of areas
         overrides["locations"] = [a.strip() for a in area.split(";") if a.strip()]
 
-    # Severity → confidence
+    # NWS severity → confidence + category
+    # Alert type also affects severity: Emergency/Warning > Watch > Advisory > Statement
     sev_map = {"Extreme": 0.95, "Severe": 0.85, "Moderate": 0.65, "Minor": 0.45}
-    overrides["confidence"] = sev_map.get(severity, 0.5)
+    overrides["confidence"] = sev_map.get(nws_severity, 0.5)
 
-    # Headline as summary
+    # Category: only actual threats are "disaster". Routine advisories are "environment".
+    is_threat = nws_severity in ("Extreme", "Severe") or alert_type in ("Emergency", "Warning")
+    overrides["category"] = "disaster" if is_threat else "environment"
+
+    # Headline as summary — include alert type here for context
     headline = raw.get("headline", "")
     if headline:
         overrides["summary"] = headline
+    elif alert_type:
+        overrides["summary"] = f"{nws_severity} {event} for {area_short}" if area_short else f"{nws_severity} {event}"
 
     # Onset timestamp
     onset = raw.get("onset") or raw.get("effective", "")
@@ -357,16 +385,20 @@ def normalize_nws_alert(entry: FetchedEntry) -> SourceOverrides | None:
         overrides["guid"] = nws_id
         overrides["source_url"] = f"https://api.weather.gov/alerts/{nws_id}"
 
-    # Tags
+    # Tags: include alert type and severity for filtering
     tags = ["nws"]
+    if alert_type:
+        tags.append(f"alert:{alert_type.lower()}")
+    if nws_severity:
+        tags.append(f"nws-severity:{nws_severity.lower()}")
     certainty = raw.get("certainty", "")
     urgency = raw.get("urgency", "")
     if certainty:
         tags.append(f"certainty:{certainty.lower()}")
     if urgency:
         tags.append(f"urgency:{urgency.lower()}")
-    if event:
-        tags.append(event.lower().replace(" ", "-"))
+    if phenomenon:
+        tags.append(phenomenon.lower().replace(" ", "-"))
     overrides["tags"] = tags
 
     return SourceOverrides(**overrides)

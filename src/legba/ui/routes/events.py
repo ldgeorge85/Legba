@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..app import get_stores, templates
-from ...shared.schemas.events import EventCategory
+from ...shared.schemas.signals import SignalCategory as EventCategory
 
 router = APIRouter()
 
@@ -21,7 +21,7 @@ PAGE_SIZE = 50
 
 async def _query_events_paged(stores, q, category, offset):
     """Query events with pagination. Returns (events, total)."""
-    from ...shared.schemas.events import Event
+    from ...shared.schemas.signals import Signal as Event
 
     if q:
         # Full-text search via OpenSearch (no offset — refine query instead)
@@ -246,7 +246,7 @@ async def _fetch_related_events(
     if not stores.structured._available:
         return []
     try:
-        from ...shared.schemas.events import Event
+        from ...shared.schemas.signals import Signal as Event
         results = []
         seen_ids = set()
 

@@ -146,7 +146,29 @@ class CurateMixin:
                         )
                     lines.append("")
 
-                # 4. Overall counts for context
+                # 4. Recent watch triggers
+                watch_triggers = await conn.fetch("""
+                    SELECT wt.watch_name, wt.event_title AS signal_title,
+                           wt.priority, wt.triggered_at,
+                           w.name AS watch_name_full
+                    FROM watch_triggers wt
+                    JOIN watchlist w ON w.id = wt.watch_id
+                    WHERE wt.triggered_at > NOW() - INTERVAL '24 hours'
+                    ORDER BY wt.triggered_at DESC
+                    LIMIT 10
+                """)
+
+                if watch_triggers:
+                    lines.append("### Recent Watch Triggers (last 24h)")
+                    for wt in watch_triggers:
+                        pri = wt['priority'] or 'normal'
+                        name = wt['watch_name_full'] or wt['watch_name'] or 'unknown'
+                        title = (wt['signal_title'] or '')[:120]
+                        ts = wt['triggered_at'].isoformat() if wt['triggered_at'] else '?'
+                        lines.append(f'- [{pri}] "{name}" triggered by "{title}" at {ts}')
+                    lines.append("")
+
+                # 5. Overall counts for context
                 total_signals = await conn.fetchval("SELECT count(*) FROM signals")
                 total_events = await conn.fetchval("SELECT count(*) FROM events")
                 unlinked_count = await conn.fetchval("""

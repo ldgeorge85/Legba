@@ -1,12 +1,12 @@
-import { useRef, useEffect, useCallback, useState } from 'react'
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { useGeoData, useEventGeoData } from '@/api/hooks'
+import { useGeoData, useEventGeoData, useSignalGeoData } from '@/api/hooks'
 import { useSelectionStore } from '@/stores/selection'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { GeoNode } from '@/api/types'
 
-/** Map marker colors by entity type — consistent with entityTypeColor in utils */
+/** Map marker colors by entity type -- consistent with entityTypeColor in utils */
 const TYPE_COLORS: Record<string, string> = {
   person: '#3b82f6',       // blue-500
   organization: '#a855f7', // purple-500
@@ -21,18 +21,14 @@ const TYPE_COLORS: Record<string, string> = {
 
 const DEFAULT_COLOR = '#6b7280' // gray-500
 
-type MapMode = 'entities' | 'events' | 'heatmap'
+type MapMode = 'entities' | 'events' | 'signals'
 
-const CATEGORY_COLORS: Record<string, string> = {
-  conflict: '#ef4444',
-  political: '#3b82f6',
-  economic: '#f59e0b',
-  technology: '#06b6d4',
-  health: '#22c55e',
-  environment: '#10b981',
-  social: '#a855f7',
-  disaster: '#f97316',
-  other: '#6b7280',
+/** Severity color mapping for derived events */
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: '#ef4444', // red-500
+  high: '#f97316',     // orange-500
+  medium: '#eab308',   // yellow-500
+  low: '#3b82f6',      // blue-500
 }
 
 function colorForType(type: string): string {
@@ -104,7 +100,7 @@ function legendEntries(nodes: GeoNode[]): Array<{ type: string; color: string }>
 /** IDs of all layers by mode (for toggling visibility) */
 const ENTITY_LAYER_IDS = ['cluster-circles', 'cluster-count', 'entity-circles', 'entity-labels']
 const EVENT_LAYER_IDS = ['event-circles', 'event-labels']
-const HEATMAP_LAYER_IDS = ['event-heat', 'event-heat-points']
+const SIGNAL_LAYER_IDS = ['signal-heat', 'signal-heat-points', 'signal-click-circles']
 
 export function MapPanel() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -112,9 +108,11 @@ export function MapPanel() {
   const popupRef = useRef<maplibregl.Popup | null>(null)
   const [mode, setMode] = useState<MapMode>('entities')
   const [mapReady, setMapReady] = useState(false)
+  const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set())
 
   const { data, isLoading } = useGeoData()
   const { data: eventGeo } = useEventGeoData()
+  const { data: signalGeo } = useSignalGeoData()
   const selected = useSelectionStore((s) => s.selected)
   const select = useSelectionStore((s) => s.select)
   const openPanel = useWorkspaceStore((s) => s.openPanel)
@@ -161,7 +159,7 @@ export function MapPanel() {
         clusterRadius: 50,
       })
 
-      // Cluster circle layer — sized and colored by point_count
+      // Cluster circle layer -- sized and colored by point_count
       map.addLayer({
         id: 'cluster-circles',
         type: 'circle',
@@ -249,17 +247,17 @@ export function MapPanel() {
         minzoom: 4,
       })
 
-      // ── Event heatmap source ──
-      map.addSource('events-geo', {
+      // ── Signals heatmap source (high-volume raw signals) ──
+      map.addSource('signals-geo', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       })
 
-      // Heatmap layer
+      // Signal heatmap layer
       map.addLayer({
-        id: 'event-heat',
+        id: 'signal-heat',
         type: 'heatmap',
-        source: 'events-geo',
+        source: 'signals-geo',
         paint: {
           'heatmap-weight': ['interpolate', ['linear'], ['get', 'confidence'], 0, 0.3, 1, 1],
           'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 1, 9, 3],
@@ -277,11 +275,11 @@ export function MapPanel() {
         },
       })
 
-      // Event point layer (shows at higher zoom when heatmap fades)
+      // Signal point layer (shows at higher zoom when heatmap fades)
       map.addLayer({
-        id: 'event-heat-points',
+        id: 'signal-heat-points',
         type: 'circle',
-        source: 'events-geo',
+        source: 'signals-geo',
         minzoom: 8,
         paint: {
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 3, 14, 6],
@@ -292,32 +290,58 @@ export function MapPanel() {
         },
       })
 
-      // ── Individual event marker layers (Events mode) ──
+      // Clickable signal circles (on top of heatmap)
+      map.addLayer({
+        id: 'signal-click-circles',
+        type: 'circle',
+        source: 'signals-geo',
+        minzoom: 5,
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 3, 10, 5, 14, 8],
+          'circle-color': '#f59e0b',
+          'circle-opacity': 0.8,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1,
+        },
+      })
+
+      // ── Derived event source (lower volume, severity-coded) ──
+      map.addSource('events-geo', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+
+      // Event circles -- sized by signal_count, colored by severity, always on top
       map.addLayer({
         id: 'event-circles',
         type: 'circle',
         source: 'events-geo',
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 4, 6, 6, 10, 8],
-          'circle-color': [
-            'match', ['get', 'category'],
-            'conflict', '#ef4444',
-            'political', '#3b82f6',
-            'economic', '#f59e0b',
-            'technology', '#06b6d4',
-            'health', '#22c55e',
-            'environment', '#10b981',
-            'social', '#a855f7',
-            'disaster', '#f97316',
-            '#6b7280',  // default (other)
+          'circle-radius': [
+            'interpolate', ['linear'],
+            ['coalesce', ['get', 'signal_count'], 1],
+            1, 7,
+            5, 10,
+            10, 14,
+            25, 18,
+            50, 24,
           ],
-          'circle-opacity': 0.8,
+          'circle-color': [
+            'match', ['get', 'severity'],
+            'critical', '#ef4444',
+            'high', '#f97316',
+            'medium', '#eab308',
+            'low', '#3b82f6',
+            '#6b7280',
+          ],
+          'circle-opacity': 0.9,
           'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 1,
-          'circle-stroke-opacity': 0.5,
+          'circle-stroke-width': 2,
+          'circle-stroke-opacity': 0.8,
         },
       })
 
+      // Event labels
       map.addLayer({
         id: 'event-labels',
         type: 'symbol',
@@ -338,14 +362,14 @@ export function MapPanel() {
         minzoom: 6,
       })
 
-      // Start with events and heatmap hidden
-      for (const id of [...EVENT_LAYER_IDS, ...HEATMAP_LAYER_IDS]) {
+      // Start with events, signals layers hidden
+      for (const id of [...EVENT_LAYER_IDS, ...SIGNAL_LAYER_IDS]) {
         map.setLayoutProperty(id, 'visibility', 'none')
       }
 
       // ── Interactions ──
 
-      // Cluster click → zoom to expand
+      // Cluster click -> zoom to expand
       map.on('click', 'cluster-circles', async (e) => {
         const features = map.queryRenderedFeatures(e.point, { layers: ['cluster-circles'] })
         if (!features.length) return
@@ -397,8 +421,8 @@ export function MapPanel() {
         popupRef.current?.remove()
       })
 
-      // Hover on event heatmap points
-      map.on('mouseenter', 'event-heat-points', (e) => {
+      // Hover on signal heatmap points
+      map.on('mouseenter', 'signal-heat-points', (e) => {
         map.getCanvas().style.cursor = 'pointer'
         if (e.features && e.features.length > 0) {
           const feature = e.features[0]
@@ -421,9 +445,46 @@ export function MapPanel() {
         }
       })
 
-      map.on('mouseleave', 'event-heat-points', () => {
+      map.on('mouseleave', 'signal-heat-points', () => {
         map.getCanvas().style.cursor = ''
         popupRef.current?.remove()
+      })
+
+      // Click on signal circle -> show persistent popup with details
+      map.on('click', 'signal-click-circles', (e) => {
+        if (e.features && e.features.length > 0) {
+          const feature = e.features[0]
+          const coords = (feature.geometry as GeoJSON.Point).coordinates.slice() as [number, number]
+          const title = feature.properties?.title ?? ''
+          const category = feature.properties?.category ?? ''
+          const timestamp = feature.properties?.timestamp ?? ''
+          const locationName = feature.properties?.location_name ?? ''
+
+          new maplibregl.Popup({
+            closeButton: true,
+            closeOnClick: true,
+            offset: 12,
+            className: 'legba-map-popup',
+          })
+            .setLngLat(coords)
+            .setHTML(
+              `<div style="font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; max-width: 240px;">
+                <strong style="color: #f59e0b">${escapeHtml(String(title).slice(0, 100))}</strong>
+                <br/>
+                <span style="color: #94a3b8; text-transform: capitalize;">${escapeHtml(String(category))}</span>
+                ${locationName ? `<br/><span style="color: #64748b;">${escapeHtml(String(locationName))}</span>` : ''}
+                ${timestamp ? `<br/><span style="color: #475569; font-size: 10px;">${escapeHtml(String(timestamp))}</span>` : ''}
+              </div>`,
+            )
+            .addTo(map)
+        }
+      })
+
+      map.on('mouseenter', 'signal-click-circles', () => {
+        map.getCanvas().style.cursor = 'pointer'
+      })
+      map.on('mouseleave', 'signal-click-circles', () => {
+        map.getCanvas().style.cursor = ''
       })
 
       // Hover on event circles
@@ -433,18 +494,23 @@ export function MapPanel() {
           const feature = e.features[0]
           const coords = (feature.geometry as GeoJSON.Point).coordinates.slice() as [number, number]
           const title = feature.properties?.title ?? ''
+          const severity = feature.properties?.severity ?? 'medium'
           const category = feature.properties?.category ?? ''
-          const locationName = feature.properties?.location_name ?? ''
-          const catColor = CATEGORY_COLORS[category] ?? DEFAULT_COLOR
+          const signalCount = feature.properties?.signal_count ?? 0
+          const timestamp = feature.properties?.timestamp ?? ''
+          const sevColor = SEVERITY_COLORS[severity] ?? DEFAULT_COLOR
 
           popupRef.current
             ?.setLngLat(coords)
             .setHTML(
-              `<div style="font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.4; max-width: 250px;">
-                <strong style="color: ${catColor}">${escapeHtml(title.slice(0, 80))}</strong>
+              `<div style="font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.4; max-width: 260px;">
+                <strong style="color: ${sevColor}">${escapeHtml(String(title).slice(0, 80))}</strong>
                 <br/>
-                <span style="color: #94a3b8; text-transform: capitalize;">${escapeHtml(category)}</span>
-                ${locationName ? `<br/><span style="color: #64748b;">${escapeHtml(locationName)}</span>` : ''}
+                <span style="color: #94a3b8; text-transform: capitalize;">${escapeHtml(String(category))}</span>
+                <span style="color: ${sevColor}; margin-left: 6px; text-transform: uppercase; font-size: 10px;">${escapeHtml(String(severity))}</span>
+                <br/>
+                <span style="color: #64748b;">${Number(signalCount)} signal${Number(signalCount) !== 1 ? 's' : ''}</span>
+                ${timestamp ? `<br/><span style="color: #475569; font-size: 10px;">${escapeHtml(String(timestamp))}</span>` : ''}
               </div>`,
             )
             .addTo(map)
@@ -456,7 +522,7 @@ export function MapPanel() {
         popupRef.current?.remove()
       })
 
-      // Click on event marker → open event detail
+      // Click on event marker -> show popup and open event detail panel
       map.on('click', 'event-circles', (e) => {
         if (e.features && e.features.length > 0) {
           const feature = e.features[0]
@@ -464,18 +530,41 @@ export function MapPanel() {
           if (eventId) {
             select({ type: 'event', id: eventId, name: feature.properties?.title ?? '' })
             openPanel('event-detail', { id: eventId })
+
+            // Also show a persistent popup with summary
+            const coords = (feature.geometry as GeoJSON.Point).coordinates.slice() as [number, number]
+            const title = feature.properties?.title ?? ''
+            const severity = feature.properties?.severity ?? 'medium'
+            const signalCount = feature.properties?.signal_count ?? 0
+            const sevColor = SEVERITY_COLORS[severity] ?? DEFAULT_COLOR
+
+            new maplibregl.Popup({
+              closeButton: true,
+              closeOnClick: true,
+              offset: 12,
+              className: 'legba-map-popup',
+            })
+              .setLngLat(coords)
+              .setHTML(
+                `<div style="font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; max-width: 260px;">
+                  <strong style="color: ${sevColor}">${escapeHtml(String(title).slice(0, 80))}</strong>
+                  <br/>
+                  <span style="color: ${sevColor}; text-transform: uppercase; font-size: 10px;">${escapeHtml(String(severity))}</span>
+                  <span style="color: #64748b; margin-left: 6px;">${Number(signalCount)} signal${Number(signalCount) !== 1 ? 's' : ''}</span>
+                </div>`,
+              )
+              .addTo(map)
           }
         }
       })
 
-      // Click on unclustered entity
+      // Click on unclustered entity — use name for lookup (graph UUIDs don't match entity_profiles)
       map.on('click', 'entity-circles', (e) => {
         if (e.features && e.features.length > 0) {
           const feature = e.features[0]
-          const entityId = feature.properties?.entity_id
-          const label = feature.properties?.label
-          if (entityId && label) {
-            handleMarkerClick(entityId, label)
+          const label = feature.properties?.label || feature.properties?.name
+          if (label) {
+            handleMarkerClick(label, label)
           }
         }
       })
@@ -503,25 +592,61 @@ export function MapPanel() {
     }
   }, [data, mapReady])
 
-  // Update event heatmap source when event geo data changes
+  // Update event source when event geo data changes
+  // Apply category filter to geo data before setting on sources
+  const filteredEventGeo = useMemo(() => {
+    if (!eventGeo || categoryFilter.size === 0) return eventGeo
+    return {
+      ...eventGeo,
+      features: eventGeo.features.filter((f: { properties?: { category?: string } }) =>
+        categoryFilter.has(f.properties?.category ?? '')
+      ),
+    }
+  }, [eventGeo, categoryFilter])
+
+  const filteredSignalGeo = useMemo(() => {
+    if (!signalGeo || categoryFilter.size === 0) return signalGeo
+    return {
+      ...signalGeo,
+      features: signalGeo.features.filter((f: { properties?: { category?: string } }) =>
+        categoryFilter.has(f.properties?.category ?? '')
+      ),
+    }
+  }, [signalGeo, categoryFilter])
+
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapReady || !eventGeo) return
+    if (!map || !mapReady || !filteredEventGeo) return
 
     const source = map.getSource('events-geo') as maplibregl.GeoJSONSource | undefined
     if (source) {
-      source.setData(eventGeo)
+      source.setData(filteredEventGeo)
     }
-  }, [eventGeo, mapReady])
+  }, [filteredEventGeo, mapReady])
+
+  // Update signal heatmap source when signal geo data changes
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || !filteredSignalGeo) return
+
+    const source = map.getSource('signals-geo') as maplibregl.GeoJSONSource | undefined
+    if (source) {
+      source.setData(filteredSignalGeo)
+    }
+  }, [filteredSignalGeo, mapReady])
 
   // Toggle layer visibility when mode changes
+  // Events mode: show both signal heatmap (underneath) and event markers (on top)
+  // Signals mode: show only signal heatmap
+  // Entities mode: show only entity markers
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
 
     const entityVis = mode === 'entities' ? 'visible' : 'none'
-    const eventVis = mode === 'events' ? 'visible' : 'none'
-    const heatVis = mode === 'heatmap' ? 'visible' : 'none'
+    const eventVis = (mode === 'events') ? 'visible' : 'none'
+    // Signal heatmap visible in both 'signals' mode AND 'events' mode (as underlay)
+    const signalVis = (mode === 'signals' || mode === 'events') ? 'visible' : 'none'
 
     for (const id of ENTITY_LAYER_IDS) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', entityVis)
@@ -529,8 +654,13 @@ export function MapPanel() {
     for (const id of EVENT_LAYER_IDS) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', eventVis)
     }
-    for (const id of HEATMAP_LAYER_IDS) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', heatVis)
+    for (const id of SIGNAL_LAYER_IDS) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', signalVis)
+    }
+
+    // When events mode, reduce heatmap opacity so events stand out
+    if (map.getLayer('signal-heat')) {
+      map.setPaintProperty('signal-heat', 'heatmap-opacity', mode === 'events' ? 0.45 : 0.7)
     }
   }, [mode, mapReady])
 
@@ -554,6 +684,7 @@ export function MapPanel() {
 
   const legend = data?.nodes ? legendEntries(data.nodes) : []
   const eventCount = eventGeo?.features?.length ?? 0
+  const signalCount = signalGeo?.features?.length ?? 0
 
   return (
     <div className="flex flex-col h-full">
@@ -562,8 +693,8 @@ export function MapPanel() {
         <span>
           Geo map
           {mode === 'entities' && data && ` \u2014 ${data.nodes.length} entities`}
-          {mode === 'events' && ` \u2014 ${eventCount} events`}
-          {mode === 'heatmap' && ` \u2014 ${eventCount} events`}
+          {mode === 'events' && ` \u2014 ${eventCount} events, ${signalCount} signals`}
+          {mode === 'signals' && ` \u2014 ${signalCount} signals`}
         </span>
 
         {/* Mode toggle */}
@@ -589,17 +720,52 @@ export function MapPanel() {
             Events
           </button>
           <button
-            onClick={() => setMode('heatmap')}
+            onClick={() => setMode('signals')}
             className={`px-2 py-0.5 rounded text-xs transition-colors ${
-              mode === 'heatmap'
+              mode === 'signals'
                 ? 'bg-background text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            Heat Map
+            Signals
           </button>
         </div>
       </div>
+
+      {/* Category filter pills — for events and signals modes */}
+      {(mode === 'events' || mode === 'signals') && (
+        <div className="flex items-center gap-1 px-2 py-1 border-b border-border shrink-0 overflow-x-auto">
+          <span className="text-[10px] text-muted-foreground mr-0.5">Filter:</span>
+          {['conflict', 'political', 'economic', 'disaster', 'health', 'social', 'technology', 'environment'].map((cat) => (
+            <button
+              key={cat}
+              onClick={() => {
+                setCategoryFilter((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(cat)) next.delete(cat)
+                  else next.add(cat)
+                  return next
+                })
+              }}
+              className={`h-5 px-2 text-[10px] rounded-full border transition-colors capitalize ${
+                categoryFilter.has(cat)
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+          {categoryFilter.size > 0 && (
+            <button
+              onClick={() => setCategoryFilter(new Set())}
+              className="h-5 px-2 text-[10px] rounded-full border border-border text-muted-foreground hover:bg-accent"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Map container */}
       <div className="flex-1 relative">
@@ -610,10 +776,10 @@ export function MapPanel() {
         )}
         <div ref={containerRef} className="absolute inset-0" />
 
-        {/* Heatmap: insufficient data notice */}
-        {mode === 'heatmap' && eventCount === 0 && (
+        {/* Signals: insufficient data notice */}
+        {mode === 'signals' && signalCount === 0 && (
           <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 bg-background/90 backdrop-blur-sm border border-border rounded-md px-4 py-2 text-xs text-muted-foreground">
-            No geo-coded events available for heatmap.
+            No geo-coded signals available for heatmap.
           </div>
         )}
 
@@ -635,25 +801,31 @@ export function MapPanel() {
           </div>
         )}
 
-        {/* Event category legend (events mode) */}
+        {/* Event severity legend (events mode) */}
         {mode === 'events' && eventCount > 0 && (
           <div className="absolute bottom-3 left-3 z-10 bg-background/85 backdrop-blur-sm border border-border rounded-md px-3 py-2 text-xs">
-            <div className="text-muted-foreground mb-1 font-medium">Event Categories</div>
+            <div className="text-muted-foreground mb-1 font-medium">Event Severity</div>
             <div className="flex flex-col gap-0.5">
-              {Object.entries(CATEGORY_COLORS).map(([cat, color]) => (
-                <div key={cat} className="flex items-center gap-1.5">
+              {Object.entries(SEVERITY_COLORS).map(([sev, color]) => (
+                <div key={sev} className="flex items-center gap-1.5">
                   <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-                  <span className="text-foreground/80 capitalize">{cat}</span>
+                  <span className="text-foreground/80 capitalize">{sev}</span>
                 </div>
               ))}
+            </div>
+            <div className="text-muted-foreground mt-1.5 pt-1 border-t border-border/50">
+              Circle size = signal count
+            </div>
+            <div className="text-muted-foreground mt-0.5">
+              Heatmap = raw signal density
             </div>
           </div>
         )}
 
-        {/* Heatmap legend overlay (heatmap mode) */}
-        {mode === 'heatmap' && eventCount > 0 && (
+        {/* Signals heatmap legend overlay (signals mode) */}
+        {mode === 'signals' && signalCount > 0 && (
           <div className="absolute bottom-3 left-3 z-10 bg-background/85 backdrop-blur-sm border border-border rounded-md px-3 py-2 text-xs">
-            <div className="text-muted-foreground mb-1 font-medium">Intensity</div>
+            <div className="text-muted-foreground mb-1 font-medium">Signal Density</div>
             <div className="flex items-center gap-1">
               <span className="text-muted-foreground">Low</span>
               <div
@@ -664,7 +836,7 @@ export function MapPanel() {
               />
               <span className="text-muted-foreground">High</span>
             </div>
-            <div className="text-muted-foreground mt-1">{eventCount} geo-coded events</div>
+            <div className="text-muted-foreground mt-1">{signalCount} geo-coded signals</div>
           </div>
         )}
       </div>
