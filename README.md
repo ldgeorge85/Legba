@@ -30,7 +30,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 
 ## Agent Cycle
 
-Every cycle (~2-10 minutes), the agent runs one of **6 cycle types** (selected by priority):
+Every cycle (~2-10 minutes), the agent runs one of **7 cycle types** (selected by priority):
 
 ```
 WAKE → ORIENT → [cycle type routing] → REFLECT → NARRATE → PERSIST
@@ -38,10 +38,11 @@ WAKE → ORIENT → [cycle type routing] → REFLECT → NARRATE → PERSIST
 Cycle types (priority order):
   Every 30 cycles: EVOLVE        — self-improvement, source discovery, operational scorecard
   Every 15 cycles: INTROSPECTION — deep audit, journal consolidation, world assessment
-  Every 10 cycles: ANALYSIS      — pattern detection, graph mining, anomaly detection
-  Every 5 cycles:  RESEARCH      — entity enrichment via Wikipedia/reference sources
-  Every 3 cycles:  CURATE        — event curation from clustered signals, entity resolution
-  Otherwise:       NORMAL        — goal-directed PLAN → REASON+ACT
+  Every 10 cycles: SYNTHESIZE    — deep-dive investigation, situation briefs, predictions
+  Every 5 cycles:  ANALYSIS      — pattern detection, graph mining, anomaly detection
+  Every 7 cycles:  RESEARCH      — entity enrichment via Wikipedia/reference sources
+  Every 9 cycles:  CURATE        — event curation from clustered signals (+ dynamic promotion)
+  Otherwise:       SURVEY         — analytical desk work: situations, graph building, hypotheses
 ```
 
 - **WAKE**: Load config, connect services, register 63 tools, drain inbox

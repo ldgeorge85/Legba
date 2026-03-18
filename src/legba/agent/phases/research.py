@@ -17,15 +17,18 @@ class ResearchMixin:
     def _is_research_cycle(self: AgentCycle) -> bool:
         """Check if this cycle should be a research/enrichment cycle.
 
-        Runs every RESEARCH_INTERVAL cycles, but NOT on introspection cycles
-        (introspection takes priority when both would fire).
+        Runs every RESEARCH_INTERVAL cycles, but yields to all higher-priority
+        cycle types (EVOLVE, INTROSPECTION, SYNTHESIZE, ANALYSIS).
         """
         from . import RESEARCH_INTERVAL
         cn = self.state.cycle_number
         return (RESEARCH_INTERVAL > 0
                 and cn > 0
                 and cn % RESEARCH_INTERVAL == 0
-                and not self._is_introspection_cycle())
+                and not self._is_evolve_cycle()
+                and not self._is_introspection_cycle()
+                and not self._is_synthesize_cycle()
+                and not self._is_analysis_cycle())
 
     async def _research(self: AgentCycle) -> None:
         """Research cycle: fill entity data gaps using external sources.

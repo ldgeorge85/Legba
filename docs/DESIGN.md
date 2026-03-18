@@ -177,7 +177,53 @@ main.py:main()
               └── Liveness check (nonce echo — dedicated LLM call, reasoning: low)
 ```
 
-### Research Cycle (every 5, non-introspection)
+### Survey Cycle (default — replaces NORMAL)
+
+The default cycle type when no specialized cycle fires. Analytical desk work with a restricted tool set — no feed_parse, no source fetching, no code modification. Rate-limited http_request (max 2 calls/cycle, verification only).
+
+```
+_wake() → _orient() →
+  _survey()
+    ├── _build_survey_context()
+    │   ├── Recent events (last 24h)
+    │   ├── Active situations with intensity scores
+    │   ├── Events not linked to any situation
+    │   ├── Active predictions needing evidence check
+    │   ├── Recent watch triggers
+    │   ├── Journal investigation leads
+    │   └── Uncurated signal count (cached for dynamic CURATE promotion)
+    ├── assemble_survey_prompt() with SURVEY_TOOLS
+    ├── reason_with_tools() → full tool loop with rate-limited executor
+    ├── _reflect()
+    ├── _narrate()
+    └── _persist()
+```
+
+Dynamic CURATE promotion: if uncurated signal backlog exceeds threshold (default 100), the survey cycle is promoted to CURATE instead.
+
+### Synthesize Cycle (every 10, non-evolve/introspection)
+
+Deep-dive investigation into a single situation or emerging pattern. Produces a named deliverable: a **Situation Brief** stored in Redis and archived to OpenSearch.
+
+```
+_wake() → _orient() →
+  _synthesize()
+    ├── _build_synthesize_context()
+    │   ├── Recently investigated threads (anti-rabbit-holing from Redis)
+    │   ├── Candidate situations ranked by novelty and intensity
+    │   ├── Active predictions for evaluation
+    │   ├── High-activity entities (last 48h)
+    │   └── Journal investigation leads
+    ├── assemble_synthesize_prompt() with SYNTHESIZE_TOOLS
+    ├── reason_with_tools() → full tool loop with http_request
+    ├── _store_situation_brief() → Redis + OpenSearch archive
+    ├── _update_synth_history() → track thread rotation
+    ├── _reflect()
+    ├── _narrate()
+    └── _persist()
+```
+
+### Research Cycle (every 7, non-introspection/analysis/synthesize)
 
 Replaces PLAN → ACT with entity enrichment using a restricted tool set:
 
@@ -219,11 +265,11 @@ _wake() → _orient() →
     └── _persist()
 ```
 
-### Acquire Cycle (every 3, legacy)
+### Acquire Cycle (legacy fallback)
 
-Only used when the ingestion service is not active. The agent fetches sources directly and stores signals. When the ingestion service handles collection, ACQUIRE is replaced by CURATE.
+Only used when the ingestion service is not active. The agent fetches sources directly and stores signals. Dormant when ingestion service is running.
 
-### Curate Cycle (every 3, when ingestion active)
+### Curate Cycle (every 9, when ingestion active)
 
 Replaces ACQUIRE when the ingestion service handles source fetching. The agent applies editorial judgment to raw signals and auto-created events:
 

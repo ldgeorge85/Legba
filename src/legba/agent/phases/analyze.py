@@ -19,14 +19,17 @@ class AnalyzeMixin:
     def _is_analysis_cycle(self: AgentCycle) -> bool:
         """Check if this is an analysis cycle.
 
-        Runs every ANALYSIS_INTERVAL cycles, but NOT on introspection cycles.
+        Runs every ANALYSIS_INTERVAL cycles, but yields to EVOLVE,
+        INTROSPECTION, and SYNTHESIZE.
         """
         from . import ANALYSIS_INTERVAL
         cn = self.state.cycle_number
         return (ANALYSIS_INTERVAL > 0
                 and cn > 0
                 and cn % ANALYSIS_INTERVAL == 0
-                and not self._is_introspection_cycle())
+                and not self._is_evolve_cycle()
+                and not self._is_introspection_cycle()
+                and not self._is_synthesize_cycle())
 
     async def _analyze(self: AgentCycle) -> None:
         """Analysis cycle: run analytical tools on accumulated data."""

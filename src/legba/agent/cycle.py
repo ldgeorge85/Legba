@@ -1,7 +1,7 @@
 """
 Core Agent Cycle
 
-WAKE → ORIENT → [EVOLVE|CURATE/ACQUIRE|ANALYZE|RESEARCH|INTROSPECTION|PLAN→ACT] → REFLECT → NARRATE → PERSIST
+WAKE → ORIENT → [EVOLVE|INTROSPECTION|SYNTHESIZE|ANALYSIS|RESEARCH|CURATE|SURVEY] → REFLECT → NARRATE → PERSIST
 
 One cycle = one execution of this module. The supervisor manages the lifecycle:
 it launches the agent for a single cycle, the agent runs through all phases,
@@ -13,11 +13,15 @@ together into a single AgentCycle class and owns the top-level orchestration.
 Cycle type routing (evaluated in priority order):
   - Every 30 cycles: EVOLVE (self-improvement, prompt/tool evaluation)
   - Every 15 cycles: INTROSPECTION (deep audit, reports, journal consolidation)
-  - Every 10 cycles: ANALYSIS (analytics, pattern detection, graph mining)
-  - Every 5 cycles:  RESEARCH (entity enrichment, gap-filling)
-  - Every 3 cycles:  CURATE (signal triage, event curation — when ingestion service active)
-                      ACQUIRE (legacy source fetching — when ingestion service inactive)
-  - Otherwise:       NORMAL (goal-directed, mixed)
+  - Every 10 cycles: SYNTHESIZE (deep-dive investigation, situation briefs)
+  - Every 5 cycles:  ANALYSIS (analytics, pattern detection, graph mining)
+  - Every 7 cycles:  RESEARCH (entity enrichment, gap-filling)
+  - Every 9 cycles:  CURATE (signal triage, event curation — when ingestion active)
+                      ACQUIRE (legacy source fetching — when ingestion inactive)
+  - Otherwise:       SURVEY (analytical desk work — situations, graph, hypotheses)
+
+Dynamic CURATE promotion: if uncurated backlog exceeds threshold, next SURVEY
+becomes CURATE automatically.
 """
 
 from __future__ import annotations
@@ -58,9 +62,13 @@ from .phases.acquire import AcquireMixin
 from .phases.analyze import AnalyzeMixin
 from .phases.curate import CurateMixin
 from .phases.evolve import EvolveMixin
+from .phases.survey import SurveyMixin
+from .phases.synthesize import SynthesizeMixin
 
 # Re-export constants for backward compatibility
-from .phases import REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL, CURATE_INTERVAL, ANALYSIS_INTERVAL, EVOLVE_INTERVAL
+from .phases import (REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL,
+                     CURATE_INTERVAL, ANALYSIS_INTERVAL, EVOLVE_INTERVAL,
+                     SYNTHESIZE_INTERVAL, CURATE_BACKLOG_THRESHOLD)
 
 
 class AgentCycle(
@@ -77,6 +85,8 @@ class AgentCycle(
     CurateMixin,
     AnalyzeMixin,
     EvolveMixin,
+    SurveyMixin,
+    SynthesizeMixin,
 ):
     """
     Executes a single agent cycle.
@@ -117,6 +127,8 @@ class AgentCycle(
 
             # Cycle type routing — evaluated in priority order.
             # Higher-priority types take precedence when intervals overlap.
+            # EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10) > ANALYSIS(5)
+            # > RESEARCH(7) > CURATE(9) > SURVEY(default)
             if self._is_evolve_cycle():
                 await self._evolve()
                 await self._reflect()
@@ -131,6 +143,10 @@ class AgentCycle(
                 await self._narrate()
                 await self._journal_consolidation()
                 await self._generate_analysis_report()
+            elif self._is_synthesize_cycle():
+                await self._synthesize()
+                await self._reflect()
+                await self._narrate()
             elif self._is_analysis_cycle():
                 await self._analyze()
                 await self._reflect()
@@ -139,7 +155,7 @@ class AgentCycle(
                 await self._research()
                 await self._reflect()
                 await self._narrate()
-            elif self._is_acquire_cycle():
+            elif self._is_curate_cycle():
                 if self._ingestion_service_active():
                     await self._curate()
                 else:
@@ -147,8 +163,15 @@ class AgentCycle(
                 await self._reflect()
                 await self._narrate()
             else:
-                await self._plan()
-                await self._reason_and_act()
+                # SURVEY (replaces NORMAL) — analytical desk work.
+                # Dynamic CURATE promotion: if uncurated backlog is high,
+                # run CURATE instead of SURVEY.
+                if self._should_promote_to_curate():
+                    self.logger.log("curate_promotion",
+                                   uncurated=getattr(self, '_uncurated_count', 0))
+                    await self._curate()
+                else:
+                    await self._survey()
                 await self._reflect()
                 await self._narrate()
 
@@ -167,6 +190,29 @@ class AgentCycle(
             )
         finally:
             await self._cleanup()
+
+    # -----------------------------------------------------------------------
+    # Curate scheduling helpers
+    # -----------------------------------------------------------------------
+
+    def _is_curate_cycle(self: AgentCycle) -> bool:
+        """Check if this is a curate cycle (replaces old _is_acquire_cycle in routing).
+
+        Runs every CURATE_INTERVAL cycles, but yields to all higher-priority types.
+        """
+        cn = self.state.cycle_number
+        return (CURATE_INTERVAL > 0
+                and cn > 0
+                and cn % CURATE_INTERVAL == 0
+                and not self._is_evolve_cycle()
+                and not self._is_introspection_cycle()
+                and not self._is_synthesize_cycle()
+                and not self._is_analysis_cycle()
+                and not self._is_research_cycle())
+
+    def _should_promote_to_curate(self) -> bool:
+        """Check if uncurated backlog warrants promoting SURVEY to CURATE."""
+        return getattr(self, '_uncurated_count', 0) > CURATE_BACKLOG_THRESHOLD
 
     # -----------------------------------------------------------------------
     # Graceful shutdown support

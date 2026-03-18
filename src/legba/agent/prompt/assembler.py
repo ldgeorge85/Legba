@@ -474,6 +474,76 @@ class PromptAssembler:
             Message(role="user", content=user_text),
         ]
 
+    def assemble_survey_prompt(
+        self,
+        cycle_number: int,
+        seed_goal: str,
+        active_goals: list[dict],
+        survey_context: str,
+        allowed_tools: frozenset[str],
+        inbox_messages: list[InboxMessage] | None = None,
+    ) -> list[Message]:
+        """Build the message list for the survey/analytical desk work cycle."""
+        goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
+
+        from ..llm.format import format_tool_definitions
+        survey_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
+        system_text = templates.SYSTEM_PROMPT.format(
+            cycle_number=cycle_number,
+            context_tokens="survey",
+        )
+        system_text += "\n\n" + format_tool_definitions(survey_tool_data)
+        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+
+        user_text = templates.SURVEY_PROMPT.format(
+            seed_goal=seed_goal,
+            active_goals=goals_text,
+            survey_context=survey_context,
+        )
+
+        if inbox_messages:
+            user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+
+        return [
+            Message(role="system", content=system_text),
+            Message(role="user", content=user_text),
+        ]
+
+    def assemble_synthesize_prompt(
+        self,
+        cycle_number: int,
+        seed_goal: str,
+        active_goals: list[dict],
+        synthesize_context: str,
+        allowed_tools: frozenset[str],
+        inbox_messages: list[InboxMessage] | None = None,
+    ) -> list[Message]:
+        """Build the message list for the synthesize/deep-dive cycle."""
+        goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
+
+        from ..llm.format import format_tool_definitions
+        synth_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
+        system_text = templates.SYSTEM_PROMPT.format(
+            cycle_number=cycle_number,
+            context_tokens="synthesize",
+        )
+        system_text += "\n\n" + format_tool_definitions(synth_tool_data)
+        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+
+        user_text = templates.SYNTHESIZE_PROMPT.format(
+            seed_goal=seed_goal,
+            active_goals=goals_text,
+            synthesize_context=synthesize_context,
+        )
+
+        if inbox_messages:
+            user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
+
+        return [
+            Message(role="system", content=system_text),
+            Message(role="user", content=user_text),
+        ]
+
     def assemble_reason_prompt(
         self,
         cycle_number: int,
