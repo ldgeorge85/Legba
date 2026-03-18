@@ -37,36 +37,47 @@ class GraphStore:
         return self._available
 
     async def connect(self) -> None:
-        """Initialize AGE extension, connection pool, and graph."""
-        try:
-            # Bootstrap: create extension with a temporary connection
-            tmp = await asyncpg.connect(self._dsn)
+        """Initialize AGE extension, connection pool, and graph.
+
+        Retries up to 3 times with 2s delay to handle transient Postgres
+        startup timing issues in Docker.
+        """
+        import asyncio
+        for attempt in range(3):
             try:
-                await tmp.execute("CREATE EXTENSION IF NOT EXISTS age")
-            finally:
-                await tmp.close()
+                # Bootstrap: create extension with a temporary connection
+                tmp = await asyncpg.connect(self._dsn)
+                try:
+                    await tmp.execute("CREATE EXTENSION IF NOT EXISTS age")
+                finally:
+                    await tmp.close()
 
-            # Pool with per-connection codec registration (one-time per conn)
-            self._pool = await asyncpg.create_pool(
-                self._dsn, min_size=1, max_size=3,
-                init=self._register_codec,
-            )
-
-            # Create graph if it doesn't exist
-            async with self._pool.acquire() as conn:
-                await self._prepare(conn)
-                exists = await conn.fetchval(
-                    "SELECT count(*) FROM ag_catalog.ag_graph WHERE name = $1",
-                    self.GRAPH_NAME,
-                )
-                if not exists:
-                    await conn.execute(
-                        f"SELECT create_graph('{self.GRAPH_NAME}')"
+                # Pool with per-connection codec registration (one-time per conn)
+                if self._pool is None:
+                    self._pool = await asyncpg.create_pool(
+                        self._dsn, min_size=1, max_size=3,
+                        init=self._register_codec,
                     )
 
-            self._available = True
-        except Exception:
-            self._available = False
+                # Create graph if it doesn't exist
+                async with self._pool.acquire() as conn:
+                    await self._prepare(conn)
+                    exists = await conn.fetchval(
+                        "SELECT count(*) FROM ag_catalog.ag_graph WHERE name = $1",
+                        self.GRAPH_NAME,
+                    )
+                    if not exists:
+                        await conn.execute(
+                            f"SELECT create_graph('{self.GRAPH_NAME}')"
+                        )
+
+                self._available = True
+                return
+            except Exception:
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                else:
+                    self._available = False
 
     async def close(self) -> None:
         if self._pool:
@@ -344,6 +355,29 @@ class GraphStore:
                     SET r += {props_map}
                     RETURN r
                 """, cols="r agtype")
+            return True
+        except Exception:
+            return False
+
+    async def remove_relationship(
+        self,
+        source_name: str,
+        target_name: str,
+        relation_type: str,
+    ) -> bool:
+        """Remove a directed relationship between two entities."""
+        if not self._available:
+            return False
+        try:
+            rel_label = self._sanitize_label(relation_type)
+            src_esc = self._escape(source_name)
+            tgt_esc = self._escape(target_name)
+            async with self._pool.acquire() as conn:
+                await self._cypher(conn, f"""
+                    MATCH (a {{name: '{src_esc}'}})-[r:{rel_label}]->(b {{name: '{tgt_esc}'}})
+                    DELETE r
+                    RETURN count(r)
+                """, cols="cnt agtype")
             return True
         except Exception:
             return False

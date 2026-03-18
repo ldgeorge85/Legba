@@ -52,8 +52,41 @@ class OrientMixin:
         # Get NATS queue summary for context
         self._queue_summary = await self.nats.queue_summary()
 
-        # Build knowledge graph summary
-        self._graph_inventory = ""
+        # Real-time infrastructure health check (overrides stale journal narratives)
+        self._infra_health = ""
+        try:
+            health_lines = ["## Infrastructure Health (live check, this cycle)"]
+            # Postgres
+            if self.memory.structured and self.memory.structured._available:
+                sig_count = await self.memory.structured._pool.fetchval("SELECT count(*) FROM signals")
+                health_lines.append(f"- PostgreSQL: **HEALTHY** ({sig_count} signals in store)")
+            else:
+                health_lines.append("- PostgreSQL: UNAVAILABLE")
+            # Graph
+            if self.memory.graph and self.memory.graph.available:
+                health_lines.append("- Graph (AGE): **HEALTHY**")
+            else:
+                health_lines.append("- Graph (AGE): UNAVAILABLE")
+            # Redis
+            try:
+                await self.memory.registers._redis.ping()
+                health_lines.append("- Redis: **HEALTHY**")
+            except Exception:
+                health_lines.append("- Redis: UNAVAILABLE")
+            # Qdrant
+            if self.memory.episodic and self.memory.episodic._available:
+                health_lines.append("- Qdrant: **HEALTHY**")
+            else:
+                health_lines.append("- Qdrant: UNAVAILABLE")
+
+            health_lines.append("")
+            health_lines.append("If your journal says a service is down but this check says HEALTHY, trust this check. Your journal may carry stale observations from previous cycles.")
+            self._infra_health = "\n".join(health_lines)
+        except Exception:
+            pass
+
+        # Build knowledge graph summary (prefixed with live health status)
+        self._graph_inventory = self._infra_health + "\n\n" if self._infra_health else ""
         try:
             if self.memory.graph and self.memory.graph.available:
                 lines = ["## Knowledge Graph Summary", ""]

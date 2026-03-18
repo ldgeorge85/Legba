@@ -45,7 +45,7 @@ Cycle types (priority order):
 ```
 
 - **WAKE**: Load config, connect services, register 63 tools, drain inbox
-- **ORIENT**: Retrieve memories, goals, graph inventory, source health, ingestion gap tracking, journal leads
+- **ORIENT**: Retrieve memories, goals, live infrastructure health check, graph inventory, source health, ingestion gap tracking, journal leads
 - **PLAN** (normal cycles): LLM selects focus and approach, outputs expected tool list
 - **REASON+ACT**: Tool loop (up to 20 steps) — LLM reasons, calls tools, feeds results back
 - **REFLECT**: LLM evaluates cycle significance, facts learned, goal progress
@@ -103,7 +103,7 @@ docker compose -p legba exec supervisor \
 | Python source files | 100+ |
 | Tests | 118 |
 | Built-in tools | 63 across 18 modules |
-| Signals ingested | ~14,000 |
+| Signals ingested | ~22,700 |
 | Platform services | 7 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, Airflow) |
 | Canonical relationship types | 30 |
 | LLM context window | 128k tokens (120k budget) |

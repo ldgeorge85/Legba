@@ -72,6 +72,9 @@ class MemoryManager:
         self.logger.log_memory("connect", "graph",
                                available=self.graph._available)
 
+        # Wire graph into structured store for edge cleanup on fact supersede
+        self.structured._graph = self.graph
+
     async def close(self) -> None:
         await self.registers.close()
         await self.episodic.close()

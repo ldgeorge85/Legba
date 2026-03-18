@@ -30,6 +30,7 @@ class StructuredStore:
         self._pool_max = pool_max
         self._pool: asyncpg.Pool | None = None
         self._available = False
+        self._graph = None  # Set after construction if graph cleanup on supersede is needed
 
     async def connect(self) -> None:
         try:
@@ -348,6 +349,16 @@ class StructuredStore:
                 CREATE INDEX IF NOT EXISTS idx_derived_events_time_start ON events(time_start);
                 CREATE INDEX IF NOT EXISTS idx_derived_events_created ON events(created_at);
 
+                -- Notification audit log
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    type TEXT NOT NULL,
+                    payload JSONB NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
+                CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+
                 -- Signal-event junction (many-to-many)
                 CREATE TABLE IF NOT EXISTS signal_event_links (
                     signal_id UUID NOT NULL,
@@ -463,6 +474,20 @@ class StructuredStore:
                 # "A LeaderOf B" should supersede any "X LeaderOf B" where X != A
                 # Also supersede "B LeaderOf X" (wrong direction) for same entity
                 if fact.predicate in self._VOLATILE_PREDICATES:
+                    # Find facts being superseded so we can clean graph edges
+                    superseded_rows = await conn.fetch(
+                        """
+                        SELECT subject, predicate, value FROM facts
+                        WHERE predicate = $1
+                        AND superseded_by IS NULL
+                        AND (
+                            (lower(value) = lower($2) AND lower(subject) != lower($3))
+                            OR (lower(subject) = lower($2) AND lower(value) != lower($3))
+                        )
+                        """,
+                        fact.predicate, fact.value, fact.subject,
+                    )
+
                     await conn.execute(
                         """
                         UPDATE facts SET superseded_by = $1, updated_at = NOW()
@@ -475,6 +500,16 @@ class StructuredStore:
                         """,
                         fact.id, fact.predicate, fact.value, fact.subject,
                     )
+
+                    # Clean corresponding graph edges for superseded facts
+                    if superseded_rows and self._graph and self._graph.available:
+                        for row in superseded_rows:
+                            try:
+                                await self._graph.remove_relationship(
+                                    row["subject"], row["value"], row["predicate"],
+                                )
+                            except Exception:
+                                pass  # Best-effort graph cleanup
 
                 await conn.execute(
                     """

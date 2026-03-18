@@ -182,6 +182,7 @@ class IngestionService:
             embedding_client=embed_fn,
         )
         await self._storage.ensure_qdrant_collection()
+        self._qdrant = qdrant_client
         self._dedup = DedupEngine(self._pg_pool, self.config.dedup_cache_size, qdrant_client=qdrant_client, embed_fn=embed_fn)
 
     async def _ensure_schema(self) -> None:
@@ -255,11 +256,13 @@ class IngestionService:
                 logger.warning("Batch linker failed: %s", e)
 
         # Signal-to-event clustering — every ~20 minutes (offset from entity linker)
-        if self._tick_count % 40 == 20:
+        if self._tick_count % 20 == 10:  # Every ~10 minutes
             try:
                 from .cluster import SignalClusterer
-                clusterer = SignalClusterer(self._pg_pool)
-                events_affected = await clusterer.cluster(window_hours=6)
+                from .notifications import NotificationDispatcher
+                notifier = NotificationDispatcher()
+                clusterer = SignalClusterer(self._pg_pool, qdrant_client=self._qdrant, notifier=notifier)
+                events_affected = await clusterer.cluster(window_hours=12, max_signals=1500)
                 if events_affected:
                     logger.info("Signal clusterer: %d events created/updated", events_affected)
             except Exception as e:

@@ -144,8 +144,10 @@ def _single_linkage_cluster(
 class SignalClusterer:
     """Clusters unclustered signals into derived events."""
 
-    def __init__(self, pool: asyncpg.Pool):
+    def __init__(self, pool: asyncpg.Pool, qdrant_client=None, notifier=None):
         self._pool = pool
+        self._qdrant = qdrant_client
+        self._notifier = notifier
 
     async def cluster(
         self,
@@ -159,6 +161,7 @@ class SignalClusterer:
 
         # Extract features
         features = []
+        signal_ids = []
         for s in signals:
             data = json.loads(s["data"]) if isinstance(s["data"], str) else s["data"]
             features.append({
@@ -171,12 +174,56 @@ class SignalClusterer:
                 "words": _title_words(s["title"]),
                 "confidence": s.get("confidence", 0.5),
                 "data": data,
+                "vector": None,  # filled below if available
             })
+            signal_ids.append(str(s["id"]))
+
+        # Fetch vectors from Qdrant if available
+        vectors_available = False
+        if self._qdrant and signal_ids:
+            try:
+                from legba.ingestion.storage import SIGNALS_COLLECTION
+                points = await self._qdrant.retrieve(
+                    collection_name=SIGNALS_COLLECTION,
+                    ids=signal_ids,
+                    with_vectors=True,
+                )
+                vec_map = {p.id: p.vector for p in points if p.vector}
+                for feat in features:
+                    feat["vector"] = vec_map.get(str(feat["id"]))
+                vectors_available = sum(1 for f in features if f["vector"]) > len(features) * 0.5
+                if vectors_available:
+                    logger.debug("Vector clustering: %d/%d signals have vectors",
+                                 sum(1 for f in features if f["vector"]), len(features))
+            except Exception as e:
+                logger.debug("Qdrant vector fetch failed, falling back to keyword similarity: %s", e)
 
         # Build similarity function
         def sim_fn(i: int, j: int) -> float:
             a, b = features[i], features[j]
-            # Skip if neither has entities — can't cluster on title alone reliably
+
+            # Vector similarity (primary if available)
+            if vectors_available and a["vector"] and b["vector"]:
+                # Cosine similarity between embedding vectors
+                va, vb = a["vector"], b["vector"]
+                dot = sum(x * y for x, y in zip(va, vb))
+                norm_a = sum(x * x for x in va) ** 0.5
+                norm_b = sum(x * x for x in vb) ** 0.5
+                cosine = dot / (norm_a * norm_b) if norm_a > 0 and norm_b > 0 else 0.0
+
+                # Temporal proximity
+                if a["timestamp"] and b["timestamp"]:
+                    hours_apart = abs((a["timestamp"] - b["timestamp"]).total_seconds()) / 3600
+                    temporal = max(0.0, 1.0 - hours_apart / 48.0)
+                else:
+                    temporal = 0.5
+
+                category_match = 1.0 if a["category"] == b["category"] else 0.0
+
+                # Vector-weighted: 60% cosine, 20% temporal, 20% category
+                return 0.6 * cosine + 0.2 * temporal + 0.2 * category_match
+
+            # Fallback: keyword-based similarity
             if not a["entities"] and not b["entities"]:
                 return 0.0
             return _similarity(
@@ -432,6 +479,18 @@ class SignalClusterer:
             category = old_data.get("category", "")
             await self._auto_link_situations(event_id, new_actors, new_locations, category)
 
+            # Notify on threshold crossings
+            if self._notifier and crossed:
+                for t in crossed:
+                    await self._notifier.notify_event_reinforced(
+                        event_id=event_id,
+                        title=old_data.get("title", ""),
+                        category=category,
+                        severity=old_data.get("severity", "medium"),
+                        signal_count=new_count,
+                        threshold_crossed=t,
+                    )
+
             return 1
         except Exception as e:
             logger.warning("reinforce_event failed: %s", e)
@@ -517,6 +576,13 @@ class SignalClusterer:
 
             # Auto-link to active situations
             await self._auto_link_situations(event_id, all_actors, all_locations, category)
+
+            # Notify on event creation
+            if self._notifier:
+                await self._notifier.notify_event_created(
+                    event_id=event_id, title=title, category=category,
+                    signal_count=signal_count, source_method="auto",
+                )
 
             return 1
         except Exception as e:

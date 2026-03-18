@@ -256,70 +256,87 @@ class IntrospectMixin:
             if not ref_7d_patterns:
                 ref_7d_patterns = _extract_section(ref_7d_content, "## Emerging", 1000)
 
-            # --- Recent events with full detail ---
+            # --- Recent events grouped by entity for correlation ---
+            # Query derived events (not raw signals) and group by shared entities
+            # so the LLM sees related events together (e.g., Cuba earthquake + Cuba blackout)
             recent_events = ""
             try:
-                if self.opensearch:
-                    events = await self.opensearch.search(
-                        index="legba-events",
-                        query={"match_all": {}},
-                        size=50,
-                        sort=[{"timestamp": "desc"}],
-                    )
-                    if events:
+                if self.memory.structured and self.memory.structured._available:
+                    async with self.memory.structured._pool.acquire() as conn:
+                        rows = await conn.fetch(
+                            "SELECT data FROM events ORDER BY time_start DESC NULLS LAST, created_at DESC LIMIT 60"
+                        )
+
+                    if rows:
+                        # Parse events and extract entities for grouping
+                        events_data = []
+                        for r in rows:
+                            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+                            entities = set()
+                            for a in (d.get("actors") or []):
+                                if a and len(a) >= 3:
+                                    entities.add(a.lower())
+                            for loc in (d.get("locations") or []):
+                                if loc and len(loc) >= 3:
+                                    entities.add(loc.lower())
+                            events_data.append({"d": d, "entities": entities})
+
+                        # Group: events sharing 2+ non-generic entities go in the same group
+                        # Skip generic terms that would over-group (nws, united states, etc.)
+                        generic = {"united states", "us", "usa", "nws", "world", "global", "europe", "asia", "africa"}
+                        groups: list[list[dict]] = []
+                        used = set()
+                        for i, ev in enumerate(events_data):
+                            if i in used:
+                                continue
+                            group = [ev]
+                            used.add(i)
+                            for j in range(i + 1, len(events_data)):
+                                if j in used:
+                                    continue
+                                overlap = (ev["entities"] & events_data[j]["entities"]) - generic
+                                if len(overlap) >= 2:
+                                    group.append(events_data[j])
+                                    used.add(j)
+                            groups.append(group)
+
+                        # Sort groups by size (largest clusters first) then by recency
+                        groups.sort(key=lambda g: (-len(g), 0))
+
+                        # Format as entity-grouped sections
                         lines = []
-                        if last_report_cycle > 0:
-                            lines.append(f"(Events since last report at cycle {last_report_cycle})")
-                        for ev in events:
-                            src = ev.get("_source", ev)
-                            title = src.get("title", "untitled")
-                            cat = src.get("category", "?")
-                            ts = src.get("event_date", src.get("timestamp", "?"))
-                            summary = src.get("summary", "")
-                            actors = src.get("actors", [])
-                            locations = src.get("locations", [])
-                            actor_str = f" | Actors: {', '.join(actors)}" if actors else ""
-                            loc_str = f" | Location: {', '.join(locations)}" if locations else ""
-                            line = f"- [{cat}] {title} ({ts}){actor_str}{loc_str}"
-                            if summary:
-                                line += f"\n  Summary: {summary[:200]}"
-                            lines.append(line)
+                        if ref_last_cycle > 0:
+                            lines.append(f"(Derived events, grouped by shared entities. Last report: cycle {ref_last_cycle})")
+                        for group in groups[:30]:  # Cap at 30 groups
+                            if len(group) > 1:
+                                # Find common entities for header
+                                common = group[0]["entities"]
+                                for ev in group[1:]:
+                                    common = common & ev["entities"]
+                                header_entities = ", ".join(sorted(common)[:3]).title() if common else "Related"
+                                lines.append(f"\n### {header_entities} ({len(group)} events)")
+                            for ev in group:
+                                d = ev["d"]
+                                title = d.get("title", "untitled")
+                                cat = d.get("category", "?")
+                                sev = d.get("severity", "medium")
+                                sc = d.get("signal_count", 0)
+                                ts = d.get("time_start", d.get("created_at", "?"))
+                                actors = d.get("actors") or []
+                                locations = d.get("locations") or []
+                                actor_str = f" | Actors: {', '.join(actors[:5])}" if actors else ""
+                                loc_str = f" | Location: {', '.join(locations[:3])}" if locations else ""
+                                line = f"- [{cat}/{sev}] {title} ({ts}) [{sc} signals]{actor_str}{loc_str}"
+                                summary = d.get("summary", "")
+                                if summary:
+                                    line += f"\n  {summary[:200]}"
+                                lines.append(line)
                         recent_events = "\n".join(lines)
             except Exception:
                 pass
 
-            # Fallback: get events from Postgres JSONB
             if not recent_events:
-                try:
-                    from ...shared.config import PostgresConfig
-                    import asyncpg
-                    pg = PostgresConfig.from_env()
-                    conn = await asyncpg.connect(
-                        host=pg.host, port=pg.port, user=pg.user,
-                        password=pg.password, database=pg.database,
-                    )
-                    rows = await conn.fetch(
-                        "SELECT data->>'title' AS title, data->>'category' AS category, "
-                        "data->>'event_date' AS event_date, data->>'summary' AS summary, "
-                        "data->>'actors' AS actors, data->>'locations' AS locations "
-                        "FROM signals ORDER BY created_at DESC LIMIT 50"
-                    )
-                    await conn.close()
-                    lines = []
-                    for r in rows:
-                        actors = r['actors'] or ""
-                        locations = r['locations'] or ""
-                        line = f"- [{r['category']}] {r['title']} ({r['event_date']})"
-                        if actors:
-                            line += f" | Actors: {actors}"
-                        if locations:
-                            line += f" | Location: {locations}"
-                        if r['summary']:
-                            line += f"\n  Summary: {r['summary'][:200]}"
-                        lines.append(line)
-                    recent_events = "\n".join(lines)
-                except Exception:
-                    recent_events = "(could not retrieve events)"
+                recent_events = "(no derived events available)"
 
             # Coverage regions from graph
             coverage_regions = ""

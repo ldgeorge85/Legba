@@ -73,9 +73,9 @@ The LLM provider is modular — selected via `LLM_PROVIDER` env var (`vllm` or `
 - **No max_tokens** — server manages budget (exception: liveness sends 200)
 
 Known behaviors:
-- Reasoning mode expects exactly 2 output messages → `{"actions": [...]}` wrapper prevents multi-message errors
+- Reasoning mode expects exactly 2 output messages (reasoning + final) — `reasoning: high` must appear exactly once per combined message to avoid multi-segment 400 errors
 - `reasoning` levels: `high`, `medium`, `low` only (no `off`)
-- ~1-2% of steps hit multi-message 400 errors, handled by forced-final
+- Phase-specific templates (EVOLVE, RESEARCH, etc.) do NOT include `reasoning: high` — it is only in the system prompt to prevent duplication when combined into a single user message
 
 #### Provider: Anthropic (Claude) — `LLM_PROVIDER=anthropic`
 
@@ -380,8 +380,10 @@ Built by `PromptAssembler._build_system_text()`:
 5. **What You Can Do** (section 3): Tool categories overview
 6. **Critical Behaviors** (section 4): Anti-patterns (no chatbot behavior, no planning without acting)
 7. **Your Purpose** (section 5): Intelligence analyst framing
-8. **Guidance addons**: Memory management, efficiency, analytics, orchestration, SA guidance, entity guidance
-9. **Bootstrap addon** (cycles 1-5 only): Early orientation referencing world briefing
+8. **Signals vs Events** (section 6): Two-tier data model explanation
+9. **Guidance addons**: Memory management, efficiency, analytics, orchestration, SA guidance, entity guidance
+10. **Self-Assessment Discipline**: Anti-catastrophizing rules — don't conclude infra is down from single tool errors, journal carries weight, AGE Cypher limitations
+11. **Bootstrap addon** (cycles 1-5 only): Early orientation referencing world briefing
 
 Note: System and user messages are combined into a single `{"role": "user"}` message by `to_chat_messages()` before sending to the LLM.
 
@@ -426,8 +428,8 @@ Note: System and user messages are combined into a single `{"role": "user"}` mes
 | Entity guidance | `ENTITY_GUIDANCE` | System addon |
 | Re-grounding | `REGROUND_PROMPT` | Every 8 tool steps |
 | Reporting | `REPORTING_REMINDER` | Every 5 cycles (structured intelligence brief format) |
-| Narrate | `NARRATE_PROMPT` | NARRATE phase (reasoning: high) |
-| Journal consolidation | `JOURNAL_CONSOLIDATION_PROMPT` | Introspection (reasoning: high) |
+| Narrate | `NARRATE_PROMPT` | NARRATE phase |
+| Journal consolidation | `JOURNAL_CONSOLIDATION_PROMPT` | Introspection |
 | Analysis report | `ANALYSIS_REPORT_PROMPT` | Introspection |
 | Curate | `CURATE_PROMPT` | Every 3 cycles (event curation from clustered signals) |
 | Evolve | `EVOLVE_PROMPT` | Every 30 cycles (self-improvement, source discovery, operational scorecard) |
@@ -974,7 +976,7 @@ legba/
 |   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 13 phase mixins
 |   |   +-- phases/                  -- Phase mixin modules
 |   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (63 tools)
-|   |   |   +-- orient.py           -- OrientMixin: memory/context + ingestion gap tracking + journal leads
+|   |   |   +-- orient.py           -- OrientMixin: memory/context + live infra health check + ingestion gap tracking + journal leads
 |   |   |   +-- plan.py             -- PlanMixin: LLM planning + tool selection
 |   |   |   +-- act.py              -- ActMixin: tool loop execution
 |   |   |   +-- reflect.py          -- ReflectMixin: significance, facts, graph

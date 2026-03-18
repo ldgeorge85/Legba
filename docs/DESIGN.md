@@ -102,7 +102,7 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 | Mixin | File | Phase |
 |-------|------|-------|
 | `WakeMixin` | `phases/wake.py` | Service init, tool registration |
-| `OrientMixin` | `phases/orient.py` | Memory/context gathering |
+| `OrientMixin` | `phases/orient.py` | Memory/context gathering, live infra health check |
 | `PlanMixin` | `phases/plan.py` | LLM planning + tool selection |
 | `ActMixin` | `phases/act.py` | Tool loop execution |
 | `ReflectMixin` | `phases/reflect.py` | Significance, facts, graph extraction |
@@ -132,6 +132,7 @@ main.py:main()
         │     ├── Retrieve episodic memories (Qdrant similarity search)
         │     ├── Load active goals + goal work tracker (Postgres + Redis)
         │     ├── Query known facts (Postgres)
+        │     ├── Live infrastructure health check (Postgres, AGE, Redis, Qdrant)
         │     ├── Build graph inventory (entity counts by type, top relationships)
         │     ├── Query source health stats (total sources, utilization %)
         │     ├── Get NATS queue summary
