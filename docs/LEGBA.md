@@ -1,17 +1,23 @@
 # Legba — Platform Reference
 
-*Continuously operating autonomous intelligence platform.*
-*Last updated: 2026-03-16 | Signals/events refactor, CURATE cycle, deterministic clustering, two-tier data model*
+*Autonomous intelligence analysis platform.*
+*Last updated: 2026-03-18 | Cycle redesign (SURVEY/SYNTHESIZE), hypothesis engine (ACH), 24 UI panels, worker mode, hybrid LLM routing*
 
 ---
 
 ## 1. What It Is
 
-Legba is an autonomous AI agent that runs continuously, pursuing open-ended goals with minimal human intervention. It is not a chatbot or a task runner — it is a persistent system that reasons, acts, remembers, and improves itself over time.
+Legba is a continuously operating AI intelligence analyst. It does not collect data — an automated ingestion pipeline handles that. The AI runs structured analytical cycles: building a knowledge graph, tracking situations, testing competing hypotheses against incoming evidence, and producing named intelligence products.
 
-The operator provides a seed goal. The agent then operates indefinitely: ingesting data, building a knowledge graph, producing analytical products, and expanding its own capabilities.
+**Three layers, each doing what it's best at:**
 
-**Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform with a two-tier data model. Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). The agent curates, correlates, and analyzes events to produce structured briefings, detect patterns, and flag significant developments.
+- **Collection layer** (deterministic, no LLM): Fetches 100+ RSS/API sources, normalizes signals, 4-tier dedup, spaCy NER, embeds to Qdrant, clusters signals into events. Runs continuously and independently.
+- **Analytical layer** (LLM-driven): 7 cycle types with restricted tool sets. SURVEY cycles review events, build graph relationships, and stress-test hypotheses. SYNTHESIZE cycles deep-dive into situations and produce named briefs. ANALYSIS detects patterns. RESEARCH enriches entities. INTROSPECTION produces world assessment reports. EVOLVE audits the agent itself.
+- **Operator layer**: 24-panel intelligence workstation, consultation engine with 15+ tools, inbox for directives, real-time SSE feed.
+
+**Current deployment:** Continuous Global Situational Awareness — monitoring geopolitical, conflict, health, environmental, and economic developments. Same codebase supports privacy/overreach monitoring and attack surface management via configuration (seed goal + source portfolio).
+
+**Two-tier data model:** Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). Signals are evidence; events are the analytical unit. Reports, situations, hypotheses, and graph analysis operate on events.
 
 **Key numbers:** 100+ Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules, ~22,700 signals, 112 active sources, 7 platform services, 12 Docker containers.
 

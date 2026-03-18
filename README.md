@@ -3,11 +3,13 @@
 </p>
 
 <h1 align="center">Legba</h1>
-<p align="center"><em>Continuously operating autonomous intelligence platform.</em></p>
+<p align="center"><em>Autonomous intelligence analysis platform.</em></p>
 
-Legba is a persistent AI agent that runs indefinitely — ingesting global signals, deriving real-world events, building a knowledge graph, producing analytical products, and improving itself over time. It is not a chatbot or task runner. It operates autonomously with minimal human intervention.
+Legba is a continuously operating AI analyst. An automated ingestion pipeline collects and clusters raw signals from 100+ global sources. The AI runs structured analytical cycles — building a knowledge graph, tracking situations, stress-testing competing hypotheses, and producing named intelligence products (world assessments, situation briefs, predictions). An operator interacts through a 24-panel intelligence workstation and a consultation engine.
 
-**Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform with a two-tier data model: raw **signals** (RSS items, API responses, alerts) are ingested and clustered into derived **events** (real-world occurrences), then correlated and analyzed to produce structured briefings, detect patterns, and flag significant developments.
+It is not a chatbot, not a task runner, not an AutoGPT-style goal chaser. It is a disciplined analytical system: collection is deterministic, analysis is LLM-driven, and every cycle type has a specific purpose and restricted tool set.
+
+**Current deployment:** Continuous Global Situational Awareness — monitoring geopolitical, conflict, health, environmental, and economic developments worldwide. Same codebase supports privacy/overreach monitoring and attack surface management via configuration.
 
 ## Architecture
 
