@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -22,7 +25,8 @@ async def _fetch_goals(stores) -> list[dict]:
                 "SELECT id, data, status, priority, parent_id, created_at, updated_at "
                 "FROM goals ORDER BY priority, created_at"
             )
-    except Exception:
+    except Exception as e:
+        logger.warning("Goals fetch query failed: %s", e)
         return []
 
     goals = []

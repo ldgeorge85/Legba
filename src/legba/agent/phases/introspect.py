@@ -22,8 +22,9 @@ INTROSPECTION_TOOLS: frozenset[str] = frozenset({
     "note_to_self", "explain_tool",
     "goal_update", "goal_create",
     "cycle_complete",
-    # Predictions (introspection can review and update hypotheses)
+    # Predictions and hypotheses
     "prediction_create", "prediction_update", "prediction_list",
+    "hypothesis_create", "hypothesis_evaluate", "hypothesis_list",
 })
 
 
@@ -461,7 +462,7 @@ class IntrospectMixin:
                             annotated_lines.append(line)
                     key_relationships = "\n".join(annotated_lines)
 
-            # --- Novelty scoring: surface under-represented events ---
+            # --- Novelty scoring: surface under-represented signals ---
             novelty_events_text = ""
             peripheral_novelty_text = ""
             try:
@@ -471,9 +472,9 @@ class IntrospectMixin:
                         cat_totals = await conn.fetch(
                             "SELECT category, COUNT(*) AS cnt FROM signals GROUP BY category"
                         )
-                        total_events_all = sum(r["cnt"] for r in cat_totals) if cat_totals else 0
+                        total_signals_all = sum(r["cnt"] for r in cat_totals) if cat_totals else 0
                         cat_pct = {
-                            r["category"]: r["cnt"] / max(total_events_all, 1)
+                            r["category"]: r["cnt"] / max(total_signals_all, 1)
                             for r in cat_totals
                         } if cat_totals else {}
 
@@ -489,7 +490,7 @@ class IntrospectMixin:
                             for r in region_totals
                         } if region_totals else {}
 
-                        # Recent events (48h) with region info
+                        # Recent signals (48h) with region info
                         recent_for_novelty = await conn.fetch(
                             "SELECT e.id, e.data->>'title' AS title, "
                             "e.category, e.created_at, "
@@ -500,7 +501,7 @@ class IntrospectMixin:
                             "ORDER BY e.created_at DESC LIMIT 200"
                         )
 
-                        # Entities seen in last 100 events (for entity novelty)
+                        # Entities seen in last 100 signals (for entity novelty)
                         known_entities: set[str] = set()
                         try:
                             known_rows = await conn.fetch(
@@ -515,7 +516,7 @@ class IntrospectMixin:
                         except Exception:
                             pass
 
-                        # Score each recent event
+                        # Score each recent signal
                         scored = []
                         for ev in recent_for_novelty:
                             # Category novelty: rarer category = higher score
@@ -527,7 +528,7 @@ class IntrospectMixin:
                             region_freq = region_pct.get(region, 0.5)
                             region_novelty = 1.0 - region_freq
 
-                            # Entity novelty: check if event links to unseen entities
+                            # Entity novelty: check if signal links to unseen entities
                             entity_novelty = 0.0
                             try:
                                 ev_entities = await conn.fetch(
@@ -561,7 +562,7 @@ class IntrospectMixin:
                         scored.sort(key=lambda x: x["novelty"], reverse=True)
                         top_novel = scored[:15]
 
-                        # Partition into primary-domain vs peripheral events
+                        # Partition into primary-domain vs peripheral signals
                         primary_domains = self.config.agent.report_primary_domains
                         primary_lines: list[str] = []
                         peripheral_lines: list[str] = []
@@ -709,12 +710,12 @@ class IntrospectMixin:
                 }
 
                 # --- Entity link rate ---
-                total_events = await conn.fetchval("SELECT COUNT(*) FROM signals") or 0
-                linked_events = await conn.fetchval(
+                total_signals = await conn.fetchval("SELECT COUNT(*) FROM signals") or 0
+                linked_signals = await conn.fetchval(
                     "SELECT COUNT(DISTINCT event_id) FROM signal_entity_links"
                 ) or 0
                 scorecard["entity_link_rate"] = round(
-                    linked_events / max(total_events, 1) * 100, 1
+                    linked_signals / max(total_signals, 1) * 100, 1
                 )
 
                 # --- Fact freshness ---
@@ -744,7 +745,7 @@ class IntrospectMixin:
                 except Exception:
                     scorecard["source_quality"] = {}
 
-                # --- Top entities by event involvement ---
+                # --- Top entities by signal involvement ---
                 rows = await conn.fetch(
                     "SELECT ep.canonical_name, COUNT(eel.event_id) AS event_count "
                     "FROM entity_profiles ep "

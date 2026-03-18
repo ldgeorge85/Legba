@@ -92,7 +92,7 @@ class ResearchMixin:
         """Build a summary of entity completeness for the research prompt."""
         try:
             async with self.memory.structured._pool.acquire() as conn:
-                # Get entities with lowest completeness that appear in events
+                # Get entities with lowest completeness that appear in signals
                 rows = await conn.fetch("""
                     SELECT ep.canonical_name, ep.entity_type,
                            ep.completeness_score,
@@ -122,8 +122,8 @@ class ResearchMixin:
                 avg_c = stats_row["avg_complete"]
                 low = stats_row["low"]
                 lines.append(f"**{total} entities total**, average completeness **{avg_c}**, **{low} below 30%**\n")
-                lines.append("Top entities by event involvement (lowest completeness first within each tier):")
-                lines.append("| Entity | Type | Completeness | Events |")
+                lines.append("Top entities by signal involvement (lowest completeness first within each tier):")
+                lines.append("| Entity | Type | Completeness | Signals |")
                 lines.append("|--------|------|-------------|--------|")
                 for r in rows:
                     lines.append(f"| {r['canonical_name']} | {r['entity_type']} | {r['completeness_score']:.0%} | {r['event_count']} |")

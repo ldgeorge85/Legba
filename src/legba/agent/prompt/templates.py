@@ -694,8 +694,9 @@ SURVEY_TOOLS: frozenset = frozenset({
     "situation_create", "situation_update", "situation_list",
     "situation_link_event",
     "watchlist_add", "watchlist_list",
-    # Predictions
+    # Predictions and hypotheses
     "prediction_create", "prediction_update", "prediction_list",
+    "hypothesis_create", "hypothesis_evaluate", "hypothesis_list",
     # Analytics (lighter use)
     "anomaly_detect", "temporal_query",
     # Limited external access (verification only, max 2/cycle)
@@ -728,7 +729,7 @@ Review the data above. What has changed? What does it mean? What should you do a
 ### Success Criteria (aim for at least 3 per cycle)
 1. **Situation updates**: Link recent events to active situations. Create new situations for emerging threads.
 2. **Graph relationships**: For entities mentioned in recent events, add typed edges (LeaderOf, HostileTo, OperatesIn, etc.) with graph_store. Nodes without edges are analytically invisible.
-3. **Hypothesis evaluation**: Check active predictions against new evidence. Update or resolve them.
+3. **Hypothesis stress-testing**: Check active hypotheses (hypothesis_list) against new signals. If a new signal supports or refutes a thesis, link it with hypothesis_evaluate. This is your most important analytical contribution — you are the evidence evaluator.
 4. **Investigation leads**: Identify threads worth deep-diving in a SYNTHESIZE cycle. Record via note_to_self.
 5. **Opportunistic curation**: If you encounter low-quality auto-events (bad titles, wrong severity, missing type), fix them with event_update.
 
@@ -765,8 +766,9 @@ SYNTHESIZE_TOOLS: frozenset = frozenset({
     # Situations (primary output)
     "situation_create", "situation_update", "situation_list",
     "situation_link_event",
-    # Predictions (primary output)
+    # Predictions and hypotheses (primary output)
     "prediction_create", "prediction_update", "prediction_list",
+    "hypothesis_create", "hypothesis_evaluate", "hypothesis_list",
     # Watchlists
     "watchlist_add", "watchlist_list",
     # External (thread-following)
@@ -850,8 +852,9 @@ ANALYSIS_TOOLS: frozenset = frozenset({
     # Watchlist + situations (analysis can create/update these)
     "watchlist_add", "watchlist_list",
     "situation_create", "situation_update", "situation_list", "situation_link_event",
-    # Predictions (analysis can create and review hypotheses)
+    # Predictions and hypotheses
     "prediction_create", "prediction_update", "prediction_list",
+    "hypothesis_create", "hypothesis_evaluate", "hypothesis_list",
     # Utilities
     "note_to_self", "explain_tool",
     "goal_update", "goal_create",

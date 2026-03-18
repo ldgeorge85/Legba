@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 
@@ -10,6 +11,8 @@ from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -65,7 +68,8 @@ async def _fetch_situations(stores, status: str | None = None) -> list[dict]:
                     "intensity_score, last_event_at, created_at, updated_at "
                     "FROM situations ORDER BY updated_at DESC"
                 )
-    except Exception:
+    except Exception as e:
+        logger.warning("_fetch_situations query failed: %s", e)
         return []
 
     situations = []
@@ -175,8 +179,8 @@ async def situation_detail(request: Request, situation_id: UUID):
                         "relevance": erow["relevance"],
                         "added_at": erow["added_at"],
                     })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("situation_detail query failed for %s: %s", situation_id, e)
 
     return templates.TemplateResponse("situations/detail.html", {
         "request": request,

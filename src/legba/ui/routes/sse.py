@@ -80,11 +80,12 @@ async def event_stream(request: Request):
                                 try:
                                     sig = Signal.model_validate_json(row["data"])
                                     yield f"event: event:new\ndata: {json.dumps({'event_id': str(sig.id), 'title': sig.title, 'category': sig.category if isinstance(sig.category, str) else sig.category.value, 'timestamp': sig.event_timestamp.isoformat() if sig.event_timestamp else ''})}\n\n"
-                                except Exception:
+                                except Exception as e:
+                                    logger.debug("SSE signal parse failed: %s", e)
                                     continue
                     last_event_count = signal_count
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("SSE signal count check failed: %s", e)
 
                 # Check for watch triggers
                 try:
@@ -92,8 +93,8 @@ async def event_stream(request: Request):
                     if triggers:
                         t = json.loads(triggers[0] if isinstance(triggers[0], str) else triggers[0].decode())
                         yield f"event: watch:trigger\ndata: {json.dumps(t)}\n\n"
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("SSE watch trigger check failed: %s", e)
 
             except Exception as exc:
                 logger.debug("SSE poll error: %s", exc)

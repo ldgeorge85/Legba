@@ -139,7 +139,8 @@ async def _fetch_full_graph(stores) -> dict:
                 "MATCH (a)-[r]->(b) RETURN a.name, r, b.name",
                 cols="src agtype, r agtype, tgt agtype",
             )
-    except Exception:
+    except Exception as e:
+        logger.warning("Full graph fetch failed: %s", e)
         return {"nodes": [], "edges": [], "rel_types": [], "node_types": []}
 
     return _build_cytoscape_data(node_rows, edge_rows)
@@ -215,7 +216,8 @@ async def _fetch_path(stores, from_name: str, to_name: str) -> dict:
                     """, cols="p agtype")
                     if path_rows:
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug("Path query at depth %d failed: %s", max_depth, e)
                     continue
             await conn.execute("RESET statement_timeout")
 

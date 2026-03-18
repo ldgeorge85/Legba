@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -50,7 +53,8 @@ async def _query_facts(stores, q: str | None, min_confidence: float | None, offs
 
             facts = [dict(row) for row in rows]
             return facts, total
-    except Exception:
+    except Exception as e:
+        logger.warning("Facts query failed: %s", e)
         return [], 0
 
 

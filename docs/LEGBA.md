@@ -13,7 +13,7 @@ The operator provides a seed goal. The agent then operates indefinitely: ingesti
 
 **Current mission:** Continuous Global Situational Awareness — an always-on intelligence platform with a two-tier data model. Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). The agent curates, correlates, and analyzes events to produce structured briefings, detect patterns, and flag significant developments.
 
-**Key numbers:** 100+ Python source files, 118 tests, **63 built-in tools** across 18 builtin modules, ~14,000 signals, 112 active sources, 7 platform services, 12 Docker containers.
+**Key numbers:** 100+ Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules, ~22,700 signals, 112 active sources, 7 platform services, 12 Docker containers.
 
 ---
 
@@ -36,8 +36,8 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   +-- Agent Container (ephemeral, one per cycle)
 |   |   - PYTHONPATH=/agent/src (self-modifiable)
 |   |   - Cycle: WAKE > ORIENT > [cycle type routing] > REFLECT > NARRATE > PERSIST
-|   |   - cycle.py orchestrator + 13 phase mixins (phases/ directory)
-|   |   - 63 built-in tools (incl. cycle_complete pseudo-tool)
+|   |   - cycle.py orchestrator + 15 phase mixins (phases/ directory)
+|   |   - 66 built-in tools (incl. cycle_complete pseudo-tool)
 |   |
 |   +-- Platform Services (long-lived)
 |   |   - Redis :6379         -- Transient state (counters, flags, registers)
@@ -150,10 +150,10 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 
 ### Agent Cycle
 
-The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
+The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 63 tools, drain inbox
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 66 tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (priority order):
    a. EVOLVE (every 30)        -- self-improvement, source discovery, operational scorecard
@@ -956,7 +956,7 @@ See `docs/WORKLOG.md` for the current work queue.
 
 ### Production Metrics
 
-As of cycle 1234+: ~14,000 signals, 1,764 facts, 501 entities, 661 graph nodes, 1,306 edges, 112 active sources. Sub-1% error rate across 1,200+ autonomous cycles.
+As of cycle 1234+: ~22,700 signals, 1,764 facts, 501 entities, 661 graph nodes, 1,306 edges, 112 active sources. Sub-1% error rate across 1,200+ autonomous cycles.
 
 ---
 
@@ -977,7 +977,7 @@ legba/
 |   |   +-- config.py               -- LegbaConfig (temperature default 1.0)
 |   +-- agent/
 |   |   +-- main.py                  -- Entry point
-|   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 13 phase mixins
+|   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 15 phase mixins
 |   |   +-- phases/                  -- Phase mixin modules
 |   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (63 tools)
 |   |   |   +-- orient.py           -- OrientMixin: memory/context + live infra health check + ingestion gap tracking + journal leads
@@ -1010,7 +1010,7 @@ legba/
 |       +-- app.py, stores.py, messages.py, static/
 |       +-- routes/                    -- dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph, facts, memory, watchlist, situations, consult, analytics
 |       +-- templates/                 -- Jinja2 (base.html + per-page dirs)
-+-- tests/                           -- 118 tests (unit + integration + graph)
++-- tests/                           -- 200+ tests (unit + integration + graph)
 +-- docs/
     +-- LEGBA.md                     -- This document (platform reference)
     +-- CODE_MAP.md                  -- Full code map with function flows

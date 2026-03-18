@@ -156,19 +156,19 @@ class OrientMixin:
                     password=pg.password, database=pg.database,
                 )
                 total_sources = await conn.fetchval("SELECT COUNT(*) FROM sources")
-                sources_with_events = await conn.fetchval(
+                sources_with_signals = await conn.fetchval(
                     "SELECT COUNT(DISTINCT source_id) FROM signals WHERE source_id IS NOT NULL"
                 )
-                total_events = await conn.fetchval("SELECT COUNT(*) FROM signals")
+                total_signals = await conn.fetchval("SELECT COUNT(*) FROM signals")
                 await conn.close()
 
-                utilization = (sources_with_events / total_sources * 100) if total_sources else 0
+                utilization = (sources_with_signals / total_sources * 100) if total_sources else 0
                 health_line = (
                     f"\n## Source Health\n"
                     f"**{total_sources} sources registered**, "
-                    f"**{sources_with_events} have produced events** "
+                    f"**{sources_with_signals} have produced signals** "
                     f"({utilization:.0f}% utilization), "
-                    f"**{total_events} total events**"
+                    f"**{total_signals} total signals**"
                 )
                 if utilization < 50:
                     health_line += (
@@ -202,7 +202,7 @@ class OrientMixin:
         except Exception:
             pass
 
-        # Ingestion gap tracking — warn if no events stored recently
+        # Ingestion gap tracking — warn if no signals stored recently
         self._ingestion_gap_warning = ""
         try:
             if self.memory and self.memory.registers:
@@ -213,10 +213,10 @@ class OrientMixin:
                     if gap > 5:
                         self._ingestion_gap_warning = (
                             f"\n## ⚠ Ingestion Gap Warning\n"
-                            f"**No new events have been stored for {gap} cycles** "
+                            f"**No new signals have been stored for {gap} cycles** "
                             f"(last ingestion: cycle {last_ingest}). "
                             f"Data is getting stale. Prioritize fetching sources "
-                            f"and storing events this cycle."
+                            f"and storing signals this cycle."
                         )
                         if self._graph_inventory:
                             self._graph_inventory += self._ingestion_gap_warning
@@ -273,7 +273,7 @@ class OrientMixin:
                         active_sources = await conn.fetchval(
                             "SELECT COUNT(*) FROM sources WHERE status = 'active'"
                         )
-                        # Top categories from recent events
+                        # Top categories from recent signals
                         cat_rows = await conn.fetch("""
                             SELECT category, COUNT(*) as cnt
                             FROM signals
@@ -286,7 +286,7 @@ class OrientMixin:
                             f"{r['category']}({r['cnt']})" for r in cat_rows
                         ) if cat_rows else "none yet"
 
-                        # High-signal event briefing (3.3)
+                        # High-confidence signal briefing (3.3)
                         briefing_rows = await conn.fetch("""
                             SELECT title, category, summary,
                                    array_to_string(actors, ', ') as actors_str,
@@ -301,7 +301,7 @@ class OrientMixin:
                         await conn.close()
 
                         if briefing_rows:
-                            brief_lines = ["## High-Signal Event Briefing (last 2h)", ""]
+                            brief_lines = ["## High-Confidence Signal Briefing (last 2h)", ""]
                             for r in briefing_rows:
                                 line = f"- **{r['title'][:100]}** [{r['category']}]"
                                 if r['locs_str']:
@@ -316,8 +316,8 @@ class OrientMixin:
                     self._ingestion_status = (
                         f"\n## Ingestion Service Status\n"
                         f"**Service: RUNNING** (heartbeat: {heartbeat})\n"
-                        f"Events stored (1h): **{events_1h}** | "
-                        f"Events stored (24h): **{events_24h}** | "
+                        f"Signals stored (1h): **{events_1h}** | "
+                        f"Signals stored (24h): **{events_24h}** | "
                         f"Errors (1h): {errors_1h}\n"
                         f"Sources: {active_sources}/{total_sources} active\n"
                         f"Top categories (1h): {cat_summary}"

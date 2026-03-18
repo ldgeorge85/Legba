@@ -94,8 +94,8 @@ async def dashboard(request: Request):
         cycle_val = await stores.registers._redis.get("legba:cycle_number")
         if cycle_val:
             cycle = int(cycle_val) if isinstance(cycle_val, int) else int(cycle_val.decode() if isinstance(cycle_val, bytes) else cycle_val)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Dashboard: cycle number fetch failed: %s", e)
     # Derive agent status from most recent audit entry timestamp
     try:
         from datetime import timezone
@@ -111,8 +111,8 @@ async def dashboard(request: Request):
                 last_ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
                 age = (datetime.now(timezone.utc) - last_ts).total_seconds()
                 agent_status = "running" if age < 300 else "idle"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Dashboard: agent status derivation failed: %s", e)
 
     # Recent events
     recent_events = []
@@ -126,10 +126,11 @@ async def dashboard(request: Request):
                 try:
                     ev = Event.model_validate_json(row["data"])
                     recent_events.append(_serialize_event(ev))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Dashboard: event parse failed: %s", e)
                     continue
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Dashboard: recent events query failed: %s", e)
 
     # Ingestion status from Redis
     ingestion = {}
@@ -145,7 +146,8 @@ async def dashboard(request: Request):
             "signals_24h": signals_24h,
             "errors_1h": errors_1h,
         }
-    except Exception:
+    except Exception as e:
+        logger.warning("Dashboard: ingestion status fetch failed: %s", e)
         ingestion = {"active": False, "signals_1h": 0, "signals_24h": 0, "errors_1h": 0}
 
     # Active situations
@@ -164,15 +166,15 @@ async def dashboard(request: Request):
             }
             for s in sits
         ]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Dashboard: active situations fetch failed: %s", e)
 
     # Count derived events separately
     event_count = 0
     try:
         event_count = await stores.count_events()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Dashboard: event count failed: %s", e)
 
     return _json({
         "entities": _safe(counts[0]),
@@ -276,7 +278,8 @@ async def list_signals(
         for hit in result.get("hits", []):
             try:
                 events.append(_serialize_event(Event.model_validate(hit)))
-            except Exception:
+            except Exception as e:
+                logger.debug("Signal parse from OpenSearch failed: %s", e)
                 continue
         return _json({
             "items": events,
@@ -338,7 +341,8 @@ async def list_signals(
             for row in rows:
                 try:
                     items.append(_serialize_event(Event.model_validate_json(row["data"])))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Signal row parse failed: %s", e)
                     continue
             return _json({"items": items, "total": total, "offset": offset, "limit": limit})
     except Exception as exc:
@@ -423,8 +427,8 @@ async def get_signal(request: Request, signal_id: UUID):
             }
             for e in ents
         ]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Signal entity links fetch failed for %s: %s", signal_id, e)
 
     data["entities"] = entities
     return _json(data)
@@ -549,7 +553,8 @@ async def list_events(
                         "locations": (d.get("locations") or [])[:5],
                         "created_at": d.get("created_at"),
                     })
-                except Exception:
+                except Exception as e:
+                    logger.debug("Derived event row parse failed: %s", e)
                     continue
             return _json({"items": items, "total": total, "offset": offset, "limit": limit})
     except Exception as exc:
@@ -724,7 +729,8 @@ async def list_entities(
                 try:
                     ep = EntityProfile.model_validate_json(row["data"])
                     items.append(_serialize_entity(ep))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Entity profile parse failed: %s", e)
                     total -= 1
             return _json({"items": items, "total": total, "offset": offset, "limit": limit})
     except Exception as exc:
@@ -753,8 +759,8 @@ async def get_entity(request: Request, entity_id: str):
             if row:
                 from ...shared.schemas.entity_profiles import EntityProfile
                 ep = EntityProfile.model_validate_json(row["data"])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Entity name lookup failed for %r: %s", entity_id, e)
 
     if not ep:
         return _json({"error": "not found"}, 404)
@@ -786,8 +792,8 @@ async def get_entity(request: Request, entity_id: str):
                         "source": getattr(a, "source_url", ""),
                         "timestamp": str(getattr(a, "observed_at", "")),
                     })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Entity assertions parse failed: %s", e)
     data["assertions"] = assertions
 
     # Relationships from graph
@@ -802,8 +808,8 @@ async def get_entity(request: Request, entity_id: str):
                     "rel_type": edge.get("rel_type", ""),
                     "properties": {k: v for k, v in edge.items() if k not in ("source", "target", "rel_type")},
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Entity relationships fetch failed: %s", e)
     data["relationships"] = relationships
 
     return _json(data)
@@ -1563,8 +1569,8 @@ async def list_cycles(
                     dt_min = datetime.fromisoformat(str(min_ts).replace("Z", "+00:00"))
                     dt_max = datetime.fromisoformat(str(max_ts).replace("Z", "+00:00"))
                     duration_s = int((dt_max - dt_min).total_seconds())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Cycle duration parse failed: %s", e)
 
             # Extract phase names for cycle type detection
             phase_buckets = (
@@ -1656,12 +1662,13 @@ async def get_cycle(request: Request, cycle_number: int):
                 for t in timestamps:
                     try:
                         ts_list.append(datetime.fromisoformat(str(t).replace("Z", "+00:00")))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Cycle detail timestamp parse failed: %s", e)
                         continue
                 if len(ts_list) >= 2:
                     duration_s = int((max(ts_list) - min(ts_list)).total_seconds())
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Cycle detail duration computation failed: %s", e)
 
         return _json({
             "cycle_number": cycle_number,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from uuid import UUID
 
@@ -11,6 +12,8 @@ from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 from ...shared.schemas.signals import SignalCategory as EventCategory
 
 router = APIRouter()
@@ -38,7 +41,8 @@ async def _query_events_paged(stores, q, category, offset):
         for hit in result.get("hits", []):
             try:
                 events.append(Event.model_validate(hit))
-            except Exception:
+            except Exception as e:
+                logger.debug("Event parse from OpenSearch failed: %s", e)
                 continue
         total = result.get("total", len(events))
         return events, total
@@ -69,7 +73,8 @@ async def _query_events_paged(stores, q, category, offset):
             )
             events = [Event.model_validate_json(row["data"]) for row in rows]
             return events, total
-    except Exception:
+    except Exception as e:
+        logger.warning("Events paged query failed: %s", e)
         return [], 0
 
 
@@ -171,7 +176,8 @@ async def event_detail(request: Request, event_id: UUID):
                         "role": raw.get("role", "mentioned"),
                         "confidence": raw.get("confidence", 0.0),
                     })
-                except Exception:
+                except Exception as e:
+                    logger.debug("Entity profile parse failed: %s", e)
                     continue
 
         # Process situations
@@ -222,7 +228,8 @@ async def _fetch_linked_situations(stores, event_id: UUID) -> list[dict]:
                 }
                 for row in rows
             ]
-    except Exception:
+    except Exception as e:
+        logger.warning("_fetch_linked_situations query failed: %s", e)
         return []
 
 
@@ -235,7 +242,8 @@ def _parse_ts(val) -> datetime | None:
     try:
         s = str(val).replace("Z", "+00:00")
         return datetime.fromisoformat(s)
-    except Exception:
+    except Exception as e:
+        logger.debug("_parse_ts failed for %r: %s", val, e)
         return None
 
 
@@ -273,7 +281,8 @@ async def _fetch_related_events(
                             "event_timestamp": _parse_ts(data.get("event_timestamp")),
                             "relation": "same source",
                         })
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Related event parse failed: %s", e)
                         continue
 
             # Overlapping actors (if we have room and actors exist)
@@ -302,11 +311,13 @@ async def _fetch_related_events(
                             "event_timestamp": _parse_ts(data.get("event_timestamp")),
                             "relation": "shared actors",
                         })
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Related event (actor) parse failed: %s", e)
                         continue
 
         return results[:5]
-    except Exception:
+    except Exception as e:
+        logger.warning("_fetch_related_events query failed: %s", e)
         return []
 
 
@@ -331,8 +342,8 @@ async def delete_event(request: Request, event_id: UUID):
         if stores.opensearch and stores.opensearch.available:
             try:
                 await stores.opensearch.delete_document("legba-events-*", str(event_id))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("OpenSearch delete for event %s failed (non-fatal): %s", event_id, e)
 
         return HTMLResponse(
             '<div class="text-green-400 text-sm p-2">Event deleted.</div>'

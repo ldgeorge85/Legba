@@ -413,8 +413,8 @@ async def _build_prompts(stores: StoreHolder) -> tuple[str, str]:
         raw = await stores.registers.get("cycle_number")
         if raw:
             cycle_number = raw
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Failed to fetch cycle number from Redis: %s", e)
 
     # Journal consolidation (truncated to avoid overwhelming the model)
     journal = "(none)"
@@ -424,8 +424,8 @@ async def _build_prompts(stores: StoreHolder) -> tuple[str, str]:
             consolidation = journal_data.get("consolidation", "")
             if consolidation:
                 journal = consolidation[:1500]
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Failed to fetch journal consolidation: %s", e)
 
     # Active situations summary
     situations = "(none)"
@@ -445,8 +445,8 @@ async def _build_prompts(stores: StoreHolder) -> tuple[str, str]:
                             f"intensity={r['intensity_score']:.1f}, events={r['event_count']}"
                         )
                     situations = "\n".join(lines)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Failed to fetch active situations: %s", e)
 
     system = _SYSTEM_CONTENT.format(tool_defs=_format_tool_defs_json())
     user_context = _USER_TEMPLATE.format(
@@ -1249,8 +1249,8 @@ async def _handle_delete_event(stores: StoreHolder, args: dict) -> str:
         if stores.opensearch and stores.opensearch.available:
             try:
                 await stores.opensearch.delete_document("legba-events-*", str(eid))
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("OpenSearch delete for event %s failed (non-fatal): %s", eid, e)
 
         return f"Event '{event_id}' deleted."
     except Exception as e:

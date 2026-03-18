@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 
 from fastapi import APIRouter, Request
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -55,8 +58,8 @@ async def _fetch_stats(request: Request) -> dict:
             ingestion["events_1h"] = ev1h
             ingestion["events_24h"] = ev24h
             ingestion["errors_1h"] = err1h
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Dashboard ingestion stats fetch failed: %s", e)
 
     return {
         "cycle_number": cycle_number,
@@ -81,7 +84,8 @@ def _load_cycle_response():
             data = json.load(f)
         from ...shared.schemas.cycle import CycleResponse
         return CycleResponse.model_validate(data)
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to load cycle response.json: %s", e)
         return None
 
 

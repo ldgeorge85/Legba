@@ -73,7 +73,8 @@ class MessageStore:
             try:
                 raw = await self._redis.zrange(_ZSET_KEY, 0, -1)
                 entries = [json.loads(r) for r in raw]
-            except Exception:
+            except Exception as e:
+                log.warning("Redis get_thread failed, using fallback: %s", e)
                 entries = self._fallback
         # Filter out empty/junk messages
         entries = [e for e in entries if e.get("content", "").strip() not in ("", "{}")]
@@ -96,7 +97,8 @@ class MessageStore:
                 return
             await self._redis.zadd(_ZSET_KEY, {payload: score})
             await self._redis.sadd(_DEDUP_KEY, msg_id)
-        except Exception:
+        except Exception as e:
+            log.warning("Redis store failed, using fallback: %s", e)
             if not any(e["id"] == msg_id for e in self._fallback):
                 self._fallback.append(entry)
 
@@ -141,7 +143,8 @@ class UINatsClient:
                 if getattr(info, 'push_bound', False):
                     await self._js.delete_consumer(_STREAM, _CONSUMER_NAME)
                     raise Exception("recreate as pull")
-            except Exception:
+            except Exception as e:
+                log.debug("Recreating NATS pull consumer: %s", e)
                 self._pull_sub = await self._js.pull_subscribe(
                     _OUTBOUND_SUBJECT,
                     durable=_CONSUMER_NAME,
@@ -200,8 +203,9 @@ class UINatsClient:
                     # Skip empty/junk messages
                     if out.content and out.content.strip() not in ("", "{}"):
                         messages.append(out)
-                except Exception:
+                except Exception as e:
                     # Handle raw messages (e.g. {"raw": "..."} or plain text)
+                    log.debug("OutboxMessage parse failed, trying raw: %s", e)
                     try:
                         import json, uuid
                         from datetime import datetime, timezone
@@ -214,12 +218,12 @@ class UINatsClient:
                                 content=content,
                             )
                             messages.append(out)
-                    except Exception:
-                        pass  # truly unparseable — skip
+                    except Exception as e:
+                        log.warning("Unparseable NATS message skipped: %s", e)
                 try:
                     await raw.ack()
-                except Exception:
-                    pass  # ack failure is non-fatal
+                except Exception as e:
+                    log.debug("NATS ack failed (non-fatal): %s", e)
         except Exception as exc:
             log.debug("drain_outbound: %s", exc)
             self._pull_sub = None  # Reset on error so next call recreates

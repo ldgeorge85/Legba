@@ -86,8 +86,8 @@ class StoreHolder:
         if self._qdrant:
             try:
                 self._qdrant.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Qdrant close failed: %s", e)
 
     # ------------------------------------------------------------------
     # Qdrant memory helpers
@@ -173,7 +173,8 @@ class StoreHolder:
 
         try:
             return await asyncio.to_thread(_count)
-        except Exception:
+        except Exception as e:
+            logger.warning("Qdrant count_memories failed for %s: %s", collection, e)
             return 0
 
     async def _embed_text(self, text: str) -> list[float] | None:
@@ -208,7 +209,8 @@ class StoreHolder:
         try:
             async with self.structured._pool.acquire() as conn:
                 return await conn.fetchval("SELECT count(*) FROM entity_profiles")
-        except Exception:
+        except Exception as e:
+            logger.warning("count_entities failed: %s", e)
             return 0
 
     async def count_signals(self) -> int:
@@ -217,7 +219,8 @@ class StoreHolder:
         try:
             async with self.structured._pool.acquire() as conn:
                 return await conn.fetchval("SELECT count(*) FROM signals")
-        except Exception:
+        except Exception as e:
+            logger.warning("count_signals failed: %s", e)
             return 0
 
     async def count_events(self) -> int:
@@ -226,7 +229,8 @@ class StoreHolder:
         try:
             async with self.structured._pool.acquire() as conn:
                 return await conn.fetchval("SELECT count(*) FROM events")
-        except Exception:
+        except Exception as e:
+            logger.warning("count_events failed: %s", e)
             return 0
 
     async def count_sources(self) -> int:
@@ -235,7 +239,8 @@ class StoreHolder:
         try:
             async with self.structured._pool.acquire() as conn:
                 return await conn.fetchval("SELECT count(*) FROM sources WHERE status = 'active'")
-        except Exception:
+        except Exception as e:
+            logger.warning("count_sources failed: %s", e)
             return 0
 
     async def count_goals(self) -> int:
@@ -246,7 +251,8 @@ class StoreHolder:
                 return await conn.fetchval(
                     "SELECT count(*) FROM goals WHERE status = 'active'"
                 )
-        except Exception:
+        except Exception as e:
+            logger.warning("count_goals failed: %s", e)
             return 0
 
     async def count_facts(self) -> int:
@@ -255,7 +261,8 @@ class StoreHolder:
         try:
             async with self.structured._pool.acquire() as conn:
                 return await conn.fetchval("SELECT count(*) FROM facts")
-        except Exception:
+        except Exception as e:
+            logger.warning("count_facts failed: %s", e)
             return 0
 
     async def count_situations(self, statuses: tuple[str, ...] | None = None) -> int:
@@ -270,7 +277,8 @@ class StoreHolder:
                         *statuses,
                     )
                 return await conn.fetchval("SELECT count(*) FROM situations")
-        except Exception:
+        except Exception as e:
+            logger.warning("count_situations failed: %s", e)
             return 0
 
     async def count_watchlist(self) -> int:
@@ -281,7 +289,8 @@ class StoreHolder:
                 return await conn.fetchval(
                     "SELECT count(*) FROM watchlist WHERE active = true"
                 )
-        except Exception:
+        except Exception as e:
+            logger.warning("count_watchlist failed: %s", e)
             return 0
 
     async def fetch_active_situations(self, limit: int = 5) -> list[dict]:
@@ -309,7 +318,8 @@ class StoreHolder:
                     }
                     for row in rows
                 ]
-        except Exception:
+        except Exception as e:
+            logger.warning("fetch_active_situations failed: %s", e)
             return []
 
     async def count_relationships(self) -> int:
@@ -323,7 +333,8 @@ class StoreHolder:
                 val = results[0]["cnt"]
                 return int(val) if val is not None else 0
             return 0
-        except Exception:
+        except Exception as e:
+            logger.warning("count_relationships failed: %s", e)
             return 0
 
     async def get_event(self, event_id: UUID) -> Any:
@@ -338,7 +349,8 @@ class StoreHolder:
                 if row:
                     return Event.model_validate_json(row["data"])
             return None
-        except Exception:
+        except Exception as e:
+            logger.warning("get_event(%s) failed: %s", event_id, e)
             return None
 
     async def list_entity_versions(self, entity_id: UUID) -> list[dict]:
@@ -361,5 +373,6 @@ class StoreHolder:
                     }
                     for row in rows
                 ]
-        except Exception:
+        except Exception as e:
+            logger.warning("list_entity_versions(%s) failed: %s", entity_id, e)
             return []

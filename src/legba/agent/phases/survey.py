@@ -162,7 +162,34 @@ class SurveyMixin:
                         lines.append(f"- **[{p['id']}]** {desc}")
                     lines.append("")
 
-                # 5. Recent watch triggers
+                # 5. Active hypotheses needing evidence evaluation
+                hypotheses = await conn.fetch("""
+                    SELECT h.id, h.thesis, h.counter_thesis, h.evidence_balance,
+                           h.status, h.last_evaluated_cycle,
+                           array_length(h.supporting_signals, 1) as support_count,
+                           array_length(h.refuting_signals, 1) as refute_count,
+                           s.name as situation_name
+                    FROM hypotheses h
+                    LEFT JOIN situations s ON s.id = h.situation_id
+                    WHERE h.status = 'active'
+                    ORDER BY h.updated_at DESC
+                    LIMIT 10
+                """)
+                if hypotheses:
+                    lines.append("### Active Hypotheses (evaluate against new evidence)")
+                    for h in hypotheses:
+                        sup = h['support_count'] or 0
+                        ref = h['refute_count'] or 0
+                        sit = h['situation_name'] or 'unlinked'
+                        lines.append(
+                            f"- **[{h['id']}]** ({sit}) balance={h['evidence_balance']:+d} "
+                            f"({sup} for, {ref} against)"
+                        )
+                        lines.append(f"  Thesis: {h['thesis'][:120]}")
+                        lines.append(f"  Counter: {h['counter_thesis'][:120]}")
+                    lines.append("")
+
+                # 6. Recent watch triggers
                 watch_triggers = await conn.fetch("""
                     SELECT wt.watch_name, wt.event_title AS signal_title,
                            wt.priority, wt.triggered_at,

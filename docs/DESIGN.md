@@ -97,7 +97,7 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 
 ### Module Structure
 
-`cycle.py` is a thin orchestrator (~195 lines) that inherits from 14 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
+`cycle.py` is a thin orchestrator (~195 lines) that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
 
 | Mixin | File | Phase |
 |-------|------|-------|

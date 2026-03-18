@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -10,6 +11,8 @@ from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -101,8 +104,8 @@ async def watchlist_page(request: Request):
                 total = len(watches)
                 active_count = sum(1 for w in watches if w["active"])
                 total_triggers = sum(w["trigger_count"] for w in watches)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Watchlist page query failed: %s", e)
 
     context = {
         "request": request,
@@ -146,8 +149,8 @@ async def recent_triggers(request: Request):
                         "priority": row["priority"],
                         "triggered_at": row["triggered_at"],
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Watch triggers query failed: %s", e)
 
     context = {
         "request": request,

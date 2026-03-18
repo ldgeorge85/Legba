@@ -116,7 +116,7 @@ class AnalyzeMixin:
         current_snapshot = {}
         try:
             async with self.memory.structured._pool.acquire() as conn:
-                # Event counts by category
+                # Signal counts by category
                 cat_rows = await conn.fetch("""
                     SELECT category, count(*) as cnt
                     FROM signals
@@ -126,12 +126,12 @@ class AnalyzeMixin:
                 cat_dist = {r["category"]: r["cnt"] for r in cat_rows} if cat_rows else {}
                 current_snapshot["categories"] = cat_dist
                 if cat_dist:
-                    lines.append("### Event Distribution by Category")
+                    lines.append("### Signal Distribution by Category")
                     for cat, cnt in cat_dist.items():
                         lines.append(f"- {cat}: {cnt}")
                     lines.append("")
 
-                # Top entities by event involvement
+                # Top entities by signal involvement
                 entity_rows = await conn.fetch("""
                     SELECT ep.canonical_name, ep.entity_type,
                            COUNT(eel.event_id) as event_count
@@ -144,15 +144,15 @@ class AnalyzeMixin:
                 """)
                 top_entities = {}
                 if entity_rows:
-                    lines.append("### Top Entities by Event Involvement")
+                    lines.append("### Top Entities by Signal Involvement")
                     for r in entity_rows:
                         top_entities[r["canonical_name"]] = r["event_count"]
-                        lines.append(f"- {r['canonical_name']} ({r['entity_type']}): {r['event_count']} events")
+                        lines.append(f"- {r['canonical_name']} ({r['entity_type']}): {r['event_count']} signals")
                     lines.append("")
                 current_snapshot["top_entities"] = top_entities
 
                 # Total counts for threshold checking
-                total_events = await conn.fetchval("SELECT count(*) FROM signals")
+                total_signals = await conn.fetchval("SELECT count(*) FROM signals")
                 total_entities = await conn.fetchval("SELECT count(*) FROM entity_profiles")
                 total_rels = 0
                 try:
@@ -166,13 +166,13 @@ class AnalyzeMixin:
                     pass
 
                 current_snapshot["totals"] = {
-                    "events": total_events,
+                    "signals": total_signals,
                     "entities": total_entities,
                     "relationships": total_rels,
                 }
 
                 lines.append("### Data Thresholds")
-                lines.append(f"- Total events: {total_events} {'(enough for anomaly_detect)' if total_events >= 30 else '(need 30+ for anomaly_detect)'}")
+                lines.append(f"- Total signals: {total_signals} {'(enough for anomaly_detect)' if total_signals >= 30 else '(need 30+ for anomaly_detect)'}")
                 lines.append(f"- Total entities: {total_entities}")
                 lines.append(f"- Total relationships: {total_rels} {'(enough for graph_analyze)' if total_rels >= 20 else '(need 20+ for graph_analyze)'}")
 
@@ -233,8 +233,12 @@ class AnalyzeMixin:
         # Total count changes
         prev_totals = prev.get("totals", {})
         curr_totals = curr.get("totals", {})
-        for key, label in [("events", "events"), ("entities", "entities"), ("relationships", "relationships")]:
-            old_val = prev_totals.get(key, 0)
+        for key, label in [("signals", "signals"), ("entities", "entities"), ("relationships", "relationships")]:
+            # Backward compat: old snapshots stored signal count under "events"
+            if key == "signals" and key not in prev_totals:
+                old_val = prev_totals.get("events", 0)
+            else:
+                old_val = prev_totals.get(key, 0)
             new_val = curr_totals.get(key, 0)
             delta = new_val - old_val
             if delta > 0:
@@ -250,9 +254,9 @@ class AnalyzeMixin:
             new_cnt = curr_cats.get(cat, 0)
             delta = new_cnt - old_cnt
             if delta >= 3:
-                diff.append(f"- Category '{cat}' grew by {delta} events")
+                diff.append(f"- Category '{cat}' grew by {delta} signals")
             elif cat not in prev_cats and new_cnt > 0:
-                diff.append(f"- NEW category '{cat}' with {new_cnt} events")
+                diff.append(f"- NEW category '{cat}' with {new_cnt} signals")
 
         # New top entities
         prev_ents = set(prev.get("top_entities", {}).keys())

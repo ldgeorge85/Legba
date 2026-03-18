@@ -369,6 +369,25 @@ class StructuredStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sel_event ON signal_event_links(event_id);
                 CREATE INDEX IF NOT EXISTS idx_sel_signal ON signal_event_links(signal_id);
+
+                -- Hypotheses: competing analytical theories (ACH)
+                CREATE TABLE IF NOT EXISTS hypotheses (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    situation_id UUID REFERENCES situations(id),
+                    thesis TEXT NOT NULL,
+                    counter_thesis TEXT NOT NULL DEFAULT '',
+                    diagnostic_evidence JSONB NOT NULL DEFAULT '[]',
+                    supporting_signals UUID[] NOT NULL DEFAULT '{}',
+                    refuting_signals UUID[] NOT NULL DEFAULT '{}',
+                    evidence_balance INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_cycle INTEGER,
+                    last_evaluated_cycle INTEGER,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_hypotheses_status ON hypotheses(status);
+                CREATE INDEX IF NOT EXISTS idx_hypotheses_situation ON hypotheses(situation_id);
             """)
 
     # --- Goal operations ---
@@ -2297,3 +2316,138 @@ class StructuredStore:
         except Exception as e:
             logger.error("Failed to review proposed edge %s: %s", edge_id, e)
             return False
+
+    # --- Hypothesis (ACH) operations ---
+
+    async def create_hypothesis(
+        self,
+        thesis: str,
+        counter_thesis: str,
+        created_cycle: int,
+        situation_id: str | None = None,
+        diagnostic_evidence: list[dict] | None = None,
+    ) -> str | None:
+        """Create a competing hypothesis pair. Returns hypothesis ID."""
+        if not self._available:
+            return None
+        try:
+            import json as _json
+            from uuid import UUID as _UUID
+            sit_id = _UUID(situation_id) if situation_id else None
+            diag = _json.dumps(diagnostic_evidence or [])
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """INSERT INTO hypotheses
+                       (situation_id, thesis, counter_thesis, diagnostic_evidence,
+                        created_cycle, last_evaluated_cycle)
+                       VALUES ($1, $2, $3, $4::jsonb, $5, $5)
+                       RETURNING id""",
+                    sit_id, thesis, counter_thesis, diag, created_cycle,
+                )
+                return str(row["id"]) if row else None
+        except Exception as e:
+            logger.error("Failed to create hypothesis: %s", e)
+            return None
+
+    async def evaluate_hypothesis(
+        self,
+        hypothesis_id: str,
+        supporting_signal: str | None = None,
+        refuting_signal: str | None = None,
+        status: str | None = None,
+        evaluated_cycle: int | None = None,
+        diagnostic_update: dict | None = None,
+    ) -> bool:
+        """Add evidence to or update status of a hypothesis."""
+        if not self._available:
+            return False
+        try:
+            from uuid import UUID as _UUID
+            hid = _UUID(hypothesis_id)
+            async with self._pool.acquire() as conn:
+                updates = ["updated_at = NOW()"]
+                params = []
+                idx = 1
+
+                if supporting_signal:
+                    sid = _UUID(supporting_signal)
+                    updates.append(f"supporting_signals = array_append(supporting_signals, ${idx}::uuid)")
+                    updates.append(f"evidence_balance = evidence_balance + 1")
+                    params.append(sid)
+                    idx += 1
+
+                if refuting_signal:
+                    rid = _UUID(refuting_signal)
+                    updates.append(f"refuting_signals = array_append(refuting_signals, ${idx}::uuid)")
+                    updates.append(f"evidence_balance = evidence_balance - 1")
+                    params.append(rid)
+                    idx += 1
+
+                if status:
+                    updates.append(f"status = ${idx}")
+                    params.append(status)
+                    idx += 1
+
+                if evaluated_cycle is not None:
+                    updates.append(f"last_evaluated_cycle = ${idx}")
+                    params.append(evaluated_cycle)
+                    idx += 1
+
+                if diagnostic_update:
+                    import json as _json
+                    updates.append(f"diagnostic_evidence = ${idx}::jsonb")
+                    params.append(_json.dumps(diagnostic_update))
+                    idx += 1
+
+                params.append(hid)
+                sql = f"UPDATE hypotheses SET {', '.join(updates)} WHERE id = ${idx}"
+                result = await conn.execute(sql, *params)
+                return "UPDATE 1" in result
+        except Exception as e:
+            logger.error("Failed to evaluate hypothesis %s: %s", hypothesis_id, e)
+            return False
+
+    async def list_hypotheses(
+        self, status: str | None = None, situation_id: str | None = None, limit: int = 20
+    ) -> list[dict]:
+        """List hypotheses, optionally filtered by status or situation."""
+        if not self._available:
+            return []
+        try:
+            from uuid import UUID as _UUID
+            conditions = []
+            params = []
+            idx = 1
+
+            if status:
+                conditions.append(f"h.status = ${idx}")
+                params.append(status)
+                idx += 1
+
+            if situation_id:
+                conditions.append(f"h.situation_id = ${idx}")
+                params.append(_UUID(situation_id))
+                idx += 1
+
+            where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            params.append(limit)
+
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(f"""
+                    SELECT h.id, h.situation_id, h.thesis, h.counter_thesis,
+                           h.diagnostic_evidence, h.evidence_balance, h.status,
+                           h.created_cycle, h.last_evaluated_cycle,
+                           array_length(h.supporting_signals, 1) as support_count,
+                           array_length(h.refuting_signals, 1) as refute_count,
+                           s.name as situation_name
+                    FROM hypotheses h
+                    LEFT JOIN situations s ON s.id = h.situation_id
+                    {where}
+                    ORDER BY h.updated_at DESC
+                    LIMIT ${idx}
+                """, *params)
+
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error("Failed to list hypotheses: %s", e)
+            return []

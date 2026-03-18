@@ -7,6 +7,7 @@ Single entry point: python -m uvicorn legba.ui.app:app --host 0.0.0.0 --port 850
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from ..shared.config import PostgresConfig, RedisConfig, OpenSearchConfig, NatsC
 from .stores import StoreHolder
 from .messages import UINatsClient, MessageStore
 from .consult import ConsultationEngine
+
+logger = logging.getLogger(__name__)
 
 UI_DIR = Path(__file__).parent
 TEMPLATES_DIR = UI_DIR / "templates"
@@ -59,7 +62,8 @@ async def lifespan(app: FastAPI):
             try:
                 await ui_nats.publish(subject, body.encode())
                 return True
-            except Exception:
+            except Exception as e:
+                logger.warning("NATS publish failed: %s", e)
                 return False
 
         consult_engine = ConsultationEngine(
@@ -157,7 +161,8 @@ def _render_message(text: str | None) -> str:
         from markdown_it import MarkdownIt
         md = MarkdownIt()
         return md.render(text)
-    except Exception:
+    except Exception as e:
+        logger.debug("Markdown rendering failed, using plaintext: %s", e)
         from markupsafe import escape
         return f"<p>{escape(text)}</p>"
 

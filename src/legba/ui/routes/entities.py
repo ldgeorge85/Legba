@@ -217,10 +217,12 @@ async def _query_entities_paged(stores, q, entity_type, offset):
             for row in rows:
                 try:
                     entities.append(EntityProfile.model_validate_json(row["data"]))
-                except Exception:
+                except Exception as e:
+                    logger.debug("Entity profile parse failed: %s", e)
                     total -= 1  # Don't count invalid rows
             return entities, total
-    except Exception:
+    except Exception as e:
+        logger.warning("Entity paged query failed: %s", e)
         return [], 0
 
 
@@ -329,7 +331,8 @@ async def entity_detail(request: Request, entity_id: UUID):
                 "role": raw.get("role", "mentioned"),
                 "confidence": raw.get("confidence", 0.0),
             })
-        except Exception:
+        except Exception as e:
+            logger.debug("Linked event parse failed: %s", e)
             continue
 
     # Build profile summary and grouped facts for the new layout
@@ -465,7 +468,8 @@ async def merge_entities(request: Request):
 
     try:
         body = await request.json()
-    except Exception:
+    except Exception as e:
+        logger.debug("Entity merge: invalid JSON body: %s", e)
         return JSONResponse({"success": False, "error": "Invalid JSON body"}, status_code=400)
 
     keep_id = body.get("keep_id")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections import Counter
 from datetime import datetime
@@ -10,6 +11,8 @@ from datetime import datetime
 from fastapi import APIRouter, Request
 
 from ..app import get_stores, templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,7 +47,8 @@ def _load_cycle_response():
             data = json.load(f)
         from ...shared.schemas.cycle import CycleResponse
         return CycleResponse.model_validate(data)
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to load cycle response.json: %s", e)
         return None
 
 
@@ -55,7 +59,8 @@ def _parse_dt(val) -> datetime | None:
         return val
     try:
         return datetime.fromisoformat(str(val))
-    except Exception:
+    except Exception as e:
+        logger.debug("_parse_dt failed for %r: %s", val, e)
         return None
 
 
@@ -170,7 +175,8 @@ async def cycle_list(request: Request):
                     "duration_s": duration_s,
                 })
 
-        except Exception:
+        except Exception as e:
+            logger.warning("Cycle list audit query failed: %s", e)
             audit_available = False
 
     context = {
@@ -242,7 +248,8 @@ async def cycle_detail(request: Request, cycle_number: int):
                         "timestamp": ts,
                     })
 
-        except Exception:
+        except Exception as e:
+            logger.warning("Cycle detail audit query failed: %s", e)
             audit_available = False
 
     # --- Compute summary stats for the detail page ---

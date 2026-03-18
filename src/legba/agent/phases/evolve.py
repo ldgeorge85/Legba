@@ -200,7 +200,7 @@ class EvolveMixin:
                 """)
                 regions = [r['location'] for r in region_rows] if region_rows else []
                 lines.append("### Coverage Breadth (last 7 days)")
-                lines.append(f"- Distinct locations in recent events: {len(regions)}")
+                lines.append(f"- Distinct locations in recent signals: {len(regions)}")
                 if regions:
                     lines.append(f"- Locations: {', '.join(sorted(regions)[:20])}")
                 lines.append("")
