@@ -125,6 +125,13 @@ class AgentCycle(
             await self._wake()
             await self._orient()
 
+            # Worker mode: if CYCLE_TYPE env var is set, bypass interval routing
+            # and run only that cycle type. Enables parallel workers.
+            forced_type = os.environ.get("CYCLE_TYPE", "").strip().lower()
+            if forced_type:
+                await self._run_forced_cycle_type(forced_type)
+                return await self._persist()
+
             # Cycle type routing — evaluated in priority order.
             # Higher-priority types take precedence when intervals overlap.
             # EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10) > ANALYSIS(5)
@@ -190,6 +197,83 @@ class AgentCycle(
             )
         finally:
             await self._cleanup()
+
+    # -----------------------------------------------------------------------
+    # Worker mode: forced cycle type via CYCLE_TYPE env var
+    # -----------------------------------------------------------------------
+
+    async def _run_forced_cycle_type(self, cycle_type: str) -> None:
+        """Run a specific cycle type, bypassing interval routing.
+
+        Used when CYCLE_TYPE env var is set for parallel worker mode.
+        """
+        _CYCLE_MAP = {
+            "evolve": self._run_evolve_sequence,
+            "introspection": self._run_introspection_sequence,
+            "synthesize": self._run_synthesize_sequence,
+            "analysis": self._run_analysis_sequence,
+            "research": self._run_research_sequence,
+            "curate": self._run_curate_sequence,
+            "survey": self._run_survey_sequence,
+        }
+
+        runner = _CYCLE_MAP.get(cycle_type)
+        if not runner:
+            self.logger.log_error(
+                f"Unknown CYCLE_TYPE '{cycle_type}'. "
+                f"Valid: {', '.join(sorted(_CYCLE_MAP))}"
+            )
+            return
+
+        self.logger.log("forced_cycle_type", cycle_type=cycle_type)
+        await runner()
+
+    async def _run_evolve_sequence(self):
+        await self._evolve()
+        await self._reflect()
+        await self._narrate()
+        await self._journal_consolidation()
+        await self._generate_analysis_report()
+
+    async def _run_introspection_sequence(self):
+        await self._mission_review()
+        await self._reflect()
+        await self._narrate()
+        await self._journal_consolidation()
+        await self._generate_analysis_report()
+
+    async def _run_synthesize_sequence(self):
+        await self._synthesize()
+        await self._reflect()
+        await self._narrate()
+
+    async def _run_analysis_sequence(self):
+        await self._analyze()
+        await self._reflect()
+        await self._narrate()
+
+    async def _run_research_sequence(self):
+        await self._research()
+        await self._reflect()
+        await self._narrate()
+
+    async def _run_curate_sequence(self):
+        if self._ingestion_service_active():
+            await self._curate()
+        else:
+            await self._acquire()
+        await self._reflect()
+        await self._narrate()
+
+    async def _run_survey_sequence(self):
+        if self._should_promote_to_curate():
+            self.logger.log("curate_promotion",
+                           uncurated=getattr(self, '_uncurated_count', 0))
+            await self._curate()
+        else:
+            await self._survey()
+        await self._reflect()
+        await self._narrate()
 
     # -----------------------------------------------------------------------
     # Curate scheduling helpers

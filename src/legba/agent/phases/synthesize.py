@@ -84,8 +84,9 @@ class SynthesizeMixin:
                 if m.role == "user" and m.content.startswith("[Tool Result:")
             )
 
-            # Store the situation brief from the final response
-            await self._store_situation_brief()
+            # Generate a clean situation brief via dedicated LLM call
+            # (the final_response from the tool loop is often just closing actions)
+            await self._generate_situation_brief()
 
             # Track which thread was investigated for rotation
             await self._update_synth_history()
@@ -207,20 +208,67 @@ class SynthesizeMixin:
 
         return "\n".join(lines)
 
-    async def _store_situation_brief(self: AgentCycle) -> None:
-        """Extract and store the situation brief from the final response."""
+    async def _generate_situation_brief(self: AgentCycle) -> None:
+        """Generate a clean situation brief via dedicated LLM call, then store it."""
         try:
-            if not self._final_response or not self.memory or not self.memory.registers:
+            if not self.llm or not self.memory or not self.memory.registers:
+                return
+
+            # Build a summary of what happened during the tool loop
+            working_mem = self.llm.working_memory.full_text() if self.llm.working_memory else ""
+            conversation_summary = ""
+            for msg in (self._conversation or []):
+                if msg.role == "assistant" and not msg.content.startswith("{"):
+                    conversation_summary += msg.content[:2000] + "\n"
+                elif msg.role == "user" and msg.content.startswith("[Tool Result:"):
+                    conversation_summary += msg.content[:1000] + "\n"
+
+            # Truncate to fit context
+            if len(conversation_summary) > 15000:
+                conversation_summary = conversation_summary[:15000] + "\n(... truncated)"
+
+            from ..llm.format import Message
+            brief_messages = [
+                Message(role="system", content=(
+                    "reasoning: high\n\n"
+                    "You are Legba — autonomous intelligence analyst. Produce a Situation Brief "
+                    "based on the investigation data below. Use markdown. Follow the section "
+                    "structure exactly. Be specific — cite entity names, event IDs, relationships."
+                )),
+                Message(role="user", content=(
+                    f"You just completed a SYNTHESIZE investigation (cycle {self.state.cycle_number}). "
+                    f"Here is what you found:\n\n"
+                    f"## Working Memory\n{working_mem[:5000]}\n\n"
+                    f"## Investigation Data\n{conversation_summary}\n\n"
+                    "Now produce your Situation Brief. Format:\n\n"
+                    "# Legba Situation Brief: [Topic]\n\n"
+                    "## Thesis\nOne-sentence summary.\n\n"
+                    "## Evidence\nKey signals, events, relationships. Cite specifics.\n\n"
+                    "## Competing Hypotheses\nAlternative explanations with relative likelihood.\n\n"
+                    "## Predictions\nFalsifiable near-term predictions.\n\n"
+                    "## Unknowns\nWhat you don't know and what would resolve it.\n\n"
+                    "## Recommendations\nFollow-up actions for SURVEY and RESEARCH cycles."
+                )),
+            ]
+
+            response = await self.llm.complete(
+                brief_messages,
+                purpose="situation_brief",
+                max_tokens=4000,
+            )
+
+            brief_content = response.content.strip()
+            if not brief_content:
                 return
 
             brief = {
                 "cycle": self.state.cycle_number,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "content": self._final_response,
+                "content": brief_content,
             }
 
-            # Extract title from "Legba Situation Brief: ..." in the response
-            for line in self._final_response.split("\n"):
+            # Extract title
+            for line in brief_content.split("\n"):
                 stripped = line.strip().lstrip("#").strip()
                 if stripped.lower().startswith("legba situation brief:"):
                     brief["title"] = stripped
@@ -231,7 +279,7 @@ class SynthesizeMixin:
             # Store to Redis list (newest first, capped)
             redis = self.memory.registers._redis
             await redis.lpush(_SITUATION_BRIEFS_KEY, json.dumps(brief, default=str))
-            await redis.ltrim(_SITUATION_BRIEFS_KEY, 0, 19)  # keep last 20
+            await redis.ltrim(_SITUATION_BRIEFS_KEY, 0, 19)
 
             # Archive to OpenSearch
             if self.opensearch and self.opensearch._client:
@@ -245,7 +293,7 @@ class SynthesizeMixin:
 
             self.logger.log("situation_brief_stored", title=brief.get("title", "?"))
         except Exception as e:
-            log.warning("Failed to store situation brief: %s", e)
+            log.warning("Failed to generate situation brief: %s", e)
 
     async def _update_synth_history(self: AgentCycle) -> None:
         """Track which thread was investigated for rotation."""

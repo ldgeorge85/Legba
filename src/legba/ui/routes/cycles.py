@@ -20,9 +20,12 @@ router = APIRouter()
 _CYCLE_TYPE_KEYWORDS = {
     "evolve": "EVOLVE",
     "introspection": "INTROSPECTION",
+    "synthesize": "SYNTHESIZE",
     "analysis": "ANALYSIS",
     "analyze": "ANALYSIS",
     "research": "RESEARCH",
+    "curate": "CURATE",
+    "survey": "SURVEY",
     "acquire": "ACQUIRE",
 }
 
@@ -36,6 +39,9 @@ PHASE_COLORS = {
     "reflect": {"bg": "#2e1065", "text": "#a78bfa", "label": "REFLECT"}, # violet
     "narrate": {"bg": "#1e1b4b", "text": "#818cf8", "label": "NARRATE"}, # indigo
     "persist": {"bg": "#052e16", "text": "#4ade80", "label": "PERSIST"}, # green
+    "survey": {"bg": "#0c4a6e", "text": "#38bdf8", "label": "SURVEY"},     # sky blue
+    "synthesize": {"bg": "#581c87", "text": "#d946ef", "label": "SYNTHESIZE"}, # fuchsia
+    "curate": {"bg": "#365314", "text": "#a3e635", "label": "CURATE"},     # lime
 }
 
 
@@ -70,7 +76,7 @@ def _detect_cycle_type(phase_names: list[str]) -> str:
     Looks for keywords like 'acquire', 'research', 'analysis', 'introspection'
     in the phase names. Returns the highest-priority match or 'NORMAL'.
     """
-    priority = ["EVOLVE", "INTROSPECTION", "ANALYSIS", "RESEARCH", "ACQUIRE"]
+    priority = ["EVOLVE", "INTROSPECTION", "SYNTHESIZE", "ANALYSIS", "RESEARCH", "CURATE", "SURVEY", "ACQUIRE"]
     detected = set()
     for name in phase_names:
         lower = name.lower()
@@ -80,7 +86,7 @@ def _detect_cycle_type(phase_names: list[str]) -> str:
     for p in priority:
         if p in detected:
             return p
-    return "NORMAL"
+    return "SURVEY"
 
 
 @router.get("/cycles")

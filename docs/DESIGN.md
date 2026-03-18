@@ -112,6 +112,8 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 | `ResearchMixin` | `phases/research.py` | Entity enrichment cycles |
 | `AcquireMixin` | `phases/acquire.py` | Dedicated source fetching + signal ingestion (legacy; only when ingestion service not active) |
 | `CurateMixin` | `phases/curate.py` | Signal review, event creation, editorial judgment (replaces ACQUIRE when ingestion active) |
+| `SurveyMixin` | `phases/survey.py` | Analytical desk work — situations, graph building, hypothesis evaluation (replaces NORMAL) |
+| `SynthesizeMixin` | `phases/synthesize.py` | Deep-dive investigation, situation briefs, hypothesis creation |
 | `AnalyzeMixin` | `phases/analyze.py` | Pattern detection, graph mining, anomaly detection |
 | `EvolveMixin` | `phases/evolve.py` | Self-improvement, operational scorecard, change tracking |
 

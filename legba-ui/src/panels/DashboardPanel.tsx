@@ -13,6 +13,8 @@ import {
   Network,
   FileText,
   Download,
+  FlaskConical,
+  BookOpen,
 } from 'lucide-react'
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -78,6 +80,8 @@ export function DashboardPanel() {
         <StatCard label="Watchlist" value={data.watchlist} icon={<Eye size={18} />} onClick={() => openPanel('watchlist')} />
         <StatCard label="Relationships" value={data.relationships} icon={<Network size={18} />} onClick={() => openPanel('graph')} />
         <StatCard label="Facts" value={data.facts} icon={<FileText size={18} />} />
+        <StatCard label="Hypotheses" value={data.hypotheses ?? 0} icon={<FlaskConical size={18} />} onClick={() => openPanel('hypotheses')} />
+        <StatCard label="Briefs" value={data.briefs ?? 0} icon={<BookOpen size={18} />} onClick={() => openPanel('briefs')} />
       </div>
 
       {/* Ingestion Service Status */}

@@ -21,6 +21,8 @@ import {
   BookMarked,
   Gauge,
   GitPullRequest,
+  FlaskConical,
+  ScrollText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkspaceStore, type PanelType } from '@/stores/workspace'
@@ -54,6 +56,8 @@ const navItems: NavItem[] = [
   { type: 'reports', label: 'Reports', icon: <BookMarked size={18} />, group: 'System' },
   { type: 'scorecard', label: 'Scorecard', icon: <Gauge size={18} />, group: 'System' },
   { type: 'proposed-edges', label: 'Edge Queue', icon: <GitPullRequest size={18} />, group: 'Tracking' },
+  { type: 'hypotheses', label: 'Hypotheses', icon: <FlaskConical size={18} />, group: 'Analysis' },
+  { type: 'briefs', label: 'Briefs', icon: <ScrollText size={18} />, group: 'Analysis' },
 ]
 
 export function Sidebar() {

@@ -40,6 +40,8 @@ import type {
   EventFacets,
   PredicateCount,
   EntityTypeCount,
+  HypothesisSummary,
+  SituationBrief,
 } from './types'
 
 // ── Dashboard ──
@@ -558,5 +560,21 @@ export function useFactDistribution() {
     queryKey: ['stats', 'fact-distribution'],
     queryFn: () => api.get<FactDistribution>('/api/stats/fact-distribution'),
     staleTime: 60_000,
+  })
+}
+
+export function useHypotheses(status: string = 'active') {
+  return useQuery({
+    queryKey: ['hypotheses', status],
+    queryFn: () => api.get<HypothesisSummary[]>(`/api/v2/hypotheses?status=${status}`),
+    staleTime: 30_000,
+  })
+}
+
+export function useBriefs(limit: number = 20) {
+  return useQuery({
+    queryKey: ['briefs', limit],
+    queryFn: () => api.get<SituationBrief[]>(`/api/v2/briefs?limit=${limit}`),
+    staleTime: 30_000,
   })
 }

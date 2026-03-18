@@ -17,11 +17,38 @@ export interface DashboardStats {
   situations: number
   watchlist: number
   relationships: number
+  hypotheses: number
+  briefs: number
   current_cycle: number
   agent_status: string
   recent_signals: SignalSummary[]
   active_situations: SituationSummary[]
   ingestion?: IngestionStatus
+}
+
+export interface HypothesisSummary {
+  id: string
+  thesis: string
+  counter_thesis: string
+  evidence_balance: number
+  support_count: number | null
+  refute_count: number | null
+  status: string
+  situation_name: string | null
+  created_cycle: number
+  last_evaluated_cycle: number
+  diagnostic_evidence?: Array<{
+    description: string
+    proves: string
+    observed: boolean
+  }>
+}
+
+export interface SituationBrief {
+  title: string
+  cycle: number
+  timestamp: string
+  content: string
 }
 
 // Signals — raw ingested material (was "events" before the refactor)

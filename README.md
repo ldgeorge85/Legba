@@ -15,7 +15,7 @@ Legba is a persistent AI agent that runs indefinitely — ingesting global signa
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
 ├── Docker Compose (project: legba, 12 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
-│   ├── Agent (ephemeral) — One container per cycle, 6 cycle types, self-modifiable code
+│   ├── Agent (ephemeral) — One container per cycle, 7 cycle types, self-modifiable code
 │   ├── Ingestion Service — Background signal fetching, normalization, deterministic clustering
 │   ├── Operator UI v1    — Web console with CRUD + consultation (FastAPI + htmx, :8501)
 │   ├── Operator UI v2    — Multi-panel intelligence workstation (React + Dockview, :8503)
@@ -61,7 +61,7 @@ Each specialized cycle type uses a **filtered tool set** — only tools relevant
   <img src="docs/screenshot1.png" alt="Legba v2 Operator Console" width="100%">
 </p>
 
-Multi-panel intelligence workstation (React + Dockview). Dashboard, knowledge graph, geospatial map, AI consultation, world assessment reports, live signal feed, derived events with severity badges, timeline, analytics — all in a persistent, rearrangeable layout.
+24-panel intelligence workstation (React + Dockview). Dashboard, knowledge graph, geospatial map, AI consultation, world assessment reports, live signal feed, derived events, timeline, analytics, hypothesis tracker (ACH), situation briefs — all in a persistent, rearrangeable layout.
 
 ## Quick Start
 

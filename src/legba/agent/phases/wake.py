@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -95,8 +96,38 @@ class WakeMixin:
             self.state.cycle_number = stored_cycle + 1
         await self.memory.registers.set("cycle_number", str(self.state.cycle_number))
 
-        # Initialize LLM client
-        self.llm = LLMClient(self.config.llm, self.logger)
+        # Initialize LLM client — check for cycle-type-specific provider override
+        llm_config = self.config.llm
+        forced_type = os.environ.get("CYCLE_TYPE", "").strip().upper()
+        if not forced_type:
+            # Detect cycle type from interval routing for provider selection
+            cn = self.state.cycle_number
+            from . import EVOLVE_INTERVAL, SYNTHESIZE_INTERVAL, ANALYSIS_INTERVAL, RESEARCH_INTERVAL, CURATE_INTERVAL
+            if cn % EVOLVE_INTERVAL == 0:
+                forced_type = "EVOLVE"
+            elif cn % 15 == 0:
+                forced_type = "INTROSPECTION"
+            elif cn % SYNTHESIZE_INTERVAL == 0:
+                forced_type = "SYNTHESIZE"
+            elif cn % ANALYSIS_INTERVAL == 0:
+                forced_type = "ANALYSIS"
+            elif cn % RESEARCH_INTERVAL == 0:
+                forced_type = "RESEARCH"
+            elif cn % CURATE_INTERVAL == 0:
+                forced_type = "CURATE"
+            else:
+                forced_type = "SURVEY"
+
+        from ...shared.config import LLMConfig
+        alt_config = LLMConfig.for_cycle_type(forced_type)
+        if alt_config:
+            self.logger.log("llm_provider_override",
+                           cycle_type=forced_type,
+                           provider=alt_config.provider,
+                           model=alt_config.model)
+            llm_config = alt_config
+
+        self.llm = LLMClient(llm_config, self.logger)
 
         # Initialize goal manager
         self.goals = GoalManager(self.memory.structured, self.logger)

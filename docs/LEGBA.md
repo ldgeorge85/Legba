@@ -479,7 +479,7 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 ---
 
-## 5. Tool System (63 Tools)
+## 5. Tool System (66 Tools)
 
 ### Core (17 tools)
 | Tool | Category |
@@ -749,7 +749,7 @@ Multi-panel intelligence workstation built with React, running as a separate con
 
 **Access:** `ssh -L 8503:localhost:8503 user@<your-host>` then `http://localhost:8503`
 
-**21 panels across 6 groups:**
+**24 panels across 7 groups:**
 
 | Group | Panels |
 |-------|--------|
@@ -757,8 +757,9 @@ Multi-panel intelligence workstation built with React, running as a separate con
 | Intelligence | Signals (raw feed, search, filter), Events (derived, severity badges, type/category filter), Entities (search, type filter), Sources (CRUD), Goals (tree, status edit), Facts (search, delete) |
 | Visualization | Knowledge Graph (Sigma.js, ForceAtlas2, ego graph, search highlight), Geospatial Map (MapLibre, dark tiles, fly-to), Timeline (vis-timeline, category colors) |
 | Real-Time | Live Feed (SSE stream), Consult (AI chat, markdown rendered) |
-| Tracking | Situations (status filter), Watchlist (CRUD, entity/keyword tracking) |
-| System | Analytics, Cycle Monitor (type detection), Journal (consolidation + entries), Reports (markdown, download) |
+| Tracking | Situations (status filter), Watchlist (CRUD, entity/keyword tracking), Proposed Edges (review queue) |
+| Analysis | Hypotheses (ACH — competing thesis/counter-thesis pairs, evidence balance, diagnostic checklists), Situation Briefs (SYNTHESIZE deliverables, expandable markdown) |
+| System | Analytics, Cycle Monitor (type detection), Journal (consolidation + entries), Reports (markdown, download), Scorecard |
 
 **Cross-panel interactions:** Clicking an entity in Graph/Map/table selects it globally. Other panels react — Graph highlights, Map flies to location, Entity Detail opens. Selection history with back/forward.
 
@@ -989,6 +990,8 @@ legba/
 |   |   |   +-- introspect.py       -- IntrospectMixin: mission review, reports
 |   |   |   +-- research.py         -- ResearchMixin: entity enrichment
 |   |   |   +-- curate.py           -- CurateMixin: event curation from clustered signals
+|   |   |   +-- survey.py           -- SurveyMixin: analytical desk work (replaces NORMAL)
+|   |   |   +-- synthesize.py       -- SynthesizeMixin: deep-dive investigation, situation briefs
 |   |   |   +-- analyze.py          -- AnalyzeMixin: pattern detection, graph mining, anomaly detection
 |   |   |   +-- evolve.py           -- EvolveMixin: self-improvement, operational scorecard, change tracking
 |   |   +-- log.py                   -- CycleLogger (JSONL structured logging)
@@ -998,7 +1001,7 @@ legba/
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 18 modules (59 tools) + geo.py utility
+|   |   |   +-- builtins/            -- 19 modules (66 tools) + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/

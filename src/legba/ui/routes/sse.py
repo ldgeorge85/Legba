@@ -49,7 +49,7 @@ async def event_stream(request: Request):
                             cycle_type = cycle_type.decode()
 
                         if current_cycle > last_cycle:
-                            yield f"event: cycle:start\ndata: {json.dumps({'cycle_number': current_cycle, 'cycle_type': cycle_type or 'NORMAL'})}\n\n"
+                            yield f"event: cycle:start\ndata: {json.dumps({'cycle_number': current_cycle, 'cycle_type': cycle_type or 'SURVEY'})}\n\n"
                         else:
                             yield f"event: cycle:end\ndata: {json.dumps({'cycle_number': last_cycle})}\n\n"
 

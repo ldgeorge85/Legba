@@ -1,8 +1,8 @@
 # Legba Code Map
 
-**Generated:** 2026-03-16
-**Total Python files:** 97
-**Total lines of Python:** ~19,500
+**Generated:** 2026-03-18
+**Total Python files:** 100+
+**Total lines of Python:** ~21,000
 
 ---
 
@@ -28,15 +28,16 @@ src/legba/
       modifications.py               (115 lines) — Self-modification tracking schemas
       sources.py                     (131 lines) — Source registry with trust metadata
       tools.py                       (74 lines)  — ToolDefinition, ToolCall, ToolResult
+      hypotheses.py                  (55 lines)  — Hypothesis, HypothesisStatus, DiagnosticEvidence (ACH)
 
   agent/
     __init__.py
     main.py                          (49 lines)  — Entry point: asyncio.run(run_cycle())
     log.py                           (149 lines) — Structured JSON logging (CycleLogger)
-    cycle.py                         (192 lines) — Orchestrator: AgentCycle inherits phase mixins
+    cycle.py                         (~280 lines) — Orchestrator: 15 phase mixins, CYCLE_TYPE worker mode, dynamic CURATE promotion
 
     phases/
-      __init__.py                    (12 lines)  — Constants (REPORT_INTERVAL, RESEARCH_INTERVAL)
+      __init__.py                    (25 lines)  — Interval constants (coprime: 5,7,9,10,15,30), CURATE_BACKLOG_THRESHOLD
       wake.py                        (387 lines) — WakeMixin: init, connections, tool registration
       orient.py                      (212 lines) — OrientMixin: context from all memory layers
       plan.py                        (75 lines)  — PlanMixin: LLM plan + tool filtering
@@ -47,6 +48,8 @@ src/legba/
       introspect.py                  (319 lines) — IntrospectMixin: deep review, analysis reports
       research.py                    (157 lines) — ResearchMixin: entity enrichment, health summary
       curate.py                      (166 lines) — CurateMixin: signal review, event creation, editorial judgment
+      survey.py                      (~220 lines) — SurveyMixin: analytical desk work, rate-limited http_request (replaces NORMAL)
+      synthesize.py                  (~275 lines) — SynthesizeMixin: deep-dive, situation briefs, thread rotation, hypothesis creation
 
     llm/
       __init__.py
@@ -632,6 +635,8 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 | `derived_event_tools.py` | `event_create`, `event_update`, `event_query`, `event_link_signal` | Derived event CRUD. Agent-created events start at confidence 0.7. Link signals as evidence |
 | `entity_tools.py` | `entity_profile`, `entity_inspect`, `entity_resolve` | Entity profile CRUD in Postgres + AGE sync. Profile versioning. Event-entity linking |
 | `selfmod_tools.py` | `code_test` | Syntax check + import validation before self-modifications |
+| `hypothesis_tools.py` | `hypothesis_create`, `hypothesis_evaluate`, `hypothesis_list` | ACH: competing thesis/counter-thesis pairs with evidence tracking |
+| `derived_event_tools.py` | `event_create`, `event_update`, `event_link_signal` | Derived event CRUD + signal-event linking |
 | `geo.py` | (internal, not a tool) | Location normalization: `resolve_locations(locations)` using pycountry + GeoNames cities15000 gazetteer. Returns `{countries, regions, coordinates}` |
 
 **Additionally registered in `cycle.py` (not in builtin modules):**
@@ -640,7 +645,7 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 - `explain_tool` — Get full parameter details for any tool on demand
 - `spawn_subagent` — Delegate work to a sub-agent with its own context window
 
-**Total registered tools: 47+**
+**Total registered tools: 66+**
 
 ---
 

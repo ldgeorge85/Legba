@@ -86,6 +86,52 @@ class LLMConfig:
         )
 
 
+    # Cycle types that should use an alternate LLM provider.
+    # Set LLM_PROVIDER_MAP as JSON: {"ANALYSIS": "anthropic", "SYNTHESIZE": "anthropic"}
+    # Unspecified types use the default provider.
+    _PROVIDER_MAP_CACHE: dict[str, LLMConfig] | None = None
+
+    @classmethod
+    def for_cycle_type(cls, cycle_type: str) -> LLMConfig | None:
+        """Return an alternate LLM config for a specific cycle type, or None to use default.
+
+        Reads LLM_PROVIDER_MAP env var (JSON dict mapping cycle type to provider).
+        For each mapped type, reads LLM_ALT_* env vars for the alternate provider config.
+        Returns None if cycle type isn't mapped (use default).
+        """
+        import json as _json
+
+        raw = os.getenv("LLM_PROVIDER_MAP", "")
+        if not raw:
+            return None
+
+        try:
+            provider_map = _json.loads(raw)
+        except _json.JSONDecodeError:
+            return None
+
+        alt_provider = provider_map.get(cycle_type.upper())
+        if not alt_provider:
+            return None
+
+        base = cls.from_env()
+        return cls(
+            provider=alt_provider,
+            api_base=os.getenv("LLM_ALT_API_BASE", base.api_base),
+            api_key=os.getenv("LLM_ALT_API_KEY", base.api_key),
+            model=os.getenv("LLM_ALT_MODEL", base.model),
+            max_tokens=int(os.getenv("LLM_ALT_MAX_TOKENS", str(base.max_tokens))),
+            temperature=float(os.getenv("LLM_ALT_TEMPERATURE", "0.7")),
+            top_p=base.top_p,
+            timeout=int(os.getenv("LLM_ALT_TIMEOUT", str(base.timeout))),
+            max_context_tokens=base.max_context_tokens,
+            embedding_api_base=base.embedding_api_base,
+            embedding_api_key=base.embedding_api_key,
+            embedding_model=base.embedding_model,
+            embedding_dimensions=base.embedding_dimensions,
+        )
+
+
 @dataclass(frozen=True)
 class RedisConfig:
     host: str = "localhost"

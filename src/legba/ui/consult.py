@@ -154,6 +154,22 @@ CONSULT_TOOLS = [
             {"name": "priority", "type": "string", "required": False, "description": "Priority: normal, urgent, directive (default normal)"},
         ],
     },
+    {
+        "name": "list_hypotheses",
+        "description": "List competing hypotheses (ACH). Shows thesis vs counter-thesis pairs with evidence balance, linked situations, and diagnostic evidence status.",
+        "parameters": [
+            {"name": "status", "type": "string", "required": False, "description": "Filter: active, confirmed, refuted, stale (default active)"},
+            {"name": "situation_id", "type": "string", "required": False, "description": "Filter by situation UUID"},
+            {"name": "limit", "type": "integer", "required": False, "description": "Max results (default 20)"},
+        ],
+    },
+    {
+        "name": "list_briefs",
+        "description": "List situation briefs produced by SYNTHESIZE cycles. Named intelligence documents with thesis, evidence, competing hypotheses, predictions, and recommendations.",
+        "parameters": [
+            {"name": "limit", "type": "integer", "required": False, "description": "Max results (default 20)"},
+        ],
+    },
     # --- Write tools ---
     {
         "name": "add_entity_assertion",
@@ -1763,7 +1779,53 @@ _TOOL_HANDLERS: dict[str, Callable] = {
     "delete_fact": _handle_delete_fact,
     "add_graph_edge": _handle_add_graph_edge,
     "remove_graph_edge": _handle_remove_graph_edge,
+    "list_hypotheses": _handle_list_hypotheses,
+    "list_briefs": _handle_list_briefs,
 }
+
+
+# --- Hypothesis + Brief handlers ---
+
+async def _handle_list_hypotheses(stores, args: dict) -> str:
+    """List competing hypotheses from Postgres."""
+    status = args.get("status", "active")
+    situation_id = args.get("situation_id")
+    limit = int(args.get("limit", 20))
+    try:
+        items = await stores.structured.list_hypotheses(
+            status=status, situation_id=situation_id, limit=limit,
+        )
+        if not items:
+            return f"No hypotheses found (status={status})"
+        import json
+        return json.dumps({"count": len(items), "hypotheses": items}, indent=2, default=str)
+    except Exception as e:
+        return f"Error listing hypotheses: {e}"
+
+
+async def _handle_list_briefs(stores, args: dict) -> str:
+    """List situation briefs from Redis."""
+    limit = int(args.get("limit", 20))
+    try:
+        import json
+        raw = await stores.registers._redis.lrange("legba:situation_briefs", 0, limit - 1)
+        if not raw:
+            return "No situation briefs yet. SYNTHESIZE cycles produce these."
+        briefs = []
+        for item in raw:
+            try:
+                data = json.loads(item)
+                briefs.append({
+                    "title": data.get("title", "?"),
+                    "cycle": data.get("cycle", "?"),
+                    "timestamp": data.get("timestamp", "?"),
+                    "content_preview": data.get("content", "")[:500],
+                })
+            except Exception:
+                continue
+        return json.dumps({"count": len(briefs), "briefs": briefs}, indent=2, default=str)
+    except Exception as e:
+        return f"Error listing briefs: {e}"
 
 
 # ======================================================================

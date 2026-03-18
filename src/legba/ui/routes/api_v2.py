@@ -176,6 +176,23 @@ async def dashboard(request: Request):
     except Exception as e:
         logger.warning("Dashboard: event count failed: %s", e)
 
+    # Count active hypotheses
+    hypothesis_count = 0
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            hypothesis_count = await conn.fetchval(
+                "SELECT count(*) FROM hypotheses WHERE status = 'active'"
+            ) or 0
+    except Exception as e:
+        logger.debug("Dashboard: hypothesis count failed: %s", e)
+
+    # Count situation briefs
+    brief_count = 0
+    try:
+        brief_count = await stores.registers._redis.llen("legba:situation_briefs") or 0
+    except Exception as e:
+        logger.debug("Dashboard: brief count failed: %s", e)
+
     return _json({
         "entities": _safe(counts[0]),
         "signals": _safe(counts[1]),
@@ -186,6 +203,8 @@ async def dashboard(request: Request):
         "situations": _safe(counts[5]),
         "watchlist": _safe(counts[6]),
         "relationships": _safe(counts[7]),
+        "hypotheses": hypothesis_count,
+        "briefs": brief_count,
         "current_cycle": cycle,
         "agent_status": agent_status,
         "recent_signals": recent_events,
@@ -1340,6 +1359,54 @@ async def update_prediction(request: Request, prediction_id: str, body: Predicti
 
 
 # ------------------------------------------------------------------
+# Hypotheses (ACH — competing thesis/counter-thesis pairs)
+# ------------------------------------------------------------------
+
+@router.get("/hypotheses")
+async def list_hypotheses(
+    request: Request,
+    status: str | None = "active",
+    situation_id: str | None = None,
+    limit: int = 20,
+):
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json([])
+    try:
+        items = await stores.structured.list_hypotheses(
+            status=status, situation_id=situation_id, limit=limit,
+        )
+        return _json(items)
+    except Exception as exc:
+        logger.warning("Hypotheses list failed: %s", exc)
+        return _json([])
+
+
+# ------------------------------------------------------------------
+# Situation Briefs (SYNTHESIZE deliverables)
+# ------------------------------------------------------------------
+
+@router.get("/briefs")
+async def list_briefs(request: Request, limit: int = 20):
+    """List situation briefs from Redis (newest first)."""
+    stores = get_stores(request)
+    try:
+        import json as _j
+        raw = await stores.registers._redis.lrange("legba:situation_briefs", 0, limit - 1)
+        briefs = []
+        for item in raw or []:
+            try:
+                data = _j.loads(item)
+                briefs.append(data)
+            except Exception:
+                continue
+        return _json(briefs)
+    except Exception as exc:
+        logger.warning("Briefs list failed: %s", exc)
+        return _json([])
+
+
+# ------------------------------------------------------------------
 # Facts
 # ------------------------------------------------------------------
 
@@ -1481,16 +1548,19 @@ async def delete_memory(request: Request, collection: str, point_id: str):
 _CYCLE_TYPE_KEYWORDS = {
     "evolve": "EVOLVE",
     "introspection": "INTROSPECTION",
+    "synthesize": "SYNTHESIZE",
     "analysis": "ANALYSIS",
     "analyze": "ANALYSIS",
     "research": "RESEARCH",
+    "curate": "CURATE",
+    "survey": "SURVEY",
     "acquire": "ACQUIRE",
 }
 
 
 def _detect_cycle_type(phase_names: list[str]) -> str:
     """Detect cycle type from phase event names."""
-    priority = ["EVOLVE", "INTROSPECTION", "ANALYSIS", "RESEARCH", "ACQUIRE"]
+    priority = ["EVOLVE", "INTROSPECTION", "SYNTHESIZE", "ANALYSIS", "RESEARCH", "CURATE", "SURVEY", "ACQUIRE"]
     detected = set()
     for name in phase_names:
         lower = name.lower()
@@ -1500,7 +1570,7 @@ def _detect_cycle_type(phase_names: list[str]) -> str:
     for p in priority:
         if p in detected:
             return p
-    return "NORMAL"
+    return "SURVEY"
 
 
 @router.get("/cycles")
