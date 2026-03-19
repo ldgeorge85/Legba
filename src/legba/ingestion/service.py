@@ -28,6 +28,7 @@ from .dedup import DedupEngine
 from .fetcher import fetch_source
 from .normalizer import normalize_entry
 from .scheduler import ScheduledSource, get_due_sources, initialize_next_fetch
+from .models_client import ModelsClient
 from .storage import StorageLayer
 
 logger = logging.getLogger("legba.ingestion")
@@ -185,6 +186,13 @@ class IngestionService:
         self._qdrant = qdrant_client
         self._dedup = DedupEngine(self._pg_pool, self.config.dedup_cache_size, qdrant_client=qdrant_client, embed_fn=embed_fn)
 
+        # Models service (optional GPU inference — classification, translation, extraction, summarization)
+        self._models = ModelsClient()
+        if await self._models.check_health():
+            logger.info("Models service connected")
+        else:
+            logger.info("Models service not available — using regex classification")
+
         # Telegram (optional)
         self._telegram = None
         if os.getenv("TELEGRAM_ENABLED", "").lower() in ("true", "1", "yes"):
@@ -237,6 +245,10 @@ class IngestionService:
             if self._tick_count % 10 == 0:  # Log every ~5 minutes at 30s interval
                 logger.debug("No sources due for fetching")
             return
+
+        # Periodic models health check (every ~60s)
+        if self._tick_count % 2 == 0:
+            await self._models.check_health()
 
         logger.info("Tick %d: %d sources due for fetching", self._tick_count, len(sources))
 
@@ -311,6 +323,7 @@ class IngestionService:
                 last_fetch=source.last_successful_fetch_at,
                 timeout=self.config.http_timeout,
                 limit=self.config.batch_size,
+                user_agent=source.config.get("user_agent", ""),
             )
 
             if not result.success:
@@ -351,6 +364,11 @@ class IngestionService:
                     source_language=source.language,
                 )
                 signals.append(sig)
+
+            # Model enrichment (if GPU service available)
+            if self._models.available:
+                for sig in signals:
+                    await self._enrich_with_models(sig)
 
             # Batch-internal dedup (within this fetch)
             batch_entries = [(s.guid, s.source_url, s.title) for s in signals]
@@ -422,6 +440,27 @@ class IngestionService:
             signal.geo_coordinates = geo.get("coordinates", [])
         except Exception:
             pass
+
+    async def _enrich_with_models(self, signal) -> None:
+        """Enrich a signal using the GPU models service. Best-effort."""
+        try:
+            # Translation: if non-English, translate title
+            if signal.language and signal.language != "en":
+                translated = await self._models.translate(
+                    signal.title, source_lang=signal.language,
+                )
+                if translated:
+                    # Store original, replace with translation
+                    signal.tags = list(signal.tags) + [f"original_lang:{signal.language}"]
+                    signal.title = translated
+
+            # Classification: replace regex-inferred category
+            category, confidence = await self._models.classify(signal.title)
+            if category and category != "other" and confidence > 0.5:
+                signal.category = category
+
+        except Exception as e:
+            logger.debug("Model enrichment failed for signal: %s", e)
 
     async def _process_telegram_source(self, source: ScheduledSource, log_id) -> None:
         """Fetch and process signals from a Telegram channel."""
@@ -612,6 +651,12 @@ class IngestionService:
         """Clean shutdown of connections."""
         logger.info("Shutting down ingestion service")
         self._running = False
+
+        if self._models:
+            try:
+                await self._models.close()
+            except Exception:
+                pass
 
         if self._telegram:
             try:

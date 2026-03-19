@@ -180,6 +180,9 @@ services:
       INGESTION_LOG_LEVEL: "INFO"
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
+      MODELS_API_URL: "https://models.ai1.infra.innoscale.net"
+      MODELS_API_USER: "legba"
+      MODELS_API_PASS: "opelJ83KBeml"
       TELEGRAM_ENABLED: "true"
       TELEGRAM_API_ID: "37628495"
       TELEGRAM_API_HASH: "6323a9eaddad87077cbfdaa06cc6afc1"

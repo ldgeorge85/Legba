@@ -330,6 +330,7 @@ async def fetch_source(
     last_fetch: datetime | None = None,
     timeout: int = 30,
     limit: int = 50,
+    user_agent: str = "",
 ) -> FetchResult:
     """Fetch and parse a single source. Returns structured entries.
 
@@ -349,8 +350,9 @@ async def fetch_source(
     start = datetime.now(timezone.utc)
     fetch_url = _build_url(url, query_template, last_fetch)
 
-    # Build headers
-    headers = {"User-Agent": _USER_AGENT}
+    # Build headers — per-source user_agent override, else honest bot default.
+    # Sources that block the bot UA can set data.user_agent to a browser string.
+    headers = {"User-Agent": user_agent or _USER_AGENT}
     params = {}
 
     # Skip query_param auth when query_template already resolved env vars in the URL.
