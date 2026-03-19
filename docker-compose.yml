@@ -180,6 +180,12 @@ services:
       INGESTION_LOG_LEVEL: "INFO"
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
+      TELEGRAM_ENABLED: "true"
+      TELEGRAM_API_ID: "37628495"
+      TELEGRAM_API_HASH: "6323a9eaddad87077cbfdaa06cc6afc1"
+      TELEGRAM_SESSION_PATH: "/shared/telegram.session"
+    volumes:
+      - shared_data:/shared
     ports:
       - "8600:8600"
     depends_on:

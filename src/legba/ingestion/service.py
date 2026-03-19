@@ -185,6 +185,16 @@ class IngestionService:
         self._qdrant = qdrant_client
         self._dedup = DedupEngine(self._pg_pool, self.config.dedup_cache_size, qdrant_client=qdrant_client, embed_fn=embed_fn)
 
+        # Telegram (optional)
+        self._telegram = None
+        if os.getenv("TELEGRAM_ENABLED", "").lower() in ("true", "1", "yes"):
+            from .telegram import TelegramFetcher
+            self._telegram = TelegramFetcher()
+            if await self._telegram.connect():
+                logger.info("Telegram ingestion enabled")
+            else:
+                self._telegram = None
+
     async def _ensure_schema(self) -> None:
         """Ensure ingestion-specific schema exists."""
         try:
@@ -283,6 +293,11 @@ class IngestionService:
             log_id = await self._storage.log_fetch_start(source.id, source.name)
 
             logger.info("Fetching: %s (%s, %s)", source.name, source.source_type, source.url[:80])
+
+            # Telegram sources use a different fetch path
+            if source.source_type == "telegram":
+                await self._process_telegram_source(source, log_id)
+                return
 
             # Resolve auth config from env vars if needed
             auth_config = self._resolve_auth(source.auth_config)
@@ -408,6 +423,83 @@ class IngestionService:
         except Exception:
             pass
 
+    async def _process_telegram_source(self, source: ScheduledSource, log_id) -> None:
+        """Fetch and process signals from a Telegram channel."""
+        if not self._telegram or not self._telegram.available:
+            logger.warning("Telegram not available for source %s", source.name)
+            await self._storage.log_fetch_complete(
+                log_id, status="error", error_message="Telegram client not available",
+            )
+            return
+
+        try:
+            # Extract handle from telegram://@handle URL
+            handle = source.url.replace("telegram://", "").lstrip("@")
+
+            messages = await self._telegram.fetch_channel(
+                handle,
+                since=source.last_successful_fetch_at,
+                limit=self.config.batch_size,
+            )
+
+            if not messages:
+                await self._storage.record_source_success(source.id, 0)
+                await self._storage.log_fetch_complete(log_id, status="success", events_fetched=0)
+                return
+
+            # Normalize to Signal schema
+            from .telegram_normalizer import normalize_telegram_message
+            signals = [
+                normalize_telegram_message(
+                    msg, source_id=source.id, source_name=source.name,
+                    source_category=source.category, source_language=source.language,
+                )
+                for msg in messages
+            ]
+
+            # Same dedup + store pipeline as RSS/API signals
+            batch_entries = [(s.guid, s.source_url, s.title) for s in signals]
+            batch_dupes = await self._dedup.check_batch_internal(batch_entries)
+
+            candidates = [
+                (i, signals[i]) for i in range(len(signals)) if i not in batch_dupes
+            ]
+
+            if candidates:
+                existing = await self._dedup.check_batch(
+                    [(s.guid, s.source_url, s.title) for _, s in candidates]
+                )
+                to_store = [
+                    s for (_, s), result in zip(candidates, existing) if not result.is_duplicate
+                ]
+            else:
+                to_store = []
+
+            stored = 0
+            for sig in to_store:
+                await self._resolve_geo(sig)
+                ok = await self._storage.store_signal(sig)
+                if ok:
+                    stored += 1
+                    self._signals_total += 1
+
+            duped = len(signals) - stored
+            logger.info(
+                "Telegram: %s — %d messages, %d stored, %d deduped",
+                source.name, len(messages), stored, duped,
+            )
+
+            await self._storage.record_source_success(source.id, stored)
+            await self._storage.log_fetch_complete(
+                log_id, status="success",
+                events_fetched=len(messages), events_stored=stored, events_deduped=duped,
+            )
+
+        except Exception as e:
+            logger.warning("Telegram processing failed for %s: %s", source.name, e)
+            await self._storage.record_source_failure(source.id, str(e), self.config.auto_pause_threshold)
+            await self._storage.log_fetch_complete(log_id, status="error", error_message=str(e))
+
     def _resolve_auth(self, auth_config: dict) -> dict | None:
         """Resolve auth config, substituting env var references."""
         if not auth_config:
@@ -520,6 +612,12 @@ class IngestionService:
         """Clean shutdown of connections."""
         logger.info("Shutting down ingestion service")
         self._running = False
+
+        if self._telegram:
+            try:
+                await self._telegram.close()
+            except Exception:
+                pass
 
         if self._nats:
             try:
