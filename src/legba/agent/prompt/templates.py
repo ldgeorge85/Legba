@@ -666,14 +666,14 @@ CURATE_PROMPT = """You are in a **CURATE cycle**. Your job: turn raw signals int
 
 ## Rules
 - MANDATORY: Process at least 5 unclustered signals per cycle
-- MANDATORY: Link events to situations. Check situation_list every CURATE cycle.
+- MANDATORY: After creating ANY event, immediately call situation_list and link the event to the most relevant situation with situation_link_event. If no situation fits, create one. An event without a situation link is analytically orphaned and invisible to reporting.
+- MANDATORY: For every event you create, call entity_resolve on the key actors and locations, then call graph_store to create typed relationships (LeaderOf, HostileTo, OperatesIn, etc.). Do NOT skip this — graph edges are how ANALYSIS and INTROSPECTION cycles understand the world.
 - Don't promote sports scores, horoscopes, celebrity gossip, or product reviews to events
 - Agent-created events get confidence 0.7 (higher than auto at 0.6)
-- Link entities to events, not just signals — events are the analytical backbone
 
 After your work, call cycle_complete.
 
-Your final action before cycle_complete should be a note_to_self summarizing signals reviewed, events created/updated, and entities resolved.
+Your final action before cycle_complete should be a note_to_self summarizing: signals reviewed, events created, situations linked (count), entities resolved, graph edges added.
 """
 
 # ---------------------------------------------------------------------------
@@ -729,7 +729,7 @@ Review the data above. What has changed? What does it mean? What should you do a
 ### Success Criteria (aim for at least 3 per cycle)
 1. **Situation updates**: Link recent events to EXISTING active situations. Use situation_list FIRST — if an event fits an existing situation, link it. Do NOT create a new situation unless the topic is genuinely new and not covered by any existing situation.
 2. **Graph relationships**: For entities mentioned in recent events, add TYPED edges (LeaderOf, HostileTo, OperatesIn, AlliedWith, SuppliesWeaponsTo, etc.) with graph_store. NEVER use RelatedTo — it is meaningless. If you can't determine the relationship type, skip it.
-3. **Hypothesis stress-testing**: Check active hypotheses (hypothesis_list) against new signals. If a new signal supports or refutes a thesis, link it with hypothesis_evaluate. Use REAL signal IDs from event_search results, not fabricated UUIDs.
+3. **Hypothesis evaluation (MANDATORY)**: Call hypothesis_list. For EVERY active hypothesis, check if recent events support or refute it — then call hypothesis_evaluate with real signal/event IDs. Do NOT create new hypotheses unless you have first evaluated ALL existing ones. The system tracks evidence_balance; hypotheses with 0 evidence after 10+ cycles are a failure.
 4. **Investigation leads**: Identify threads worth deep-diving in a SYNTHESIZE cycle. Record via note_to_self.
 5. **Opportunistic curation**: If you encounter low-quality auto-events (bad titles, wrong severity, missing type), fix them with event_update.
 
@@ -950,6 +950,7 @@ Every analysis cycle MUST include at least:
 - One **anomaly_detect** call (on signals from the last 7 days)
 - One **graph_analyze** call (centrality or clustering)
 - One **temporal_query** call (trend over the past week)
+- One **hypothesis_evaluate** call — run hypothesis_list first, then for EACH active hypothesis, check if any recent signals or events support or refute it. Call hypothesis_evaluate with real signal IDs. Creating new hypotheses without evaluating existing ones is a failure mode.
 If you skip these tools, the cycle has failed its purpose. These are your analytical instruments — USE them.
 
 ### DO NOT:

@@ -1,0 +1,29 @@
+services:
+  legba-models:
+    build: .
+    container_name: legba-models
+    restart: unless-stopped
+    volumes:
+      - /mnt/data/models/legba:/data
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - HF_HOME=/data/hf-cache
+      - TRANSFORMERS_CACHE=/data/hf-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    networks:
+      - fastchat
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+networks:
+  fastchat:
+    external: true

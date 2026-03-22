@@ -261,7 +261,7 @@ def register(
 
         try:
             if data_str:
-                raw_data = json.loads(data_str)
+                raw_data = data_str if isinstance(data_str, (list, dict)) else json.loads(data_str)
             else:
                 raw_data = await _fetch_os_data(
                     opensearch, index, args.get("query"),
@@ -337,7 +337,7 @@ def register(
 
         try:
             if data_str:
-                raw_data = json.loads(data_str)
+                raw_data = data_str if isinstance(data_str, (list, dict)) else json.loads(data_str)
             else:
                 raw_data = await _fetch_os_data(
                     opensearch, index, args.get("query"),
@@ -482,7 +482,7 @@ def register(
         params: dict[str, Any] = {}
         if params_str:
             try:
-                params = json.loads(params_str)
+                params = params_str if isinstance(params_str, dict) else json.loads(params_str)
             except json.JSONDecodeError:
                 return "Error: invalid JSON in params"
 
@@ -509,7 +509,7 @@ def register(
         elif nodes_str or edges_str:
             if nodes_str:
                 try:
-                    nodes = json.loads(nodes_str)
+                    nodes = nodes_str if isinstance(nodes_str, list) else json.loads(nodes_str)
                     for n in nodes:
                         nid = str(n.get("id", ""))
                         G.add_node(nid, **{k: v for k, v in n.items() if k != "id"})
@@ -517,7 +517,7 @@ def register(
                     return "Error: invalid JSON in nodes"
             if edges_str:
                 try:
-                    edges = json.loads(edges_str)
+                    edges = edges_str if isinstance(edges_str, list) else json.loads(edges_str)
                     for e in edges:
                         G.add_edge(
                             str(e.get("source", "")), str(e.get("target", "")),
@@ -629,7 +629,7 @@ def register(
         params: dict[str, Any] = {}
         if params_str:
             try:
-                params = json.loads(params_str)
+                params = params_str if isinstance(params_str, dict) else json.loads(params_str)
             except json.JSONDecodeError:
                 return "Error: invalid JSON in params"
 
@@ -643,7 +643,7 @@ def register(
 
         try:
             if data_str:
-                raw_data = json.loads(data_str)
+                raw_data = data_str if isinstance(data_str, (list, dict)) else json.loads(data_str)
             else:
                 raw_data = await _fetch_os_data(
                     opensearch, index, args.get("query"), fields=fields,

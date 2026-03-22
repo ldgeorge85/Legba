@@ -150,8 +150,8 @@ async def _check_watchlist_matches(structured: StructuredStore, event) -> list[d
                 if not failed:
                     watch_categories = [c.lower() for c in data.get("categories", [])]
                     if watch_categories:
-                        if event.category.value.lower() in watch_categories:
-                            matched_criteria.append(f"category:{event.category.value}")
+                        if str(event.category.value if hasattr(event.category, 'value') else event.category).lower() in watch_categories:
+                            matched_criteria.append(f"category:{str(event.category.value if hasattr(event.category, 'value') else event.category)}")
                         else:
                             failed = True
 
@@ -242,9 +242,9 @@ async def _suggest_situations(structured: StructuredStore, event) -> list[dict]:
                     reasons.append(f"regions: {', '.join(sorted(region_overlap)[:3])}")
 
                 # Category match
-                if row["category"] and row["category"] == event.category.value:
+                if row["category"] and row["category"] == str(event.category.value if hasattr(event.category, 'value') else event.category):
                     score += 0.2
-                    reasons.append(f"category: {event.category.value}")
+                    reasons.append(f"category: {str(event.category.value if hasattr(event.category, 'value') else event.category)}")
 
                 if score >= 0.3:
                     suggestions.append({
@@ -288,7 +288,7 @@ async def _compute_novelty(structured: StructuredStore, event) -> dict | None:
             if total and total > 20:
                 cat_count = await conn.fetchval(
                     "SELECT count(*) FROM signals WHERE category = $1",
-                    event.category.value,
+                    str(event.category.value if hasattr(event.category, 'value') else event.category),
                 )
                 ratio = cat_count / total
                 if ratio < 0.05:
@@ -615,7 +615,7 @@ def register(
                 "title": signal.title,
                 "summary": signal.summary,
                 "full_content": signal.full_content,
-                "category": signal.category.value,
+                "category": str(signal.category.value if hasattr(signal.category, 'value') else signal.category),
                 "actors": signal.actors,
                 "locations": signal.locations,
                 "tags": signal.tags,
@@ -732,7 +732,7 @@ def register(
                 "id": str(e.id),
                 "title": e.title,
                 "summary": e.summary[:200] if e.summary else "",
-                "category": e.category.value,
+                "category": str(e.category.value if hasattr(e.category, 'value') else e.category),
                 "event_timestamp": e.event_timestamp.isoformat() if e.event_timestamp else None,
                 "source_url": e.source_url,
                 "actors": e.actors,

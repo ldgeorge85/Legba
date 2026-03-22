@@ -338,7 +338,7 @@ def register(
         from ....shared.schemas.signals import SignalCategory
 
         rows = await structured._pool.fetch(
-            "SELECT data FROM events_derived WHERE id = $1", event_id,
+            "SELECT data FROM events WHERE id = $1", event_id,
         )
         if not rows:
             return f"Error: event {event_id_str[:8]} not found"
@@ -425,7 +425,7 @@ def register(
             results.append({
                 "id": str(ev.id)[:8],
                 "title": ev.title,
-                "category": ev.category.value,
+                "category": str(ev.category.value if hasattr(ev.category, 'value') else ev.category),
                 "event_type": ev.event_type.value,
                 "severity": ev.severity.value,
                 "signal_count": ev.signal_count,
@@ -467,7 +467,7 @@ def register(
         try:
             await structured._pool.execute(
                 """
-                UPDATE events_derived SET
+                UPDATE events SET
                     signal_count = (SELECT COUNT(*) FROM signal_event_links WHERE event_id = $1),
                     updated_at = NOW()
                 WHERE id = $1

@@ -333,6 +333,7 @@ class SignalClusterer:
         # Create new event
         return await self._create_event_from_cluster(
             feats, all_actors, all_locations, timestamps, categories, confidences,
+            all_geo_countries, all_geo_coords,
         )
 
     async def _find_merge_target(
@@ -504,6 +505,8 @@ class SignalClusterer:
         timestamps: list[datetime],
         categories: list[str],
         confidences: list[float],
+        all_geo_countries: set[str],
+        all_geo_coords: list[dict],
     ) -> int:
         """Create a new derived event from a multi-signal cluster."""
         try:

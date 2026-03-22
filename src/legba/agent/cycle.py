@@ -231,12 +231,14 @@ class AgentCycle(
         scores = {}
 
         # CURATE: recent uncurated backlog (last 24h signals without event links).
-        # Capped at 0.6 — dedicated CURATE workers handle heavy backlog.
+        # Capped at 0.55 — must not dominate SURVEY even at max backlog.
         uncurated = getattr(self, '_uncurated_count', 0)
-        scores["CURATE"] = min(uncurated / 80.0, 0.6) if uncurated > 30 else 0.0
+        scores["CURATE"] = min(uncurated / 80.0, 0.55) if uncurated > 30 else 0.0
 
-        # SURVEY: default analytical work — the analyst's desk cycle
-        scores["SURVEY"] = 0.4
+        # SURVEY: analytical desk work — must run regularly for hypothesis eval,
+        # situation linking, and graph maintenance.  Base 0.45 ensures it wins
+        # roughly half of Tier-3 slots even when backlog is high.
+        scores["SURVEY"] = 0.45
 
         # Cooldown: don't repeat the same dynamic type back-to-back
         last_types = getattr(self, '_recent_cycle_types', [])

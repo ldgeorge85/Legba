@@ -1,0 +1,16 @@
+models.ai1.infra.innoscale.net {
+  basicauth {
+    mike $2a$14$Nz3eYe9mHxKFPE5KrJJGr.LfLrxbHZKLwJnAalpgLZEOHjY8nO2se
+    alexey $2a$14$/CTOArW4VNxtVNISh8lx5OCTbFryRA9iuHy3TSlH6VG6Nnq05rqqy
+    lewis $2a$14$V5o0qu4DT6CN898eVPOSBuGS1rFxpqly3HKZwUrUQ8pamDONwSaCm
+    james $2a$14$dNP5Vs/OQ8Q03nbMYJNPFeq6zK5wGL1u30oskfm8zKxo8GZr3Wcr.
+    brian $2a$14$rtSruExl.YdVcNLjFHypHuvFj6bg9S2JslVkMND8bti7335Nci8jy
+    techs $2a$14$RF5qzWmNCi5vbb1Gf8OI0e1WWAqsiPK16Fr9D4NB2bupmllnkd1eW
+    usman $2a$14$dtc87OLLqOWHv8cvJMimV.3XWZwTf9pOd06vw0p0XSUFLSsXd2eli
+    phil $2a$14$4xKJLx.f8OiG/7nnh30OnuLh5QcvZQ9I.rJuyvOaMhd583X99NeLq
+    alan $2a$14$16JAyJ8wQR0m.eDQJ0L0LeIJ7/5Wnn5oNyW3WsOHmsVWuBZ2xvHiC
+    legba $2a$14$oqlXvNPXT2fbXgRS8K7VjeqZU3rnknJS.RUCgx8fEqjWWDn8e1JGq
+  }
+
+  reverse_proxy legba-models:8700
+}

@@ -190,6 +190,25 @@ class StructuredStore:
                     ON signal_entity_links (entity_id);
                 CREATE INDEX IF NOT EXISTS idx_sel_signal_entity
                     ON signal_entity_links (signal_id);
+
+                -- Events table (created early so watch_triggers FK works)
+                CREATE TABLE IF NOT EXISTS events (
+                    id UUID PRIMARY KEY,
+                    data JSONB NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    category TEXT NOT NULL DEFAULT 'other',
+                    event_type TEXT NOT NULL DEFAULT 'incident',
+                    severity TEXT NOT NULL DEFAULT 'medium',
+                    time_start TIMESTAMPTZ,
+                    time_end TIMESTAMPTZ,
+                    confidence REAL NOT NULL DEFAULT 0.5,
+                    signal_count INTEGER NOT NULL DEFAULT 0,
+                    source_method TEXT NOT NULL DEFAULT 'auto',
+                    source_cycle INTEGER,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
             """)
             # --- Additive migrations (safe to re-run) ---
             await conn.execute("""
@@ -378,6 +397,18 @@ class StructuredStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sel_event ON signal_event_links(event_id);
                 CREATE INDEX IF NOT EXISTS idx_sel_signal ON signal_event_links(signal_id);
+
+                -- Event-entity links (auto-propagated from signal_entity_links)
+                CREATE TABLE IF NOT EXISTS event_entity_links (
+                    event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                    entity_id UUID NOT NULL REFERENCES entity_profiles(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL DEFAULT 'mentioned',
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (event_id, entity_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_eel_entity ON event_entity_links(entity_id);
+                CREATE INDEX IF NOT EXISTS idx_eel_event ON event_entity_links(event_id);
 
                 -- Hypotheses: competing analytical theories (ACH)
                 CREATE TABLE IF NOT EXISTS hypotheses (
@@ -913,7 +944,7 @@ class StructuredStore:
                     signal.title,
                     signal.source_id,
                     signal.source_url,
-                    signal.category.value,
+                    str(signal.category.value if hasattr(signal.category, 'value') else signal.category),
                     signal.event_timestamp,
                     signal.language,
                     signal.confidence,
@@ -945,7 +976,7 @@ class StructuredStore:
                         signal.model_dump_json(),
                         signal.title,
                         signal.source_url,
-                        signal.category.value,
+                        str(signal.category.value if hasattr(signal.category, 'value') else signal.category),
                         signal.event_timestamp,
                         signal.language,
                         signal.confidence,
@@ -1111,7 +1142,7 @@ class StructuredStore:
                     event.model_dump_json(),
                     event.title,
                     event.summary,
-                    event.category.value,
+                    str(event.category.value if hasattr(event.category, 'value') else event.category),
                     event.event_type.value,
                     event.severity.value,
                     event.time_start,

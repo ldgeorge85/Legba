@@ -635,7 +635,7 @@ class IngestionService:
         if not self._nats:
             return
         try:
-            categories = list(set(s.category.value for s in signals if hasattr(s, "category")))
+            categories = list(set(str(s.category.value if hasattr(s.category, 'value') else s.category) for s in signals if hasattr(s, "category")))
             msg = {
                 "source_id": str(source.id),
                 "source_name": source.name,
