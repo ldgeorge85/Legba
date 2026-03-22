@@ -182,9 +182,9 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
             async with structured._pool.acquire() as conn:
                 await _ensure_tables(conn)
 
-                # Duplicate check by name
+                # Duplicate check: exact name match
                 existing = await conn.fetchrow(
-                    "SELECT id, name FROM watchlist WHERE lower(name) = $1 LIMIT 1",
+                    "SELECT id, name FROM watchlist WHERE lower(name) = $1 AND active = true LIMIT 1",
                     name.lower(),
                 )
                 if existing:
@@ -194,6 +194,29 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
                         "existing_name": existing["name"],
                         "reason": "a watch with this name already exists",
                     }, indent=2)
+
+                # Semantic overlap check: compare keywords+entities against active watches
+                new_terms = {t.lower() for t in entities + keywords}
+                if new_terms:
+                    rows = await conn.fetch(
+                        "SELECT id, name, data FROM watchlist WHERE active = true",
+                    )
+                    for row in rows:
+                        raw = row["data"]
+                        d = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else {}
+                        existing_terms = {t.lower() for t in d.get("entities", []) + d.get("keywords", [])}
+                        if not existing_terms:
+                            continue
+                        overlap = len(new_terms & existing_terms)
+                        union = len(new_terms | existing_terms)
+                        if union > 0 and overlap / union >= 0.5:
+                            return json.dumps({
+                                "status": "duplicate_detected",
+                                "existing_watch_id": str(row["id"]),
+                                "existing_name": row["name"],
+                                "overlap": sorted(new_terms & existing_terms),
+                                "reason": f"overlaps {overlap}/{union} terms with existing watch — update the existing watch instead of creating a new one",
+                            }, indent=2)
 
                 await conn.execute(
                     "INSERT INTO watchlist (id, data, name, priority, active, created_at) "

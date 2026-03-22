@@ -184,9 +184,10 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
 
         await _ensure_tables(structured._pool)
 
-        # Duplicate check by name
+        # Duplicate check: exact name + fuzzy name overlap
         try:
             async with structured._pool.acquire() as conn:
+                # Exact name match
                 existing = await conn.fetchrow(
                     "SELECT id, name FROM situations WHERE lower(name) = $1 LIMIT 1",
                     name.lower(),
@@ -199,6 +200,31 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
                         "hint": "A situation with this name already exists. "
                                 "Use situation_update to modify it.",
                     }, indent=2)
+
+                # Fuzzy name overlap: Jaccard on name words
+                stop = {"a", "an", "the", "of", "in", "on", "at", "to", "for",
+                        "and", "or", "is", "was", "by", "from", "with", "march",
+                        "2026", "2025", "events", "event"}
+                new_words = {w for w in name.lower().split() if w not in stop and len(w) > 2}
+                if new_words:
+                    active = await conn.fetch(
+                        "SELECT id, name FROM situations WHERE status IN ('active', 'escalating')",
+                    )
+                    for row in active:
+                        ex_words = {w for w in row["name"].lower().split() if w not in stop and len(w) > 2}
+                        if not ex_words:
+                            continue
+                        overlap = len(new_words & ex_words)
+                        union = len(new_words | ex_words)
+                        if union > 0 and overlap / union >= 0.5:
+                            return json.dumps({
+                                "status": "duplicate_detected",
+                                "existing_id": str(row["id"]),
+                                "existing_name": row["name"],
+                                "overlap_words": sorted(new_words & ex_words),
+                                "hint": f"Similar situation exists (word overlap {overlap}/{union}). "
+                                        "Use situation_update to modify it.",
+                            }, indent=2)
         except Exception:
             pass  # Proceed with creation if check fails
 

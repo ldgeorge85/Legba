@@ -581,6 +581,28 @@ class IntrospectMixin:
             except Exception:
                 pass  # Best-effort — don't break the report if novelty scoring fails
 
+            # Query active watches with recent triggers for the report
+            watchlist_summary = ""
+            try:
+                async with self.structured._pool.acquire() as conn:
+                    watch_rows = await conn.fetch(
+                        "SELECT name, priority, trigger_count, last_triggered_at, data "
+                        "FROM watchlist WHERE active = true AND trigger_count > 0 "
+                        "ORDER BY trigger_count DESC LIMIT 15",
+                    )
+                    if watch_rows:
+                        lines = []
+                        for wr in watch_rows:
+                            last = wr["last_triggered_at"]
+                            last_str = last.strftime("%Y-%m-%d") if last else "never"
+                            lines.append(
+                                f"- [{wr['priority']}] {wr['name']}: "
+                                f"{wr['trigger_count']} triggers (last: {last_str})"
+                            )
+                        watchlist_summary = "\n".join(lines)
+            except Exception:
+                pass
+
             report_messages = self.assembler.assemble_analysis_report_prompt(
                 cycle_number=self.state.cycle_number,
                 graph_summary=graph_summary,
@@ -592,6 +614,7 @@ class IntrospectMixin:
                 narrative=narrative_with_prev,
                 novelty_events=novelty_events_text,
                 peripheral_novelty=peripheral_novelty_text,
+                watchlist_summary=watchlist_summary,
             )
 
             response = await self.llm.complete(

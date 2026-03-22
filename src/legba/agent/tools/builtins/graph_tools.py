@@ -67,9 +67,9 @@ RELATIONSHIP_ALIASES: dict[str, str] = {
     "CompetesWith": "AlternativeTo", "SimilarTo": "AlternativeTo",
     # InspiredBy
     "InfluencedBy": "InspiredBy", "MotivatedBy": "InspiredBy",
-    # RelatedTo (catch-all synonyms)
-    "RELATED_TO": "RelatedTo", "Related": "RelatedTo", "LinksTo": "RelatedTo",
-    "Has": "RelatedTo", "Knows": "RelatedTo", "ReportsTo": "RelatedTo",
+    # Former RelatedTo catch-all — now redirected to AffiliatedWith to avoid vague edges
+    "RELATED_TO": "AffiliatedWith", "Related": "AffiliatedWith", "LinksTo": "AffiliatedWith",
+    "Has": "AffiliatedWith", "Knows": "AffiliatedWith", "ReportsTo": "LeaderOf",
     # --- SA relationship aliases ---
     # AlliedWith
     "AlliedTo": "AlliedWith", "AllyOf": "AlliedWith",
@@ -109,7 +109,7 @@ CANONICAL_RELATIONSHIP_TYPES: frozenset[str] = frozenset({
     "OperatesIn", "LocatedIn", "BordersWith", "OccupiedBy",
     "SignatoryTo", "ProducesResource", "ImportsFrom", "ExportsTo",
     # General relationship types
-    "AffiliatedWith", "PartOf", "FundedBy", "RelatedTo",
+    "AffiliatedWith", "PartOf", "FundedBy",
     "CreatedBy", "MaintainedBy",
     # Technical (kept for backwards compatibility)
     "UsesArchitecture", "UsesPersistence", "HasSafety", "HasLimitation", "HasFeature",
@@ -148,8 +148,13 @@ def normalize_relationship_type(rel_type: str) -> tuple[str, str | None]:
             f"(score={best_ratio:.2f})."
         )
 
-    # 4. Unrecognized — default to RelatedTo
-    return "RelatedTo", f"Note: '{rel_type}' not recognized. Defaulted to 'RelatedTo'."
+    # 4. Unrecognized — reject instead of defaulting to RelatedTo
+    return None, (
+        f"Error: '{rel_type}' is not a recognized relationship type. "
+        f"Use a specific type: AlliedWith, HostileTo, TradesWith, SanctionedBy, "
+        f"SuppliesWeaponsTo, MemberOf, LeaderOf, OperatesIn, LocatedIn, "
+        f"BordersWith, AffiliatedWith, PartOf, FundedBy, or others from the canonical set."
+    )
 
 
 async def _find_similar_entity(
@@ -230,6 +235,10 @@ def register(
         rel_type = args.get("relation_type")
         if relate_to and rel_type:
             rel_type, rel_note = normalize_relationship_type(rel_type)
+            if rel_type is None:
+                # Rejected — unrecognized relationship type
+                result += f" {rel_note}"
+                return result
             target = await graph.find_entity(relate_to)
             if not target:
                 similar_target = await _find_similar_entity(graph, relate_to)

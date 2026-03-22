@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Autonomous intelligence analysis platform.*
-*Last updated: 2026-03-18 | Cycle redesign (SURVEY/SYNTHESIZE), hypothesis engine (ACH), 24 UI panels, worker mode, hybrid LLM routing*
+*Last updated: 2026-03-22 | Cycle redesign (SURVEY/SYNTHESIZE), hypothesis engine (ACH), 22+ UI panels, worker mode, hybrid LLM routing*
 
 ---
 
@@ -13,13 +13,13 @@ Legba is a continuously operating AI intelligence analyst. It does not collect d
 
 - **Collection layer** (deterministic, no LLM): Fetches 100+ RSS/API sources, normalizes signals, 4-tier dedup, spaCy NER, embeds to Qdrant, clusters signals into events. Runs continuously and independently.
 - **Analytical layer** (LLM-driven): 7 cycle types with restricted tool sets. SURVEY cycles review events, build graph relationships, and stress-test hypotheses. SYNTHESIZE cycles deep-dive into situations and produce named briefs. ANALYSIS detects patterns. RESEARCH enriches entities. INTROSPECTION produces world assessment reports. EVOLVE audits the agent itself.
-- **Operator layer**: 24-panel intelligence workstation, consultation engine with 15+ tools, inbox for directives, real-time SSE feed.
+- **Operator layer**: 22+ panel intelligence workstation, consultation engine with 15+ tools, inbox for directives, real-time SSE feed.
 
 **Current deployment:** Continuous Global Situational Awareness — monitoring geopolitical, conflict, health, environmental, and economic developments. Same codebase supports privacy/overreach monitoring and attack surface management via configuration (seed goal + source portfolio).
 
 **Two-tier data model:** Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). Signals are evidence; events are the analytical unit. Reports, situations, hypotheses, and graph analysis operate on events.
 
-**Key numbers:** 100+ Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules, ~22,700 signals, 112 active sources, 7 platform services, 12 Docker containers.
+**Key numbers:** 100+ Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules, ~30,500 signals, ~1,100 events, ~13,400 active facts, ~598 entities, 138 active sources, 14 Docker containers.
 
 ---
 
@@ -30,7 +30,7 @@ Legba is a continuously operating AI intelligence analyst. It does not collect d
 ```
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |
-+-- Docker Compose (project: legba)
++-- Docker Compose (project: legba, 14 containers)
 |   |
 |   +-- Supervisor Container
 |   |   - Manages agent lifecycle (launch/kill per cycle)
@@ -45,6 +45,10 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - cycle.py orchestrator + 15 phase mixins (phases/ directory)
 |   |   - 66 built-in tools (incl. cycle_complete pseudo-tool)
 |   |
+|   +-- Ingestion Service Container
+|   |   - Background signal fetching, normalization, deterministic clustering
+|   |   - spaCy NER, 4-tier dedup, no LLM required
+|   |
 |   +-- Platform Services (long-lived)
 |   |   - Redis :6379         -- Transient state (counters, flags, registers)
 |   |   - Postgres+AGE :5432  -- Structured data, entity graph (Cypher)
@@ -52,7 +56,9 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - NATS :4222          -- Event bus, messaging, data ingestion
 |   |   - OpenSearch :9200    -- Bulk data, full-text search, aggregations
 |   |   - OpenSearch Audit :9201 -- Audit logs (agent cannot access)
-|   |   - Airflow :8080       -- Scheduled pipelines, DAG orchestration
+|   |   - Airflow :8080       -- Scheduled pipelines, 4 DAGs (metrics rollup, source health, decision surfacing, eval rubrics)
+|   |   - TimescaleDB :5433   -- Time-series metrics (cycle, ingestion, source health, HDX conflict baselines)
+|   |   - Grafana :3000       -- Operational dashboards (auto-provisioned TimescaleDB datasource)
 |   |
 |   +-- Operator Console v1 :8501  -- Web UI + consultation (FastAPI + htmx)
 |   +-- Operator Console v2 :8503  -- Multi-panel workstation (React + Dockview + Sigma.js + MapLibre)
@@ -464,6 +470,7 @@ Note: System and user messages are combined into a single `{"role": "user"}` mes
 | **Entity graph** | Apache AGE | Entities + relationships (Cypher topology) | Cypher queries |
 | **Entity profiles** | Postgres (JSONB) | Rich profiles with versioned assertions | SQL + JSONB |
 | **Bulk data** | OpenSearch | Documents, event indices, aggregations | Full-text + structured search |
+| **Time-series metrics** | TimescaleDB | Cycle metrics, ingestion metrics, source health, HDX conflict baselines (242 countries, 2018-2025) | SQL + hypertables |
 
 ### Entity Intelligence Layer
 
@@ -761,7 +768,7 @@ Multi-panel intelligence workstation built with React, running as a separate con
 
 **Access:** `ssh -L 8503:localhost:8503 user@<your-host>` then `http://localhost:8503`
 
-**24 panels across 7 groups:**
+**22+ panels across 7 groups:**
 
 | Group | Panels |
 |-------|--------|
@@ -969,7 +976,7 @@ See `docs/WORKLOG.md` for the current work queue.
 
 ### Production Metrics
 
-As of cycle 1234+: ~22,700 signals, 1,764 facts, 501 entities, 661 graph nodes, 1,306 edges, 112 active sources. Sub-1% error rate across 1,200+ autonomous cycles.
+As of cycle ~2070: ~30,500 signals, ~1,100 events, ~13,400 active facts, ~598 entities, ~16,500 signal-level entity links, ~1,280 event-level entity links, 138 active sources (all categorized). Sub-1% error rate across 2,000+ autonomous cycles.
 
 ---
 
@@ -1051,7 +1058,9 @@ legba/
 | Structured data | PostgreSQL 18 + Apache AGE |
 | Full-text search | OpenSearch 2.x |
 | Messaging | NATS + JetStream |
-| Orchestration | Apache Airflow |
+| Time-series | TimescaleDB (hypertables, HDX conflict baselines) |
+| Dashboards | Grafana (auto-provisioned TimescaleDB datasource) |
+| Orchestration | Apache Airflow (4 DAGs: metrics rollup, source health, decision surfacing, eval rubrics) |
 | Analytics | PyOD, statsforecast, spaCy, NetworkX, scikit-learn |
 | RSS/Feed | feedparser, trafilatura |
 | Operator Console v1 | FastAPI, Jinja2, htmx, Tailwind CSS |

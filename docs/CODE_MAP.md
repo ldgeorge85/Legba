@@ -1,6 +1,6 @@
 # Legba Code Map
 
-**Generated:** 2026-03-18
+**Generated:** 2026-03-22
 **Total Python files:** 100+
 **Total lines of Python:** ~21,000
 
@@ -29,6 +29,8 @@ src/legba/
       sources.py                     (131 lines) — Source registry with trust metadata
       tools.py                       (74 lines)  — ToolDefinition, ToolCall, ToolResult
       hypotheses.py                  (55 lines)  — Hypothesis, HypothesisStatus, DiagnosticEvidence (ACH)
+      situations.py                  — Situation, SituationStatus (tracked narrative groupings)
+      watchlist.py                   — WatchItem, WatchTrigger (keyword/entity alert definitions)
 
   agent/
     __init__.py
@@ -96,6 +98,8 @@ src/legba/
         entity_tools.py              (473 lines) — entity_profile, entity_inspect, entity_resolve
         selfmod_tools.py             (110 lines) — code_test (syntax + import validation)
         geo.py                       (177 lines) — Location normalization (pycountry + GeoNames)
+        situation_tools.py           (506 lines) — situation_create, situation_update, situation_list, situation_link_event; name dedup (word overlap Jaccard >= 0.5)
+        watchlist_tools.py           (329 lines) — watchlist_add, watchlist_list, watchlist_remove; term overlap dedup (Jaccard on entities+keywords >= 0.5)
 
     prompt/
       __init__.py
@@ -157,6 +161,12 @@ src/legba/
 
 scripts/
   migrate_signals_events.sql         (131 lines) — DDL migration: events→signals, events_derived→events
+
+dags/
+  metrics_rollup.py                  — Airflow DAG: hourly/daily TimescaleDB metric aggregation
+  source_health.py                   — Airflow DAG: auto-pause dead sources (>20 consecutive failures)
+  decision_surfacing.py              — Airflow DAG: stale goals, dormant situations, merge candidates
+  eval_rubrics.py                    — Airflow DAG: automated quality checks (event dedup, graph, sources, entity links)
 ```
 
 ---
@@ -632,11 +642,12 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 | `feed_tools.py` | `feed_parse` | RSS/Atom feed parsing with feedparser, browser UA retry on 403/405, source reliability tracking via `record_source_fetch()` |
 | `source_tools.py` | `source_register`, `source_list`, `source_update`, `source_get` | Source registry CRUD with dedup (checks existing URL, limit 500), auto-pause at 5 consecutive failures |
 | `event_tools.py` | `signal_store`, `signal_query`, `signal_search` | Signal storage to Postgres + OpenSearch (was event_store/query/search). Auto geo-resolution via `geo.py`. 3-tier dedup. `increment_source_event_count` on store |
-| `derived_event_tools.py` | `event_create`, `event_update`, `event_query`, `event_link_signal` | Derived event CRUD. Agent-created events start at confidence 0.7. Link signals as evidence |
+| `derived_event_tools.py` | `event_create`, `event_update`, `event_query`, `event_link_signal` | Derived event CRUD. Agent-created events start at confidence 0.7. Link signals as evidence. Dedup: Jaccard title similarity check before create |
 | `entity_tools.py` | `entity_profile`, `entity_inspect`, `entity_resolve` | Entity profile CRUD in Postgres + AGE sync. Profile versioning. Event-entity linking |
 | `selfmod_tools.py` | `code_test` | Syntax check + import validation before self-modifications |
-| `hypothesis_tools.py` | `hypothesis_create`, `hypothesis_evaluate`, `hypothesis_list` | ACH: competing thesis/counter-thesis pairs with evidence tracking |
-| `derived_event_tools.py` | `event_create`, `event_update`, `event_link_signal` | Derived event CRUD + signal-event linking |
+| `hypothesis_tools.py` | `hypothesis_create`, `hypothesis_evaluate`, `hypothesis_list` | ACH: competing thesis/counter-thesis pairs with evidence tracking. Dedup: Jaccard thesis similarity >= 0.45 before create |
+| `situation_tools.py` | `situation_create`, `situation_update`, `situation_list`, `situation_link_event` | Situation CRUD: tracked narrative groupings for related events. Dedup: exact name + word-overlap Jaccard >= 0.5 before create |
+| `watchlist_tools.py` | `watchlist_add`, `watchlist_list`, `watchlist_remove` | Keyword/entity alert watches with trigger tracking. Dedup: exact name + term overlap Jaccard (entities+keywords) >= 0.5 before create |
 | `geo.py` | (internal, not a tool) | Location normalization: `resolve_locations(locations)` using pycountry + GeoNames cities15000 gazetteer. Returns `{countries, regions, coordinates}` |
 
 **Additionally registered in `cycle.py` (not in builtin modules):**
@@ -645,7 +656,7 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 - `explain_tool` — Get full parameter details for any tool on demand
 - `spawn_subagent` — Delegate work to a sub-agent with its own context window
 
-**Total registered tools: 66+**
+**Total registered tools: 73+**
 
 ---
 
@@ -937,6 +948,23 @@ Deterministic (no LLM) service that runs independently of the agent cycle. Fetch
 6. New `situation_events` table created for derived events
 7. `watch_triggers.event_id` renamed to `signal_id`, new `event_id` column added
 8. All indexes renamed for clarity
+
+---
+
+### 2.18 `dags/` — Airflow DAGs
+
+Four DAGs deployed to the shared Airflow dags volume. Run on fixed schedules, independent of the agent cycle.
+
+| DAG File | DAG ID | Schedule | Purpose |
+|----------|--------|----------|---------|
+| `metrics_rollup.py` | `metrics_rollup` | `@hourly` | Roll raw TimescaleDB metrics into hourly/daily aggregates for Grafana |
+| `source_health.py` | `source_health` | Every 6h | Auto-pause sources with >20 consecutive failures; report utilization stats |
+| `decision_surfacing.py` | `decision_surfacing` | Every 12h | Identify stale goals (>7 days), dormant situations, merge candidates |
+| `eval_rubrics.py` | `eval_rubrics` | Every 8h | Quality evaluation: event dedup rate, graph quality (RelatedTo%, isolated%), zero-signal sources, entity link density |
+
+All DAGs connect directly to Postgres (`legba` DB) and/or TimescaleDB (`legba_metrics` DB) via `psycopg2`. Eval results are written to the TimescaleDB `metrics` table with dimension `eval` for Grafana visualization.
+
+DAGs can also be deployed at runtime by the agent via the `workflow_define` orchestration tool, which writes Python files to the shared dags volume.
 
 ---
 
@@ -1254,9 +1282,12 @@ client.py:reason_with_tools(messages, tool_executor, max_steps=20)
         |                |                |
    +----+----+    +------+------+   +-----+-----+
    |  Redis  |    |    NATS     |   |  Airflow  |
-   |(registers|   | (event bus) |   |(workflows)|
-   | +journal)|   +-------------+   +-----------+
-   +---------+
+   |(registers|   | (event bus) |   |(4 DAGs:   |
+   | +journal)|   +-------------+   | rollup,   |
+   +---------+                      | health,   |
+                                    | surfacing,|
+                                    | eval)     |
+                                    +-----------+
 
    +-----------+        +-----------+
    |Supervisor |------->|   Agent   |

@@ -14,6 +14,29 @@ from typing import TYPE_CHECKING
 
 from ....shared.schemas.tools import ToolDefinition, ToolParameter
 
+
+# ---------------------------------------------------------------------------
+# Duplicate detection helpers
+# ---------------------------------------------------------------------------
+
+_STOP = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or",
+         "is", "was", "by", "from", "with", "that", "this", "are", "be", "as",
+         "it", "its", "not", "but", "has", "had", "have", "been", "would",
+         "will", "can", "may"}
+
+
+def _thesis_words(text: str) -> set[str]:
+    """Extract normalised significant words from a thesis."""
+    return {w for w in text.lower().split() if w not in _STOP and len(w) > 2}
+
+
+def _thesis_similarity(a: str, b: str) -> float:
+    """Jaccard similarity of thesis words."""
+    wa, wb = _thesis_words(a), _thesis_words(b)
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
 if TYPE_CHECKING:
     from ...memory.structured import StructuredStore
     from ...tools.registry import ToolRegistry
@@ -115,6 +138,29 @@ def register(registry: ToolRegistry, *, structured: StructuredStore, state: Cycl
             return "Error: thesis is required"
         if not counter_thesis:
             return "Error: counter_thesis is required — every hypothesis needs a competing explanation"
+
+        # --- Dedup: check for existing active hypotheses with similar thesis ---
+        try:
+            async with structured._pool.acquire() as conn:
+                active = await conn.fetch(
+                    "SELECT id, thesis, counter_thesis FROM hypotheses "
+                    "WHERE status = 'active' ORDER BY created_at DESC",
+                )
+                for row in active:
+                    sim = _thesis_similarity(thesis, row["thesis"])
+                    if sim >= 0.45:
+                        return json.dumps({
+                            "status": "duplicate_detected",
+                            "existing_hypothesis_id": str(row["id"]),
+                            "existing_thesis": row["thesis"][:120],
+                            "similarity": round(sim, 3),
+                            "reason": (
+                                f"An active hypothesis already covers this topic (Jaccard {sim:.2f}). "
+                                "Use hypothesis_evaluate to add evidence to it, or update its status."
+                            ),
+                        }, indent=2)
+        except Exception as e:
+            logger.debug("Hypothesis dedup check failed: %s", e)
 
         situation_id = args.get("situation_id")
         diag_raw = args.get("diagnostic_evidence")

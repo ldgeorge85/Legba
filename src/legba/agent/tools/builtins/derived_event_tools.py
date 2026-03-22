@@ -19,6 +19,25 @@ logger = logging.getLogger(__name__)
 
 from ....shared.schemas.tools import ToolDefinition, ToolParameter
 
+
+# ---------------------------------------------------------------------------
+# Duplicate detection helpers (mirrored from event_tools.py)
+# ---------------------------------------------------------------------------
+
+_STOP = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or",
+         "is", "was", "by", "from", "with"}
+
+
+def _title_words(title: str) -> set[str]:
+    return {w for w in title.lower().split() if w not in _STOP and len(w) > 1}
+
+
+def _title_similarity(a: str, b: str) -> float:
+    wa, wb = _title_words(a), _title_words(b)
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
 if TYPE_CHECKING:
     from ...memory.structured import StructuredStore
     from ...tools.registry import ToolRegistry
@@ -171,6 +190,43 @@ def register(
         title = args.get("title", "").strip()
         if not title:
             return "Error: title is required"
+
+        # --- Dedup: check for existing events with similar titles (last 7 days) ---
+        try:
+            async with structured._pool.acquire() as conn:
+                # Exact title match
+                exact = await conn.fetchrow(
+                    "SELECT id, title FROM events "
+                    "WHERE lower(title) = $1 AND created_at >= NOW() - INTERVAL '7 days'",
+                    title.lower(),
+                )
+                if exact:
+                    return json.dumps({
+                        "status": "duplicate_detected",
+                        "existing_event_id": str(exact["id"]),
+                        "existing_title": exact["title"],
+                        "reason": "exact title match — use event_update to modify or event_link_signal to add evidence",
+                    }, indent=2)
+
+                # Jaccard similarity check
+                threshold = 0.4 if len(title.split()) <= 5 else 0.5
+                candidates = await conn.fetch(
+                    "SELECT id, title FROM events "
+                    "WHERE created_at >= NOW() - INTERVAL '7 days' "
+                    "ORDER BY created_at DESC LIMIT 300",
+                )
+                for cand in candidates:
+                    sim = _title_similarity(title, cand["title"])
+                    if sim >= threshold:
+                        return json.dumps({
+                            "status": "duplicate_detected",
+                            "existing_event_id": str(cand["id"]),
+                            "existing_title": cand["title"],
+                            "similarity": round(sim, 3),
+                            "reason": f"similar event exists (Jaccard {sim:.2f}) — use event_update or event_link_signal instead",
+                        }, indent=2)
+        except Exception as e:
+            logger.debug("Event dedup check failed: %s", e)
 
         from ....shared.schemas.derived_events import (
             DerivedEvent, EventType, EventSeverity,

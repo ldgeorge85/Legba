@@ -803,6 +803,7 @@ class PromptAssembler:
         entity_profiles: str = "",
         novelty_events: str = "",
         peripheral_novelty: str = "",
+        watchlist_summary: str = "",
     ) -> list[Message]:
         """Build the message list for the full analysis report during introspection."""
         report_text = templates.ANALYSIS_REPORT_PROMPT.format(
@@ -816,6 +817,7 @@ class PromptAssembler:
             entity_count=entity_count,
             coverage_regions=coverage_regions or "(coverage unknown)",
             narrative=narrative or "(no narrative perspective yet)",
+            watchlist_summary=watchlist_summary or "(no active watches with recent triggers)",
         )
         return [
             Message(role="system", content=(

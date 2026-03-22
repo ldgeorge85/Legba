@@ -5,7 +5,7 @@
 <h1 align="center">Legba</h1>
 <p align="center"><em>Autonomous intelligence analysis platform.</em></p>
 
-Legba is a continuously operating AI analyst. An automated ingestion pipeline collects and clusters raw signals from 100+ global sources. The AI runs structured analytical cycles — building a knowledge graph, tracking situations, stress-testing competing hypotheses, and producing named intelligence products (world assessments, situation briefs, predictions). An operator interacts through a 24-panel intelligence workstation and a consultation engine.
+Legba is a continuously operating AI analyst. An automated ingestion pipeline collects and clusters raw signals from 138 active sources. The AI runs structured analytical cycles — building a knowledge graph, tracking situations, stress-testing competing hypotheses, and producing named intelligence products (world assessments, situation briefs, predictions). An operator interacts through a 22+ panel intelligence workstation and a consultation engine.
 
 It is not a chatbot, not a task runner, not an AutoGPT-style goal chaser. It is a disciplined analytical system: collection is deterministic, analysis is LLM-driven, and every cycle type has a specific purpose and restricted tool set.
 
@@ -26,9 +26,9 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 │   ├── Qdrant            — Semantic search (episodic memory)
 │   ├── NATS              — Event bus, messaging
 │   ├── OpenSearch x2     — Full-text search + isolated audit logs
-│   ├── TimescaleDB       — Time-series metrics (cycle, ingestion, source health)
-│   ├── Grafana           — Operational dashboards
-│   └── Airflow           — Scheduled pipelines
+│   ├── TimescaleDB       — Time-series metrics (cycle, ingestion, source health, HDX conflict baselines: 242 countries, 2018-2025)
+│   ├── Grafana           — Operational dashboards (auto-provisioned TimescaleDB datasource)
+│   └── Airflow           — 4 DAGs (metrics rollup, source health, decision surfacing, eval rubrics)
 └── External LLM: GPT-OSS 120B via vLLM or Claude Sonnet via Anthropic API
 ```
 
@@ -69,7 +69,7 @@ Each specialized cycle type uses a **filtered tool set** — only tools relevant
   <img src="docs/screenshot1.png" alt="Legba v2 Operator Console" width="100%">
 </p>
 
-24-panel intelligence workstation (React + Dockview). Dashboard, knowledge graph, geospatial map, AI consultation, world assessment reports, live signal feed, derived events, timeline, analytics, hypothesis tracker (ACH), situation briefs — all in a persistent, rearrangeable layout.
+22+ panel intelligence workstation (React + Dockview). Dashboard, knowledge graph, geospatial map, AI consultation, world assessment reports, live signal feed, derived events, timeline, analytics, hypothesis tracker (ACH), situation briefs — all in a persistent, rearrangeable layout.
 
 ## Quick Start
 
@@ -112,8 +112,13 @@ docker compose -p legba exec supervisor \
 | Python source files | 100+ |
 | Tests | 200+ |
 | Built-in tools | 66 across 19 modules |
-| Signals ingested | ~22,700 |
-| Platform services | 7 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, Airflow) |
+| Signals ingested | ~30,500 |
+| Derived events | ~1,100 |
+| Active facts | ~13,400 |
+| Entities | ~598 |
+| Entity links | ~16,500 signal-level, ~1,280 event-level |
+| Active sources | 138 (all categorized) |
+| Platform services | 9 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, TimescaleDB, Grafana, Airflow) |
 | Canonical relationship types | 30 |
 | LLM context window | 128k tokens (120k budget) |
 | Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |

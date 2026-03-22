@@ -364,6 +364,31 @@ services:
     profiles:
       - dev  # Only started manually or for development
 
+  # --- Caddy (TLS reverse proxy) ---
+  # Automatic HTTPS for legba.civislux.us → ui-v2.
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"    # HTTP/3
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      ui-v2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:80/health || exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    profiles:
+      - v2
+
   # --- Operator Console UI v2 (React SPA) ---
   # Palantir Gotham-style multi-panel workspace.
   # Access via SSH tunnel: ssh -L 8503:localhost:8503
@@ -500,5 +525,9 @@ volumes:
     name: legba_airflow_dags
   timescaledb_data:
     name: legba_timescaledb_data
+  caddy_data:
+    name: legba_caddy_data
+  caddy_config:
+    name: legba_caddy_config
   grafana_data:
     name: legba_grafana_data

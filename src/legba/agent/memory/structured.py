@@ -1130,7 +1130,7 @@ class StructuredStore:
     async def link_signal_to_event(
         self, signal_id: UUID, event_id: UUID, relevance: float = 1.0,
     ) -> bool:
-        """Create a signal-event link."""
+        """Create a signal-event link and propagate entity links to the event."""
         if not self._available:
             return False
         try:
@@ -1139,6 +1139,16 @@ class StructuredStore:
                     "INSERT INTO signal_event_links (signal_id, event_id, relevance) "
                     "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
                     signal_id, event_id, relevance,
+                )
+                # Auto-propagate: copy signal_entity_links → event_entity_links
+                await conn.execute(
+                    """
+                    INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
+                    SELECT $1, entity_id, role, confidence
+                    FROM signal_entity_links WHERE signal_id = $2
+                    ON CONFLICT (event_id, entity_id, role) DO NOTHING
+                    """,
+                    event_id, signal_id,
                 )
             return True
         except Exception as e:
@@ -1623,9 +1633,9 @@ class StructuredStore:
             async with self._pool.acquire() as conn:
                 await conn.execute(
                     """
-                    INSERT INTO signal_entity_links (signal_id, entity_id, role, confidence)
+                    INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
                     VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (signal_id, entity_id, role) DO UPDATE SET
+                    ON CONFLICT (event_id, entity_id, role) DO UPDATE SET
                         confidence = EXCLUDED.confidence
                     """,
                     link.event_id,

@@ -415,6 +415,32 @@ def register(
         if not name:
             return "Error: name is required"
 
+        # --- Validation gate: reject generic descriptors ---
+        _GENERIC_BLOCKLIST = {
+            "assailant", "attacker", "suspect", "victim", "driver", "official",
+            "civilians", "authorities", "residents", "protesters", "militants",
+            "gunmen", "soldiers", "police", "troops", "rebel", "rebels",
+            "fighter", "fighters", "worker", "workers", "student", "students",
+            "reporter", "journalist", "activist", "refugee", "refugees",
+            "immigrant", "immigrants", "national", "republic",
+        }
+        name_lower = name.lower().strip()
+        name_words = name_lower.split()
+
+        # Reject single-word generic nouns
+        if len(name_words) == 1 and name_lower in _GENERIC_BLOCKLIST:
+            return f"Error: '{name}' is a generic descriptor, not a named entity. Only resolve proper nouns."
+
+        # Reject multi-word names where ALL words are generic/lowercase common words
+        if all(w in _GENERIC_BLOCKLIST or len(w) <= 2 for w in name_words):
+            return f"Error: '{name}' is a generic descriptor, not a named entity. Only resolve proper nouns."
+
+        # Reject names that are entirely lowercase and short (likely not proper nouns)
+        if name == name_lower and len(name_words) <= 2 and not any(c.isdigit() for c in name):
+            # Check if original input was lowercase (not a proper noun)
+            if name_lower in _GENERIC_BLOCKLIST or all(w in _GENERIC_BLOCKLIST for w in name_words):
+                return f"Error: '{name}' is a generic descriptor, not a named entity."
+
         etype_str = _str_arg(args, "entity_type", "other")
         try:
             etype = EntityType(etype_str)

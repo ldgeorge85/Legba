@@ -1,7 +1,7 @@
 # Legba — Implementation Design
 
 *Key design decisions, data flows, and component interactions.*
-*Last updated: 2026-03-16*
+*Last updated: 2026-03-22*
 
 ---
 
@@ -462,7 +462,72 @@ Six guidance modules are appended to the system prompt in PLAN, REASON, and INTR
 
 ---
 
-## 8. Graph Database (Apache AGE)
+## 8. Airflow DAGs
+
+Four Airflow DAGs run on fixed schedules, independent of the agent cycle. They handle background maintenance, quality assurance, and decision surfacing.
+
+| DAG | Schedule | Purpose |
+|-----|----------|---------|
+| `metrics_rollup` | Hourly | Roll raw TimescaleDB metrics into hourly/daily aggregates for Grafana dashboards and baseline comparisons |
+| `source_health` | Every 6h | Auto-pause sources with >20 consecutive failures; report source utilization stats |
+| `decision_surfacing` | Every 12h | Identify stale goals (>7 days), dormant situations, merge candidates — surfaces items needing human or agent attention |
+| `eval_rubrics` | Every 8h | Automated quality evaluation: event dedup rate (<3%), graph quality (RelatedTo edges <5%, isolated nodes <5%), zero-signal source rate (<10%), entity link density |
+
+DAGs are deployed via the `workflow_define` orchestration tool (writes Python to the shared dags volume) or manually placed in `dags/`. Results from `eval_rubrics` are written to TimescaleDB as eval metrics and visualized in Grafana.
+
+### Quality Assurance / Eval Rubrics
+
+The `eval_rubrics` DAG implements the quantitative checks from `EVALUATION_RUBRICS.md`:
+- **Event dedup rate** — duplicate event titles within 7 days, target <3%
+- **Graph quality** — RelatedTo edge ratio (lazy relationship typing) and isolated node ratio, target <5% each
+- **Source health** — active sources that have never produced a signal, target <10%
+- **Entity link density** — average entity links per event (tracks enrichment coverage)
+
+Each check writes its result to TimescaleDB (`metrics` table, dimension `eval`) so trends are visible in Grafana alongside operational metrics.
+
+---
+
+## 9. Dedup Strategies
+
+Deduplication is enforced at multiple layers — ingestion, tool-level, and background evaluation — to prevent data sprawl without constraining the LLM's flexibility.
+
+### Signal Dedup (ingestion)
+
+Three-tier check in `ingestion/dedup.py` before any signal is stored:
+1. **GUID fast-path** — exact match on RSS guid / Atom id
+2. **Source URL** — exact match after URL normalization
+3. **Jaccard title similarity** — word-set overlap after source suffix/prefix stripping (e.g., " - Reuters"), threshold 50%, within +/-1 day window
+
+### Event Dedup (agent tools)
+
+`derived_event_tools.py:event_create` checks before creating a new event:
+- Exact title match against recent events (7 days)
+- Jaccard title-word similarity against recent events, threshold configurable (default ~0.5). Returns `duplicate_detected` with the existing event ID so the agent can use `event_update` or `event_link_signal` instead.
+
+### Hypothesis Dedup (agent tools)
+
+`hypothesis_tools.py:hypothesis_create` checks before creating:
+- Jaccard similarity of thesis words against existing hypotheses for the same situation, threshold 0.45. Returns `duplicate_detected` with the existing hypothesis ID.
+
+### Situation Dedup (agent tools)
+
+`situation_tools.py:situation_create` checks before creating:
+- Exact name match
+- Fuzzy word-overlap (Jaccard on name words with stop-word removal), threshold 0.50. Returns `duplicate_detected` with overlap words.
+
+### Watchlist Dedup (agent tools)
+
+`watchlist_tools.py:watchlist_add` checks before creating:
+- Exact name match
+- Term overlap — Jaccard on the union of entities + keywords against existing active watches, threshold 0.50. Returns `duplicate_detected` with overlapping terms.
+
+### Background Dedup Audit
+
+The `eval_rubrics` Airflow DAG checks event dedup rate every 8 hours, flagging when duplicate titles exceed 3% of recent events.
+
+---
+
+## 10. Graph Database (Apache AGE)
 
 ### Why AGE, Not Neo4j
 
@@ -491,7 +556,7 @@ Entity deduplication: `upsert_entity` first checks for any existing vertex with 
 
 ---
 
-## 9. Known Limitations
+## 11. Known Limitations
 
 ### LLM Behavioral Issues
 - **Multi-message errors**: GPT-OSS occasionally generates multiple Harmony message blocks → 400 error. Mitigated by `{"actions": [...]}` wrapper, but still happens (~1-2% of steps).
@@ -506,7 +571,7 @@ The full system prompt with all guidance addons is ~20k tokens. With tool defini
 
 ---
 
-## 10. Consultation Engine
+## 12. Consultation Engine
 
 ### Why Not Reuse LLMClient
 

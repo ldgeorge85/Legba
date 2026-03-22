@@ -1,0 +1,12 @@
+# Caddy reverse proxy for Legba UI v2
+# Copy to Caddyfile and fill in your domain + credentials:
+#   cp Caddyfile.template Caddyfile
+#   docker run --rm caddy:2-alpine caddy hash-password --plaintext 'YOUR_PASSWORD'
+#   Paste the hash below.
+
+your-domain.example.com {
+	basic_auth * {
+		# username <bcrypt-hash>
+	}
+	reverse_proxy ui-v2:8503
+}

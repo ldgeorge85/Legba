@@ -1565,6 +1565,9 @@ local governance, social). Include only if they connect to a primary narrative. 
 ### Coverage Regions
 {coverage_regions}
 
+### Active Watch Items
+{watchlist_summary}
+
 ## SECTION 2: YOUR PERSPECTIVE (use this for voice and continuity only)
 
 The following is your journal — your experiential perspective. Use it to inform your VOICE and the CONTINUITY of your thinking, NOT as a source of facts. Do not treat anything in your journal as factual unless it also appears in Section 1.
@@ -1609,7 +1612,15 @@ This is where your hundreds of cycles of observation produce insight:
 - Testable hypotheses with validation criteria
 - What would change your assessment
 
-## 5. Corrections
+## 5. Active Watch Items
+For each watch with recent triggers, note:
+- What the watch tracks (entities, keywords, regions)
+- Trigger count and trend (increasing/stable/decreasing)
+- Whether the pattern warrants escalation to a situation or hypothesis
+
+If no watches have fired recently, note that the watchlist is quiet — that itself is information.
+
+## 6. Corrections
 - Facts from previous reports that are now wrong or outdated
 - Leadership changes, alliance shifts, resolved situations
 - Only include if there are actual corrections to make
