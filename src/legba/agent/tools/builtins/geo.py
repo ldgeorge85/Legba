@@ -20,7 +20,10 @@ logger = logging.getLogger(__name__)
 
 # GeoNames gazetteer data (loaded lazily on first use)
 _cities: dict[str, dict[str, Any]] | None = None
-_GEONAMES_PATH = Path("/data/geo/cities15000.txt")
+_admin1: dict[str, str] | None = None  # "US.CA" → "California"
+_GEONAMES_PATH = Path("/data/geo/cities5000.txt")
+_GEONAMES_FALLBACK = Path("/data/geo/cities15000.txt")  # Backward compat
+_ADMIN1_PATH = Path("/data/geo/admin1CodesASCII.txt")
 
 # Country name aliases not covered by pycountry
 _COUNTRY_ALIASES: dict[str, str] = {
@@ -40,15 +43,38 @@ _COUNTRY_ALIASES: dict[str, str] = {
 }
 
 
+def _load_admin1() -> dict[str, str]:
+    """Load admin1 codes (state/province names). Key: 'CC.ADMIN1' → name."""
+    global _admin1
+    if _admin1 is not None:
+        return _admin1
+
+    _admin1 = {}
+    if not _ADMIN1_PATH.exists():
+        return _admin1
+
+    try:
+        with open(_ADMIN1_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("\t")
+                if len(parts) >= 2:
+                    _admin1[parts[0]] = parts[1]  # "US.CA" → "California"
+        logger.info("Loaded %d admin1 regions", len(_admin1))
+    except Exception as e:
+        logger.warning("Failed to load admin1 codes: %s", e)
+    return _admin1
+
+
 def _load_cities() -> dict[str, dict[str, Any]]:
-    """Load GeoNames cities15000 gazetteer. Keyed by lowercase city name."""
+    """Load GeoNames cities gazetteer. Keyed by lowercase city name."""
     global _cities
     if _cities is not None:
         return _cities
 
     _cities = {}
-    if not _GEONAMES_PATH.exists():
-        logger.warning("GeoNames gazetteer not found at %s", _GEONAMES_PATH)
+    geo_path = _GEONAMES_PATH if _GEONAMES_PATH.exists() else _GEONAMES_FALLBACK
+    if not geo_path.exists():
+        logger.warning("GeoNames gazetteer not found at %s or %s", _GEONAMES_PATH, _GEONAMES_FALLBACK)
         return _cities
 
     try:
@@ -140,7 +166,9 @@ def resolve_locations(locations: list[str]) -> dict[str, Any]:
     regions: list[str] = []
     coordinates: list[dict] = []
     seen_countries: set[str] = set()
+    seen_regions: set[str] = set()
     cities = _load_cities()
+    admin1_map = _load_admin1()
 
     for loc in locations:
         loc_stripped = loc.strip()
@@ -155,8 +183,16 @@ def resolve_locations(locations: list[str]) -> dict[str, Any]:
             if cc and cc not in seen_countries:
                 countries.append(cc)
                 seen_countries.add(cc)
-            if city["admin1"]:
-                regions.append(city["admin1"])
+
+            # Resolve admin1 code to human-readable name
+            admin1_code = city.get("admin1", "")
+            if admin1_code and cc:
+                admin1_key = f"{cc}.{admin1_code}"
+                admin1_name = admin1_map.get(admin1_key, admin1_code)
+                if admin1_name and admin1_name not in seen_regions:
+                    regions.append(admin1_name)
+                    seen_regions.add(admin1_name)
+
             coordinates.append({
                 "name": loc_stripped,
                 "lat": round(city["lat"], 4),

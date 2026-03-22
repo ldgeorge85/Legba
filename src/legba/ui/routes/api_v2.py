@@ -96,21 +96,30 @@ async def dashboard(request: Request):
             cycle = int(cycle_val) if isinstance(cycle_val, int) else int(cycle_val.decode() if isinstance(cycle_val, bytes) else cycle_val)
     except Exception as e:
         logger.warning("Dashboard: cycle number fetch failed: %s", e)
-    # Derive agent status from most recent audit entry timestamp
+    # Derive agent status — check Redis heartbeat first (more reliable), fall back to audit
     try:
         from datetime import timezone
-        latest = await stores.audit.search(
-            "legba-audit-*",
-            {"match_all": {}},
-            size=1,
-            sort=[{"timestamp": "desc"}],
-        )
-        if latest.get("hits"):
-            ts_str = latest["hits"][0].get("timestamp", "")
-            if ts_str:
-                last_ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
-                age = (datetime.now(timezone.utc) - last_ts).total_seconds()
-                agent_status = "running" if age < 300 else "idle"
+        # Primary: check supervisor heartbeat in Redis
+        hb_ts = await stores.registers._redis.get("legba:heartbeat_at")
+        if hb_ts:
+            hb_str = hb_ts.decode() if isinstance(hb_ts, bytes) else str(hb_ts)
+            last_hb = datetime.fromisoformat(hb_str.replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - last_hb).total_seconds()
+            agent_status = "running" if age < 900 else "idle"  # 15min window for long cycles
+        else:
+            # Fallback: check audit OpenSearch
+            latest = await stores.audit.search(
+                "legba-audit-*",
+                {"match_all": {}},
+                size=1,
+                sort=[{"timestamp": "desc"}],
+            )
+            if latest.get("hits"):
+                ts_str = latest["hits"][0].get("timestamp", "")
+                if ts_str:
+                    last_ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - last_ts).total_seconds()
+                    agent_status = "running" if age < 300 else "idle"
     except Exception as e:
         logger.warning("Dashboard: agent status derivation failed: %s", e)
 

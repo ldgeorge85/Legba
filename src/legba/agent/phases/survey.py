@@ -85,8 +85,22 @@ class SurveyMixin:
             self.logger.log_error(f"Survey cycle failed: {e}")
 
     async def _build_survey_context(self: AgentCycle) -> str:
-        """Build context for SURVEY: recent events, situations, leads, predictions."""
+        """Build context for SURVEY with focused task assignments."""
         lines = []
+
+        # --- Task assignments: concrete, scoped work items ---
+        tasks = await self._identify_survey_tasks()
+        if tasks:
+            lines.append("## YOUR ASSIGNED TASKS (prioritized — do these first)")
+            lines.append("")
+            for i, task in enumerate(tasks, 1):
+                lines.append(f"### Task {i}: {task['name']}")
+                lines.append(task['description'])
+                lines.append("")
+            lines.append("Complete the assigned tasks above before doing general analytical work.")
+            lines.append("")
+
+        lines.append("## Context Data")
         try:
             async with self.memory.structured._pool.acquire() as conn:
                 # 1. Recent high-confidence derived events (last 24h)
@@ -246,3 +260,94 @@ class SurveyMixin:
             pass
 
         return "\n".join(lines)
+
+    async def _identify_survey_tasks(self: AgentCycle) -> list[dict]:
+        """Identify concrete, scoped tasks for this SURVEY cycle based on system state."""
+        tasks = []
+        try:
+            if not self.memory.structured or not self.memory.structured._available:
+                return tasks
+
+            async with self.memory.structured._pool.acquire() as conn:
+                # Task: Link unlinked events to situations
+                unlinked = await conn.fetch("""
+                    SELECT e.id, e.title FROM events e
+                    LEFT JOIN situation_events se ON se.event_id = e.id
+                    WHERE se.event_id IS NULL
+                    ORDER BY e.created_at DESC LIMIT 5
+                """)
+                if unlinked:
+                    event_list = ", ".join(f"[{r['id']}] {r['title'][:60]}" for r in unlinked)
+                    tasks.append({
+                        "name": "Link unlinked events to situations",
+                        "description": (
+                            f"These {len(unlinked)} events have no situation links. "
+                            f"Use situation_list to find matching situations, then situation_link_event for each.\n"
+                            f"Events: {event_list}"
+                        ),
+                        "priority": 0.8,
+                    })
+
+                # Task: Evaluate hypotheses against new evidence
+                hyps = await conn.fetch("""
+                    SELECT h.id, h.thesis, h.last_evaluated_cycle,
+                           s.name as situation_name
+                    FROM hypotheses h
+                    LEFT JOIN situations s ON s.id = h.situation_id
+                    WHERE h.status = 'active'
+                    ORDER BY h.last_evaluated_cycle ASC NULLS FIRST
+                    LIMIT 2
+                """)
+                for h in hyps:
+                    stale_cycles = self.state.cycle_number - (h['last_evaluated_cycle'] or 0)
+                    if stale_cycles > 5:
+                        tasks.append({
+                            "name": f"Evaluate hypothesis (stale {stale_cycles} cycles)",
+                            "description": (
+                                f"Hypothesis [{h['id']}]: \"{h['thesis'][:100]}\"\n"
+                                f"Situation: {h['situation_name'] or 'unlinked'}\n"
+                                f"Not evaluated in {stale_cycles} cycles. "
+                                f"Search for recent signals related to this thesis using event_search, "
+                                f"then call hypothesis_evaluate with any supporting or refuting signal IDs."
+                            ),
+                            "priority": 0.7,
+                        })
+
+                # Task: Merge overlapping situations
+                sits = await conn.fetch("""
+                    SELECT id, name, data FROM situations WHERE status != 'resolved'
+                """)
+                if len(sits) > 1:
+                    from collections import defaultdict
+                    entity_map = defaultdict(set)
+                    for s in sits:
+                        data = s['data'] if isinstance(s['data'], dict) else {}
+                        for e in (data.get('key_entities') or []):
+                            entity_map[e.lower()].add(str(s['id']))
+                    # Find pairs sharing 3+ entities
+                    from itertools import combinations
+                    sit_pairs = defaultdict(int)
+                    for entity, sit_ids in entity_map.items():
+                        for a, b in combinations(sit_ids, 2):
+                            sit_pairs[(a, b)] += 1
+                    for (a, b), overlap in sit_pairs.items():
+                        if overlap >= 3:
+                            name_a = next((s['name'] for s in sits if str(s['id']) == a), '?')
+                            name_b = next((s['name'] for s in sits if str(s['id']) == b), '?')
+                            tasks.append({
+                                "name": "Consider merging overlapping situations",
+                                "description": (
+                                    f"Situations \"{name_a}\" and \"{name_b}\" share {overlap} key entities. "
+                                    f"Should they be merged? If yes, use situation_update to resolve one "
+                                    f"and link its events to the other."
+                                ),
+                                "priority": 0.5,
+                            })
+                            break  # Only suggest one merge per cycle
+
+        except Exception:
+            pass
+
+        # Sort by priority, take top 2
+        tasks.sort(key=lambda t: t['priority'], reverse=True)
+        return tasks[:2]

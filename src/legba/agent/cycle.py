@@ -10,18 +10,15 @@ emits a heartbeat, and exits. Changes take effect next cycle.
 Phase logic lives in phases/*.py as mixin classes. This module wires them
 together into a single AgentCycle class and owns the top-level orchestration.
 
-Cycle type routing (evaluated in priority order):
-  - Every 30 cycles: EVOLVE (self-improvement, prompt/tool evaluation)
-  - Every 15 cycles: INTROSPECTION (deep audit, reports, journal consolidation)
-  - Every 10 cycles: SYNTHESIZE (deep-dive investigation, situation briefs)
-  - Every 5 cycles:  ANALYSIS (analytics, pattern detection, graph mining)
-  - Every 7 cycles:  RESEARCH (entity enrichment, gap-filling)
-  - Every 9 cycles:  CURATE (signal triage, event curation — when ingestion active)
-                      ACQUIRE (legacy source fetching — when ingestion inactive)
-  - Otherwise:       SURVEY (analytical desk work — situations, graph, hypotheses)
+3-tier cycle type routing:
+  Tier 1 — Scheduled outputs (fixed intervals):
+    EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10)
+  Tier 2 — Guaranteed work (coprime modulo intervals):
+    ANALYSIS(4) > RESEARCH(7) > CURATE(9)
+  Tier 3 — Dynamic fill (state-scored):
+    CURATE (capped 0.6, recent 24h backlog) vs SURVEY (0.4 default)
 
-Dynamic CURATE promotion: if uncurated backlog exceeds threshold, next SURVEY
-becomes CURATE automatically.
+CURATE runs _curate() when ingestion active, _acquire() as legacy fallback.
 """
 
 from __future__ import annotations
@@ -68,7 +65,7 @@ from .phases.synthesize import SynthesizeMixin
 # Re-export constants for backward compatibility
 from .phases import (REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL,
                      CURATE_INTERVAL, ANALYSIS_INTERVAL, EVOLVE_INTERVAL,
-                     SYNTHESIZE_INTERVAL, CURATE_BACKLOG_THRESHOLD)
+                     SYNTHESIZE_INTERVAL)
 
 
 class AgentCycle(
@@ -132,53 +129,48 @@ class AgentCycle(
                 await self._run_forced_cycle_type(forced_type)
                 return await self._persist()
 
-            # Cycle type routing — evaluated in priority order.
-            # Higher-priority types take precedence when intervals overlap.
-            # EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10) > ANALYSIS(5)
-            # > RESEARCH(7) > CURATE(9) > SURVEY(default)
-            if self._is_evolve_cycle():
+            # Hybrid cycle routing:
+            #   Scheduled outputs: EVOLVE(30), INTROSPECTION(15), SYNTHESIZE(10)
+            #   Dynamic work: state-scored selection from SURVEY/ANALYSIS/RESEARCH/CURATE
+            cycle_type = self._select_cycle_type()
+            self._selected_cycle_type = cycle_type
+            self.logger.log("cycle_type_selected",
+                           cycle_type=cycle_type,
+                           cycle_number=self.state.cycle_number)
+
+            if cycle_type == "EVOLVE":
                 await self._evolve()
                 await self._reflect()
                 await self._narrate()
-                # EVOLVE overlaps with INTROSPECTION (both hit multiples of 30).
-                # Always generate the analysis report so we don't skip reporting.
                 await self._journal_consolidation()
                 await self._generate_analysis_report()
-            elif self._is_introspection_cycle():
+            elif cycle_type == "INTROSPECTION":
                 await self._mission_review()
                 await self._reflect()
                 await self._narrate()
                 await self._journal_consolidation()
                 await self._generate_analysis_report()
-            elif self._is_synthesize_cycle():
+            elif cycle_type == "SYNTHESIZE":
                 await self._synthesize()
                 await self._reflect()
                 await self._narrate()
-            elif self._is_analysis_cycle():
+            elif cycle_type == "ANALYSIS":
                 await self._analyze()
                 await self._reflect()
                 await self._narrate()
-            elif self._is_research_cycle():
+            elif cycle_type == "RESEARCH":
                 await self._research()
                 await self._reflect()
                 await self._narrate()
-            elif self._is_curate_cycle():
+            elif cycle_type == "CURATE":
                 if self._ingestion_service_active():
                     await self._curate()
                 else:
                     await self._acquire()
                 await self._reflect()
                 await self._narrate()
-            else:
-                # SURVEY (replaces NORMAL) — analytical desk work.
-                # Dynamic CURATE promotion: if uncurated backlog is high,
-                # run CURATE instead of SURVEY.
-                if self._should_promote_to_curate():
-                    self.logger.log("curate_promotion",
-                                   uncurated=getattr(self, '_uncurated_count', 0))
-                    await self._curate()
-                else:
-                    await self._survey()
+            else:  # SURVEY
+                await self._survey()
                 await self._reflect()
                 await self._narrate()
 
@@ -197,6 +189,76 @@ class AgentCycle(
             )
         finally:
             await self._cleanup()
+
+    # -----------------------------------------------------------------------
+    # Hybrid cycle type selection
+    # -----------------------------------------------------------------------
+
+    def _select_cycle_type(self) -> str:
+        """Select cycle type via 3-tier routing.
+
+        Tier 1 — Scheduled outputs (fixed intervals, highest priority):
+          EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10)
+
+        Tier 2 — Guaranteed work (modulo floor, ensures all types fire):
+          ANALYSIS(5) > RESEARCH(7) > CURATE(9)
+          These fire on their interval unless a Tier 1 type already claimed it.
+
+        Tier 3 — Dynamic fill (state-scored, remaining cycles):
+          Scores CURATE vs SURVEY based on recent uncurated backlog.
+          CURATE score capped at 0.6 to prevent monopolization.
+          Dedicated CURATE workers (CYCLE_TYPE=CURATE) handle overflow.
+        """
+        cn = self.state.cycle_number
+
+        # --- Tier 1: Scheduled outputs (non-negotiable) ---
+        if cn > 0 and cn % EVOLVE_INTERVAL == 0:
+            return "EVOLVE"
+        if cn > 0 and cn % 15 == 0:
+            return "INTROSPECTION"
+        if cn > 0 and cn % SYNTHESIZE_INTERVAL == 0:
+            return "SYNTHESIZE"
+
+        # --- Tier 2: Guaranteed work (modulo floor) ---
+        if cn > 0 and cn % ANALYSIS_INTERVAL == 0:
+            return "ANALYSIS"
+        if cn > 0 and cn % RESEARCH_INTERVAL == 0:
+            return "RESEARCH"
+        if cn > 0 and cn % CURATE_INTERVAL == 0:
+            return "CURATE"
+
+        # --- Tier 3: Dynamic fill (CURATE promotion vs SURVEY) ---
+        scores = {}
+
+        # CURATE: recent uncurated backlog (last 24h signals without event links).
+        # Capped at 0.6 — dedicated CURATE workers handle heavy backlog.
+        uncurated = getattr(self, '_uncurated_count', 0)
+        scores["CURATE"] = min(uncurated / 80.0, 0.6) if uncurated > 30 else 0.0
+
+        # SURVEY: default analytical work — the analyst's desk cycle
+        scores["SURVEY"] = 0.4
+
+        # Cooldown: don't repeat the same dynamic type back-to-back
+        last_types = getattr(self, '_recent_cycle_types', [])
+        if last_types and last_types[-1] in scores:
+            scores[last_types[-1]] *= 0.5
+
+        selected = max(scores, key=scores.get)
+
+        # Track for cooldown
+        if not hasattr(self, '_recent_cycle_types'):
+            self._recent_cycle_types = []
+        self._recent_cycle_types.append(selected)
+        if len(self._recent_cycle_types) > 5:
+            self._recent_cycle_types = self._recent_cycle_types[-5:]
+
+        # Log scores for debugging
+        self.logger.log("cycle_scores",
+                       scores={k: round(v, 2) for k, v in scores.items()},
+                       selected=selected,
+                       uncurated=uncurated)
+
+        return selected
 
     # -----------------------------------------------------------------------
     # Worker mode: forced cycle type via CYCLE_TYPE env var
@@ -225,6 +287,7 @@ class AgentCycle(
             )
             return
 
+        self._selected_cycle_type = cycle_type.upper()
         self.logger.log("forced_cycle_type", cycle_type=cycle_type)
         await runner()
 
@@ -296,7 +359,7 @@ class AgentCycle(
 
     def _should_promote_to_curate(self) -> bool:
         """Check if uncurated backlog warrants promoting SURVEY to CURATE."""
-        return getattr(self, '_uncurated_count', 0) > CURATE_BACKLOG_THRESHOLD
+        return getattr(self, '_uncurated_count', 0) > 100
 
     # -----------------------------------------------------------------------
     # Graceful shutdown support

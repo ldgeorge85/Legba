@@ -101,6 +101,19 @@ class ModelsClient:
             logger.debug("Extraction failed: %s", e)
         return []
 
+    async def ner(self, text: str) -> tuple[list[str], list[str]]:
+        """GPU-accelerated NER via spaCy trf. Returns (actors, locations)."""
+        if not self._available:
+            return [], []
+        try:
+            resp = await self._http.post("/ner", json={"text": text[:2000]})
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("actors", []), data.get("locations", [])
+        except Exception as e:
+            logger.debug("NER failed: %s", e)
+        return [], []
+
     async def summarize(self, texts: list[str], max_length: int = 64) -> str | None:
         """Summarize multiple texts into one sentence. Returns summary or None."""
         if not self._available:

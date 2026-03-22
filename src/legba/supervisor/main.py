@@ -205,6 +205,7 @@ class Supervisor:
             "OPENSEARCH_HOST", "OPENSEARCH_PORT", "OPENSEARCH_SCHEME",
             "AIRFLOW_URL", "AIRFLOW_ADMIN_USER", "AIRFLOW_ADMIN_PASSWORD",
             "AIRFLOW_DAGS_PATH",
+            "INGESTION_SERVICE_ACTIVE",
         ]:
             val = os.getenv(var, "")
             if val:

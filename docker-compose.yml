@@ -342,6 +342,7 @@ services:
       AIRFLOW_URL: http://airflow:8080
       AIRFLOW_ADMIN_USER: airflow
       AIRFLOW_ADMIN_PASSWORD: airflow
+      INGESTION_SERVICE_ACTIVE: "true"
     volumes:
       - workspace_data:/workspace
       - agent_code:/agent
@@ -439,6 +440,37 @@ services:
     profiles:
       - test
 
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: legba_metrics
+      POSTGRES_PASSWORD: legba_metrics
+      POSTGRES_DB: legba_metrics
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legba_metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: legba
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+
 networks:
   audit:
     name: legba_audit
@@ -466,3 +498,7 @@ volumes:
     name: legba_log_data
   airflow_dags:
     name: legba_airflow_dags
+  timescaledb_data:
+    name: legba_timescaledb_data
+  grafana_data:
+    name: legba_grafana_data

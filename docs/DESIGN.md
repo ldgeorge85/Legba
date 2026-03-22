@@ -201,7 +201,7 @@ _wake() → _orient() →
     └── _persist()
 ```
 
-Dynamic CURATE promotion: if uncurated signal backlog exceeds threshold (default 100), the survey cycle is promoted to CURATE instead.
+Tier 3 dynamic fill: when no Tier 1 or Tier 2 cycle fires, CURATE and SURVEY compete on score. CURATE scores by uncurated signal backlog (capped at 0.6), SURVEY is fixed at 0.4. Cooldown halves the previous dynamic type's score to prevent repetition.
 
 ### Synthesize Cycle (every 10, non-evolve/introspection)
 

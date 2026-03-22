@@ -69,7 +69,12 @@ class StructuredStore:
                     value TEXT NOT NULL,
                     confidence REAL NOT NULL DEFAULT 1.0,
                     source_cycle INTEGER,
+                    source_type TEXT NOT NULL DEFAULT 'agent',
                     data JSONB,
+                    valid_from TIMESTAMPTZ,
+                    valid_until TIMESTAMPTZ,
+                    geo_lat DOUBLE PRECISION,
+                    geo_lon DOUBLE PRECISION,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     superseded_by UUID REFERENCES facts(id)
@@ -78,8 +83,8 @@ class StructuredStore:
                 CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);
                 CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
                 CREATE INDEX IF NOT EXISTS idx_facts_source_cycle ON facts(source_cycle);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_triple
-                    ON facts (lower(subject), lower(predicate), lower(value));
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_temporal_triple
+                    ON facts (lower(subject), lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'::timestamptz));
 
                 CREATE TABLE IF NOT EXISTS modifications (
                     id UUID PRIMARY KEY,
@@ -141,6 +146,10 @@ class StructuredStore:
                     version INTEGER NOT NULL DEFAULT 1,
                     completeness_score REAL NOT NULL DEFAULT 0.0,
                     last_event_link_at TIMESTAMPTZ,
+                    geo_lat DOUBLE PRECISION,
+                    geo_lon DOUBLE PRECISION,
+                    geo_country TEXT,
+                    geo_region TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
@@ -509,9 +518,10 @@ class StructuredStore:
 
                     await conn.execute(
                         """
-                        UPDATE facts SET superseded_by = $1, updated_at = NOW()
+                        UPDATE facts SET superseded_by = $1, valid_until = NOW(), updated_at = NOW()
                         WHERE predicate = $2
                         AND superseded_by IS NULL
+                        AND valid_until IS NULL
                         AND (
                             (lower(value) = lower($3) AND lower(subject) != lower($4))
                             OR (lower(subject) = lower($3) AND lower(value) != lower($4))
@@ -530,14 +540,28 @@ class StructuredStore:
                             except Exception:
                                 pass  # Best-effort graph cleanup
 
+                # Resolve geo from subject/value
+                geo_lat, geo_lon = None, None
+                try:
+                    from ..tools.builtins.geo import resolve_locations
+                    geo = resolve_locations([fact.subject, fact.value])
+                    if geo.get("coordinates"):
+                        coord = geo["coordinates"][0]
+                        geo_lat = coord["lat"]
+                        geo_lon = coord["lon"]
+                except Exception:
+                    pass
+
                 await conn.execute(
                     """
-                    INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (lower(subject), lower(predicate), lower(value)) DO UPDATE SET
+                    INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at, valid_from, geo_lat, geo_lon)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10)
+                    ON CONFLICT (lower(subject), lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'::timestamptz)) DO UPDATE SET
                         confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
                         source_cycle = EXCLUDED.source_cycle,
                         data = EXCLUDED.data,
+                        geo_lat = COALESCE(EXCLUDED.geo_lat, facts.geo_lat),
+                        geo_lon = COALESCE(EXCLUDED.geo_lon, facts.geo_lon),
                         updated_at = NOW()
                     """,
                     fact.id,
@@ -548,6 +572,7 @@ class StructuredStore:
                     fact.source_cycle,
                     fact.model_dump_json(),
                     fact.created_at,
+                    geo_lat, geo_lon,
                 )
             return True
         except Exception:
@@ -575,6 +600,7 @@ class StructuredStore:
                 params.append(f"%{predicate}%")
                 idx += 1
 
+            conditions.append("valid_until IS NULL")
             where = " AND ".join(conditions)
             params.append(limit)
 
@@ -605,7 +631,7 @@ class StructuredStore:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
                     "SELECT data FROM facts "
-                    "WHERE superseded_by IS NULL AND source_cycle >= $1 "
+                    "WHERE superseded_by IS NULL AND valid_until IS NULL AND source_cycle >= $1 "
                     "ORDER BY source_cycle DESC, created_at DESC LIMIT $2",
                     min_cycle, limit,
                 )
@@ -1329,12 +1355,29 @@ class StructuredStore:
                     if existing:
                         profile.version = existing["version"] + 1
 
+                    # Resolve geo from canonical name
+                    geo_lat, geo_lon, geo_country, geo_region = None, None, None, None
+                    try:
+                        from ..tools.builtins.geo import resolve_locations
+                        geo = resolve_locations([profile.canonical_name])
+                        if geo.get("coordinates"):
+                            coord = geo["coordinates"][0]
+                            geo_lat = coord["lat"]
+                            geo_lon = coord["lon"]
+                        if geo.get("countries"):
+                            geo_country = geo["countries"][0]
+                        if geo.get("regions"):
+                            geo_region = geo["regions"][0]
+                    except Exception:
+                        pass
+
                     await conn.execute(
                         """
                         INSERT INTO entity_profiles (id, data, canonical_name, entity_type,
                                                      version, completeness_score, last_event_link_at,
+                                                     geo_lat, geo_lon, geo_country, geo_region,
                                                      created_at, updated_at, last_verified_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
                         ON CONFLICT (id) DO UPDATE SET
                             data = EXCLUDED.data,
                             canonical_name = EXCLUDED.canonical_name,
@@ -1342,6 +1385,10 @@ class StructuredStore:
                             version = EXCLUDED.version,
                             completeness_score = EXCLUDED.completeness_score,
                             last_event_link_at = EXCLUDED.last_event_link_at,
+                            geo_lat = COALESCE(EXCLUDED.geo_lat, entity_profiles.geo_lat),
+                            geo_lon = COALESCE(EXCLUDED.geo_lon, entity_profiles.geo_lon),
+                            geo_country = COALESCE(EXCLUDED.geo_country, entity_profiles.geo_country),
+                            geo_region = COALESCE(EXCLUDED.geo_region, entity_profiles.geo_region),
                             updated_at = NOW(),
                             last_verified_at = NOW()
                         """,
@@ -1352,6 +1399,7 @@ class StructuredStore:
                         profile.version,
                         profile.completeness_score,
                         profile.last_event_link_at,
+                        geo_lat, geo_lon, geo_country, geo_region,
                         profile.created_at,
                     )
 
@@ -2369,19 +2417,24 @@ class StructuredStore:
                 params = []
                 idx = 1
 
+                balance_delta = 0
                 if supporting_signal:
                     sid = _UUID(supporting_signal)
                     updates.append(f"supporting_signals = array_append(supporting_signals, ${idx}::uuid)")
-                    updates.append(f"evidence_balance = evidence_balance + 1")
+                    balance_delta += 1
                     params.append(sid)
                     idx += 1
 
                 if refuting_signal:
                     rid = _UUID(refuting_signal)
                     updates.append(f"refuting_signals = array_append(refuting_signals, ${idx}::uuid)")
-                    updates.append(f"evidence_balance = evidence_balance - 1")
+                    balance_delta -= 1
                     params.append(rid)
                     idx += 1
+
+                if balance_delta != 0:
+                    sign = "+" if balance_delta > 0 else "-"
+                    updates.append(f"evidence_balance = evidence_balance {sign} {abs(balance_delta)}")
 
                 if status:
                     updates.append(f"status = ${idx}")
@@ -2447,7 +2500,23 @@ class StructuredStore:
                     LIMIT ${idx}
                 """, *params)
 
-                return [dict(r) for r in rows]
+                results = []
+                for r in rows:
+                    d = dict(r)
+                    # Convert UUIDs to strings for JSON serialization
+                    for k, v in d.items():
+                        if hasattr(v, 'hex'):  # UUID
+                            d[k] = str(v)
+                    # Ensure JSONB fields are parsed (asyncpg may return as string)
+                    de = d.get("diagnostic_evidence")
+                    if isinstance(de, str):
+                        import json as _json
+                        try:
+                            d["diagnostic_evidence"] = _json.loads(de)
+                        except Exception:
+                            d["diagnostic_evidence"] = []
+                    results.append(d)
+                return results
         except Exception as e:
             logger.error("Failed to list hypotheses: %s", e)
             return []

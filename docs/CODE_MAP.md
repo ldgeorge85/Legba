@@ -37,7 +37,7 @@ src/legba/
     cycle.py                         (~280 lines) — Orchestrator: 15 phase mixins, CYCLE_TYPE worker mode, dynamic CURATE promotion
 
     phases/
-      __init__.py                    (25 lines)  — Interval constants (coprime: 5,7,9,10,15,30), CURATE_BACKLOG_THRESHOLD
+      __init__.py                    (25 lines)  — Interval constants (Tier 1: 10,15,30; Tier 2 coprime: 4,7,9)
       wake.py                        (387 lines) — WakeMixin: init, connections, tool registration
       orient.py                      (212 lines) — OrientMixin: context from all memory layers
       plan.py                        (75 lines)  — PlanMixin: LLM plan + tool filtering

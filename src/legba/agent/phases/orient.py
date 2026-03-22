@@ -389,10 +389,47 @@ class OrientMixin:
         except Exception:
             pass
 
+        # Compute state variables for dynamic cycle type selection
+        self._uncurated_count = 0
+        self._stale_entity_count = 0
+        self._last_analysis_cycle = 0
+        try:
+            if self.memory.structured and self.memory.structured._available:
+                async with self.memory.structured._pool.acquire() as conn:
+                    # Recent uncurated signals: last 24h, no event link, non-junk.
+                    # Temporal window prevents the all-time backlog from permanently
+                    # monopolizing CURATE cycles. Uses event links (not entity links)
+                    # because event curation is what the agent can actually affect.
+                    self._uncurated_count = await conn.fetchval("""
+                        SELECT count(*) FROM signals s
+                        LEFT JOIN signal_event_links sel ON sel.signal_id = s.id
+                        WHERE sel.signal_id IS NULL
+                          AND s.category != 'other'
+                          AND s.created_at > NOW() - INTERVAL '24 hours'
+                    """) or 0
+
+                    # Stale entities (below 30% completeness)
+                    self._stale_entity_count = await conn.fetchval("""
+                        SELECT count(*) FROM entity_profiles
+                        WHERE completeness_score < 0.3
+                    """) or 0
+
+            # Last analysis cycle from Redis
+            if self.memory.registers:
+                import json as _json
+                snapshot = await self.memory.registers.get_json("analysis_snapshot")
+                if snapshot and isinstance(snapshot, dict):
+                    self._last_analysis_cycle = snapshot.get("cycle", 0)
+        except Exception:
+            pass
+
         self.logger.log("orient_complete",
                         episodes=len(self._memory_context.get("episodes", [])),
                         goals=len(self._active_goals),
                         facts=len(self._memory_context.get("facts", [])),
                         graph_entities=len(self._graph_inventory) > 0,
                         nats_data_streams=len(self._queue_summary.data_streams),
-                        has_journal=bool(self._journal_context))
+                        has_journal=bool(self._journal_context),
+                        uncurated=self._uncurated_count,
+                        stale_entities=self._stale_entity_count,
+                        last_analysis=self._last_analysis_cycle)

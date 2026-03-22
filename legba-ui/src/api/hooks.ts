@@ -396,6 +396,7 @@ export function useMemory(params: { collection?: string; q?: string; offset?: st
 export function useCycles(params: { offset?: number; limit?: number }) {
   return useQuery({
     queryKey: ['cycles', params],
+    refetchInterval: 60_000,
     queryFn: () => {
       const sp = new URLSearchParams()
       if (params.offset) sp.set('offset', String(params.offset))
@@ -490,6 +491,7 @@ export function useSignalGeoData() {
 export function useJournal() {
   return useQuery({
     queryKey: ['journal'],
+    refetchInterval: 60_000,
     queryFn: async () => {
       const data = await api.get<JournalData>('/api/journal')
       return {
@@ -508,6 +510,7 @@ export function useReports() {
     queryKey: ['reports'],
     queryFn: () => api.get<ReportEntry[]>('/api/reports'),
     staleTime: 60_000,
+    refetchInterval: 60_000,
   })
 }
 
@@ -568,6 +571,7 @@ export function useHypotheses(status: string = 'active') {
     queryKey: ['hypotheses', status],
     queryFn: () => api.get<HypothesisSummary[]>(`/api/v2/hypotheses?status=${status}`),
     staleTime: 30_000,
+    refetchInterval: 60_000,
   })
 }
 
@@ -576,5 +580,6 @@ export function useBriefs(limit: number = 20) {
     queryKey: ['briefs', limit],
     queryFn: () => api.get<SituationBrief[]>(`/api/v2/briefs?limit=${limit}`),
     staleTime: 30_000,
+    refetchInterval: 60_000,
   })
 }

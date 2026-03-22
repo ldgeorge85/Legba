@@ -51,7 +51,8 @@ class ReflectMixin:
             self._reflection_data = self._parse_reflection(self._reflection)
 
             # Store extracted facts
-            await self._store_reflection_facts()
+            # Fact extraction removed from REFLECT — handled by deterministic ingestion pipeline
+            # await self._store_reflection_facts()
 
             # Store extracted entities and relationships in graph
             await self._store_reflection_graph()

@@ -161,31 +161,37 @@ The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) 
 ```
 1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 66 tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
-3. Route to cycle type (priority order):
-   a. EVOLVE (every 30)        -- self-improvement, source discovery, operational scorecard
-   b. INTROSPECTION (every 15) -- mission review, deep audit, journal consolidation, analysis report
-   c. SYNTHESIZE (every 10)    -- deep-dive investigation, situation briefs, predictions
-   d. ANALYSIS (every 5)       -- pattern detection, graph mining, anomaly detection, trend analysis
-   e. RESEARCH (every 7)       -- entity enrichment via Wikipedia/reference, gap-filling
-   f. CURATE (every 9)         -- event curation from clustered signals (+ dynamic promotion)
-   g. SURVEY (default)         -- analytical desk work: situations, graph building, hypotheses
+3. Route to cycle type (3-tier):
+   Tier 1 — Scheduled outputs (fixed intervals):
+     a. EVOLVE (every 30)        -- self-improvement, source discovery, operational scorecard
+     b. INTROSPECTION (every 15) -- mission review, deep audit, journal consolidation, analysis report
+     c. SYNTHESIZE (every 10)    -- deep-dive investigation, situation briefs, predictions
+   Tier 2 — Guaranteed work (coprime modulo intervals):
+     d. ANALYSIS (every 4)       -- pattern detection, graph mining, anomaly detection, trend analysis
+     e. RESEARCH (every 7)       -- entity enrichment via Wikipedia/reference, gap-filling
+     f. CURATE (every 9)         -- event curation from clustered signals
+   Tier 3 — Dynamic fill (state-scored):
+     g. CURATE or SURVEY         -- scored by uncurated backlog vs default analytical desk work
 4. REFLECT   -- LLM evaluates: significance (calibrated 0-1 scale), facts learned, entities, goal progress
 5. NARRATE   -- LLM writes 1-3 journal entries + extracts investigation leads
 6. PERSIST   -- Store episode, track ingestion, auto-complete goals, promote memories, heartbeat, exit
 ```
 
 ```python
-# Cycle type selection (evaluated in priority order):
-if cycle_number % 30 == 0:  EVOLVE
-elif cycle_number % 15 == 0: INTROSPECTION
-elif cycle_number % 10 == 0: SYNTHESIZE
-elif cycle_number % 5 == 0:  ANALYSIS
-elif cycle_number % 7 == 0:  RESEARCH
-elif cycle_number % 9 == 0:  CURATE
-else:                        SURVEY  # + dynamic CURATE promotion if backlog > threshold
+# 3-tier cycle type selection:
+# Tier 1: scheduled outputs
+if cn % 30 == 0: EVOLVE
+elif cn % 15 == 0: INTROSPECTION
+elif cn % 10 == 0: SYNTHESIZE
+# Tier 2: guaranteed work (coprime intervals)
+elif cn % 4 == 0: ANALYSIS
+elif cn % 7 == 0: RESEARCH
+elif cn % 9 == 0: CURATE
+# Tier 3: dynamic fill
+else: score(CURATE vs SURVEY) based on uncurated backlog
 ```
 
-**Cycle type distribution (per 30-cycle window):** 1 evolve, 1 introspection, 2 synthesize, 2 analysis, 4 research, 3 curate (+dynamic), 17 survey. Intervals are coprime (5, 7, 9, 10) to minimize collisions. Each cycle type uses a filtered tool set. SURVEY replaces the old NORMAL cycle — no collection tools, explicitly analytical.
+**Cycle type distribution (per 90 cycles):** 3 evolve (3%), 3 introspection (3%), 6 synthesize (7%), 18 analysis (20%), 8 research (9%), 5 curate (6% guaranteed + dynamic), 47 survey/dynamic (52%). Tier 2 intervals are coprime (4, 7, 9) to minimize masking. ANALYSIS is intentionally frequent — pattern detection benefits from running often on fresh data. Each cycle type uses a filtered tool set. SURVEY replaces the old NORMAL cycle — no collection tools, explicitly analytical.
 
 Each step in the REASON+ACT loop rebuilds the full [system, user] message pair (no multi-turn growth). A sliding window keeps the 8 most recent tool results in full, condensing older ones to one-line summaries. Re-grounding prompts inject every 8 steps to keep the LLM on track.
 
@@ -947,7 +953,7 @@ for f in sorted(os.listdir('/logs/archive/cycle_000NNN')):
 | Research Cycles | Dedicated research phase every 5 cycles — entity enrichment via Wikipedia/reference sources, entity health summary, gap-filling, conflict resolution |
 | UI CRUD | Operator console CRUD: fact delete/edit, memory delete, entity assertion add/remove, event delete/edit, graph edge add/remove, source full edit (htmx inline) |
 | Cycle Decomposition | cycle.py split from 2005 lines to 192-line orchestrator + 10 phase mixin modules (phases/ directory) |
-| V2 Cycle Architecture | 7 cycle types (EVOLVE/INTROSPECTION/SYNTHESIZE/ANALYSIS/RESEARCH/CURATE/SURVEY) with filtered tool sets. 15 phase mixins. Coprime intervals (5,7,9,10,15,30) minimize collisions. SURVEY replaces NORMAL (analytical, no collection). SYNTHESIZE produces situation briefs. Dynamic CURATE promotion on backlog. |
+| V2 Cycle Architecture | 7 cycle types via 3-tier routing: Tier 1 scheduled (EVOLVE/30, INTROSPECTION/15, SYNTHESIZE/10), Tier 2 guaranteed modulo (ANALYSIS/4, RESEARCH/7, CURATE/9), Tier 3 dynamic fill (CURATE vs SURVEY scored by backlog). 15 phase mixins. Coprime Tier 2 intervals (4,7,9) minimize masking. SURVEY replaces NORMAL (analytical, no collection). SYNTHESIZE produces situation briefs. |
 | Data Pipeline Hardening | 3-tier event dedup (GUID → source_url → adaptive Jaccard), source domain dedup relaxed (path-prefix instead of domain-level), entity completeness depth-weighted (assertions/3 per section), graph fuzzy match limit 100→500 |
 | Watchlists & Situations | Persistent watch patterns (entities, keywords, categories, regions) with trigger tracking. Situation tracking (persistent narratives with status, event accumulation, intensity scoring). Both with full agent tools + operator UI CRUD. |
 | EVOLVE Cycle | Self-improvement + source discovery cycle (every 30, highest priority). Operational scorecard, source discovery, prompt/tool evaluation, implement improvements, change tracking via `evolve_log`. 18-tool filtered set including filesystem + code_test for self-modification. |

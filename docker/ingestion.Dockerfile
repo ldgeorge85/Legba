@@ -21,11 +21,12 @@ RUN pip install --no-cache-dir telethon
 COPY src/ src/
 RUN pip install --no-cache-dir --no-deps -e .
 
-# GeoNames gazetteer for geo resolution
+# GeoNames gazetteer for geo resolution (cities5000 = 50K+ cities vs 23K in cities15000)
 RUN mkdir -p /data/geo && \
-    curl -sL http://download.geonames.org/export/dump/cities15000.zip -o /tmp/cities.zip && \
+    curl -sL http://download.geonames.org/export/dump/cities5000.zip -o /tmp/cities.zip && \
     python -c "import zipfile; zipfile.ZipFile('/tmp/cities.zip').extractall('/data/geo')" && \
-    rm /tmp/cities.zip
+    rm /tmp/cities.zip && \
+    curl -sL http://download.geonames.org/export/dump/admin1CodesASCII.txt -o /data/geo/admin1CodesASCII.txt
 
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1

@@ -312,6 +312,12 @@ class PersistMixin:
                 outbox = Outbox(messages=self._outbox_messages)
                 outbox_path.write_text(outbox.model_dump_json(indent=2))
 
+        # Sanity checks — log warnings for quality tracking
+        await self._run_sanity_checks()
+
+        # Write cycle metrics to TimescaleDB
+        await self._write_cycle_metrics()
+
         # Liveness check — last step, after all data is persisted
         transformed_nonce = await self._validate_liveness()
 
@@ -397,3 +403,71 @@ class PersistMixin:
                     continue
                 return self.state.nonce
         return self.state.nonce
+
+    async def _run_sanity_checks(self: AgentCycle) -> None:
+        """Run cycle quality checks and log warnings. Does not block the heartbeat."""
+        try:
+            warnings = []
+
+            # 1. Did the cycle do anything?
+            if self.state.actions_taken == 0:
+                warnings.append("zero_actions")
+
+            # 2. Check cycle duration
+            if self.state.started_at:
+                duration = (datetime.now(timezone.utc) - self.state.started_at).total_seconds()
+                if duration < 5:
+                    warnings.append("suspiciously_fast")
+                elif duration > 900:
+                    warnings.append("very_slow")
+
+            # 3. Check if reflection produced valid data
+            if hasattr(self, '_reflection_data'):
+                if not self._reflection_data:
+                    warnings.append("empty_reflection")
+                elif not self._reflection_data.get("cycle_summary"):
+                    warnings.append("no_cycle_summary")
+
+            # 4. Check situation count growth
+            if self.memory.structured and self.memory.structured._available:
+                try:
+                    async with self.memory.structured._pool.acquire() as conn:
+                        sit_count = await conn.fetchval(
+                            "SELECT count(*) FROM situations WHERE status != 'resolved'"
+                        )
+                        if sit_count and sit_count > 30:
+                            warnings.append(f"situation_proliferation:{sit_count}")
+                except Exception:
+                    pass
+
+            if warnings:
+                self.logger.log("sanity_warnings",
+                               warnings=warnings,
+                               count=len(warnings))
+
+        except Exception as e:
+            self.logger.log("sanity_check_error", error=str(e))
+
+    async def _write_cycle_metrics(self: AgentCycle) -> None:
+        """Write cycle performance metrics to TimescaleDB."""
+        try:
+            from ...shared.metrics import MetricsClient
+            metrics = MetricsClient()
+            if not await metrics.connect():
+                return
+
+            duration = 0.0
+            if self.state.started_at:
+                duration = (datetime.now(timezone.utc) - self.state.started_at).total_seconds()
+
+            cycle_type = self._selected_cycle_type
+
+            await metrics.write_batch([
+                ("cycle_duration_s", f"type:{cycle_type}", duration),
+                ("cycle_actions", f"type:{cycle_type}", float(self.state.actions_taken)),
+                ("cycle_success", f"type:{cycle_type}", 1.0),
+            ])
+
+            await metrics.close()
+        except Exception:
+            pass  # Metrics are best-effort, never block the cycle

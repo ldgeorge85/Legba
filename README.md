@@ -15,7 +15,7 @@ It is not a chatbot, not a task runner, not an AutoGPT-style goal chaser. It is 
 
 ```
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
-├── Docker Compose (project: legba, 12 containers)
+├── Docker Compose (project: legba, 14 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
 │   ├── Agent (ephemeral) — One container per cycle, 7 cycle types, self-modifiable code
 │   ├── Ingestion Service — Background signal fetching, normalization, deterministic clustering
@@ -26,6 +26,8 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 │   ├── Qdrant            — Semantic search (episodic memory)
 │   ├── NATS              — Event bus, messaging
 │   ├── OpenSearch x2     — Full-text search + isolated audit logs
+│   ├── TimescaleDB       — Time-series metrics (cycle, ingestion, source health)
+│   ├── Grafana           — Operational dashboards
 │   └── Airflow           — Scheduled pipelines
 └── External LLM: GPT-OSS 120B via vLLM or Claude Sonnet via Anthropic API
 ```
@@ -35,16 +37,20 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 Every cycle (~2-10 minutes), the agent runs one of **7 cycle types** (selected by priority):
 
 ```
-WAKE → ORIENT → [cycle type routing] → REFLECT → NARRATE → PERSIST
+WAKE → ORIENT → [3-tier cycle routing] → REFLECT → NARRATE → PERSIST
 
-Cycle types (priority order):
+Tier 1 — Scheduled outputs (fixed intervals):
   Every 30 cycles: EVOLVE        — self-improvement, source discovery, operational scorecard
   Every 15 cycles: INTROSPECTION — deep audit, journal consolidation, world assessment
   Every 10 cycles: SYNTHESIZE    — deep-dive investigation, situation briefs, predictions
-  Every 5 cycles:  ANALYSIS      — pattern detection, graph mining, anomaly detection
+
+Tier 2 — Guaranteed work (coprime modulo intervals):
+  Every 4 cycles:  ANALYSIS      — pattern detection, graph mining, anomaly detection
   Every 7 cycles:  RESEARCH      — entity enrichment via Wikipedia/reference sources
-  Every 9 cycles:  CURATE        — event curation from clustered signals (+ dynamic promotion)
-  Otherwise:       SURVEY         — analytical desk work: situations, graph building, hypotheses
+  Every 9 cycles:  CURATE        — event curation from clustered signals
+
+Tier 3 — Dynamic fill (state-scored):
+  CURATE or SURVEY — scored by uncurated signal backlog vs default analytical desk work
 ```
 
 - **WAKE**: Load config, connect services, register 66 tools, drain inbox

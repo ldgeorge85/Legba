@@ -30,6 +30,7 @@ from .normalizer import normalize_entry
 from .scheduler import ScheduledSource, get_due_sources, initialize_next_fetch
 from .models_client import ModelsClient
 from .storage import StorageLayer
+from ..shared.metrics import MetricsClient
 
 logger = logging.getLogger("legba.ingestion")
 
@@ -192,6 +193,10 @@ class IngestionService:
             logger.info("Models service connected")
         else:
             logger.info("Models service not available — using regex classification")
+
+        # Metrics (TimescaleDB, optional)
+        self._metrics = MetricsClient()
+        await self._metrics.connect()
 
         # Telegram (optional)
         self._telegram = None
@@ -424,6 +429,14 @@ class IngestionService:
                 source.name, len(signals), stored, deduped, result.parse_mode,
             )
 
+            # Metrics
+            if self._metrics.available:
+                await self._metrics.write_batch([
+                    ("signals_stored", f"source:{source.name}", stored),
+                    ("signals_deduped", f"source:{source.name}", deduped),
+                    ("signals_fetched", f"source:{source.name}", len(signals)),
+                ])
+
             # NATS notification
             if stored > 0:
                 await self._notify_nats(source, stored, deduped, signals)
@@ -458,6 +471,40 @@ class IngestionService:
             category, confidence = await self._models.classify(signal.title)
             if category and category != "other" and confidence > 0.5:
                 signal.category = category
+
+            # NER: spaCy trf on GPU (high-accuracy entity extraction)
+            ner_actors, ner_locations = await self._models.ner(signal.title)
+
+            # Entity/relation extraction: REBEL triples (relationship discovery)
+            triples = await self._models.extract_triples(signal.title)
+
+            # Merge NER + REBEL + existing spaCy sm results
+            actors = set(signal.actors) if signal.actors else set()
+            locations = set(signal.locations) if signal.locations else set()
+
+            # Add NER results
+            actors.update(a for a in ner_actors if len(a) >= 2)
+            locations.update(l for l in ner_locations if len(l) >= 2)
+
+            # Add REBEL subject/object entities
+            if triples:
+                for t in triples:
+                    subj = t.get("subject", "").strip()
+                    obj = t.get("object", "").strip()
+                    pred = t.get("predicate", "").lower()
+                    if subj and len(subj) >= 2:
+                        if "location" in pred or "country" in pred or "place" in pred:
+                            locations.add(subj)
+                        else:
+                            actors.add(subj)
+                    if obj and len(obj) >= 2:
+                        if "location" in pred or "country" in pred or "place" in pred:
+                            locations.add(obj)
+                        else:
+                            actors.add(obj)
+
+            signal.actors = list(actors)[:15]
+            signal.locations = list(locations)[:10]
 
         except Exception as e:
             logger.debug("Model enrichment failed for signal: %s", e)

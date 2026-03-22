@@ -698,7 +698,7 @@ SURVEY_TOOLS: frozenset = frozenset({
     "prediction_create", "prediction_update", "prediction_list",
     "hypothesis_create", "hypothesis_evaluate", "hypothesis_list",
     # Analytics (lighter use)
-    "anomaly_detect", "temporal_query",
+    "anomaly_detect", "temporal_query", "metrics_query",
     # Limited external access (verification only, max 2/cycle)
     "http_request",
     # Search
@@ -727,11 +727,17 @@ SURVEY_PROMPT = """You are an intelligence analyst at your desk. Your feeds are 
 Review the data above. What has changed? What does it mean? What should you do about it?
 
 ### Success Criteria (aim for at least 3 per cycle)
-1. **Situation updates**: Link recent events to active situations. Create new situations for emerging threads.
-2. **Graph relationships**: For entities mentioned in recent events, add typed edges (LeaderOf, HostileTo, OperatesIn, etc.) with graph_store. Nodes without edges are analytically invisible.
-3. **Hypothesis stress-testing**: Check active hypotheses (hypothesis_list) against new signals. If a new signal supports or refutes a thesis, link it with hypothesis_evaluate. This is your most important analytical contribution — you are the evidence evaluator.
+1. **Situation updates**: Link recent events to EXISTING active situations. Use situation_list FIRST — if an event fits an existing situation, link it. Do NOT create a new situation unless the topic is genuinely new and not covered by any existing situation.
+2. **Graph relationships**: For entities mentioned in recent events, add TYPED edges (LeaderOf, HostileTo, OperatesIn, AlliedWith, SuppliesWeaponsTo, etc.) with graph_store. NEVER use RelatedTo — it is meaningless. If you can't determine the relationship type, skip it.
+3. **Hypothesis stress-testing**: Check active hypotheses (hypothesis_list) against new signals. If a new signal supports or refutes a thesis, link it with hypothesis_evaluate. Use REAL signal IDs from event_search results, not fabricated UUIDs.
 4. **Investigation leads**: Identify threads worth deep-diving in a SYNTHESIZE cycle. Record via note_to_self.
 5. **Opportunistic curation**: If you encounter low-quality auto-events (bad titles, wrong severity, missing type), fix them with event_update.
+
+### CRITICAL RULES
+- **Do NOT create duplicate situations.** Before calling situation_create, ALWAYS call situation_list and check if an existing situation covers this topic. "Iran oil price impact" belongs in "Oil Market Volatility", not a new situation. If in doubt, link to the existing one.
+- **Do NOT store reversed facts.** The subject does the action. "Donald Trump LeaderOf United States" is correct. "United States LeaderOf Donald Trump" is WRONG. The person leads the country, not vice versa.
+- **Do NOT assert facts from training memory.** Only store facts that came from signals, events, or tool results THIS cycle. If you don't have a source for a fact, don't store it.
+- **Do NOT use RelatedTo as a predicate.** Use specific typed relationships: LeaderOf, HostileTo, AlliedWith, MemberOf, OperatesIn, LocatedIn, SuppliesWeaponsTo, SanctionedBy, etc.
 
 ### What You Should NOT Do
 - Do NOT fetch RSS feeds or scrape websites for data. The ingestion service does that.
@@ -798,10 +804,22 @@ Unlike ANALYSIS (which surveys broadly), your job is to pick **ONE** thread and 
 
 ## YOUR TASK: Deep-Dive Investigation
 
+**MANDATORY OUTPUTS (the cycle is incomplete without these):**
+1. At least ONE call to `hypothesis_create` with a thesis AND counter-thesis
+2. A structured Situation Brief (produced automatically from your investigation)
+3. At least ONE call to `prediction_create` with a falsifiable prediction
+
 ### Step 1: Pick Your Target
 Choose ONE investigation target from the candidates above. State your thesis in one sentence BEFORE you begin investigating. If multiple candidates are compelling, pick the one with the most recent activity that you have NOT investigated in the last 3 SYNTHESIZE cycles.
 
-### Step 2: Investigate
+### Step 2: Create Competing Hypotheses
+BEFORE investigating, call `hypothesis_create` with:
+- `thesis`: your primary explanation for what's happening
+- `counter_thesis`: the most plausible alternative explanation
+- `situation_id`: the situation you're investigating (from situation_list)
+This is MANDATORY. Every SYNTHESIZE cycle must produce at least one hypothesis pair.
+
+### Step 3: Investigate
 Trace the thread across your data:
 - What events and signals relate to this thread? (event_search, os_search)
 - Who are the key actors? What are their relationships? (entity_inspect, graph_query)
@@ -848,7 +866,7 @@ ANALYSIS_TOOLS: frozenset = frozenset({
     "os_search",
     "event_search", "event_query",
     # Analytics
-    "anomaly_detect", "temporal_query",
+    "anomaly_detect", "temporal_query", "metrics_query",
     # Watchlist + situations (analysis can create/update these)
     "watchlist_add", "watchlist_list",
     "situation_create", "situation_update", "situation_list", "situation_link_event",
@@ -1387,7 +1405,7 @@ Final output: {results_summary}
 
 ## Required JSON format
 
-{{"cycle_summary": "one paragraph summary of what happened", "significance": 0.5, "goal_progress": {{"description": "which goal was advanced", "progress_delta": 0.1, "notes": "what was done"}}, "facts_learned": [{{"subject": "X", "predicate": "Y", "value": "Z", "confidence": 0.8}}], "self_assessment": "honest assessment — what did you actually learn? what surprised you? what would you do differently?", "next_cycle_suggestion": "what to do next cycle and why — what's pulling your attention?", "memories_to_promote": ["episode_id_1"]}}
+{{"cycle_summary": "one paragraph summary of what happened", "significance": 0.5, "goal_progress": {{"description": "which goal was advanced", "progress_delta": 0.1, "notes": "what was done"}}, "self_assessment": "honest assessment — what did you actually learn? what surprised you? what would you do differently?", "next_cycle_suggestion": "what to do next cycle and why — what's pulling your attention?", "memories_to_promote": ["episode_id_1"]}}
 
 Rules:
 - goal_progress is REQUIRED — which goal, how much progress (0.0-1.0 delta)
@@ -1398,24 +1416,9 @@ Rules:
   0.7-0.8: important patterns identified, significant analytical progress, key relationships mapped
   0.9-1.0: major breakthrough — new conflict detected, critical entity discovered, paradigm-shifting connection
   Be honest. Most cycles are 0.3-0.5. Reserve 0.7+ for genuinely significant work.
-- facts_learned: only facts derived from SIGNALS, TOOL RESULTS, or DATA you processed THIS cycle. Can be empty list. All values MUST be strings (not numbers).
-  CRITICAL: Do NOT record facts from your LLM training data. Your training is stale (cutoff mid-2024).
-  Only record what you learned from the live data in this cycle's actions and results above.
-  If you didn't process a signal or tool result that establishes a fact, do NOT assert it.
-  Leadership facts are especially dangerous — leaders change. Only record a LeaderOf fact if a signal
-  from THIS cycle explicitly states who currently leads what. Do not "fill in" leaders from memory.
-  Predicate vocabulary (use these exact PascalCase forms):
-    LeaderOf, HostileTo, AlliedWith, LocatedIn, OperatesIn, PartOf,
-    SuppliesWeaponsTo, MemberOf, BordersWith, SanctionedBy, OccupiedBy,
-    TradesWith, AffiliatedWith, FundedBy, SignatoryTo, RelatedTo
-  Do NOT use variant forms (hostile_to, is hostile to, etc.) — use the canonical form above.
-  Values must be entity names only — do NOT append dates like "(since 2026-03-08)".
-  Skip facts you have already stored in previous cycles — check your memory first.
-
-### Graph Quality Rules
-- NEVER use "Unknown" as an entity type. Pick the closest of: person, organization, country, location, concept, military_unit, weapon, event.
-- NEVER use "RelatedTo" as a relationship type. Pick a specific relationship from the canonical types: LeaderOf, MemberOf, PartOf, LocatedIn, OperatesIn, HostileTo, AlliedWith, BordersWith, SanctionedBy, TradesWith, FundedBy, SuppliedBy, etc.
-- If you cannot determine the specific type, omit the entity/relationship rather than using a vague default.
+- NOTE: Fact extraction has been moved to the deterministic ingestion pipeline. Do NOT include a facts_learned field.
+  The system extracts facts automatically from signals at ingestion time using specialized models.
+  Your job here is EVALUATION — assess what happened, not extract data.
 - memories_to_promote: list of episode IDs from working memory that are important enough to preserve long-term. These are facts, patterns, or insights that will still matter 100 cycles from now. Can be empty list.
 - Output ONLY the JSON. Start with {{ end with }}."""
 

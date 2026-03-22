@@ -4,9 +4,13 @@ Phase modules for the Agent Cycle.
 Each module exports a mixin class that AgentCycle inherits from.
 The mixins share state via self.* attributes set by __init__ in cycle.py.
 
-Cycle type routing (priority order, highest first):
-  EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10) > ANALYSIS(5)
-  > RESEARCH(7) > CURATE(9) > SURVEY(default)
+3-tier cycle routing:
+  Tier 1 — Scheduled outputs (fixed intervals):
+    EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10)
+  Tier 2 — Guaranteed work (modulo floor):
+    ANALYSIS(5) > RESEARCH(7) > CURATE(9)
+  Tier 3 — Dynamic fill (state-scored):
+    CURATE (capped 0.6, recent 24h backlog) vs SURVEY (0.4 default)
 """
 
 # Reporting cadence: produce a status report every N cycles.
@@ -22,13 +26,11 @@ ACQUIRE_INTERVAL = 3
 CURATE_INTERVAL = 9
 
 # Analysis cadence: analytical tools cycle every N cycles.
-ANALYSIS_INTERVAL = 5
+# Interval 4 is coprime with 7, 9, 10 — minimal masking by other types.
+ANALYSIS_INTERVAL = 4
 
 # Synthesize cadence: deep-dive investigation cycle every N cycles.
 SYNTHESIZE_INTERVAL = 10
 
 # Evolve cadence: self-improvement cycle every N cycles.
 EVOLVE_INTERVAL = 30
-
-# Dynamic CURATE promotion: if uncurated signal backlog exceeds this, promote next SURVEY to CURATE.
-CURATE_BACKLOG_THRESHOLD = 100

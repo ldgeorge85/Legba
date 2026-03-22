@@ -67,16 +67,14 @@ class CurateMixin:
         lines = []
         try:
             async with self.memory.structured._pool.acquire() as conn:
-                # 1. Unclustered strong signals (no linked event, not junk)
+                # 1. Unclustered signals (no linked event, not junk)
                 unclustered = await conn.fetch("""
                     SELECT s.id, s.title, s.category, s.confidence,
-                           s.actors, s.locations, s.source_url,
-                           s.created_at
+                           s.source_url, s.created_at
                     FROM signals s
                     LEFT JOIN signal_event_links sel ON sel.signal_id = s.id
                     WHERE sel.signal_id IS NULL
                       AND s.category != 'other'
-                      AND (s.actors IS NOT NULL OR s.locations IS NOT NULL)
                     ORDER BY s.confidence DESC
                     LIMIT 20
                 """)
@@ -85,19 +83,10 @@ class CurateMixin:
                     lines.append("### Unclustered Signals (no linked event)")
                     lines.append(f"({len(unclustered)} shown, highest confidence first)\n")
                     for r in unclustered:
-                        actors = r['actors'] or ''
-                        locations = r['locations'] or ''
                         lines.append(
                             f"- **[{r['id']}]** ({r['category']}, conf={r['confidence']:.2f}) "
                             f"{r['title'][:120]}"
                         )
-                        if actors or locations:
-                            parts = []
-                            if actors:
-                                parts.append(f"actors: {actors[:80]}")
-                            if locations:
-                                parts.append(f"locations: {locations[:80]}")
-                            lines.append(f"  {' | '.join(parts)}")
                     lines.append("")
                 else:
                     lines.append("### Unclustered Signals\n(None found — all signals are linked to events)\n")
@@ -107,7 +96,7 @@ class CurateMixin:
                     SELECT e.id, e.title, e.severity, e.event_type,
                            e.signal_count, e.confidence, e.created_at
                     FROM events e
-                    WHERE e.source = 'auto'
+                    WHERE e.source_method = 'auto'
                       AND e.signal_count <= 2
                     ORDER BY e.created_at DESC
                     LIMIT 15

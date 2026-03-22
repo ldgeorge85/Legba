@@ -1779,12 +1779,11 @@ _TOOL_HANDLERS: dict[str, Callable] = {
     "delete_fact": _handle_delete_fact,
     "add_graph_edge": _handle_add_graph_edge,
     "remove_graph_edge": _handle_remove_graph_edge,
-    "list_hypotheses": _handle_list_hypotheses,
-    "list_briefs": _handle_list_briefs,
 }
 
 
 # --- Hypothesis + Brief handlers ---
+# (defined here, then added to dispatch dict below)
 
 async def _handle_list_hypotheses(stores, args: dict) -> str:
     """List competing hypotheses from Postgres."""
@@ -1826,6 +1825,11 @@ async def _handle_list_briefs(stores, args: dict) -> str:
         return json.dumps({"count": len(briefs), "briefs": briefs}, indent=2, default=str)
     except Exception as e:
         return f"Error listing briefs: {e}"
+
+
+# Add hypothesis + brief handlers to dispatch dict
+_TOOL_HANDLERS["list_hypotheses"] = _handle_list_hypotheses
+_TOOL_HANDLERS["list_briefs"] = _handle_list_briefs
 
 
 # ======================================================================
