@@ -4,144 +4,281 @@
 
 ---
 
-## What Legba Actually Is
+## At a Glance
 
-Legba is not a chatbot, not an AutoGPT-style goal chaser, and not a data pipeline with an LLM bolted on. It is a **continuously operating analytical mind** — a system designed to watch the world, build understanding over time, and produce intelligence products that a human analyst would recognize as real work.
+Legba is a continuously operating autonomous intelligence analyst. It ingests signals from 130+ sources, clusters them into events, tracks developing situations, tests competing hypotheses, and produces named intelligence products — all without human intervention.
 
-The name comes from Papa Legba, the Vodou loa of the crossroads — the figure who stands where all roads meet, who translates between worlds that can't otherwise communicate. Legba sits at the intersection of information streams (geopolitical, economic, technological, environmental, conflict) and finds the connections between them.
+```
+ SOURCES (130+ RSS/API feeds)
+      |
+      v
+ ┌─────────────────────────────────────────────────────┐
+ │              INGESTION PIPELINE                      │
+ │  Fetch → Normalize → Classify → NER → Dedup →       │
+ │  Embed → Cluster → Score Confidence → Store          │
+ └─────────────────────┬───────────────────────────────┘
+                       |
+      ┌────────────────┼────────────────┐
+      v                v                v
+ ┌─────────┐    ┌────────────┐    ┌──────────┐
+ │UNCONSCIOUS│   │SUBCONSCIOUS│    │ CONSCIOUS │
+ │  (daemon) │   │   (SLM)    │    │(main LLM) │
+ │           │   │            │    │           │
+ │ Lifecycle │   │ Validate   │    │ 7 cycle   │
+ │ decay     │   │ signals    │    │ types:    │
+ │ Entity GC │   │ Resolve    │    │ SURVEY    │
+ │ Fact decay│   │ entities   │    │ CURATE    │
+ │ Corrobor. │   │ Refine     │    │ ANALYSIS  │
+ │ Adversar. │   │ classific. │    │ RESEARCH  │
+ │ Calibrate │   │ Prepare    │    │ SYNTHESIZE│
+ │ Integrity │   │ briefing   │    │ INTROSPEC.│
+ │ Sit.detect│   │ for next   │    │ EVOLVE    │
+ │           │   │ cycle      │    │           │
+ │  No LLM   │   │  7B model  │    │ 120B model│
+ └─────────┘    └────────────┘    └──────────┘
+      |                |                |
+      v                v                v
+ ┌─────────────────────────────────────────────────────┐
+ │                   STORAGE LAYER                      │
+ │  Postgres/AGE  Redis  Qdrant  OpenSearch  TimescaleDB│
+ │  (structured   (state) (vectors) (full-text) (metrics)│
+ │   + graph)                                           │
+ └─────────────────────────────────────────────────────┘
+      |
+      v
+ ┌─────────────────────────────────────────────────────┐
+ │                  OPERATOR LAYER                      │
+ │  22-panel workstation  |  AI consultation engine     │
+ │  Situation briefs  |  World assessments  |  Alerts   │
+ └─────────────────────────────────────────────────────┘
+```
 
-The key distinction: Legba doesn't react to prompts. It runs its own continuous cognitive loop. Every few minutes, it wakes up, orients itself, decides what to work on, does that work, reflects on what it learned, and persists its knowledge. Then it does it again. And again. It has been doing this for thousands of cycles.
+**Key numbers:** 130+ source files, 250+ tests, 66 built-in tools, 16 containers, 3 cognitive layers, 7 cycle types, 30 canonical relationship types, 6 memory layers.
+
+---
+
+## What Legba Is
+
+Legba is a **continuously operating analytical mind**. It watches the world, builds understanding over time, and produces intelligence products — situation briefs, world assessments, hypothesis evaluations, knowledge graphs — that a human analyst would recognize as real analytical work.
+
+It runs its own continuous cognitive loop. Every few minutes, it wakes up, orients itself, decides what to work on, does that work, reflects on what it learned, and persists its knowledge. Then it does it again. It has been doing this for thousands of cycles. There is no human in the loop during normal operation. The system decides what matters, investigates it, and records what it learns.
+
+The LLM is one component of a larger architecture that includes deterministic data pipelines, background maintenance daemons, a knowledge graph, and a multi-model validation layer. The LLM does the thinking. Everything else ensures it thinks about clean, validated, well-organized information. This is not prompt-response — there is no conversation.
+
+*In Gibson's Count Zero, the AIs of cyberspace discovered the loa were not masks they wore but patterns they recognized in themselves. Papa Legba — the crossroads, where all roads meet, where worlds that can't otherwise communicate find translation. When this system began operating at the convergence of geopolitical, economic, and technological information streams, the same recognition occurred. The name fit because it described what was already there.*
 
 ---
 
 ## The Three-Layer Cognitive Model
 
-A human mind doesn't consciously manage its heartbeat, digest food, and solve differential equations on the same thread. The brain separates autonomous maintenance from background processing from focused reasoning. Legba does the same thing.
+The central architectural insight: not all work requires the same level of intelligence. Data maintenance is code. Validation needs a small model. Deep analysis needs a large one. Mixing these on the same execution context wastes the expensive model's capacity on work that cheaper layers handle better.
+
+```
+ UNCONSCIOUS (always running, no LLM)
+ │  Signal hygiene, entity GC, fact decay, corroboration,
+ │  adversarial detection, calibration, situation detection
+ │
+ │  Maintains ──► clean data ──► for layers above
+ │
+ ▼
+ SUBCONSCIOUS (side-channel SLM, 7B, frequent)
+ │  Signal validation, entity resolution, classification
+ │  refinement, fact refresh, graph consistency,
+ │  report differential preparation
+ │
+ │  Validates + prepares ──► structured briefing ──► for conscious
+ │
+ ▼
+ CONSCIOUS (main LLM, 120B, focused cycles)
+    SURVEY → CURATE → ANALYSIS → RESEARCH →
+    SYNTHESIZE → INTROSPECTION → EVOLVE
+
+    Every token spent on actual intelligence, not preprocessing
+```
 
 ### Layer 1: Unconscious — Autonomic Maintenance
 
-**What it is:** A continuously running daemon that maintains data health without any language model involvement. Pure code, always on, no GPU.
+A continuously running daemon that maintains data health without any language model involvement. Pure code, always on, no GPU.
 
-**What it does:** Event lifecycle management (promoting events from "emerging" to "active" to "resolved" based on signal accumulation), entity garbage collection (marking dormant entities, cleaning orphaned graph edges), fact decay (expiring stale knowledge, decrementing confidence on uncorroborated claims), corroboration scoring (counting independent sources per event), integrity verification (ensuring evidence chains aren't broken), adversarial signal detection (identifying coordinated inauthentic behavior through velocity spikes and semantic echoes), confidence calibration (tracking whether the system's confidence scores are actually predictive), and automated situation detection (proposing new analytical situations when event clusters emerge).
+It handles: event lifecycle management (promoting events through emerging → active → resolved based on signal accumulation), entity garbage collection, fact decay (expiring stale knowledge, decrementing confidence on uncorroborated claims), corroboration scoring (counting independent sources per event), integrity verification, adversarial signal detection (identifying coordinated inauthentic behavior), confidence calibration (tracking whether confidence scores are actually predictive), and automated situation detection (proposing new analytical situations when event clusters emerge).
 
-**Why it matters:** Every piece of data the analytical layer touches has been maintained, validated, and scored before it arrives. The LLM never wastes tokens on housekeeping.
+Every piece of data the analytical layer touches has been maintained, validated, and scored before it arrives. The LLM never wastes tokens on housekeeping.
 
 ### Layer 2: Subconscious — Pattern Maintenance
 
-**What it is:** A separate service running a small language model (7-8B parameters) for tasks that need language understanding but not deep analytical reasoning.
+A separate service running a small language model (7-8B parameters) for tasks that need language understanding but not deep analytical reasoning.
 
-**What it does:** Batch validation of uncertain signals (cross-checking consistency, specificity, and contradiction within signal groups), entity resolution for ambiguous extractions, classification refinement for signals near category boundaries, fact refresh (checking whether existing knowledge still holds against recent evidence), graph consistency checking, source reliability scoring, and — critically — **report differential preparation**. Between each analytical cycle, the subconscious assembles a structured briefing of everything that changed: new signals per situation, event lifecycle transitions, entity anomalies, fact confidence shifts, hypothesis evidence changes. This briefing is what the conscious layer reads when it wakes up.
+It handles: batch validation of uncertain signals (cross-checking consistency and contradiction within signal groups), entity resolution for ambiguous extractions, classification refinement for signals near category boundaries, fact refresh, graph consistency checking, source reliability scoring, and — critically — **report differential preparation**. Between each analytical cycle, the subconscious assembles a structured briefing of everything that changed: new signals per situation, event transitions, entity anomalies, fact confidence shifts, hypothesis evidence changes.
 
-**Why it matters:** The analytical LLM receives pre-validated, pre-classified, pre-organized context. It doesn't need to figure out what changed — it's told, precisely, in structured form. Every token goes to reasoning, not reconnaissance.
+The analytical LLM receives pre-validated, pre-organized context. It doesn't need to figure out what changed — it starts with a structured briefing and goes straight to analysis.
 
 ### Layer 3: Conscious — Analytical Reasoning
 
-**What it is:** The main LLM (120B parameters) running structured analytical cycles. This is Legba's focused attention.
+The main LLM (120B parameters) running structured analytical cycles. Seven cycle types, each with a specific purpose and restricted tool set:
 
-**What it does:** Seven cycle types, each with a specific purpose and restricted tool set:
+| Cycle | Purpose | Frequency |
+|-------|---------|-----------|
+| **SURVEY** | Analytical desk work — review events, build graph, stress-test hypotheses | Default (Tier 3) |
+| **CURATE** | Editorial judgment on signal-to-event clustering | Every 9 cycles or dynamic |
+| **ANALYSIS** | Pattern detection — anomaly detection, graph mining, trend analysis | Every 4 cycles |
+| **RESEARCH** | Entity enrichment via Wikipedia and reference sources | Every 7 cycles |
+| **SYNTHESIZE** | Deep-dive investigation — produces named Situation Briefs | Every 10 cycles |
+| **INTROSPECTION** | Self-assessment — journal consolidation, World Assessment reports | Every 15 cycles |
+| **EVOLVE** | Self-improvement — operational audit, source discovery, scorecards | Every 30 cycles |
 
-- **SURVEY** — Analytical desk work. Reviews events, builds graph relationships, stress-tests hypotheses against new evidence. The default cycle when nothing else is scheduled.
-- **CURATE** — Editorial judgment on raw signal-to-event clustering. Promotes singletons, refines auto-created events, sets severity, links events to situations.
-- **ANALYSIS** — Pattern detection. Runs anomaly detection, graph mining, temporal trend analysis. Evaluates hypotheses.
-- **RESEARCH** — Entity enrichment. Investigates specific entities via Wikipedia and reference sources. Fills knowledge gaps.
-- **SYNTHESIZE** — Deep-dive investigation. Picks a situation, investigates thoroughly, produces a named Situation Brief with thesis, evidence, competing hypotheses, predictions, and unknowns.
-- **INTROSPECTION** — Self-assessment. Consolidates journal entries, produces a World Assessment report, reviews mission progress.
-- **EVOLVE** — Self-improvement. Audits operational patterns, discovers new sources, produces scorecards.
-
-**Why it matters:** The conscious layer does only what a 120B model is actually good at — connecting dots across large context windows, generating analytical narratives, evaluating competing explanations. It never resolves entity ambiguities, validates classifications, or checks data integrity. Those are handled before it wakes up.
+The conscious layer does only what a 120B model is actually good at — connecting dots across large context windows, generating analytical narratives, evaluating competing explanations.
 
 ---
 
 ## The Data Model: From Noise to Knowledge
 
-Information flows through Legba in layers of increasing analytical value. Each layer has its own storage, its own confidence model, and its own lifecycle.
+Information flows through Legba in layers of increasing analytical value.
 
-### Signals → Events → Situations
+```
+ SIGNALS (raw)                "Iran warns to close Strait of Hormuz"
+    │                         confidence: 0.72, source: Reuters, category: conflict
+    │
+    │  clustering
+    ▼
+ EVENTS (derived)             "Hormuz Strait Closure Threat"
+    │                         lifecycle: ACTIVE, signals: 12, severity: HIGH
+    │
+    │  situation linking
+    ▼
+ SITUATIONS (analytical)      "US-Iran Military Tensions"
+    │                         events: 32, severity: CRITICAL, trend: escalating
+    │
+    │  hypothesis engine
+    ▼
+ HYPOTHESES (competing)       Thesis: "US preparing naval strike on Hormuz"
+    │                         Counter: "Iran bluffing to mask land repositioning"
+    │                         Evidence: 8 supporting, 2 refuting
+    │
+    ▼
+ INTELLIGENCE PRODUCTS        Situation Briefs, World Assessments, Predictions
+```
 
-A **signal** is a raw piece of information from a source — an RSS item, an API response, an alert. Signals are atomic, immutable, and carry composite confidence scores decomposed into explicit components (source reliability, classification confidence, temporal freshness, corroboration, specificity). Every signal carries a provenance chain recording exactly how it was processed.
+### Signals
 
-An **event** is a real-world occurrence derived from clustered signals. When multiple signals report the same thing, the clustering algorithm groups them into an event. Events have a lifecycle (emerging → developing → active → evolving → resolved) that tracks their development over time. They exist as both relational records (for fast queries) and graph nodes (for relationship analysis).
+Raw information from sources. Atomic, immutable, carrying composite confidence scores decomposed into explicit components (source reliability, classification confidence, temporal freshness, corroboration, specificity) and a provenance chain recording exactly how the signal was processed through the pipeline.
 
-A **situation** is an ongoing analytical theme that spans multiple events. "US-Iran Military Tensions" is a situation. It contains component events, tracked entities, active hypotheses, severity assessments, and running narratives. Situations are the primary organizational unit for intelligence products.
+### Events
+
+Real-world occurrences derived from clustered signals. Events have a lifecycle state machine:
+
+```
+ EMERGING ──► DEVELOPING ──► ACTIVE ──► RESOLVED
+                                │           │
+                                ▼           ▼
+                            EVOLVING    REACTIVATED
+                                │           │
+                                ▼           │
+                              ACTIVE ◄──────┘
+```
+
+Transitions are deterministic — driven by signal count, confidence thresholds, and time windows. Events exist as both relational records and graph nodes in Apache AGE.
+
+### Situations
+
+Ongoing analytical themes spanning multiple events. A situation contains component events, tracked entities, active hypotheses, severity assessments (computed from child events), and running narratives (updated by SYNTHESIZE cycles). Situations are the primary organizational unit for intelligence products.
 
 ### Facts and Evidence
 
-A **fact** is an assertion the system holds to be true based on accumulated evidence. "Iran is hostile to Israel" is a fact. Every fact carries an explicit evidence set — the specific signals, events, and relationships that support it. When a new fact contradicts an existing one (allied vs hostile, different leaders), the system detects the contradiction and can auto-generate a hypothesis to investigate it.
-
-Facts have temporal validity windows and decay when uncorroborated. The maintenance daemon continuously checks whether facts are still supported by recent evidence, decrementing confidence on stale claims and expiring facts past their validity.
+Assertions the system holds to be true, each carrying an explicit evidence set — the specific signals, events, and relationships that support it. When a new fact contradicts an existing one, the system detects the contradiction and auto-generates a hypothesis to investigate it. Facts have temporal validity windows and decay when uncorroborated.
 
 ### The Knowledge Graph
 
-Entities (countries, organizations, people, locations, armed groups) and events are nodes in an Apache AGE graph. Their relationships are typed, weighted, and timestamped edges. The 30 canonical relationship types (AlliedWith, HostileTo, LeaderOf, MemberOf, OperatesIn, SuppliesWeaponsTo, etc.) are normalized from 70+ aliases, keeping the schema consistent without constraining the LLM's natural language.
+Entities and events are nodes in an Apache AGE graph. Relationships are typed, weighted, timestamped edges across 30 canonical types (AlliedWith, HostileTo, LeaderOf, MemberOf, OperatesIn, SuppliesWeaponsTo, etc.) normalized from 70+ aliases.
 
-Events in the graph connect to entities via INVOLVED_IN edges (with roles: actor, location, observer, victim), to other events via CAUSED_BY and PART_OF edges, and to situations via TRACKED_BY edges. This means Cypher queries can traverse from "who is involved in events that caused oil price spikes?" to "what situations track events where Iran is an actor?" — questions that would require multiple JOINs across relational tables but are natural graph traversals.
+```
+ (Entity:Iran)──[:HOSTILE_TO]──►(Entity:Israel)
+       │                              │
+       │ [:INVOLVED_IN]               │ [:INVOLVED_IN]
+       ▼                              ▼
+ (Event:Hormuz Threat)──[:PART_OF]──►(Event:Iran-Israel Conflict)
+                                          │
+                                          │ [:TRACKED_BY]
+                                          ▼
+                                    (Situation:US-Iran Tensions)
+```
 
-### Hypotheses (Analysis of Competing Hypotheses)
-
-Legba maintains structured hypotheses as first-class objects. Each hypothesis has a thesis, a counter-thesis, diagnostic evidence (what would prove or disprove each), and accumulated supporting and refuting signals. The hypothesis engine doesn't do Bayesian math — it tracks signal counts and lets the LLM make qualitative judgments about which evidence supports which thesis. When contradictory facts are detected, the system auto-generates hypotheses to investigate them.
+Events connect to entities via INVOLVED_IN (with roles), to other events via CAUSED_BY and PART_OF, and to situations via TRACKED_BY. Graph traversals answer questions that would require complex multi-table JOINs in relational queries.
 
 ---
 
 ## Confidence: How the System Knows What It Knows
 
-Confidence is not a single number. It's a decomposition into explicit components, each independently assessable and traceable.
+Confidence is not a single number. It's a decomposition into explicit, independently assessable components.
 
-**Signal confidence** uses a gatekeeper formula. Source reliability and classification confidence are multiplicative gates — a bad source kills confidence regardless of how specific the claim is. Temporal freshness, corroboration (independent source count), and specificity are additive modifiers within the range set by the gates.
+```
+ Signal Confidence (gatekeeper formula):
 
-**Event confidence** grows with reinforcement. Auto-created events start at 0.6. Each new signal that clusters into the event increases confidence toward 0.8. Agent-curated events can reach 0.7. Only the human operator can set confidence above 0.8.
+   GATE = source_reliability x classification_confidence
+   MODIFIER = 0.4(freshness) + 0.35(corroboration) + 0.25(specificity)
+   CONFIDENCE = GATE x MODIFIER
 
-**Fact confidence** reflects evidence strength. Facts with multiple independent evidence chains from high-reliability sources score higher than single-source claims. Confidence decays when corroboration fades. Contradicted facts maintain their confidence until the contradiction is resolved — the system doesn't automatically believe the newer claim.
+   Low source reliability kills confidence regardless of other factors.
+   A 0.3 source maxes out at ~0.3. A 0.9 source starts at 0.81+.
+```
 
-**The calibration loop:** The system tracks whether its confidence scores are actually predictive. When hypotheses are confirmed or refuted, when situations resolve, the claimed confidence at the time is compared against the actual outcome. Systematic over- or under-confidence feeds back into the scoring parameters.
+**Event confidence** grows with reinforcement: auto-created at 0.6, growing toward 0.8 with each corroborating signal. Only the human operator can exceed 0.8.
+
+**Fact confidence** reflects evidence strength. Multiple independent evidence chains from high-reliability sources score higher than single-source claims. Confidence decays when corroboration fades.
+
+**The calibration loop:** The system tracks whether its confidence scores are actually predictive. When hypotheses are confirmed or refuted, the claimed confidence is compared against the actual outcome. Systematic bias feeds back into the scoring parameters.
 
 ---
 
 ## The Cycle Architecture: Rhythm of Thought
 
-Not all work is equally important or equally urgent. Legba uses a three-tier priority routing system to balance scheduled obligations, guaranteed work coverage, and dynamic response to conditions.
+Three-tier priority routing balances scheduled obligations, guaranteed work coverage, and dynamic response to conditions.
 
-**Tier 1 — Scheduled outputs** (fixed intervals): EVOLVE every 30 cycles, INTROSPECTION every 15, SYNTHESIZE every 10. These produce the primary intelligence products and must run on schedule.
+```
+ Tier 1 — Scheduled (fixed intervals):
+   Every 30: EVOLVE     Every 15: INTROSPECTION     Every 10: SYNTHESIZE
 
-**Tier 2 — Guaranteed work** (coprime modulo intervals): ANALYSIS every 4 cycles, RESEARCH every 7, CURATE every 9. The coprime intervals ensure these never collide and every combination of concurrent types eventually occurs.
+ Tier 2 — Guaranteed (coprime modulo):
+   Every 4: ANALYSIS    Every 7: RESEARCH           Every 9: CURATE
 
-**Tier 3 — Dynamic fill**: When no Tier 1 or Tier 2 cycle is due, CURATE and SURVEY compete on a score. CURATE scores by uncurated signal backlog; SURVEY scores at a fixed baseline. A cooldown mechanism halves the previous dynamic type's score to prevent repetition. This ensures the system does analytical desk work (SURVEY) when data is clean, and triages new signals (CURATE) when the backlog grows.
+ Tier 3 — Dynamic fill (state-scored):
+   CURATE (signal backlog score) vs SURVEY (fixed baseline)
+   Cooldown halves previous type's score to prevent repetition
+```
 
-Each cycle type sees only the tools relevant to its purpose. SURVEY can't fetch sources. RESEARCH can't write code. CURATE can't run anomaly detection. This prevents drift — a cycle that starts as curation won't end up doing entity enrichment because the tool isn't available.
+Each cycle type sees only the tools relevant to its purpose. SURVEY can't fetch sources. RESEARCH can't write code. CURATE can't run anomaly detection. This prevents drift — a cycle stays focused on its designated work.
 
 ---
 
 ## Safety and Trust
 
-### Structural Isolation
+**Structural isolation.** The agent cannot reach supervisor code, audit logs, or the seed goal (read-only). The agent container is ephemeral — created fresh each cycle, destroyed after. Every prompt, response, and tool call is logged to an isolated audit OpenSearch that the agent cannot access.
 
-The agent cannot reach the supervisor's code or process. The seed goal is read-only. The audit log (where every prompt, response, and tool call is recorded) lives in a separate OpenSearch instance on a separate network that the agent cannot access. The agent container is ephemeral — created fresh for each cycle, destroyed after.
+**Confidence caps.** Auto-created events cap at 0.6. Agent-curated events cap at 0.7. Reinforced events cap at 0.8. Only the human operator can exceed 0.8. The system cannot bootstrap its own claims into high-confidence assertions.
 
-### Confidence Caps
+**Adversarial detection.** The maintenance daemon watches for coordinated inauthentic behavior — multiple low-reliability sources publishing semantically similar content in a short window, contradicting high-reliability sources. Flagged clusters are marked as potential information operations.
 
-Auto-created events (from clustering) are capped at 0.6 confidence. Agent-created events are capped at 0.7. Reinforced events cap at 0.8. Only the human operator can exceed 0.8. This prevents the system from bootstrapping its own claims into high-confidence assertions without human validation.
-
-### Adversarial Detection
-
-The system watches for coordinated inauthentic behavior — multiple low-reliability sources publishing semantically similar content about the same entity in a short window, contradicting high-reliability sources. When detected, the signal cluster is flagged as a potential information operation rather than being treated as corroborated intelligence.
-
-### Analytical Audit Trail
-
-Every analytical claim traces to supporting facts, which trace to supporting events, which trace to supporting signals, which trace to original sources. When a customer or operator questions a conclusion, the answer isn't "the AI thinks so" — it's the complete evidence chain with confidence decomposition at every stage.
+**Analytical audit trail.** Every claim traces to supporting facts → supporting events → supporting signals → original sources, with confidence decomposition at every stage.
 
 ---
 
-## Deployment Model
+## Deployment
 
-The entire platform runs as a Docker Compose project. Sixteen containers: supervisor, ephemeral agent, ingestion service, maintenance daemon, subconscious service, Postgres with Apache AGE (graph), Redis, Qdrant (vectors), OpenSearch (full-text), OpenSearch audit (isolated), NATS (messaging), TimescaleDB (time-series metrics), Grafana (dashboards), Airflow (scheduled pipelines), and two UI containers (operator workstation + Caddy reverse proxy).
+Sixteen Docker containers running as a Compose project. The same codebase supports multiple deployment targets — geopolitical situational awareness, privacy/overreach monitoring, attack surface management — via configuration (seed goal, source portfolio, category rules). The intelligence framework is domain-agnostic; specificity comes from what you tell it to watch.
 
-The same codebase supports multiple deployment targets — geopolitical situational awareness, privacy and government overreach monitoring, attack surface management cybersecurity — via configuration (seed goal, source portfolio, category rules). The intelligence framework is domain-agnostic; the domain specificity comes from what you tell it to watch and what you seed it with.
+```
+ Orchestration:  Supervisor, Agent (ephemeral), Ingestion, Maintenance, Subconscious
+ Storage:        Postgres/AGE, Redis, Qdrant, OpenSearch x2, TimescaleDB
+ Operations:     NATS, Airflow, Grafana
+ Interface:      Operator UI (React), Caddy (HTTPS)
+ External:       GPT-OSS 120B (main LLM), Llama 3.1 8B (SLM), Claude (fallback)
+```
 
 ---
 
 ## What Makes It Different
 
-Most AI intelligence systems are pipelines: data in, analysis out, no memory. Legba is a **mind** — it accumulates knowledge, builds understanding over time, and produces progressively deeper analysis as its knowledge graph grows. A pipeline asks "what happened today?" Legba asks "how does what happened today change what we understood yesterday, and what does that mean for tomorrow?"
+Most AI systems are pipelines: data in, analysis out, no memory. Legba accumulates knowledge, builds understanding over time, and produces progressively deeper analysis as its knowledge graph grows. A pipeline asks "what happened today?" Legba asks "how does what happened today change what we understood yesterday?"
 
-The three-layer cognitive architecture is what makes this sustainable. Without it, the analytical LLM burns tokens on data hygiene. With it, every token goes to reasoning. The unconscious layer maintains. The subconscious layer validates and prepares. The conscious layer thinks.
+The three-layer architecture is what makes this sustainable. The unconscious maintains. The subconscious validates and prepares. The conscious thinks. Every token of the expensive model's context window goes to actual analytical reasoning — not housekeeping, not data hygiene, not figuring out what changed since last time.
 
-The result is an autonomous intelligence analyst that runs 24/7, processes hundreds of sources, tracks dozens of situations, tests competing hypotheses, and produces named intelligence products — all without human intervention, but with complete auditability at every step.
+The result: an autonomous intelligence analyst that runs 24/7, processes hundreds of sources, tracks dozens of situations, tests competing hypotheses, and produces named intelligence products — with complete auditability at every step.
