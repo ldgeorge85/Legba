@@ -344,6 +344,54 @@ _TOOL_DESC_BLOCK = "\n".join(
 )
 
 
+def _clean_response(content: str) -> str:
+    """Extract clean text from LLM response that may be wrapped in JSON.
+
+    Sometimes the LLM returns its answer inside a JSON action wrapper like:
+    {"actions": [{"tool": "respond", "args": {"message": "actual answer"}}]}
+    or the content has escaped newlines (\\n) from JSON serialization.
+    This extracts the clean text for display.
+    """
+    import re
+
+    # Try to extract respond message from JSON wrapper
+    if '"respond"' in content or '"message"' in content:
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                # {"actions": [{"tool": "respond", "args": {"message": "..."}}]}
+                actions = parsed.get("actions", [])
+                for a in actions:
+                    if isinstance(a, dict) and a.get("tool") == "respond":
+                        msg = a.get("args", {}).get("message", "")
+                        if msg:
+                            return msg
+                # {"message": "..."}
+                if "message" in parsed:
+                    return parsed["message"]
+                # {"response": "..."}
+                if "response" in parsed:
+                    return parsed["response"]
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
+
+    # Fix escaped newlines that survived from JSON serialization
+    if "\\n" in content and "\n" not in content:
+        content = content.replace("\\n", "\n")
+
+    # Strip outer quotes if the whole thing is a JSON string
+    stripped = content.strip()
+    if len(stripped) > 2 and stripped[0] == '"' and stripped[-1] == '"':
+        try:
+            unquoted = json.loads(stripped)
+            if isinstance(unquoted, str):
+                content = unquoted
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return content
+
+
 def _format_tool_defs_json() -> str:
     """Format tool definitions as compact JSON for the system prompt."""
     tools = []
@@ -2016,6 +2064,7 @@ class ConsultationEngine:
 
             if not has_tool_call(content):
                 # Final response — no tool call (plain text)
+                content = _clean_response(content)
                 messages.append({"role": "assistant", "content": content})
                 await self.save_session(session_id, messages)
                 return content, messages
@@ -2024,6 +2073,7 @@ class ConsultationEngine:
             tool_calls = parse_tool_calls(content)
             if not tool_calls:
                 # Parser found nothing despite has_tool_call hint — treat as final
+                content = _clean_response(content)
                 messages.append({"role": "assistant", "content": content})
                 await self.save_session(session_id, messages)
                 return content, messages

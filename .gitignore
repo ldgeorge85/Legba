@@ -16,6 +16,7 @@ build/
 
 # Runtime data
 backups/
+dumps/
 *.jsonl
 *.tar.gz
 cycle_*.txt
@@ -23,12 +24,13 @@ step*_prompt.txt
 prompt*.txt
 feedback.md
 curl_*.json
+journal_*.txt
+report_cycle*.md
+
+# Caddy (contains domain/credentials)
+docker/Caddyfile
 
 # IDE / tools
 .claude/
 .vscode/
 .idea/
-
-# Internal analysis docs (not published)
-docs/PHASE_*.md
-docs/TOOL_UTILIZATION.md

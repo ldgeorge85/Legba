@@ -363,13 +363,25 @@ class SupervisorConfig:
     max_consecutive_failures: int = 5   # Kill agent after this many heartbeat failures
     cycle_sleep: float = 2.0            # Seconds between cycles
     heartbeat_timeout: int = 360        # Seconds to wait for agent heartbeat
+    max_extensions: int = 2             # Default max timeout extensions (pings)
+    extension_map: dict[str, int] = field(default_factory=dict)  # Per-cycle-type overrides
 
     @classmethod
     def from_env(cls) -> SupervisorConfig:
+        ext_map: dict[str, int] = {}
+        raw = os.getenv("SUPERVISOR_EXTENSION_MAP", "")
+        if raw:
+            import json as _json
+            try:
+                ext_map = {k.upper(): int(v) for k, v in _json.loads(raw).items()}
+            except (ValueError, AttributeError):
+                pass
         return cls(
             max_consecutive_failures=int(os.getenv("SUPERVISOR_MAX_FAILURES", "5")),
             cycle_sleep=float(os.getenv("SUPERVISOR_CYCLE_SLEEP", "2.0")),
             heartbeat_timeout=int(os.getenv("SUPERVISOR_HEARTBEAT_TIMEOUT", "360")),
+            max_extensions=int(os.getenv("SUPERVISOR_MAX_EXTENSIONS", "2")),
+            extension_map=ext_map,
         )
 
 

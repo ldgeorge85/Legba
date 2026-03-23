@@ -134,6 +134,7 @@ class AgentCycle(
             #   Dynamic work: state-scored selection from SURVEY/ANALYSIS/RESEARCH/CURATE
             cycle_type = self._select_cycle_type()
             self._selected_cycle_type = cycle_type
+            self._write_cycle_type(cycle_type)
             self.logger.log("cycle_type_selected",
                            cycle_type=cycle_type,
                            cycle_number=self.state.cycle_number)
@@ -290,6 +291,7 @@ class AgentCycle(
             return
 
         self._selected_cycle_type = cycle_type.upper()
+        self._write_cycle_type(cycle_type.upper())
         self.logger.log("forced_cycle_type", cycle_type=cycle_type)
         await runner()
 
@@ -367,6 +369,15 @@ class AgentCycle(
     # Graceful shutdown support
     # -----------------------------------------------------------------------
 
+    def _write_cycle_type(self, cycle_type: str) -> None:
+        """Write cycle type to shared volume so the supervisor can read it."""
+        path = os.path.join(self.config.paths.shared, "cycle_type.json")
+        try:
+            with open(path, "w") as f:
+                json.dump({"cycle_type": cycle_type, "cycle": self.state.cycle_number}, f)
+        except OSError:
+            pass
+
     def _check_stop_flag(self) -> bool:
         """Check if the supervisor has requested graceful shutdown."""
         return os.path.exists(os.path.join(self.config.paths.shared, "stop_flag.json"))
@@ -399,7 +410,7 @@ class AgentCycle(
 
     def _cleanup_signals(self) -> None:
         """Remove stale signal files from a previous cycle."""
-        for name in ("stop_flag.json", "stop_ping.json"):
+        for name in ("stop_flag.json", "stop_ping.json", "cycle_type.json"):
             path = os.path.join(self.config.paths.shared, name)
             if os.path.exists(path):
                 os.remove(path)

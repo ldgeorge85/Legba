@@ -225,6 +225,8 @@ class Supervisor:
             },
             timeout_seconds=challenge.timeout_seconds,
             shared_path=self.config.paths.shared,
+            max_extensions=self.config.supervisor.max_extensions,
+            extension_map=self.config.supervisor.extension_map or None,
         )
 
         self._log_cycle_result(result)

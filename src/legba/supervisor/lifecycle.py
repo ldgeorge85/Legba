@@ -29,8 +29,8 @@ PING_WAIT_SECONDS = 150
 # After a ping, extend the timeout by this fraction of the original.
 EXTENSION_FACTOR = 0.5
 
-# Maximum number of timeout extensions.
-MAX_EXTENSIONS = 2
+# Default maximum number of timeout extensions (overridable via config).
+DEFAULT_MAX_EXTENSIONS = 2
 
 # Polling interval when monitoring the container.
 POLL_INTERVAL = 2.0
@@ -73,6 +73,8 @@ class LifecycleManager:
         timeout_seconds: int = 300,
         bind_mounts: dict[str, str] | None = None,
         shared_path: str = "",
+        max_extensions: int = DEFAULT_MAX_EXTENSIONS,
+        extension_map: dict[str, int] | None = None,
     ) -> CycleResult:
         """
         Launch the agent as a Docker container for a single cycle.
@@ -86,6 +88,8 @@ class LifecycleManager:
             volumes: Named Docker volumes {volume_name: container_path}
             bind_mounts: Host directory bind mounts {host_path: container_path}
             shared_path: Path to the shared volume (for signal files)
+            max_extensions: Default max timeout extensions (pings allowed)
+            extension_map: Per-cycle-type overrides {cycle_type: max_extensions}
         """
         # Build docker run command
         cmd = ["docker", "run", "--rm", "--name", self.container_name]
@@ -121,6 +125,8 @@ class LifecycleManager:
             # Monitor with graceful shutdown support
             return await self._monitor_with_graceful_shutdown(
                 proc, start, timeout_seconds, shared_path,
+                max_extensions=max_extensions,
+                extension_map=extension_map,
             )
 
         except Exception as e:
@@ -138,6 +144,8 @@ class LifecycleManager:
         start: float,
         timeout_seconds: int,
         shared_path: str,
+        max_extensions: int = DEFAULT_MAX_EXTENSIONS,
+        extension_map: dict[str, int] | None = None,
     ) -> CycleResult:
         """
         Monitor the agent process with soft timeout and graceful shutdown.
@@ -147,12 +155,18 @@ class LifecycleManager:
         2. On soft timeout: write stop_flag.json, wait up to PING_WAIT_SECONDS
         3. If agent writes stop_ping.json: extend timeout by EXTENSION_FACTOR
         4. If no ping or max extensions exceeded: hard kill
+
+        The agent writes cycle_type.json to the shared volume early in WAKE.
+        If extension_map has an override for that cycle type, it replaces
+        max_extensions dynamically.
         """
         comm_task = asyncio.create_task(proc.communicate())
         soft_deadline = start + timeout_seconds
         extensions = 0
         stop_flag_written = False
         graceful = False
+        effective_max = max_extensions
+        _type_resolved = False
 
         while True:
             now = time.monotonic()
@@ -174,6 +188,19 @@ class LifecycleManager:
                     stderr=stderr_bytes.decode("utf-8", errors="replace"),
                     graceful_shutdown=graceful,
                 )
+
+            # Resolve per-cycle-type extension override (once)
+            if not _type_resolved and extension_map and shared_path:
+                ct = self._read_cycle_type(shared_path)
+                if ct:
+                    _type_resolved = True
+                    if ct in extension_map:
+                        effective_max = extension_map[ct]
+                        print(
+                            f"[lifecycle] Cycle type {ct}: "
+                            f"max_extensions={effective_max}",
+                            flush=True,
+                        )
 
             # Soft timeout reached?
             if time.monotonic() >= soft_deadline:
@@ -213,7 +240,7 @@ class LifecycleManager:
                             graceful = True
                             print(
                                 f"[lifecycle] Ping received, extending by {bonus:.0f}s "
-                                f"(extension {extensions}/{MAX_EXTENSIONS})",
+                                f"(extension {extensions}/{effective_max})",
                                 flush=True,
                             )
                             # Remove the ping file so we can detect the next one
@@ -240,10 +267,10 @@ class LifecycleManager:
                             timed_out=True,
                         )
 
-                elif extensions >= MAX_EXTENSIONS:
+                elif extensions >= effective_max:
                     # Max extensions exhausted — hard kill
                     print(
-                        f"[lifecycle] Max extensions ({MAX_EXTENSIONS}) exhausted, "
+                        f"[lifecycle] Max extensions ({effective_max}) exhausted, "
                         f"hard killing agent",
                         flush=True,
                     )
@@ -278,6 +305,19 @@ class LifecycleManager:
                     )
 
     @staticmethod
+    def _read_cycle_type(shared_path: str) -> str:
+        """Read the cycle type written by the agent during WAKE."""
+        path = os.path.join(shared_path, "cycle_type.json")
+        try:
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+                return data.get("cycle_type", "").upper()
+        except (OSError, json.JSONDecodeError):
+            pass
+        return ""
+
+    @staticmethod
     def _write_stop_flag(shared_path: str) -> None:
         """Write the stop flag file for the agent to detect."""
         flag = {
@@ -306,7 +346,7 @@ class LifecycleManager:
     @staticmethod
     def cleanup_signals(shared_path: str) -> None:
         """Remove stale signal files from a previous cycle."""
-        for name in ("stop_flag.json", "stop_ping.json"):
+        for name in ("stop_flag.json", "stop_ping.json", "cycle_type.json"):
             path = os.path.join(shared_path, name)
             try:
                 if os.path.exists(path):

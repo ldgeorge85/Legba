@@ -26,15 +26,27 @@ export function ConsultPanel() {
     setLoading(true)
 
     try {
-      const res = await fetch('/consult/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content }),
-      })
-      const data = await res.json()
-      setMessages((prev) => [...prev, { role: 'assistant', content: data.response }])
+      let res: Response | null = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          res = await fetch('/consult/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: content }),
+          })
+          if (res.ok) break
+        } catch {
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
+        }
+      }
+      if (res?.ok) {
+        const data = await res.json()
+        setMessages((prev) => [...prev, { role: 'assistant', content: data.response ?? data.error ?? 'No response' }])
+      } else {
+        setMessages((prev) => [...prev, { role: 'system', content: `Error: ${res?.status ?? 'connection failed'} — retries exhausted` }])
+      }
     } catch {
-      setMessages((prev) => [...prev, { role: 'system', content: 'Failed to send message' }])
+      setMessages((prev) => [...prev, { role: 'system', content: 'Connection failed after 3 attempts' }])
     } finally {
       setLoading(false)
     }

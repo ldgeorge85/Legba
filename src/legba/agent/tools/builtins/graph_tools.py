@@ -5,8 +5,8 @@ Let the agent explicitly manage entities and their relationships in the
 knowledge graph (Apache AGE / Cypher). Used for tracking connections between
 people, organizations, events, locations, concepts, etc.
 
-The graph_query tool includes a 'cypher' mode for raw Cypher queries,
-enabling complex pattern matching, path analysis, and graph algorithms.
+graph_query supports named operations (top_connected, neighbors, path, etc.)
+instead of raw Cypher — all queries are pre-built for AGE compatibility.
 """
 
 from __future__ import annotations
@@ -279,9 +279,12 @@ def register(
 
         return result
 
+    # ------------------------------------------------------------------
+    # graph_query handler — named operations, no raw Cypher
+    # ------------------------------------------------------------------
+
     async def graph_query_handler(args: dict) -> str:
         import json as _json
-        import re as _re
 
         query = args.get("query", "")
         mode = args.get("mode", "search")
@@ -289,15 +292,9 @@ def register(
         rel_type = args.get("relation_type")
         depth = int(args.get("depth", 2))
         limit = int(args.get("limit", 20))
+        entity_b = args.get("entity_b", "")
 
-        # Auto-detect Cypher: if mode is default "search" but query looks like
-        # Cypher syntax, upgrade to cypher mode. Safe because entity names never
-        # start with "MATCH (" etc.
-        if mode == "search" and query and _re.match(
-            r'\s*(MATCH|CREATE|MERGE|RETURN|WITH|OPTIONAL|UNWIND|CALL)\s*[\(\[]',
-            query, _re.IGNORECASE,
-        ):
-            mode = "cypher"
+        # ------ existing modes (unchanged) ------
 
         if mode == "search":
             entities = await graph.search_entities(
@@ -323,7 +320,6 @@ def register(
             for r in rels:
                 direction = r["direction"]
                 arrow = "-->" if direction == "outgoing" else "<--"
-                # Include temporal info if present on edge
                 temporal = ""
                 rel_props = r.get("rel_properties", {})
                 if rel_props.get("since") or rel_props.get("until"):
@@ -340,28 +336,222 @@ def register(
             sg = await graph.query_subgraph(
                 entity_name=query, depth=depth, limit=limit,
             )
-            entities = sg.get("entities", [])
+            entities_list = sg.get("entities", [])
             rels = sg.get("relationships", [])
-            if not entities:
+            if not entities_list:
                 return f"No subgraph found around '{query}'."
             lines = [f"Subgraph around '{query}' (depth={depth}):"]
-            lines.append(f"Entities ({len(entities)}):")
-            for e in entities:
+            lines.append(f"Entities ({len(entities_list)}):")
+            for e in entities_list:
                 lines.append(f"  - {e['name']} ({e['type']})")
             lines.append(f"Relationships ({len(rels)}):")
             for r in rels:
                 lines.append(f"  - {r['source']} --[{r['relation']}]--> {r['target']}")
             return "\n".join(lines)
 
-        elif mode == "cypher":
-            results = await graph.execute_cypher(query)
-            if not results:
-                return "Cypher query returned no results."
-            if len(results) == 1 and "error" in results[0]:
-                return f"Cypher error: {results[0]['error']}"
-            return _json.dumps(results, indent=2, default=str)
+        # ------ new named operations ------
 
-        return f"Unknown query mode: {mode}. Use 'search', 'relationships', 'subgraph', or 'cypher'."
+        elif mode == "top_connected":
+            # Top N entities by edge count (replaces broken size() Cypher)
+            try:
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    # Count outgoing + incoming edges per node
+                    rows = await graph._cypher(conn, f"""
+                        MATCH (n)-[r]-()
+                        RETURN n.name AS name, count(r) AS degree
+                        ORDER BY degree DESC
+                        LIMIT {int(limit)}
+                    """, cols="name agtype, degree agtype")
+                if not rows:
+                    return "No connected entities found."
+                lines = [f"Top {len(rows)} entities by connection count:"]
+                for r in rows:
+                    lines.append(f"  {r['degree']:>4}  {r['name']}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in top_connected: {exc}"
+
+        elif mode == "by_type":
+            # All entities of a given type
+            target_type = etype or query
+            if not target_type:
+                return "Error: provide entity_type or query with the type name (e.g. 'country', 'person')."
+            entities = await graph.search_entities(
+                query=None, entity_type=target_type, limit=limit,
+            )
+            if not entities:
+                return f"No entities of type '{target_type}'."
+            lines = [f"Entities of type '{target_type}' ({len(entities)}):"]
+            for e in entities:
+                lines.append(f"  - {e.name}")
+            return "\n".join(lines)
+
+        elif mode == "edge_types":
+            # Relationship type distribution
+            try:
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    rows = await graph._cypher(conn, """
+                        MATCH ()-[r]->()
+                        RETURN label(r) AS rel_type, count(r) AS cnt
+                        ORDER BY cnt DESC
+                    """, cols="rel_type agtype, cnt agtype")
+                if not rows:
+                    return "No edges in the graph."
+                total = sum(r["cnt"] for r in rows)
+                lines = [f"Edge type distribution ({total} total edges):"]
+                for r in rows:
+                    pct = r["cnt"] / total * 100 if total else 0
+                    lines.append(f"  {r['cnt']:>5}  ({pct:4.1f}%)  {r['rel_type']}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in edge_types: {exc}"
+
+        elif mode == "shared_connections":
+            # Entities connected to both A and B
+            if not query or not entity_b:
+                return "Error: provide 'query' (entity A) and 'entity_b' (entity B)."
+            try:
+                a_esc = graph._escape(query)
+                b_esc = graph._escape(entity_b)
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    rows = await graph._cypher(conn, f"""
+                        MATCH (a {{name: '{a_esc}'}})-[r1]-(shared)-[r2]-(b {{name: '{b_esc}'}})
+                        RETURN DISTINCT shared.name AS name, label(r1) AS rel_a, label(r2) AS rel_b
+                        LIMIT {int(limit)}
+                    """, cols="name agtype, rel_a agtype, rel_b agtype")
+                if not rows:
+                    return f"No shared connections between '{query}' and '{entity_b}'."
+                lines = [f"Shared connections between '{query}' and '{entity_b}' ({len(rows)}):"]
+                for r in rows:
+                    lines.append(f"  - {r['name']}  (via {r['rel_a']} / {r['rel_b']})")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in shared_connections: {exc}"
+
+        elif mode == "path":
+            # Shortest path between A and B
+            if not query or not entity_b:
+                return "Error: provide 'query' (source entity) and 'entity_b' (target entity)."
+            max_depth = min(depth, 5)
+            path = await graph.find_path(query, entity_b, max_depth=max_depth)
+            if not path:
+                return f"No path found between '{query}' and '{entity_b}' within {max_depth} hops."
+            lines = [f"Path from '{query}' to '{entity_b}' ({len(path)} steps):"]
+            for step in path:
+                lines.append(f"  {step.get('source', '?')} --[{step.get('relation', '?')}]--> {step.get('target', '?')}")
+            return "\n".join(lines)
+
+        elif mode == "triangles":
+            # Find A→B→C relationship triangles (tension/alliance patterns)
+            if rel_type:
+                rl = graph._sanitize_label(rel_type)
+                pattern = f"(a)-[r1:{rl}]->(b)-[r2]->(c)"
+            else:
+                pattern = "(a)-[r1]->(b)-[r2]->(c)"
+            try:
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    rows = await graph._cypher(conn, f"""
+                        MATCH {pattern}
+                        RETURN a.name AS src, label(r1) AS r1_type, b.name AS mid,
+                               label(r2) AS r2_type, c.name AS dst
+                        LIMIT {int(limit)}
+                    """, cols="src agtype, r1_type agtype, mid agtype, r2_type agtype, dst agtype")
+                if not rows:
+                    rel_note = f" starting with {rel_type}" if rel_type else ""
+                    return f"No relationship triangles found{rel_note}."
+                lines = [f"Relationship chains ({len(rows)} found):"]
+                for r in rows:
+                    lines.append(f"  {r['src']} --[{r['r1_type']}]--> {r['mid']} --[{r['r2_type']}]--> {r['dst']}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in triangles: {exc}"
+
+        elif mode == "isolated":
+            # Entities with zero edges
+            try:
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    # AGE doesn't support OPTIONAL MATCH well, so use set difference
+                    # Get all nodes, then nodes with edges, subtract
+                    all_rows = await graph._cypher(conn, f"""
+                        MATCH (n)
+                        RETURN n.name AS name, label(n) AS etype
+                        LIMIT 5000
+                    """, cols="name agtype, etype agtype")
+                    connected_rows = await graph._cypher(conn, """
+                        MATCH (n)-[]-()
+                        RETURN DISTINCT n.name AS name
+                    """, cols="name agtype")
+                connected_names = {r["name"] for r in connected_rows}
+                isolated = [r for r in all_rows if r["name"] not in connected_names]
+                if not isolated:
+                    return f"No isolated entities. All {len(all_rows)} entities have at least one edge."
+                result = isolated[:limit]
+                lines = [f"Isolated entities ({len(isolated)} of {len(all_rows)} total, showing {len(result)}):"]
+                for r in result:
+                    lines.append(f"  - {r['name']} ({r['etype']})")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in isolated: {exc}"
+
+        elif mode == "recent_edges":
+            # Edges with a 'since' property >= a given date
+            since_val = query or ""
+            if not since_val:
+                return "Error: provide a date in 'query' (e.g. '2026-03-01') to find edges added since that date."
+            try:
+                since_esc = graph._escape(since_val)
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    rows = await graph._cypher(conn, f"""
+                        MATCH (a)-[r]->(b)
+                        WHERE r.since >= '{since_esc}'
+                        RETURN a.name AS src, label(r) AS rel, b.name AS dst, r.since AS since
+                        ORDER BY r.since DESC
+                        LIMIT {int(limit)}
+                    """, cols="src agtype, rel agtype, dst agtype, since agtype")
+                if not rows:
+                    return f"No edges with since >= '{since_val}'."
+                lines = [f"Edges since '{since_val}' ({len(rows)} found):"]
+                for r in rows:
+                    lines.append(f"  {r['since']}  {r['src']} --[{r['rel']}]--> {r['dst']}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in recent_edges: {exc}"
+
+        # Reject raw Cypher and unknown modes with helpful guidance
+        elif mode == "cypher":
+            return (
+                "Raw Cypher mode is disabled. Use a named operation instead:\n"
+                "  top_connected — most-connected entities by edge count\n"
+                "  neighbors — same as 'relationships' mode\n"
+                "  shared_connections — entities connected to both A and B (set entity_b)\n"
+                "  path — shortest path between two entities (set entity_b)\n"
+                "  triangles — A→B→C chain patterns (optionally filter by relation_type)\n"
+                "  by_type — all entities of a given type\n"
+                "  edge_types — relationship type distribution\n"
+                "  isolated — entities with zero connections\n"
+                "  recent_edges — edges added since a date"
+            )
+
+        return (
+            f"Unknown mode: '{mode}'. Available modes:\n"
+            "  search — find entities by name\n"
+            "  relationships — get all connections for an entity\n"
+            "  subgraph — explore neighborhood (set depth)\n"
+            "  top_connected — most-connected entities\n"
+            "  shared_connections — mutual connections between two entities (set entity_b)\n"
+            "  path — shortest path between two entities (set entity_b)\n"
+            "  triangles — A→B→C relationship chains\n"
+            "  by_type — list entities of a type\n"
+            "  edge_types — relationship type distribution\n"
+            "  isolated — entities with no connections\n"
+            "  recent_edges — edges added since a date"
+        )
 
     registry.register(GRAPH_STORE_DEF, graph_store_handler)
     registry.register(GRAPH_QUERY_DEF, graph_query_handler)
@@ -413,28 +603,30 @@ GRAPH_STORE_DEF = ToolDefinition(
 GRAPH_QUERY_DEF = ToolDefinition(
     name="graph_query",
     description=(
-        "Query the entity knowledge graph. Search for entities, get relationships, "
-        "explore subgraphs, or execute raw Cypher for complex pattern matching."
+        "Query the entity knowledge graph using named operations. "
+        "Modes: search (find entities by name), relationships (connections for an entity), "
+        "subgraph (neighborhood exploration), top_connected (highest edge count), "
+        "shared_connections (mutual links between two entities), path (shortest route between two), "
+        "triangles (A→B→C chains), by_type (list entities of a type), "
+        "edge_types (relationship distribution), isolated (unconnected entities), "
+        "recent_edges (edges added since a date)."
     ),
     parameters=[
         ToolParameter(name="query", type="string",
-                      description="Entity name/search term, OR a raw Cypher query when mode='cypher'. "
-                                  "NOTE: This graph uses Apache AGE (not Neo4j). Key Cypher differences: "
-                                  "(1) No NOT-pattern in WHERE — instead of WHERE NOT (n)-[]-(), use "
-                                  "OPTIONAL MATCH (n)-[r]-() ... WHERE r IS NULL. "
-                                  "(2) Use label(n) not n.type to get vertex labels. "
-                                  "(3) No EXISTS subqueries — use OPTIONAL MATCH + IS NULL pattern. "
-                                  "(4) RETURN columns need aliases (AS name) for clean output."),
-        ToolParameter(name="entity_type", type="string",
-                      description="Filter by entity type (for search mode)", required=False),
+                      description="Entity name for most modes. For recent_edges: a date (e.g. '2026-03-01'). "
+                                  "For by_type: the entity type if entity_type not set."),
         ToolParameter(name="mode", type="string",
-                      description="Query mode: 'search' (find entities), 'relationships' (get connections), "
-                                  "'subgraph' (explore neighborhood), 'cypher' (raw Cypher query). Default: search",
-                      required=False),
+                      description="Operation: 'search', 'relationships', 'subgraph', 'top_connected', "
+                                  "'shared_connections', 'path', 'triangles', 'by_type', "
+                                  "'edge_types', 'isolated', 'recent_edges'. Default: search"),
+        ToolParameter(name="entity_type", type="string",
+                      description="Filter by entity type (for search and by_type modes)", required=False),
+        ToolParameter(name="entity_b", type="string",
+                      description="Second entity for shared_connections and path modes", required=False),
         ToolParameter(name="relation_type", type="string",
-                      description="Filter relationships by type", required=False),
+                      description="Filter by relationship type (for relationships and triangles)", required=False),
         ToolParameter(name="depth", type="number",
-                      description="Depth for subgraph/path exploration (default 2)", required=False),
+                      description="Depth for subgraph (default 2) or max hops for path (default 2, max 5)", required=False),
         ToolParameter(name="limit", type="number",
                       description="Max results (default 20)", required=False),
     ],
