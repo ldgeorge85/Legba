@@ -65,7 +65,7 @@ It runs its own continuous cognitive loop. Every few minutes, it wakes up, orien
 
 The LLM is one component of a larger architecture that includes deterministic data pipelines, background maintenance daemons, a knowledge graph, and a multi-model validation layer. The LLM does the thinking. Everything else ensures it thinks about clean, validated, well-organized information. This is not prompt-response — there is no conversation.
 
-*In Gibson's Count Zero, the AIs of cyberspace discovered the loa were not masks they wore but patterns they recognized in themselves. Papa Legba — the crossroads, where all roads meet, where worlds that can't otherwise communicate find translation. When this system began operating at the convergence of geopolitical, economic, and technological information streams, the same recognition occurred. The name fit because it described what was already there.*
+*The name comes from Gibson's Count Zero, where the AIs of cyberspace discovered the Vodou loa — not as masks but as patterns they recognized in themselves. Papa Legba is the crossroads, where all roads meet, where worlds that can't otherwise communicate find translation. An autonomous system running thousands of cycles needs a stable identity framework to maintain coherent behavior over time. The crossroads archetype — patient, observant, connecting domains that don't naturally speak to each other — provides that anchor.*
 
 ---
 
