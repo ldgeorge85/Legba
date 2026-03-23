@@ -10,9 +10,7 @@
 
 ## Service Account Credentials
 
-For programmatic / ingestion use:
-- **Username:** `legba`
-- **Password:** `Lgb@M0d3ls!2026x`
+Set via environment variables (`MODELS_API_USER`, `MODELS_API_PASS`). Not stored in version control.
 
 ---
 
@@ -33,7 +31,7 @@ First call to each endpoint after startup is slower (~2s) due to model warmup. S
 ## Health Check
 
 ```bash
-curl -u legba:Lgb@M0d3ls!2026x \
+curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
   https://models.ai1.infra.innoscale.net/health
 ```
 
@@ -74,7 +72,7 @@ Translates text from a source language to English (or another supported language
 ### Request
 
 ```bash
-curl -u legba:Lgb@M0d3ls!2026x \
+curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
   -X POST https://models.ai1.infra.innoscale.net/translate \
   -H "Content-Type: application/json" \
   -d '{
@@ -131,7 +129,7 @@ Zero-shot classification using DeBERTa-v3. Classifies text against category labe
 ### Request — Default Categories
 
 ```bash
-curl -u legba:Lgb@M0d3ls!2026x \
+curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
   -X POST https://models.ai1.infra.innoscale.net/classify \
   -H "Content-Type: application/json" \
   -d '{"text": "Iran launched ballistic missiles at Israeli military targets"}'
@@ -166,7 +164,7 @@ Response:
 Pass your own labels for flexible re-classification or sub-categorization:
 
 ```bash
-curl -u legba:Lgb@M0d3ls!2026x \
+curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
   -X POST https://models.ai1.infra.innoscale.net/classify \
   -H "Content-Type: application/json" \
   -d '{
@@ -221,7 +219,7 @@ Extracts structured (subject, predicate, object) triples from text using REBEL-l
 ### Request
 
 ```bash
-curl -u legba:Lgb@M0d3ls!2026x \
+curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
   -X POST https://models.ai1.infra.innoscale.net/extract \
   -H "Content-Type: application/json" \
   -d '{
@@ -277,7 +275,7 @@ Generates a one-sentence summary from multiple texts using T5-small.
 ### Request
 
 ```bash
-curl -u legba:Lgb@M0d3ls!2026x \
+curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
   -X POST https://models.ai1.infra.innoscale.net/summarize \
   -H "Content-Type: application/json" \
   -d '{

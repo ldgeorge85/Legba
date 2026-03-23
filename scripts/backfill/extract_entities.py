@@ -9,7 +9,7 @@ Usage:
       -e DATABASE_URL=postgresql://legba:legba@postgres:5432/legba \
       -e MODELS_API_URL=https://models.ai1.infra.innoscale.net \
       -e MODELS_API_USER=legba \
-      -e MODELS_API_PASS=opelJ83KBeml \
+      -e MODELS_API_PASS=$MODELS_API_PASS \
       ingestion python3 /scripts/backfill/extract_entities.py
 """
 

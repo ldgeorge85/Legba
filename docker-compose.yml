@@ -18,7 +18,7 @@ services:
     image: apache/age:latest
     environment:
       POSTGRES_USER: legba
-      POSTGRES_PASSWORD: legba
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-legba}
       POSTGRES_DB: legba
     ports:
       - "5432:5432"
@@ -122,7 +122,7 @@ services:
       AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
       AIRFLOW__WEBSERVER__WARN_DEPLOYMENT_EXPOSURE: "false"
       AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
       NATS_URL: nats://nats:4222
       OPENSEARCH_HOST: opensearch
       REDIS_HOST: redis
@@ -170,7 +170,7 @@ services:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
       POSTGRES_USER: legba
-      POSTGRES_PASSWORD: legba
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-legba}
       POSTGRES_DB: legba
       OPENSEARCH_HOST: opensearch
       OPENSEARCH_PORT: "9200"
@@ -180,12 +180,12 @@ services:
       INGESTION_LOG_LEVEL: "INFO"
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
-      MODELS_API_URL: "https://models.ai1.infra.innoscale.net"
-      MODELS_API_USER: "legba"
-      MODELS_API_PASS: "opelJ83KBeml"
-      TELEGRAM_ENABLED: "true"
-      TELEGRAM_API_ID: "37628495"
-      TELEGRAM_API_HASH: "6323a9eaddad87077cbfdaa06cc6afc1"
+      MODELS_API_URL: "${MODELS_API_URL:-}"
+      MODELS_API_USER: "${MODELS_API_USER:-}"
+      MODELS_API_PASS: "${MODELS_API_PASS:-}"
+      TELEGRAM_ENABLED: "${TELEGRAM_ENABLED:-false}"
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
       TELEGRAM_SESSION_PATH: "/shared/telegram.session"
     volumes:
       - shared_data:/shared
@@ -223,7 +223,7 @@ services:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
       POSTGRES_USER: legba
-      POSTGRES_PASSWORD: legba
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-legba}
       POSTGRES_DB: legba
       OPENSEARCH_HOST: opensearch
       OPENSEARCH_PORT: "9200"
@@ -289,7 +289,7 @@ services:
       AUDIT_OPENSEARCH_HOST: opensearch-audit
       AIRFLOW_URL: http://airflow:8080
       AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
     volumes:
       - shared_data:/shared
       - log_data:/logs
@@ -341,7 +341,7 @@ services:
       OPENSEARCH_HOST: opensearch
       AIRFLOW_URL: http://airflow:8080
       AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
       INGESTION_SERVICE_ACTIVE: "true"
     volumes:
       - workspace_data:/workspace
@@ -446,7 +446,7 @@ services:
       OPENSEARCH_HOST: opensearch
       AIRFLOW_URL: http://airflow:8080
       AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
     volumes:
       - ./src:/app/src
       - ./tests:/app/tests
@@ -469,7 +469,7 @@ services:
     image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_USER: legba_metrics
-      POSTGRES_PASSWORD: legba_metrics
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD:-legba_metrics}
       POSTGRES_DB: legba_metrics
     ports:
       - "5433:5432"
@@ -490,7 +490,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: legba
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-legba}
     depends_on:
       timescaledb:
         condition: service_healthy
