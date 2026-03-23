@@ -94,7 +94,8 @@ DERIVED_EVENT_CREATE_DEF = ToolDefinition(
 DERIVED_EVENT_UPDATE_DEF = ToolDefinition(
     name="event_update",
     description="Update an existing derived event. Use to refine auto-created events: "
-                "improve titles, adjust severity, merge events, add summary.",
+                "improve titles, adjust severity, merge events, add summary, "
+                "or advance lifecycle status.",
     parameters=[
         ToolParameter(name="event_id", type="string",
                       description="UUID of the event to update"),
@@ -112,6 +113,9 @@ DERIVED_EVENT_UPDATE_DEF = ToolDefinition(
                       required=False),
         ToolParameter(name="category", type="string",
                       description="New category",
+                      required=False),
+        ToolParameter(name="lifecycle_status", type="string",
+                      description="Lifecycle status: emerging, active, evolving, stable, historical",
                       required=False),
     ],
 )
@@ -366,17 +370,40 @@ def register(
             except ValueError:
                 pass
 
+        # Lifecycle status update
+        lifecycle_status = None
+        _VALID_LIFECYCLE = {"emerging", "active", "evolving", "stable", "historical"}
+        if args.get("lifecycle_status"):
+            ls = args["lifecycle_status"].lower().strip()
+            if ls in _VALID_LIFECYCLE:
+                lifecycle_status = ls
+            else:
+                return f"Error: Invalid lifecycle_status '{ls}'. Use: {', '.join(sorted(_VALID_LIFECYCLE))}"
+
         event.updated_at = datetime.now(timezone.utc)
-        ok = await structured.save_derived_event(event)
+        ok = await structured.save_derived_event(event, lifecycle_status=lifecycle_status)
         if not ok:
             return "Error: failed to update event"
 
-        return json.dumps({
+        # If lifecycle changed, update lifecycle_changed_at directly
+        if lifecycle_status:
+            try:
+                await structured._pool.execute(
+                    "UPDATE events SET lifecycle_status = $1, lifecycle_changed_at = NOW() WHERE id = $2",
+                    lifecycle_status, event_id,
+                )
+            except Exception:
+                pass  # Column may not exist yet
+
+        result = {
             "status": "updated",
             "event_id": event_id_str[:8],
             "title": event.title,
             "severity": event.severity.value,
-        }, indent=2)
+        }
+        if lifecycle_status:
+            result["lifecycle_status"] = lifecycle_status
+        return json.dumps(result, indent=2)
 
     async def event_query_handler(args: dict) -> str:
         pg_err = _check_pg()
@@ -456,7 +483,11 @@ def register(
             event_id = UUID(event_id_str)
             signal_id = UUID(signal_id_str)
         except ValueError:
-            return "Error: invalid UUID"
+            return (
+                f"Error: invalid UUID (event_id='{event_id_str}', signal_id='{signal_id_str}'). "
+                "You must use the actual UUID returned by event_create, not a placeholder. "
+                "Call event_create first, then use the returned event_id to link signals."
+            )
 
         relevance = float(args.get("relevance", 1.0))
         ok = await structured.link_signal_to_event(signal_id, event_id, relevance)

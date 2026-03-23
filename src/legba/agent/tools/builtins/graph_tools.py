@@ -206,6 +206,77 @@ def register(
         import json as _json
         from ....shared.schemas.memory import Entity
 
+        # --- Event vertex mode ---
+        event_type = args.get("event_type")
+        if event_type:
+            from ....shared.graph_events import (
+                upsert_event_vertex,
+                link_entity_to_event,
+                link_event_hierarchy,
+                link_event_causal,
+            )
+            event_title = args.get("entity_name", "")
+            event_id = int(args.get("event_id", 0))
+            lifecycle = args.get("lifecycle_status")
+            ok = await upsert_event_vertex(
+                graph._pool, graph.GRAPH_NAME,
+                event_id, event_title,
+                category=event_type, lifecycle_status=lifecycle,
+            )
+            if not ok:
+                return f"Error: failed to upsert Event vertex '{event_title}'."
+            result = f"Event vertex '{event_title}' (id={event_id}, type={event_type}) stored."
+
+            # Event-to-event edges (PART_OF, CAUSED_BY)
+            relate_to = args.get("relate_to")
+            rel_type = args.get("relation_type")
+            if relate_to and rel_type:
+                if rel_type.upper() == "PART_OF":
+                    ok = await link_event_hierarchy(graph._pool, graph.GRAPH_NAME, event_title, relate_to)
+                    if ok:
+                        result += f" Edge: {event_title} --[PART_OF]--> {relate_to}."
+                    else:
+                        result += f" Warning: failed to create PART_OF edge to '{relate_to}'."
+                elif rel_type.upper() == "CAUSED_BY":
+                    props_str = args.get("relation_properties", "{}")
+                    try:
+                        rprops = _json.loads(props_str) if props_str else {}
+                    except Exception:
+                        rprops = {}
+                    ok = await link_event_causal(
+                        graph._pool, graph.GRAPH_NAME, event_title, relate_to,
+                        confidence=rprops.get("confidence"),
+                        evidence_source=rprops.get("evidence_source"),
+                    )
+                    if ok:
+                        result += f" Edge: {event_title} <--[CAUSED_BY]-- {relate_to}."
+                    else:
+                        result += f" Warning: failed to create CAUSED_BY edge to '{relate_to}'."
+                elif rel_type.upper() == "INVOLVED_IN":
+                    # relate_to is the entity name that is involved in this event
+                    role = None
+                    confidence = None
+                    props_str = args.get("relation_properties", "{}")
+                    try:
+                        rprops = _json.loads(props_str) if props_str else {}
+                    except Exception:
+                        rprops = {}
+                    role = rprops.get("role")
+                    confidence = rprops.get("confidence")
+                    ok = await link_entity_to_event(
+                        graph._pool, graph.GRAPH_NAME, relate_to, event_title,
+                        role=role, confidence=confidence,
+                    )
+                    if ok:
+                        result += f" Edge: {relate_to} --[INVOLVED_IN]--> {event_title}."
+                    else:
+                        result += f" Warning: failed to create INVOLVED_IN edge from '{relate_to}'."
+                else:
+                    result += f" Warning: unsupported event edge type '{rel_type}'. Use PART_OF, CAUSED_BY, or INVOLVED_IN."
+
+            return result
+
+        # --- Standard entity mode ---
         name = args.get("entity_name", "")
         etype = args.get("entity_type", "concept")
         props_str = args.get("properties", "{}")
@@ -234,6 +305,24 @@ def register(
         relate_to = args.get("relate_to")
         rel_type = args.get("relation_type")
         if relate_to and rel_type:
+            # Check if this is an INVOLVED_IN edge (entity → event)
+            if rel_type.upper() == "INVOLVED_IN":
+                from ....shared.graph_events import link_entity_to_event
+                props_str = args.get("relation_properties", "{}")
+                try:
+                    rprops = _json.loads(props_str) if props_str else {}
+                except Exception:
+                    rprops = {}
+                ok = await link_entity_to_event(
+                    graph._pool, graph.GRAPH_NAME, name, relate_to,
+                    role=rprops.get("role"), confidence=rprops.get("confidence"),
+                )
+                if ok:
+                    result += f" Edge: {name} --[INVOLVED_IN]--> {relate_to}."
+                else:
+                    result += f" Warning: failed to create INVOLVED_IN edge to event '{relate_to}'."
+                return result
+
             rel_type, rel_note = normalize_relationship_type(rel_type)
             if rel_type is None:
                 # Rejected — unrecognized relationship type
@@ -523,6 +612,118 @@ def register(
             except Exception as exc:
                 return f"Error in recent_edges: {exc}"
 
+        # ------ event graph operations (from graph_events module) ------
+
+        elif mode == "event_actors":
+            # Entities involved in an event via INVOLVED_IN edges
+            if not query:
+                return "Error: provide the event title in 'query'."
+            try:
+                from ....shared.graph_events import event_actors_query
+                rows = await event_actors_query(graph._pool, graph.GRAPH_NAME, query)
+                if not rows:
+                    return f"No actors found for event '{query}'."
+                lines = [f"Actors involved in '{query}' ({len(rows)} found):"]
+                for r in rows:
+                    role = r.get('role') or 'unspecified'
+                    conf = r.get('confidence')
+                    conf_str = f", conf={conf:.2f}" if conf is not None else ""
+                    lines.append(f"  - {r['actor']} ({r.get('type', '?')}) — role={role}{conf_str}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in event_actors: {exc}"
+
+        elif mode == "event_chain":
+            # Causal chain following CAUSED_BY edges upstream from an event
+            if not query:
+                return "Error: provide the event title in 'query'."
+            try:
+                from ....shared.graph_events import event_chain_query
+                rows = await event_chain_query(graph._pool, graph.GRAPH_NAME, query, max_depth=depth)
+                if not rows:
+                    return f"No causal chain found for event '{query}'."
+                lines = [f"Causal chains for '{query}' ({len(rows)} paths):"]
+                for r in rows:
+                    chain = r.get('chain', [])
+                    if isinstance(chain, list):
+                        lines.append(f"  {' → '.join(str(c) for c in chain)}")
+                    else:
+                        lines.append(f"  {chain}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in event_chain: {exc}"
+
+        elif mode == "event_children":
+            # Sub-events of a parent event via PART_OF edges
+            if not query:
+                return "Error: provide the parent event title in 'query'."
+            try:
+                from ....shared.graph_events import event_children_query
+                rows = await event_children_query(graph._pool, graph.GRAPH_NAME, query)
+                if not rows:
+                    return f"No sub-events found for '{query}'."
+                lines = [f"Sub-events of '{query}' ({len(rows)} found):"]
+                for r in rows:
+                    eid = r.get('event_id', '?')
+                    lines.append(f"  - [{eid}] {r.get('child_event', '?')}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in event_children: {exc}"
+
+        elif mode == "event_situation":
+            # Events tracked by a situation via TRACKED_BY edges
+            if not query:
+                return "Error: provide the situation name in 'query'."
+            try:
+                from ....shared.graph_events import event_situation_query
+                rows = await event_situation_query(graph._pool, graph.GRAPH_NAME, query)
+                if not rows:
+                    return f"No events tracked by situation '{query}'."
+                lines = [f"Events tracked by '{query}' ({len(rows)} found):"]
+                for r in rows:
+                    eid = r.get('event_id', '?')
+                    rel = r.get('relevance')
+                    rel_str = f" (relevance={rel:.2f})" if rel is not None else ""
+                    lines.append(f"  - [{eid}] {r.get('event', '?')}{rel_str}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in event_situation: {exc}"
+
+        elif mode == "entity_events":
+            # Events an entity participates in via INVOLVED_IN edges
+            if not query:
+                return "Error: provide the entity name in 'query'."
+            try:
+                from ....shared.graph_events import entity_events_query
+                rows = await entity_events_query(graph._pool, graph.GRAPH_NAME, query, limit=limit)
+                if not rows:
+                    return f"No events found for entity '{query}'."
+                lines = [f"Events involving '{query}' ({len(rows)} found):"]
+                for r in rows:
+                    eid = r.get('event_id', '?')
+                    role = r.get('role') or 'unspecified'
+                    lines.append(f"  - [{eid}] {r.get('event', '?')} — role={role}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in entity_events: {exc}"
+
+        elif mode == "cross_situation":
+            # Events bridging two situations
+            if not query or not entity_b:
+                return "Error: provide 'query' (situation A) and 'entity_b' (situation B)."
+            try:
+                from ....shared.graph_events import cross_situation_query
+                rows = await cross_situation_query(graph._pool, graph.GRAPH_NAME, query, entity_b)
+                if not rows:
+                    return f"No bridging events between situations '{query}' and '{entity_b}'."
+                lines = [f"Events bridging '{query}' and '{entity_b}' ({len(rows)} found):"]
+                for r in rows:
+                    eid = r.get('event_id', '?')
+                    lines.append(f"  - [{eid}] {r.get('event', '?')}")
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in cross_situation: {exc}"
+
         # Reject raw Cypher and unknown modes with helpful guidance
         elif mode == "cypher":
             return (
@@ -535,7 +736,13 @@ def register(
                 "  by_type — all entities of a given type\n"
                 "  edge_types — relationship type distribution\n"
                 "  isolated — entities with zero connections\n"
-                "  recent_edges — edges added since a date"
+                "  recent_edges — edges added since a date\n"
+                "  event_actors — entities involved in an event\n"
+                "  event_chain — causal chain (CAUSED_BY edges) for an event\n"
+                "  event_children — sub-events (PART_OF edges)\n"
+                "  event_situation — events tracked by a situation\n"
+                "  entity_events — events an entity participates in\n"
+                "  cross_situation — events bridging two situations (set entity_b)"
             )
 
         return (
@@ -550,7 +757,13 @@ def register(
             "  by_type — list entities of a type\n"
             "  edge_types — relationship type distribution\n"
             "  isolated — entities with no connections\n"
-            "  recent_edges — edges added since a date"
+            "  recent_edges — edges added since a date\n"
+            "  event_actors — entities involved in an event\n"
+            "  event_chain — causal chain for an event\n"
+            "  event_children — sub-events of a parent event\n"
+            "  event_situation — events tracked by a situation\n"
+            "  entity_events — events an entity participates in\n"
+            "  cross_situation — events bridging two situations (set entity_b)"
         )
 
     registry.register(GRAPH_STORE_DEF, graph_store_handler)
@@ -560,34 +773,51 @@ def register(
 GRAPH_STORE_DEF = ToolDefinition(
     name="graph_store",
     description=(
-        "Store an entity and/or relationship in the knowledge graph. "
+        "Store an entity, event, or relationship in the knowledge graph. "
         "This is the PRIMARY tool for building relationships (edges) between entities. "
         "Use relate_to + relation_type to connect entities: LeaderOf, AlliedWith, "
         "HostileTo, SuppliesWeaponsTo, TradesWith, MemberOf, LocatedIn, OperatesIn, "
         "SanctionedBy, BordersWith, AffiliatedWith, etc. "
+        "For events: set event_type to create an Event vertex instead of an entity. "
+        "Event edges: INVOLVED_IN (entity→event), PART_OF (event→event), CAUSED_BY (event→event). "
         "Note: entity_resolve only creates nodes — use graph_store to create the edges "
         "that make the graph useful for intelligence analysis."
     ),
     parameters=[
         ToolParameter(name="entity_name", type="string",
-                      description="Name of the entity (e.g. 'Russia', 'OPEC', 'CVE-2024-1234')"),
+                      description="Name of the entity or event title"),
         ToolParameter(name="entity_type", type="string",
                       description="Type/label: person, country, organization, international_org, "
                                   "political_party, armed_group, location, concept, corporation, "
                                   "military_unit, commodity, infrastructure, media_outlet"),
+        ToolParameter(name="event_type", type="string",
+                      description="Set this to create an Event vertex instead of an entity. "
+                                  "Values: conflict, political, economic, disaster, health, etc. "
+                                  "When set, entity_name becomes the event title.",
+                      required=False),
+        ToolParameter(name="event_id", type="number",
+                      description="Numeric event ID from the events table (required with event_type)",
+                      required=False),
+        ToolParameter(name="lifecycle_status", type="string",
+                      description="Event lifecycle: developing, evolving, stable, resolved (used with event_type)",
+                      required=False),
         ToolParameter(name="properties", type="string",
                       description="JSON object of key-value properties for the entity", required=False),
         ToolParameter(name="relate_to", type="string",
-                      description="Name of another entity to create a relationship to", required=False),
+                      description="Name of another entity or event to create a relationship to", required=False),
         ToolParameter(name="relation_type", type="string",
-                      description="Type of relationship. Use specific types: LeaderOf, AlliedWith, "
+                      description="Type of relationship. Entity-entity: LeaderOf, AlliedWith, "
                                   "HostileTo, MemberOf, LocatedIn, OperatesIn, PartOf, BordersWith, "
                                   "SuppliesWeaponsTo, SanctionedBy, TradesWith, AffiliatedWith, "
                                   "FundedBy, SignatoryTo, OccupiedBy, ProducesResource, CreatedBy. "
+                                  "Event edges: INVOLVED_IN, PART_OF, CAUSED_BY. "
                                   "Aliases are normalized (e.g. 'allies' → AlliedWith).",
                       required=False),
         ToolParameter(name="relation_properties", type="string",
-                      description="JSON object of properties for the relationship", required=False),
+                      description="JSON object of properties for the relationship. "
+                                  "For INVOLVED_IN: {\"role\": \"participant\", \"confidence\": 0.9}. "
+                                  "For CAUSED_BY: {\"confidence\": 0.8, \"evidence_source\": \"...\"}.",
+                      required=False),
         ToolParameter(name="since", type="string",
                       description="When the relationship started (e.g. '2024-01', '2022-02-24'). "
                                   "Stored as edge property for temporal graph queries.",
@@ -609,16 +839,26 @@ GRAPH_QUERY_DEF = ToolDefinition(
         "shared_connections (mutual links between two entities), path (shortest route between two), "
         "triangles (A→B→C chains), by_type (list entities of a type), "
         "edge_types (relationship distribution), isolated (unconnected entities), "
-        "recent_edges (edges added since a date)."
+        "recent_edges (edges added since a date), "
+        "event_actors (entities involved in an event), event_chain (causal chain for an event), "
+        "event_children (sub-events), event_situation (events tracked by a situation), "
+        "entity_events (events an entity participates in), "
+        "cross_situation (events bridging two situations)."
     ),
     parameters=[
         ToolParameter(name="query", type="string",
                       description="Entity name for most modes. For recent_edges: a date (e.g. '2026-03-01'). "
-                                  "For by_type: the entity type if entity_type not set."),
+                                  "For by_type: the entity type if entity_type not set. "
+                                  "For event_actors/event_chain/event_children: the event title. "
+                                  "For event_situation: the situation name. "
+                                  "For entity_events: the entity name. "
+                                  "For cross_situation: situation A name (set entity_b for situation B)."),
         ToolParameter(name="mode", type="string",
                       description="Operation: 'search', 'relationships', 'subgraph', 'top_connected', "
                                   "'shared_connections', 'path', 'triangles', 'by_type', "
-                                  "'edge_types', 'isolated', 'recent_edges'. Default: search"),
+                                  "'edge_types', 'isolated', 'recent_edges', "
+                                  "'event_actors', 'event_chain', 'event_children', "
+                                  "'event_situation', 'entity_events', 'cross_situation'. Default: search"),
         ToolParameter(name="entity_type", type="string",
                       description="Filter by entity type (for search and by_type modes)", required=False),
         ToolParameter(name="entity_b", type="string",

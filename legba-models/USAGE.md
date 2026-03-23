@@ -10,6 +10,7 @@
 
 ## Service Account Credentials
 
+For programmatic / ingestion use:
 Set via environment variables (`MODELS_API_USER`, `MODELS_API_PASS`). Not stored in version control.
 
 ---

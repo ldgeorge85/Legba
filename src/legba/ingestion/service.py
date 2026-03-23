@@ -32,6 +32,13 @@ from .models_client import ModelsClient
 from .storage import StorageLayer
 from ..shared.metrics import MetricsClient
 
+# Cognitive architecture: composite confidence scoring
+try:
+    from ..shared.confidence import compute_composite_confidence, compute_temporal_freshness
+    _CONFIDENCE_AVAILABLE = True
+except ImportError:
+    _CONFIDENCE_AVAILABLE = False
+
 logger = logging.getLogger("legba.ingestion")
 
 
@@ -307,6 +314,18 @@ class IngestionService:
             except Exception:
                 pass
 
+            # Cognitive architecture: look up source quality score for confidence computation
+            source_quality_score = 0.5  # default neutral
+            try:
+                sqr = await self._pg_pool.fetchval(
+                    "SELECT COALESCE(source_quality_score, 0.0) FROM sources WHERE id = $1",
+                    source.id,
+                )
+                if sqr and sqr > 0:
+                    source_quality_score = float(sqr)
+            except Exception:
+                pass
+
             log_id = await self._storage.log_fetch_start(source.id, source.name)
 
             logger.info("Fetching: %s (%s, %s)", source.name, source.source_type, source.url[:80])
@@ -373,7 +392,11 @@ class IngestionService:
             # Model enrichment (if GPU service available)
             if self._models.available:
                 for sig in signals:
-                    await self._enrich_with_models(sig)
+                    await self._enrich_with_models(sig, source_quality_score)
+            elif _CONFIDENCE_AVAILABLE:
+                # Even without models, compute confidence from available components
+                for sig in signals:
+                    self._compute_signal_confidence(sig, source_quality_score, 0.5)
 
             # Batch-internal dedup (within this fetch)
             batch_entries = [(s.guid, s.source_url, s.title) for s in signals]
@@ -454,8 +477,13 @@ class IngestionService:
         except Exception:
             pass
 
-    async def _enrich_with_models(self, signal) -> None:
-        """Enrich a signal using the GPU models service. Best-effort."""
+    async def _enrich_with_models(self, signal, source_quality_score: float = 0.5) -> None:
+        """Enrich a signal using the GPU models service. Best-effort.
+
+        Cognitive architecture: captures classification confidence from the models
+        service and computes composite confidence using the hybrid gatekeeper formula.
+        """
+        classification_conf = 0.5  # default if classification fails
         try:
             # Translation: if non-English, translate title
             if signal.language and signal.language != "en":
@@ -471,6 +499,8 @@ class IngestionService:
             category, confidence = await self._models.classify(signal.title)
             if category and category != "other" and confidence > 0.5:
                 signal.category = category
+            # Cognitive architecture: capture classification confidence for composite scoring
+            classification_conf = confidence if confidence else 0.5
 
             # NER: spaCy trf on GPU (high-accuracy entity extraction)
             ner_actors, ner_locations = await self._models.ner(signal.title)
@@ -508,6 +538,46 @@ class IngestionService:
 
         except Exception as e:
             logger.debug("Model enrichment failed for signal: %s", e)
+
+        # Cognitive architecture: compute composite confidence after enrichment
+        self._compute_signal_confidence(signal, source_quality_score, classification_conf)
+
+    def _compute_signal_confidence(
+        self, signal, source_quality_score: float, classification_conf: float,
+    ) -> None:
+        """Compute and store composite confidence using the hybrid gatekeeper formula.
+
+        Gate = source_reliability * classification_confidence
+        Modifier = 0.4 * temporal_freshness + 0.35 * corroboration + 0.25 * specificity
+        Confidence = Gate * Modifier
+
+        Stores both the composite score and the individual components for later use.
+        """
+        if not _CONFIDENCE_AVAILABLE:
+            return
+
+        try:
+            # Compute temporal freshness from event timestamp
+            tf = 1.0  # default: assume fresh
+            if signal.event_timestamp:
+                tf = compute_temporal_freshness(signal.event_timestamp)
+
+            components = {
+                "source_reliability": source_quality_score,
+                "classification_confidence": classification_conf,
+                "temporal_freshness": tf,
+                "corroboration": 0.0,  # updated post-clustering when independent sources counted
+                "specificity": 0.5,    # default until SLM validates
+            }
+
+            composite = compute_composite_confidence(components)
+            signal.confidence = composite
+
+            # Store components as a tag for downstream use (storage layer picks this up)
+            # Components are preserved in signal data JSONB via model_dump_json()
+            signal.tags = list(signal.tags) + [f"cc:{json.dumps(components)}"]
+        except Exception:
+            pass  # Non-fatal — keep existing confidence
 
     async def _process_telegram_source(self, source: ScheduledSource, log_id) -> None:
         """Fetch and process signals from a Telegram channel."""

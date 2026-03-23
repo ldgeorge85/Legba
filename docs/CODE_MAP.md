@@ -1,8 +1,8 @@
 # Legba Code Map
 
-**Generated:** 2026-03-22
-**Total Python files:** 100+
-**Total lines of Python:** ~21,000
+**Generated:** 2026-03-23
+**Total Python files:** 130+
+**Total lines of Python:** ~28,600
 
 ---
 
@@ -31,6 +31,15 @@ src/legba/
       hypotheses.py                  (55 lines)  — Hypothesis, HypothesisStatus, DiagnosticEvidence (ACH)
       situations.py                  — Situation, SituationStatus (tracked narrative groupings)
       watchlist.py                   — WatchItem, WatchTrigger (keyword/entity alert definitions)
+      cognitive.py                   (179 lines) — ConfidenceComponents, EvidenceItem, EventLifecycleExtension (cognitive arch schemas)
+    confidence.py                    (160 lines) — Composite confidence formula (gatekeeper: gate * modifier, pure functions)
+    contradictions.py                (213 lines) — Contradiction detection between facts (predicate incompatibility + value conflict)
+    lifecycle.py                     (201 lines) — Event lifecycle state machine (EMERGING → DEVELOPING → ACTIVE → EVOLVING → RESOLVED → REACTIVATED)
+    graph_events.py                  (630 lines) — Event-as-vertex graph ops for Apache AGE (upsert event vertex, link entity to event, causal/temporal edges)
+    watchlist_eval.py                (244 lines) — Structured watchlist query evaluation (entity/location/severity/category matching, pure functions)
+    situation_severity.py            (172 lines) — Situation severity aggregation from linked events (pure functions)
+    adversarial_context.py           (132 lines) — Adversarial flag summary for ANALYSIS phase prompt injection
+    schema_extensions.py             (169 lines) — Idempotent ALTER TABLE statements for cognitive architecture columns (confidence_components, evidence_set, lifecycle_status, provenance)
 
   agent/
     __init__.py
@@ -159,6 +168,34 @@ src/legba/
     storage.py                       (498 lines) — Signal storage to Postgres + OpenSearch
     cluster.py                       (531 lines) — SignalClusterer: deterministic signal-to-event clustering
 
+  maintenance/
+    __init__.py                      (10 lines)  — Package docstring
+    __main__.py                      (5 lines)   — Entry point: python -m legba.maintenance
+    config.py                        (67 lines)  — MaintenanceConfig: tick intervals, backing store configs, from_env()
+    service.py                       (495 lines) — MaintenanceService: main daemon, tick loop, task scheduler, health server
+    lifecycle.py                     (280 lines) — LifecycleManager: event lifecycle decay transitions, situation dormancy
+    entity_gc.py                     (271 lines) — EntityGarbageCollector: dormant entity marking, duplicate detection, orphan edge cleanup, source health
+    fact_decay.py                    (163 lines) — FactDecayManager: fact expiration (valid_until), confidence temporal decay
+    corroboration.py                 (159 lines) — CorroborationScorer: count independent sources per event, update corroboration scores
+    integrity.py                     (294 lines) — IntegrityVerifier: evidence chain verification, eval rubrics (event dedup, graph quality, source health)
+    metrics.py                       (205 lines) — MetricCollector: extended operational metrics to TimescaleDB for Grafana
+    situation_detect.py              (258 lines) — SituationDetector: automated situation proposals from event clusters (3+ events, shared region/category/entities)
+    adversarial.py                   (494 lines) — AdversarialDetector: source velocity spikes, semantic echo detection, provenance grouping
+    calibration.py                   (368 lines) — CalibrationTracker: claimed confidence vs actual outcomes, systematic bias detection
+
+  subconscious/
+    __init__.py                      (1 line)    — Package docstring
+    __main__.py                      (5 lines)   — Entry point: python -m legba.subconscious
+    config.py                        (87 lines)  — SubconsciousConfig: task intervals, SLM provider, uncertainty thresholds, from_env()
+    service.py                       (795 lines) — SubconsciousService: three concurrent loops (NATS consumer, timer, differential), health server
+    provider.py                      (354 lines) — BaseSLMProvider, VLLMSLMProvider, AnthropicSLMProvider: SLM abstraction with guided_json / tool_use
+    validation.py                    (177 lines) — Signal batch validation: fetch uncertain signals, SLM quality assessment, apply verdicts
+    classification.py                (182 lines) — Classification refinement: SLM tiebreaking for boundary cases where ML classifier is uncertain
+    entity_resolution.py             (240 lines) — Entity resolution: SLM-powered matching of ambiguous entities against existing profiles
+    differential.py                  (282 lines) — DifferentialAccumulator: tracks state changes between conscious cycles, writes JSON summary to Redis
+    prompts.py                       (223 lines) — SLM prompt templates: signal validation, classification, entity resolution, fact refresh, graph consistency
+    schemas.py                       (103 lines) — Pydantic models for SLM structured responses (SignalValidationVerdict, ClassificationVerdict, etc.)
+
 scripts/
   migrate_signals_events.sql         (131 lines) — DDL migration: events→signals, events_derived→events
 
@@ -167,6 +204,15 @@ dags/
   source_health.py                   — Airflow DAG: auto-pause dead sources (>20 consecutive failures)
   decision_surfacing.py              — Airflow DAG: stale goals, dormant situations, merge candidates
   eval_rubrics.py                    — Airflow DAG: automated quality checks (event dedup, graph, sources, entity links)
+
+docker/
+  maintenance.Dockerfile             — Maintenance daemon container (Python 3.12, no GPU)
+  subconscious.Dockerfile            — Subconscious service container (Python 3.12, no GPU, SLM via remote vLLM)
+
+docker-compose.cognitive.yml         — Overlay: maintenance + subconscious services (opt-in, merges with main compose)
+
+legba-models/
+  docker-compose.slm.yml             — SLM vLLM service: Llama 3.1 8B Instruct (port 8701, 45% GPU memory)
 ```
 
 ---
@@ -633,7 +679,7 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 | `shell.py` | `exec` | Shell command execution with timeout ceiling |
 | `http.py` | `http_request` | HTTP with trafilatura HTML extraction, within-cycle GET cache, browser UA retry on 403/405 |
 | `memory_tools.py` | `memory_store`, `memory_query`, `memory_promote`, `memory_supersede` | Explicit memory CRUD: store episodes/facts, semantic search, promote to long-term, supersede facts |
-| `graph_tools.py` | `graph_store`, `graph_query`, `graph_analyze` | Entity/relationship CRUD in AGE graph. Includes `RELATIONSHIP_ALIASES` (30+ canonical types with synonyms), `normalize_relationship_type()`, `_find_similar_entity()` for fuzzy dedup |
+| `graph_tools.py` | `graph_store`, `graph_query`, `graph_analyze` | Entity/relationship CRUD in AGE graph. `graph_query` uses named operations (top_connected, shared_connections, path, triangles, by_type, edge_types, isolated, recent_edges) instead of raw Cypher. Includes `RELATIONSHIP_ALIASES` (30+ canonical types with synonyms), `normalize_relationship_type()`, `_find_similar_entity()` for fuzzy dedup |
 | `goal_tools.py` | `goal_create`, `goal_list`, `goal_update`, `goal_decompose` | Goal hierarchy CRUD via GoalManager |
 | `nats_tools.py` | `nats_publish`, `nats_subscribe`, `nats_create_stream`, `nats_queue_summary` | NATS event bus operations |
 | `opensearch_tools.py` | `os_create_index`, `os_index`, `os_search`, `os_delete_index`, `os_list_indices` | OpenSearch document management and search |
@@ -965,6 +1011,130 @@ Four DAGs deployed to the shared Airflow dags volume. Run on fixed schedules, in
 All DAGs connect directly to Postgres (`legba` DB) and/or TimescaleDB (`legba_metrics` DB) via `psycopg2`. Eval results are written to the TimescaleDB `metrics` table with dimension `eval` for Grafana visualization.
 
 DAGs can also be deployed at runtime by the agent via the `workflow_define` orchestration tool, which writes Python files to the shared dags volume.
+
+---
+
+### 2.19 `src/legba/shared/` — New Shared Modules (Cognitive Architecture)
+
+#### `shared/confidence.py`
+**Purpose:** Pure functions for computing composite signal confidence scores using a gatekeeper formula. No database access.
+
+**Key function:**
+- `compute_confidence(source_reliability, classification_confidence, temporal_freshness, corroboration, specificity)` — Returns `Gate * Modifier` where Gate = source_reliability * classification_confidence, Modifier = weighted sum of freshness (0.4), corroboration (0.35), specificity (0.25). Weights configurable via env vars.
+
+#### `shared/contradictions.py`
+**Purpose:** Pure functions for detecting contradictory facts among stored knowledge. Uses the 30 canonical relationship predicates.
+
+**Key structures:**
+- `CONTRADICTORY_PREDICATES` — Dict mapping each predicate to a frozenset of semantically incompatible predicates (e.g., `AlliedWith` contradicts `HostileTo`, `SanctionedBy`). Symmetric.
+- `detect_contradictions(new_fact, existing_facts)` — Returns list of contradicted fact IDs with reasoning.
+
+#### `shared/lifecycle.py`
+**Purpose:** Event lifecycle state machine — pure functions, no database access.
+
+**Key types/functions:**
+- `EventLifecycleStatus` enum — `EMERGING`, `DEVELOPING`, `ACTIVE`, `EVOLVING`, `RESOLVED`, `REACTIVATED`
+- `evaluate_transition(event_dict)` — Evaluates transition rules against event state, returns new status or None. Rules: EMERGING→DEVELOPING (signal_count >= 3), DEVELOPING→ACTIVE (signal_count >= 5 + confidence >= 0.6), ACTIVE→EVOLVING (velocity > 2.0), decay to RESOLVED based on inactivity windows, RESOLVED→REACTIVATED on new signal.
+
+#### `shared/graph_events.py`
+**Purpose:** Event-as-vertex graph operations for Apache AGE. Provides Cypher query builders for managing events as first-class graph vertices alongside entities.
+
+**Key functions:**
+- `upsert_event_vertex(pool, graph, event_id, title, category, lifecycle_status)` — Create/update event vertex
+- `link_entity_to_event(pool, graph, entity_name, event_title, role, confidence)` — INVOLVED_IN edge
+- `event_actors_query(pool, graph, event_title)` — Query entities involved in an event
+- Causal, hierarchical, and temporal edge helpers between events
+
+#### `shared/watchlist_eval.py`
+**Purpose:** Structured watchlist query evaluation — pure functions for matching events against watchlist criteria (entity, location, severity, category). Used by the ingestion clusterer and agent tools.
+
+#### `shared/situation_severity.py`
+**Purpose:** Situation severity aggregation from linked events — pure functions. Computes peak severity, active event ratio, escalation trend, and composite intensity score.
+
+#### `shared/adversarial_context.py`
+**Purpose:** Queries recent adversarial flags from signal JSONB data and formats a summary string for injection into ANALYSIS cycle prompts. Lightweight SQL aggregation, no LLM.
+
+#### `shared/schema_extensions.py`
+**Purpose:** Idempotent `ALTER TABLE` / `CREATE INDEX` statements for extending existing tables with cognitive architecture columns (`confidence_components`, `evidence_set`, `lifecycle_status`, `provenance`, `contradiction_of`). All statements use `IF NOT EXISTS` for safe re-runs.
+
+#### `shared/schemas/cognitive.py`
+**Purpose:** Pydantic models for the cognitive architecture extensions.
+
+**Key classes:**
+- `ConfidenceComponents` — Individual components feeding the composite confidence formula (source_reliability, classification_confidence, temporal_freshness, corroboration, specificity)
+- `EvidenceItem` — A single piece of evidence supporting a fact (signal_id/event_id, relationship, confidence, observed_at)
+
+---
+
+### 2.20 `src/legba/maintenance/` — Maintenance Daemon (Unconscious Layer)
+
+Deterministic background maintenance service. No LLM. Runs continuously on a configurable tick interval (default 60s), performing scheduled housekeeping tasks via modulo scheduling.
+
+#### `maintenance/config.py`
+**Purpose:** `MaintenanceConfig` dataclass with tick intervals for all 9 tasks, backing store configs, and `from_env()` factory.
+
+#### `maintenance/service.py`
+**Purpose:** `MaintenanceService` orchestrator — connects to all backing stores (Postgres, Redis, OpenSearch, Qdrant, NATS, TimescaleDB), runs the tick loop with modulo-based task scheduling, exposes a health/metrics HTTP endpoint.
+
+#### `maintenance/lifecycle.py`
+**Purpose:** `LifecycleManager` — event lifecycle decay (state machine transitions based on signal activity and temporal rules) and situation dormancy (situations with no recent events marked dormant).
+
+#### `maintenance/entity_gc.py`
+**Purpose:** `EntityGarbageCollector` — marks entities with zero signal references in 30 days as DORMANT, detects duplicate entity candidates (fuzzy name matching), cleans orphan graph edges, auto-pauses sources with excessive consecutive failures.
+
+#### `maintenance/fact_decay.py`
+**Purpose:** `FactDecayManager` — expires facts past their `valid_until` date, applies confidence decay to facts that haven't been refreshed recently.
+
+#### `maintenance/corroboration.py`
+**Purpose:** `CorroborationScorer` — for recently clustered events, counts distinct source_ids among linked signals and updates the event's corroboration component in confidence_components JSONB.
+
+#### `maintenance/integrity.py`
+**Purpose:** `IntegrityVerifier` — verifies evidence chains (events trace to signals, facts have evidence), runs eval rubrics (event dedup rate, graph quality, source health, entity link density), writes results to TimescaleDB.
+
+#### `maintenance/metrics.py`
+**Purpose:** `MetricCollector` — collects extended operational metrics (entity completeness distribution, fact confidence histogram, hypothesis balance, situation intensity, source quality scores) and writes to TimescaleDB for Grafana dashboards.
+
+#### `maintenance/situation_detect.py`
+**Purpose:** `SituationDetector` — proposes new situations from event clusters. Criteria: 3+ events in the same region + category within 7 days, sharing 2+ entities, no existing situation already covers them.
+
+#### `maintenance/adversarial.py`
+**Purpose:** `AdversarialDetector` — three heuristic methods for detecting coordinated inauthentic behavior: (1) source cluster velocity spikes on an entity, (2) semantic echo detection (suspiciously similar signals from "independent" sources via Jaccard), (3) source provenance grouping (correlated publishing from shared-provenance sources). Flags written to signal JSONB and metrics to TimescaleDB.
+
+#### `maintenance/calibration.py`
+**Purpose:** `CalibrationTracker` — when hypotheses are CONFIRMED or REFUTED, records claimed confidence at creation vs actual outcome. Computes confidence discrimination metric to detect systematic over/under-confidence.
+
+---
+
+### 2.21 `src/legba/subconscious/` — Subconscious Service (SLM-Powered Validation)
+
+Async service running alongside the conscious agent, using a side-channel SLM (Llama 3.1 8B via vLLM) for continuous validation and enrichment. Three concurrent loops.
+
+#### `subconscious/config.py`
+**Purpose:** `SubconsciousConfig` dataclass with task intervals, SLM provider settings (model, temperature, timeout), uncertainty thresholds, batch sizes, and `from_env()` factory.
+
+#### `subconscious/service.py`
+**Purpose:** `SubconsciousService` orchestrator — runs three concurrent async loops: NATS consumer (triggered work), timer loop (periodic tasks), differential accumulator (state change tracking). Connects to Postgres, Redis, NATS, and the SLM provider.
+
+#### `subconscious/provider.py`
+**Purpose:** SLM provider abstraction. `BaseSLMProvider` ABC with two implementations: `VLLMSLMProvider` (OpenAI-compatible API with `guided_json` for constrained decoding) and `AnthropicSLMProvider` (`tool_use` for structured output). Both return parsed dicts from SLM JSON output.
+
+#### `subconscious/validation.py`
+**Purpose:** Signal batch validation — fetches uncertain signals (confidence between low/high thresholds), sends to SLM for quality assessment (specificity, internal consistency, cross-signal contradiction), applies adjusted confidence verdicts to Postgres.
+
+#### `subconscious/classification.py`
+**Purpose:** Classification refinement — handles boundary cases where the ingestion ML classifier is uncertain between top categories. The SLM provides semantic tiebreaking.
+
+#### `subconscious/entity_resolution.py`
+**Purpose:** Entity resolution — resolves ambiguous entity extractions by querying the SLM to match extracted names against existing entity profiles in Postgres.
+
+#### `subconscious/differential.py`
+**Purpose:** `DifferentialAccumulator` — tracks state changes between conscious agent cycles. Accumulates: new signals per situation, event lifecycle transitions, entity anomalies, fact changes, hypothesis evidence changes, watchlist matches. Writes JSON summary to Redis key `legba:subconscious:differential` every 5 minutes.
+
+#### `subconscious/prompts.py`
+**Purpose:** SLM prompt templates for all validation tasks. Each includes a system instruction, expected JSON output schema, and slot markers for dynamic content.
+
+#### `subconscious/schemas.py`
+**Purpose:** Pydantic models for SLM structured responses: `SignalValidationVerdict`, `ClassificationVerdict`, `EntityResolutionVerdict`, `FactRefreshVerdict`, `RelationshipVerdict`. Used for both response parsing and `guided_json` constrained decoding.
 
 ---
 

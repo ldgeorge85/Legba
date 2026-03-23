@@ -201,6 +201,10 @@ async def _fetch_os_data(
     size: int = 1000,
 ) -> list[dict[str, Any]]:
     """Fetch documents from OpenSearch by index + query."""
+    # Normalize index names: agent often sends "legba-signals" but actual
+    # indices are date-suffixed (legba-signals-2026.03). Add wildcard.
+    if index and not index.endswith("*") and not "." in index.split("-")[-1]:
+        index = f"{index}-*"
     query: dict[str, Any] = {"match_all": {}}
     if query_str:
         try:

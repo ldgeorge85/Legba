@@ -93,8 +93,29 @@ class StorageLayer:
     store_events_batch = store_signals_batch
 
     async def _store_pg(self, signal: Signal) -> bool:
-        """Insert signal into Postgres."""
+        """Insert signal into Postgres.
+
+        Cognitive architecture: the signal's data JSONB includes confidence_components
+        (extracted from the 'cc:' tag added by the service enrichment pipeline).
+        These components are preserved for downstream confidence recomputation.
+        """
         try:
+            # Extract confidence_components from tags if present, merge into data JSONB
+            data_json = signal.model_dump_json()
+            try:
+                cc_tag = next((t for t in signal.tags if t.startswith("cc:")), None)
+                if cc_tag:
+                    import json as _json
+                    data_dict = _json.loads(data_json)
+                    data_dict["confidence_components"] = _json.loads(cc_tag[3:])
+                    # Remove the cc: tag from tags list in data (it's a transport mechanism)
+                    data_dict["tags"] = [t for t in data_dict.get("tags", []) if not t.startswith("cc:")]
+                    data_json = _json.dumps(data_dict)
+                    # Also clean up the signal's tags in-place
+                    signal.tags = [t for t in signal.tags if not t.startswith("cc:")]
+            except Exception:
+                pass  # Non-fatal — store signal even if cc parsing fails
+
             await self._pool.execute(
                 """
                 INSERT INTO signals (id, data, title, source_id, source_url, category,
@@ -103,7 +124,7 @@ class StorageLayer:
                 ON CONFLICT (id) DO NOTHING
                 """,
                 signal.id,
-                signal.model_dump_json(),
+                data_json,
                 signal.title,
                 signal.source_id,
                 signal.source_url,
@@ -126,7 +147,7 @@ class StorageLayer:
                     ON CONFLICT (id) DO NOTHING
                     """,
                     signal.id,
-                    signal.model_dump_json(),
+                    data_json,
                     signal.title,
                     signal.source_url,
                     str(signal.category.value if hasattr(signal.category, 'value') else signal.category),

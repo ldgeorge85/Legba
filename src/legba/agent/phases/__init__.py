@@ -10,7 +10,7 @@ The mixins share state via self.* attributes set by __init__ in cycle.py.
   Tier 2 — Guaranteed work (modulo floor):
     ANALYSIS(5) > RESEARCH(7) > CURATE(9)
   Tier 3 — Dynamic fill (state-scored):
-    CURATE (capped 0.6, recent 24h backlog) vs SURVEY (0.4 default)
+    CURATE (capped 0.45, recent 24h backlog) vs SURVEY (0.50 default)
 """
 
 # Reporting cadence: produce a status report every N cycles.

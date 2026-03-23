@@ -16,7 +16,7 @@ together into a single AgentCycle class and owns the top-level orchestration.
   Tier 2 — Guaranteed work (coprime modulo intervals):
     ANALYSIS(4) > RESEARCH(7) > CURATE(9)
   Tier 3 — Dynamic fill (state-scored):
-    CURATE (capped 0.6, recent 24h backlog) vs SURVEY (0.4 default)
+    CURATE (capped 0.45, recent 24h backlog) vs SURVEY (0.50 default)
 
 CURATE runs _curate() when ingestion active, _acquire() as legacy fallback.
 """
@@ -207,7 +207,7 @@ class AgentCycle(
 
         Tier 3 — Dynamic fill (state-scored, remaining cycles):
           Scores CURATE vs SURVEY based on recent uncurated backlog.
-          CURATE score capped at 0.6 to prevent monopolization.
+          CURATE score capped at 0.45 to prevent monopolization.
           Dedicated CURATE workers (CYCLE_TYPE=CURATE) handle overflow.
         """
         cn = self.state.cycle_number
@@ -232,14 +232,16 @@ class AgentCycle(
         scores = {}
 
         # CURATE: recent uncurated backlog (last 24h signals without event links).
-        # Capped at 0.55 — must not dominate SURVEY even at max backlog.
+        # Capped at config value (default 0.45) — SURVEY should win unless
+        # there is a genuine backlog needing attention.
         uncurated = getattr(self, '_uncurated_count', 0)
-        scores["CURATE"] = min(uncurated / 80.0, 0.55) if uncurated > 30 else 0.0
+        curate_cap = self.config.agent.curate_score_cap
+        scores["CURATE"] = min(uncurated / 80.0, curate_cap) if uncurated > 30 else 0.0
 
         # SURVEY: analytical desk work — must run regularly for hypothesis eval,
-        # situation linking, and graph maintenance.  Base 0.45 ensures it wins
-        # roughly half of Tier-3 slots even when backlog is high.
-        scores["SURVEY"] = 0.45
+        # situation linking, and graph maintenance.  Base score (default 0.50)
+        # ensures it wins most Tier-3 slots unless backlog is high.
+        scores["SURVEY"] = self.config.agent.survey_base_score
 
         # Cooldown: don't repeat the same dynamic type back-to-back
         last_types = getattr(self, '_recent_cycle_types', [])

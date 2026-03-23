@@ -372,6 +372,7 @@ class PromptAssembler:
             active_goals=goals_text,
             curate_context=curate_context,
         )
+        user_text += "\n\n" + templates.SITUATION_GUIDANCE
 
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
@@ -500,6 +501,7 @@ class PromptAssembler:
             active_goals=goals_text,
             survey_context=survey_context,
         )
+        user_text += "\n\n" + templates.SITUATION_GUIDANCE
 
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text

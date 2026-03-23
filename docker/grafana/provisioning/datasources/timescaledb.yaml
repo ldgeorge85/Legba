@@ -8,7 +8,7 @@ datasources:
     database: legba_metrics
     user: legba_metrics
     secureJsonData:
-      password: $TIMESCALEDB_PASSWORD
+      password: legba_metrics
     jsonData:
       sslmode: disable
       maxOpenConns: 5

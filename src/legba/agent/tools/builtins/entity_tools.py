@@ -423,6 +423,15 @@ def register(
             "fighter", "fighters", "worker", "workers", "student", "students",
             "reporter", "journalist", "activist", "refugee", "refugees",
             "immigrant", "immigrants", "national", "republic",
+            # Weather phenomena and natural events (BUG 8)
+            "black rain", "dust storm", "heatwave", "heat wave", "flood",
+            "earthquake", "tornado", "hurricane", "typhoon", "cyclone",
+            "wildfire", "drought", "tsunami", "blizzard", "thunderstorm",
+            "monsoon",
+            # Generic event/role descriptors
+            "the attack", "the incident", "the conflict", "the crisis",
+            "the government", "the military", "the police", "authorities",
+            "officials", "residents", "victims", "protesters", "rebels",
         }
         name_lower = name.lower().strip()
         name_words = name_lower.split()

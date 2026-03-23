@@ -1,0 +1,63 @@
+# SLM (Small Language Model) vLLM service — Llama 3.1 8B Instruct
+#
+# Runs alongside the main legba-models (GPT-OSS 120B) on the models host.
+# Uses a fraction of GPU memory (~45%) so it can share a GPU or use a second one.
+#
+# Usage (from the legba-models directory):
+#   docker compose -f docker-compose.yml -f docker-compose.slm.yml up -d legba-slm
+#
+# Build is not needed — uses the official vLLM OpenAI-compatible image directly.
+#
+# The SLM serves the subconscious service on the main host.
+# Default port: 8701 (mapped from vLLM's internal 8000).
+
+services:
+  legba-slm:
+    image: vllm/vllm-openai:latest
+    container_name: legba-slm
+    command:
+      - --model
+      - meta-llama/Llama-3.1-8B-Instruct
+      - --dtype
+      - auto
+      - --max-model-len
+      - "4096"
+      - --gpu-memory-utilization
+      - "0.45"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
+      - --guided-decoding-backend
+      - xgrammar
+    environment:
+      - HF_HOME=/data/hf-cache
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['${SLM_GPU_DEVICE:-0}']
+              capabilities: [gpu]
+    volumes:
+      - /mnt/data/models/legba:/data
+    ports:
+      - "8701:8000"
+    networks:
+      - fastchat
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+networks:
+  fastchat:
+    external: true

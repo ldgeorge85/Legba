@@ -223,7 +223,22 @@ class SurveyMixin:
                         lines.append(f'- [{pri}] "{name}" triggered by "{title}"')
                     lines.append("")
 
-                # 6. Uncurated signal count (for awareness)
+                # 6. Event lifecycle distribution
+                try:
+                    lifecycle_rows = await conn.fetch("""
+                        SELECT lifecycle_status, count(*) as cnt FROM events
+                        GROUP BY lifecycle_status ORDER BY cnt DESC
+                    """)
+                    if lifecycle_rows:
+                        lines.append("### Event Lifecycle Distribution")
+                        for row in lifecycle_rows:
+                            status = row['lifecycle_status'] or 'unset'
+                            lines.append(f"- {status}: {row['cnt']} events")
+                        lines.append("")
+                except Exception:
+                    pass  # lifecycle_status column may not exist yet
+
+                # 7. Uncurated signal count (for awareness)
                 uncurated = await conn.fetchval("""
                     SELECT count(*) FROM signals s
                     LEFT JOIN signal_event_links sel ON sel.signal_id = s.id
@@ -233,7 +248,7 @@ class SurveyMixin:
                 # Cache for dynamic CURATE promotion check
                 self._uncurated_count = uncurated or 0
 
-                # 7. Overview counts
+                # 8. Overview counts
                 total_signals = await conn.fetchval("SELECT count(*) FROM signals")
                 total_events = await conn.fetchval("SELECT count(*) FROM events")
 
@@ -312,6 +327,28 @@ class SurveyMixin:
                             ),
                             "priority": 0.7,
                         })
+
+                # Task: Review EVOLVING events (lifecycle management)
+                try:
+                    evolving = await conn.fetch("""
+                        SELECT e.id, e.title, e.created_at FROM events e
+                        WHERE e.lifecycle_status = 'evolving'
+                        ORDER BY e.created_at ASC LIMIT 5
+                    """)
+                    if evolving:
+                        event_list = ", ".join(f"[{r['id']}] {r['title'][:60]}" for r in evolving)
+                        tasks.append({
+                            "name": "Review EVOLVING events for status updates",
+                            "description": (
+                                f"{len(evolving)} events are marked 'evolving'. Check if they have "
+                                f"stabilized or resolved. Use event_update to change lifecycle_status "
+                                f"to 'stable' or 'resolved' as appropriate.\n"
+                                f"Events: {event_list}"
+                            ),
+                            "priority": 0.6,
+                        })
+                except Exception:
+                    pass  # lifecycle_status column may not exist yet
 
                 # Task: Merge overlapping situations
                 sits = await conn.fetch("""

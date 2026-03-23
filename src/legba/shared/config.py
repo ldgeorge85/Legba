@@ -333,6 +333,20 @@ class AgentConfig:
     qdrant_long_term: str = "legba_long_term"
     qdrant_facts: str = "legba_facts"
 
+    # Cognitive architecture
+    cluster_threshold: float = 0.6            # Raised from 0.5 — tighter clustering
+    autolink_entity_freq_threshold: float = 0.1  # 10% of events
+    survey_base_score: float = 0.50           # Tier 3 dynamic: SURVEY base priority
+    curate_score_cap: float = 0.45            # Tier 3 dynamic: CURATE max score
+    maintenance_check_interval: int = 60      # Seconds between maintenance checks
+
+    # Subconscious LLM (lightweight model for background tasks)
+    subconscious_llm_provider: str = "vllm"
+    subconscious_llm_base_url: str = ""
+    subconscious_llm_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+    subconscious_uncertainty_low: float = 0.3
+    subconscious_uncertainty_high: float = 0.7
+
     @classmethod
     def from_env(cls) -> AgentConfig:
         return cls(
@@ -353,6 +367,18 @@ class AgentConfig:
             qdrant_short_term=os.getenv("AGENT_QDRANT_SHORT_TERM", "legba_short_term"),
             qdrant_long_term=os.getenv("AGENT_QDRANT_LONG_TERM", "legba_long_term"),
             qdrant_facts=os.getenv("AGENT_QDRANT_FACTS", "legba_facts"),
+            # Cognitive architecture
+            cluster_threshold=float(os.getenv("CLUSTER_THRESHOLD", "0.6")),
+            autolink_entity_freq_threshold=float(os.getenv("AUTOLINK_ENTITY_FREQ_THRESHOLD", "0.1")),
+            survey_base_score=float(os.getenv("SURVEY_BASE_SCORE", "0.50")),
+            curate_score_cap=float(os.getenv("CURATE_SCORE_CAP", "0.45")),
+            maintenance_check_interval=int(os.getenv("MAINTENANCE_CHECK_INTERVAL", "60")),
+            # Subconscious LLM
+            subconscious_llm_provider=os.getenv("SUBCONSCIOUS_LLM_PROVIDER", "vllm"),
+            subconscious_llm_base_url=os.getenv("SUBCONSCIOUS_LLM_BASE_URL", ""),
+            subconscious_llm_model=os.getenv("SUBCONSCIOUS_LLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
+            subconscious_uncertainty_low=float(os.getenv("SUBCONSCIOUS_UNCERTAINTY_LOW", "0.3")),
+            subconscious_uncertainty_high=float(os.getenv("SUBCONSCIOUS_UNCERTAINTY_HIGH", "0.7")),
         )
 
 

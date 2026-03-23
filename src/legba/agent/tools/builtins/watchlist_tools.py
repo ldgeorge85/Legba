@@ -93,6 +93,12 @@ WATCHLIST_ADD_DEF = ToolDefinition(
         ToolParameter(name="description", type="string",
                       description="Longer description of what this watch is for",
                       required=False),
+        ToolParameter(name="structured_query", type="string",
+                      description="JSON string with structured matching criteria: "
+                                  '{"entity": "...", "location": "...", "severity_min": "...", '
+                                  '"category": "...", "logic": "AND|OR"}. '
+                                  "Evaluated in addition to keyword/entity matching.",
+                      required=False),
     ],
 )
 
@@ -152,12 +158,28 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
         regions = _split_csv(args.get("regions"))
         priority = args.get("priority", "normal").strip().lower()
         description = args.get("description", "").strip()
+        structured_query_raw = args.get("structured_query", "").strip()
+
+        # Parse structured_query if provided
+        parsed_structured_query = None
+        if structured_query_raw:
+            try:
+                parsed_structured_query = json.loads(structured_query_raw)
+                if not isinstance(parsed_structured_query, dict):
+                    return "Error: structured_query must be a JSON object"
+                # Validate known keys
+                valid_keys = {"entity", "relationship", "location", "severity_min", "category", "logic"}
+                unknown = set(parsed_structured_query.keys()) - valid_keys
+                if unknown:
+                    return f"Error: Unknown structured_query keys: {', '.join(sorted(unknown))}. Valid: {', '.join(sorted(valid_keys))}"
+            except json.JSONDecodeError as e:
+                return f"Error: Invalid JSON in structured_query: {e}"
 
         if priority not in ("normal", "high", "critical"):
             return f"Error: Invalid priority '{priority}'. Use: normal, high, critical"
 
-        if not entities and not keywords and not categories and not regions:
-            return "Error: At least one matching criterion (entities, keywords, categories, or regions) is required"
+        if not entities and not keywords and not categories and not regions and not parsed_structured_query:
+            return "Error: At least one matching criterion (entities, keywords, categories, regions, or structured_query) is required"
 
         from uuid import uuid4
         watch_id = uuid4()
@@ -177,6 +199,8 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
             "last_triggered_at": None,
             "trigger_count": 0,
         }
+        if parsed_structured_query:
+            data["structured_query"] = parsed_structured_query
 
         try:
             async with structured._pool.acquire() as conn:
@@ -223,10 +247,17 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
                     "VALUES ($1, $2::jsonb, $3, $4, true, $5)",
                     watch_id, json.dumps(data, default=str), name, priority, now,
                 )
+
+                # Store structured_query in dedicated column if provided
+                if parsed_structured_query:
+                    await conn.execute(
+                        "UPDATE watchlist SET structured_query = $2::jsonb WHERE id = $1",
+                        watch_id, json.dumps(parsed_structured_query),
+                    )
         except Exception as e:
             return f"Error: Failed to create watch — {e}"
 
-        return json.dumps({
+        result = {
             "status": "created",
             "watch_id": str(watch_id),
             "name": name,
@@ -235,7 +266,10 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
             "keywords": keywords,
             "categories": categories,
             "regions": regions,
-        }, indent=2)
+        }
+        if parsed_structured_query:
+            result["structured_query"] = parsed_structured_query
+        return json.dumps(result, indent=2)
 
     async def watchlist_list_handler(args: dict) -> str:
         err = _check_available()
@@ -276,7 +310,7 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
         for row in rows:
             raw = row["data"]
             data = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else {}
-            result.append({
+            entry = {
                 "id": str(row["id"]),
                 "name": row["name"],
                 "priority": row["priority"],
@@ -289,7 +323,11 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
                 "trigger_count": row["trigger_count"],
                 "last_triggered_at": str(row["last_triggered_at"]) if row["last_triggered_at"] else None,
                 "created_at": str(row["created_at"]),
-            })
+            }
+            sq = data.get("structured_query")
+            if sq:
+                entry["structured_query"] = sq
+            result.append(entry)
 
         return json.dumps({"count": len(result), "watches": result}, indent=2, default=str)
 

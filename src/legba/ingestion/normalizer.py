@@ -365,6 +365,10 @@ def normalize_entry(
         if ner_locations:
             locations = ner_locations
 
+    # Cognitive architecture: confidence is no longer hardcoded at 0.5.
+    # The service layer computes composite confidence using the hybrid gatekeeper
+    # formula (source_reliability * classification_confidence * modifier).
+    # We use None-coalesced 0.5 here as a safe default that gets overwritten.
     sig = create_signal(
         title=title,
         summary=summary,
@@ -372,7 +376,7 @@ def normalize_entry(
         source_id=source_id,
         source_url=entry.link or "",
         category=category,
-        confidence=0.5,
+        confidence=0.3,  # low default — overwritten by service.py composite scoring
         actors=actors,
         locations=locations,
         tags=tags,

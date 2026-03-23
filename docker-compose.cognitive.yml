@@ -1,0 +1,140 @@
+# Cognitive services overlay — maintenance daemon + subconscious SLM processor
+#
+# Usage (from the skynet directory):
+#   docker compose -p legba -f docker-compose.yml -f docker-compose.cognitive.yml up -d
+#
+# Build only:
+#   docker compose -p legba -f docker-compose.yml -f docker-compose.cognitive.yml build maintenance subconscious
+#
+# These services are opt-in. The core stack (docker-compose.yml) runs without them.
+# Network and volume names match the main compose file so they merge correctly.
+
+services:
+
+  # --- Maintenance Daemon ---
+  # Periodic housekeeping: dedup cleanup, TTL expiry, index optimization,
+  # vacuum, stale entity pruning, metric rollups. No LLM, no GPU.
+
+  maintenance:
+    build:
+      context: .
+      dockerfile: docker/maintenance.Dockerfile
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      NATS_URL: nats://nats:4222
+      TIMESCALE_HOST: timescaledb
+      TIMESCALE_PORT: "5432"
+      TIMESCALE_USER: legba_metrics
+      TIMESCALE_PASSWORD: legba_metrics
+      TIMESCALE_DB: legba_metrics
+      # Maintenance-specific config (override in .env)
+      MAINTENANCE_INTERVAL: "${MAINTENANCE_INTERVAL:-300}"
+      MAINTENANCE_LOG_LEVEL: "${MAINTENANCE_LOG_LEVEL:-INFO}"
+      MAINTENANCE_DEDUP_TTL_DAYS: "${MAINTENANCE_DEDUP_TTL_DAYS:-30}"
+      MAINTENANCE_VACUUM_ENABLED: "${MAINTENANCE_VACUUM_ENABLED:-true}"
+      MAINTENANCE_INDEX_OPTIMIZE_ENABLED: "${MAINTENANCE_INDEX_OPTIMIZE_ENABLED:-true}"
+    volumes:
+      - shared_data:/shared
+    ports:
+      - "8700:8700"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8700/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # --- Subconscious Service ---
+  # Background SLM-driven processing: pattern detection, salience scoring,
+  # memory consolidation, anomaly flagging. Calls the SLM (Llama 8B) over HTTP.
+
+  subconscious:
+    build:
+      context: .
+      dockerfile: docker/subconscious.Dockerfile
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      NATS_URL: nats://nats:4222
+      # SLM provider config — points to the vLLM SLM instance on the models host
+      SUBCONSCIOUS_LLM_PROVIDER: "${SUBCONSCIOUS_LLM_PROVIDER:-vllm}"
+      SUBCONSCIOUS_LLM_BASE_URL: "${SUBCONSCIOUS_LLM_BASE_URL:-}"
+      SUBCONSCIOUS_LLM_API_KEY: "${SUBCONSCIOUS_LLM_API_KEY:-EMPTY}"
+      SUBCONSCIOUS_LLM_MODEL: "${SUBCONSCIOUS_LLM_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+      # Subconscious-specific config (override in .env)
+      SUBCONSCIOUS_INTERVAL: "${SUBCONSCIOUS_INTERVAL:-60}"
+      SUBCONSCIOUS_LOG_LEVEL: "${SUBCONSCIOUS_LOG_LEVEL:-INFO}"
+      SUBCONSCIOUS_BATCH_SIZE: "${SUBCONSCIOUS_BATCH_SIZE:-20}"
+      SUBCONSCIOUS_MAX_TOKENS: "${SUBCONSCIOUS_MAX_TOKENS:-512}"
+    volumes:
+      - shared_data:/shared
+    ports:
+      - "8800:8800"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8800/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+# Reference the same named volumes and networks from the main compose file.
+# When used with -f, compose merges these definitions.
+
+volumes:
+  shared_data:
+    name: legba_shared_data
+
+networks:
+  default:
+    name: legba_default

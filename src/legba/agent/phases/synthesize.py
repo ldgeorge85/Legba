@@ -291,9 +291,87 @@ class SynthesizeMixin:
                 except Exception:
                     pass
 
+            # Update matching situation's narrative with the brief summary
+            await self._update_situation_narrative(brief)
+
             self.logger.log("situation_brief_stored", title=brief.get("title", "?"))
         except Exception as e:
             log.warning("Failed to generate situation brief: %s", e)
+
+    async def _update_situation_narrative(self: AgentCycle, brief: dict) -> None:
+        """Update the matching situation's narrative field with the brief summary.
+
+        Finds the situation by fuzzy name match against the brief title,
+        then stores a truncated version of the brief content as the narrative.
+        """
+        try:
+            if not self.memory or not self.memory.structured or not self.memory.structured._available:
+                return
+
+            brief_title = brief.get("title", "")
+            brief_content = brief.get("content", "")
+            if not brief_content:
+                return
+
+            # Extract the topic portion from "Legba Situation Brief: <topic>"
+            topic = brief_title
+            if ":" in topic:
+                topic = topic.split(":", 1)[1].strip()
+
+            # Extract a summary: use the Thesis section if present, else first 2000 chars
+            brief_summary = brief_content[:2000]
+            for section_marker in ("## Thesis", "## Evidence"):
+                if section_marker in brief_content:
+                    # Get the thesis paragraph
+                    idx = brief_content.index(section_marker)
+                    thesis_text = brief_content[idx:idx + 1000]
+                    # Take until next section header
+                    lines = thesis_text.split("\n")
+                    summary_lines = [lines[0]]  # section header
+                    for line in lines[1:]:
+                        if line.strip().startswith("## "):
+                            break
+                        summary_lines.append(line)
+                    brief_summary = "\n".join(summary_lines).strip()
+                    break
+
+            if not topic or not brief_summary:
+                return
+
+            # Find matching situation by fuzzy name match
+            stop = {"a", "an", "the", "of", "in", "on", "at", "to", "for",
+                    "and", "or", "is", "was", "by", "from", "with", "legba",
+                    "situation", "brief"}
+            topic_words = {w.lower() for w in topic.split() if w.lower() not in stop and len(w) > 2}
+            if not topic_words:
+                return
+
+            async with self.memory.structured._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, name FROM situations WHERE status IN ('active', 'escalating') "
+                    "ORDER BY updated_at DESC LIMIT 50"
+                )
+                for row in rows:
+                    name_words = {w.lower() for w in row["name"].split()
+                                  if w.lower() not in stop and len(w) > 2}
+                    if not name_words:
+                        continue
+                    overlap = len(topic_words & name_words)
+                    union = len(topic_words | name_words)
+                    if union > 0 and overlap / union >= 0.3:
+                        await conn.execute("""
+                            UPDATE situations SET
+                                data = jsonb_set(data, '{narrative}', to_jsonb($2::text)),
+                                updated_at = NOW()
+                            WHERE id = $1
+                        """, row["id"], brief_summary[:2000])
+                        log.info(
+                            "Updated situation %s narrative from brief: %s",
+                            str(row["id"])[:8], topic[:60],
+                        )
+                        break
+        except Exception as e:
+            log.debug("Situation narrative update failed (non-fatal): %s", e)
 
     async def _update_synth_history(self: AgentCycle) -> None:
         """Track which thread was investigated for rotation."""

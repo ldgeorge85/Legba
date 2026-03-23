@@ -430,6 +430,17 @@ class StructuredStore:
                 CREATE INDEX IF NOT EXISTS idx_hypotheses_situation ON hypotheses(situation_id);
             """)
 
+            # --- Cognitive architecture schema extensions ---
+            # Uses ADD COLUMN IF NOT EXISTS so safe on both fresh + existing DBs
+            try:
+                from ...shared.schema_extensions import apply_extensions
+                ext_results = await apply_extensions(self._pool)
+                for tbl, ok in ext_results.items():
+                    if not ok:
+                        logger.warning("Schema extension failed for table: %s", tbl)
+            except Exception as e:
+                logger.warning("Schema extensions could not be applied: %s", e)
+
     # --- Goal operations ---
 
     async def save_goal(self, goal: Goal) -> bool:
@@ -519,7 +530,7 @@ class StructuredStore:
         "PrimeMinister", "SupremeLeader", "Monarch",
     })
 
-    async def store_fact(self, fact: Fact) -> bool:
+    async def store_fact(self, fact: Fact, evidence: list[dict] | None = None, embedding=None) -> bool:
         if not self._available:
             return False
         try:
@@ -529,6 +540,81 @@ class StructuredStore:
             fact.value = normalize_fact_value(fact.value)
 
             async with self._pool.acquire() as conn:
+                # --- BUG 7 fix: Dedup hardening ---
+                # Check for existing active fact with same triple regardless of valid_from
+                existing = await conn.fetchrow("""
+                    SELECT id, confidence FROM facts
+                    WHERE LOWER(subject) = LOWER($1)
+                    AND LOWER(predicate) = LOWER($2)
+                    AND LOWER(value) = LOWER($3)
+                    AND superseded_by IS NULL
+                    AND valid_until IS NULL
+                    LIMIT 1
+                """, fact.subject, fact.predicate, fact.value)
+                if existing:
+                    # Update confidence if new is higher, skip insert
+                    if fact.confidence > existing['confidence']:
+                        await conn.execute(
+                            "UPDATE facts SET confidence = $1, source_cycle = $2, updated_at = NOW() WHERE id = $3",
+                            fact.confidence, fact.source_cycle, existing['id']
+                        )
+                    return True  # Fact already exists
+
+                # --- Contradiction detection ---
+                contradiction_id = None
+                try:
+                    from ...shared.contradictions import detect_contradiction, should_auto_create_hypothesis
+                    existing_facts = await conn.fetch("""
+                        SELECT id, subject, predicate, value, confidence FROM facts
+                        WHERE LOWER(subject) = LOWER($1) AND superseded_by IS NULL AND valid_until IS NULL
+                    """, fact.subject)
+                    contradictions = detect_contradiction(
+                        fact.subject, fact.predicate, fact.value,
+                        [dict(r) for r in existing_facts]
+                    )
+                    if contradictions:
+                        contradiction_id = contradictions[0]['id']
+                        # Auto-create hypothesis if warranted
+                        new_fact_dict = {
+                            "subject": fact.subject,
+                            "predicate": fact.predicate,
+                            "value": fact.value,
+                            "confidence": fact.confidence,
+                        }
+                        # Count signal references for involved entities
+                        signal_ref_count = 0
+                        try:
+                            signal_ref_count = await conn.fetchval("""
+                                SELECT COUNT(DISTINCT sel.signal_id)
+                                FROM signal_entity_links sel
+                                JOIN entity_profiles ep ON ep.id = sel.entity_id
+                                WHERE LOWER(ep.canonical_name) = LOWER($1)
+                            """, fact.subject) or 0
+                        except Exception:
+                            pass
+                        if should_auto_create_hypothesis(
+                            contradictions[0], new_fact_dict,
+                            min_signal_refs=2, signal_ref_count=signal_ref_count,
+                        ):
+                            try:
+                                await conn.execute("""
+                                    INSERT INTO hypotheses (thesis, counter_thesis, status, created_cycle, last_evaluated_cycle)
+                                    VALUES ($1, $2, 'active', $3, $3)
+                                """,
+                                    f"{fact.subject} {fact.predicate} {fact.value}",
+                                    f"{contradictions[0]['subject']} {contradictions[0]['predicate']} {contradictions[0]['value']}",
+                                    fact.source_cycle,
+                                )
+                                logger.info(
+                                    "Auto-created hypothesis from contradiction: %s %s %s vs %s %s %s",
+                                    fact.subject, fact.predicate, fact.value,
+                                    contradictions[0]['subject'], contradictions[0]['predicate'], contradictions[0]['value'],
+                                )
+                            except Exception as he:
+                                logger.debug("Auto-hypothesis creation failed: %s", he)
+                except Exception as ce:
+                    logger.debug("Contradiction detection failed: %s", ce)
+
                 # Auto-supersede for volatile predicates (leadership, etc.)
                 # "A LeaderOf B" should supersede any "X LeaderOf B" where X != A
                 # Also supersede "B LeaderOf X" (wrong direction) for same entity
@@ -583,28 +669,51 @@ class StructuredStore:
                 except Exception:
                     pass
 
-                await conn.execute(
-                    """
-                    INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at, valid_from, geo_lat, geo_lon)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10)
-                    ON CONFLICT (lower(subject), lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'::timestamptz)) DO UPDATE SET
-                        confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
-                        source_cycle = EXCLUDED.source_cycle,
-                        data = EXCLUDED.data,
-                        geo_lat = COALESCE(EXCLUDED.geo_lat, facts.geo_lat),
-                        geo_lon = COALESCE(EXCLUDED.geo_lon, facts.geo_lon),
-                        updated_at = NOW()
-                    """,
-                    fact.id,
-                    fact.subject,
-                    fact.predicate,
-                    fact.value,
-                    fact.confidence,
-                    fact.source_cycle,
-                    fact.model_dump_json(),
-                    fact.created_at,
-                    geo_lat, geo_lon,
-                )
+                # Evidence set JSON
+                evidence_json = json.dumps(evidence or [])
+
+                # Build INSERT with optional new columns (evidence_set, contradiction_of)
+                # Use try/except to gracefully handle missing columns on older schemas
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle,
+                                          data, created_at, valid_from, geo_lat, geo_lon,
+                                          evidence_set, contradiction_of)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11::jsonb, $12)
+                        ON CONFLICT (lower(subject), lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'::timestamptz)) DO UPDATE SET
+                            confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
+                            source_cycle = EXCLUDED.source_cycle,
+                            data = EXCLUDED.data,
+                            geo_lat = COALESCE(EXCLUDED.geo_lat, facts.geo_lat),
+                            geo_lon = COALESCE(EXCLUDED.geo_lon, facts.geo_lon),
+                            evidence_set = EXCLUDED.evidence_set,
+                            contradiction_of = COALESCE(EXCLUDED.contradiction_of, facts.contradiction_of),
+                            updated_at = NOW()
+                        """,
+                        fact.id, fact.subject, fact.predicate, fact.value,
+                        fact.confidence, fact.source_cycle, fact.model_dump_json(),
+                        fact.created_at, geo_lat, geo_lon,
+                        evidence_json, contradiction_id,
+                    )
+                except Exception:
+                    # Fallback: columns may not exist yet on older schema
+                    await conn.execute(
+                        """
+                        INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at, valid_from, geo_lat, geo_lon)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10)
+                        ON CONFLICT (lower(subject), lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'::timestamptz)) DO UPDATE SET
+                            confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
+                            source_cycle = EXCLUDED.source_cycle,
+                            data = EXCLUDED.data,
+                            geo_lat = COALESCE(EXCLUDED.geo_lat, facts.geo_lat),
+                            geo_lon = COALESCE(EXCLUDED.geo_lon, facts.geo_lon),
+                            updated_at = NOW()
+                        """,
+                        fact.id, fact.subject, fact.predicate, fact.value,
+                        fact.confidence, fact.source_cycle, fact.model_dump_json(),
+                        fact.created_at, geo_lat, geo_lon,
+                    )
             return True
         except Exception:
             return False
@@ -1107,7 +1216,7 @@ class StructuredStore:
 
     # --- Derived Event operations (real-world occurrences from signals) ---
 
-    async def save_derived_event(self, event) -> bool:
+    async def save_derived_event(self, event, lifecycle_status: str | None = None) -> bool:
         """Insert or update a derived event in events."""
         if not self._available:
             return False
@@ -1116,43 +1225,87 @@ class StructuredStore:
             if not isinstance(event, DerivedEvent):
                 return False
             async with self._pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO events (id, data, title, summary, category,
-                                                event_type, severity, time_start, time_end,
-                                                confidence, signal_count, source_method,
-                                                source_cycle, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
-                    ON CONFLICT (id) DO UPDATE SET
-                        data = EXCLUDED.data,
-                        title = EXCLUDED.title,
-                        summary = EXCLUDED.summary,
-                        category = EXCLUDED.category,
-                        event_type = EXCLUDED.event_type,
-                        severity = EXCLUDED.severity,
-                        time_start = EXCLUDED.time_start,
-                        time_end = EXCLUDED.time_end,
-                        confidence = EXCLUDED.confidence,
-                        signal_count = EXCLUDED.signal_count,
-                        source_method = EXCLUDED.source_method,
-                        source_cycle = EXCLUDED.source_cycle,
-                        updated_at = NOW()
-                    """,
-                    event.id,
-                    event.model_dump_json(),
-                    event.title,
-                    event.summary,
-                    str(event.category.value if hasattr(event.category, 'value') else event.category),
-                    event.event_type.value,
-                    event.severity.value,
-                    event.time_start,
-                    event.time_end,
-                    event.confidence,
-                    event.signal_count,
-                    event.source_method,
-                    event.source_cycle,
-                    event.created_at,
-                )
+                # Try with lifecycle columns first (cognitive architecture schema)
+                try:
+                    ls = lifecycle_status or "emerging"
+                    await conn.execute(
+                        """
+                        INSERT INTO events (id, data, title, summary, category,
+                                                    event_type, severity, time_start, time_end,
+                                                    confidence, signal_count, source_method,
+                                                    source_cycle, created_at, updated_at,
+                                                    lifecycle_status, lifecycle_changed_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), $15, NOW())
+                        ON CONFLICT (id) DO UPDATE SET
+                            data = EXCLUDED.data,
+                            title = EXCLUDED.title,
+                            summary = EXCLUDED.summary,
+                            category = EXCLUDED.category,
+                            event_type = EXCLUDED.event_type,
+                            severity = EXCLUDED.severity,
+                            time_start = EXCLUDED.time_start,
+                            time_end = EXCLUDED.time_end,
+                            confidence = EXCLUDED.confidence,
+                            signal_count = EXCLUDED.signal_count,
+                            source_method = EXCLUDED.source_method,
+                            source_cycle = EXCLUDED.source_cycle,
+                            updated_at = NOW()
+                        """,
+                        event.id,
+                        event.model_dump_json(),
+                        event.title,
+                        event.summary,
+                        str(event.category.value if hasattr(event.category, 'value') else event.category),
+                        event.event_type.value,
+                        event.severity.value,
+                        event.time_start,
+                        event.time_end,
+                        event.confidence,
+                        event.signal_count,
+                        event.source_method,
+                        event.source_cycle,
+                        event.created_at,
+                        ls,
+                    )
+                except Exception:
+                    # Fallback: lifecycle columns may not exist yet
+                    await conn.execute(
+                        """
+                        INSERT INTO events (id, data, title, summary, category,
+                                                    event_type, severity, time_start, time_end,
+                                                    confidence, signal_count, source_method,
+                                                    source_cycle, created_at, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+                        ON CONFLICT (id) DO UPDATE SET
+                            data = EXCLUDED.data,
+                            title = EXCLUDED.title,
+                            summary = EXCLUDED.summary,
+                            category = EXCLUDED.category,
+                            event_type = EXCLUDED.event_type,
+                            severity = EXCLUDED.severity,
+                            time_start = EXCLUDED.time_start,
+                            time_end = EXCLUDED.time_end,
+                            confidence = EXCLUDED.confidence,
+                            signal_count = EXCLUDED.signal_count,
+                            source_method = EXCLUDED.source_method,
+                            source_cycle = EXCLUDED.source_cycle,
+                            updated_at = NOW()
+                        """,
+                        event.id,
+                        event.model_dump_json(),
+                        event.title,
+                        event.summary,
+                        str(event.category.value if hasattr(event.category, 'value') else event.category),
+                        event.event_type.value,
+                        event.severity.value,
+                        event.time_start,
+                        event.time_end,
+                        event.confidence,
+                        event.signal_count,
+                        event.source_method,
+                        event.source_cycle,
+                        event.created_at,
+                    )
             return True
         except Exception as e:
             logger.error("save_derived_event failed for %s: %s", event.id, e)
@@ -1177,7 +1330,7 @@ class StructuredStore:
                     INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
                     SELECT $1, entity_id, role, confidence
                     FROM signal_entity_links WHERE signal_id = $2
-                    ON CONFLICT (event_id, entity_id, role) DO NOTHING
+                    ON CONFLICT (event_id, entity_id) DO NOTHING
                     """,
                     event_id, signal_id,
                 )
@@ -1666,8 +1819,9 @@ class StructuredStore:
                     """
                     INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
                     VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (event_id, entity_id, role) DO UPDATE SET
-                        confidence = EXCLUDED.confidence
+                    ON CONFLICT (event_id, entity_id) DO UPDATE SET
+                        confidence = EXCLUDED.confidence,
+                        role = EXCLUDED.role
                     """,
                     link.event_id,
                     link.entity_id,

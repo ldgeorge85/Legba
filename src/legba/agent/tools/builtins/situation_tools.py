@@ -68,15 +68,17 @@ async def _ensure_tables(pool) -> None:
 SITUATION_CREATE_DEF = ToolDefinition(
     name="situation_create",
     description="Create a new tracked situation (persistent narrative). "
-                "Situations group related events under a named storyline "
+                "Situations are analytical themes spanning multiple events, "
+                "not labels for individual events. A situation must represent "
+                "a developing pattern or ongoing condition "
                 "(e.g. 'Iran Nuclear Crisis', 'Ukraine-Russia War'). "
                 "Use situation_list first to avoid duplicates.",
     parameters=[
         ToolParameter(name="name", type="string",
                       description="Situation name (e.g. 'Iran Nuclear Talks')"),
         ToolParameter(name="description", type="string",
-                      description="Brief description of the situation",
-                      required=False),
+                      description="Brief description of the situation (REQUIRED — "
+                                  "explain the analytical theme and why it matters)"),
         ToolParameter(name="category", type="string",
                       description="Category: conflict, political, economic, technology, health, environment, social, disaster, other",
                       required=False),
@@ -182,6 +184,14 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
         if not name:
             return "Error: name is required"
 
+        description = args.get("description", "").strip()
+        if not description:
+            return (
+                "Error: description is required. Situations are analytical themes "
+                "spanning multiple events, not labels for individual events. "
+                "Provide a description explaining the developing pattern or ongoing condition."
+            )
+
         await _ensure_tables(structured._pool)
 
         # Duplicate check: exact name + fuzzy name overlap
@@ -261,11 +271,17 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
         except Exception as e:
             return f"Error: Failed to create situation: {e}"
 
-        return json.dumps({
+        result = {
             "status": "created",
             "situation_id": str(sit_id),
             "name": name,
-        }, indent=2)
+            "guidance": (
+                "Now link at least 2 events to this situation using "
+                "situation_link_event. A situation without linked events "
+                "has no analytical value."
+            ),
+        }
+        return json.dumps(result, indent=2)
 
     async def situation_update_handler(args: dict) -> str:
         err = _check_available()

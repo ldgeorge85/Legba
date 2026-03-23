@@ -26,6 +26,14 @@ import asyncpg
 
 from .dedup import _title_words, _jaccard
 
+# Cognitive architecture imports — lifecycle state machine + confidence scoring
+try:
+    from legba.shared.lifecycle import check_transition, EventLifecycleStatus
+    from legba.shared.confidence import compute_corroboration
+    _LIFECYCLE_AVAILABLE = True
+except ImportError:
+    _LIFECYCLE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Structured sources that always produce real events (clean typed data).
@@ -42,8 +50,8 @@ _STRUCTURED_SOURCES = frozenset({
 })
 
 # Similarity threshold for clustering (single-linkage)
-# Raised from 0.4 to 0.5 to prevent mega-buckets from high-frequency entities
-_CLUSTER_THRESHOLD = 0.5
+# Raised from 0.5 to 0.6 to prevent mega-bucket events from loose entity overlap
+_CLUSTER_THRESHOLD = 0.6
 
 # Max auto-created event confidence
 _AUTO_CONFIDENCE_CAP = 0.6
@@ -467,6 +475,42 @@ class SignalClusterer:
                     f["id"], event_id,
                 )
 
+            # Cognitive architecture: check lifecycle transition after reinforcement
+            if _LIFECYCLE_AVAILABLE:
+                try:
+                    event_row = await self._pool.fetchrow(
+                        "SELECT signal_count, confidence, lifecycle_status, "
+                        "created_at, time_end AS last_signal_at "
+                        "FROM events WHERE id = $1",
+                        event_id,
+                    )
+                    if event_row and event_row.get("lifecycle_status"):
+                        event_dict = {
+                            "signal_count": event_row["signal_count"],
+                            "confidence": event_row["confidence"],
+                            "lifecycle_status": event_row["lifecycle_status"],
+                            "created_at": event_row["created_at"],
+                            "last_signal_at": event_row["last_signal_at"],
+                        }
+                        new_status = check_transition(event_dict)
+                        if new_status:
+                            await self._pool.execute(
+                                "UPDATE events SET lifecycle_status = $1, "
+                                "lifecycle_changed_at = NOW() WHERE id = $2",
+                                new_status.value, event_id,
+                            )
+                            logger.info(
+                                "Event %s lifecycle: %s -> %s",
+                                str(event_id)[:8],
+                                event_row["lifecycle_status"],
+                                new_status.value,
+                            )
+                except Exception as e:
+                    logger.debug("Lifecycle transition check failed (non-fatal): %s", e)
+
+            # Cognitive architecture: update corroboration after reinforcement
+            await self._update_corroboration(event_id)
+
             # Check reinforcement thresholds
             crossed = {t for t in _REINFORCEMENT_THRESHOLDS if old_count < t <= new_count}
             if crossed:
@@ -479,6 +523,12 @@ class SignalClusterer:
             # Auto-link to active situations (merged entity set)
             category = old_data.get("category", "")
             await self._auto_link_situations(event_id, new_actors, new_locations, category)
+
+            # Check watchlist triggers on reinforcement
+            await self._check_watchlist_triggers(
+                event_id, old_data.get("title", ""), category,
+                new_actors, new_locations,
+            )
 
             # Notify on threshold crossings
             if self._notifier and crossed:
@@ -550,24 +600,48 @@ class SignalClusterer:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            await self._pool.execute(
-                """
-                INSERT INTO events (id, data, title, summary, category,
-                                            event_type, severity, time_start, time_end,
-                                            confidence, signal_count, source_method,
-                                            created_at, updated_at)
-                VALUES ($1, $2, $3, '', $4, 'incident', 'medium', $5, $6, $7, $8, 'auto', NOW(), NOW())
-                ON CONFLICT (id) DO NOTHING
-                """,
-                event_id,
-                json.dumps(data),
-                title,
-                category,
-                time_start,
-                time_end,
-                confidence,
-                signal_count,
-            )
+            # Cognitive architecture: new events start as EMERGING
+            try:
+                await self._pool.execute(
+                    """
+                    INSERT INTO events (id, data, title, summary, category,
+                                                event_type, severity, time_start, time_end,
+                                                confidence, signal_count, source_method,
+                                                lifecycle_status, lifecycle_changed_at,
+                                                created_at, updated_at)
+                    VALUES ($1, $2, $3, '', $4, 'incident', 'medium', $5, $6, $7, $8, 'auto',
+                            'emerging', NOW(), NOW(), NOW())
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    event_id,
+                    json.dumps(data),
+                    title,
+                    category,
+                    time_start,
+                    time_end,
+                    confidence,
+                    signal_count,
+                )
+            except Exception:
+                # Fallback if lifecycle columns don't exist yet
+                await self._pool.execute(
+                    """
+                    INSERT INTO events (id, data, title, summary, category,
+                                                event_type, severity, time_start, time_end,
+                                                confidence, signal_count, source_method,
+                                                created_at, updated_at)
+                    VALUES ($1, $2, $3, '', $4, 'incident', 'medium', $5, $6, $7, $8, 'auto', NOW(), NOW())
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    event_id,
+                    json.dumps(data),
+                    title,
+                    category,
+                    time_start,
+                    time_end,
+                    confidence,
+                    signal_count,
+                )
 
             # Link signals
             for f in feats:
@@ -577,8 +651,14 @@ class SignalClusterer:
                     f["id"], event_id,
                 )
 
+            # Cognitive architecture: compute corroboration from independent sources
+            await self._update_corroboration(event_id)
+
             # Auto-link to active situations
             await self._auto_link_situations(event_id, all_actors, all_locations, category)
+
+            # Check watchlist triggers for new events
+            await self._check_watchlist_triggers(event_id, title, category, all_actors, all_locations)
 
             # Notify on event creation
             if self._notifier:
@@ -599,7 +679,11 @@ class SignalClusterer:
         locations: set[str] | list[str],
         category: str,
     ) -> None:
-        """Link an event to active situations that share entities."""
+        """Link an event to active situations that share entities.
+
+        Cognitive architecture: high-frequency entities (appearing in >10% of
+        recent events) are excluded from matching to prevent over-linking.
+        """
         try:
             rows = await self._pool.fetch(
                 "SELECT id, data FROM situations WHERE status = 'active'"
@@ -608,6 +692,34 @@ class SignalClusterer:
                 return
 
             event_entities = {e.lower() for e in list(actors) + list(locations) if e and len(e) >= 3}
+            if not event_entities:
+                return
+
+            # Filter out high-frequency entities to prevent spurious situation links.
+            # Entities appearing in >10% of recent events are too generic for matching.
+            high_freq = set()
+            try:
+                total_events = await self._pool.fetchval(
+                    "SELECT count(*) FROM events WHERE created_at > NOW() - interval '7 days'"
+                )
+                if total_events and total_events > 20:
+                    freq_rows = await self._pool.fetch("""
+                        SELECT LOWER(unnest(string_to_array(data->>'actors', ','))) as actor,
+                               count(*) as cnt
+                        FROM events WHERE created_at > NOW() - interval '7 days'
+                        GROUP BY 1 HAVING count(*) > $1
+                    """, int(total_events * 0.1))
+                    high_freq = {r['actor'].strip() for r in freq_rows if r['actor']}
+                    if high_freq:
+                        logger.debug(
+                            "Situation auto-link: excluding %d high-freq entities: %s",
+                            len(high_freq), list(high_freq)[:5],
+                        )
+            except Exception as e:
+                logger.debug("High-freq entity filter failed (non-fatal): %s", e)
+
+            # Remove high-frequency entities from the matching set
+            event_entities -= high_freq
             if not event_entities:
                 return
 
@@ -670,24 +782,48 @@ class SignalClusterer:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            await self._pool.execute(
-                """
-                INSERT INTO events (id, data, title, summary, category,
-                                            event_type, severity, time_start, time_end,
-                                            confidence, signal_count, source_method,
-                                            created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, 'incident', 'medium', $6, $7, $8, 1, 'auto', NOW(), NOW())
-                ON CONFLICT (id) DO NOTHING
-                """,
-                event_id,
-                json.dumps(event_data),
-                feat["title"],
-                data.get("summary", ""),
-                feat["category"],
-                feat["timestamp"],
-                feat["timestamp"],
-                min(_AUTO_CONFIDENCE_CAP, feat["confidence"]),
-            )
+            # Cognitive architecture: singleton events also start as EMERGING
+            try:
+                await self._pool.execute(
+                    """
+                    INSERT INTO events (id, data, title, summary, category,
+                                                event_type, severity, time_start, time_end,
+                                                confidence, signal_count, source_method,
+                                                lifecycle_status, lifecycle_changed_at,
+                                                created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, 'incident', 'medium', $6, $7, $8, 1, 'auto',
+                            'emerging', NOW(), NOW(), NOW())
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    event_id,
+                    json.dumps(event_data),
+                    feat["title"],
+                    data.get("summary", ""),
+                    feat["category"],
+                    feat["timestamp"],
+                    feat["timestamp"],
+                    min(_AUTO_CONFIDENCE_CAP, feat["confidence"]),
+                )
+            except Exception:
+                # Fallback if lifecycle columns don't exist yet
+                await self._pool.execute(
+                    """
+                    INSERT INTO events (id, data, title, summary, category,
+                                                event_type, severity, time_start, time_end,
+                                                confidence, signal_count, source_method,
+                                                created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, 'incident', 'medium', $6, $7, $8, 1, 'auto', NOW(), NOW())
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    event_id,
+                    json.dumps(event_data),
+                    feat["title"],
+                    data.get("summary", ""),
+                    feat["category"],
+                    feat["timestamp"],
+                    feat["timestamp"],
+                    min(_AUTO_CONFIDENCE_CAP, feat["confidence"]),
+                )
 
             # Link signal to event
             await self._pool.execute(
@@ -701,7 +837,178 @@ class SignalClusterer:
             locations = data.get("locations") or []
             await self._auto_link_situations(event_id, set(actors), set(locations), feat["category"])
 
+            # Check watchlist triggers for singleton events
+            await self._check_watchlist_triggers(
+                event_id, feat["title"], feat["category"],
+                set(actors), set(locations),
+            )
+
             return 1
         except Exception as e:
             logger.warning("create_singleton_event failed: %s", e)
             return 0
+
+    # ------------------------------------------------------------------
+    # Cognitive architecture helpers
+    # ------------------------------------------------------------------
+
+    async def _update_corroboration(self, event_id: UUID) -> None:
+        """Count independent sources for an event and store corroboration score.
+
+        Cognitive architecture: corroboration is a key confidence component.
+        Multiple independent sources reporting the same event increases reliability.
+        """
+        if not _LIFECYCLE_AVAILABLE:
+            return
+        try:
+            source_count = await self._pool.fetchval("""
+                SELECT count(DISTINCT s.source_id) FROM signals s
+                JOIN signal_event_links sel ON sel.signal_id = s.id
+                WHERE sel.event_id = $1 AND s.source_id IS NOT NULL
+            """, event_id)
+            corroboration = compute_corroboration(source_count or 0)
+
+            # Store corroboration in the event's data JSONB (nested jsonb_set)
+            await self._pool.execute("""
+                UPDATE events SET
+                    data = jsonb_set(
+                        jsonb_set(data, '{corroboration}', to_jsonb($2::float)),
+                        '{independent_source_count}', to_jsonb($3::int)
+                    )
+                WHERE id = $1
+            """, event_id, corroboration, source_count or 0)
+        except Exception as e:
+            logger.debug("Corroboration update failed (non-fatal): %s", e)
+
+    async def _check_watchlist_triggers(
+        self,
+        event_id: UUID,
+        title: str,
+        category: str,
+        actors: set[str] | list[str],
+        locations: set[str] | list[str],
+    ) -> None:
+        """Check if a new/reinforced event triggers any active watchlist patterns.
+
+        This is the ingestion-side watchlist check — runs during clustering so
+        triggers fire when events are created or reinforced, not just when the
+        agent processes them. Fixes the gap where 0 triggers fired in 69 cycles
+        because the agent-side check only runs when the agent explicitly creates
+        events via event_create tool.
+        """
+        try:
+            rows = await self._pool.fetch(
+                "SELECT id, data, name, priority FROM watchlist WHERE active = true"
+            )
+            if not rows:
+                return
+
+            event_text = title.lower()
+            event_actors_lower = {a.lower() for a in actors if a}
+            event_locations_lower = {loc.lower() for loc in locations if loc}
+
+            for row in rows:
+                raw = row["data"]
+                data = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else {}
+
+                matched_criteria = []
+                failed = False
+
+                # Entity matching (AND across criteria types, OR within)
+                watch_entities = [e.lower() for e in data.get("entities", [])]
+                if watch_entities:
+                    hit = next(
+                        (we for we in watch_entities
+                         if we in event_actors_lower or we in event_locations_lower or we in event_text),
+                        None,
+                    )
+                    if hit:
+                        matched_criteria.append(f"entity:{hit}")
+                    else:
+                        failed = True
+
+                # Keyword matching
+                if not failed:
+                    watch_keywords = [k.lower() for k in data.get("keywords", [])]
+                    if watch_keywords:
+                        hit = next((kw for kw in watch_keywords if kw in event_text), None)
+                        if hit:
+                            matched_criteria.append(f"keyword:{hit}")
+                        else:
+                            failed = True
+
+                # Category matching
+                if not failed:
+                    watch_categories = [c.lower() for c in data.get("categories", [])]
+                    if watch_categories:
+                        if category.lower() in watch_categories:
+                            matched_criteria.append(f"category:{category}")
+                        else:
+                            failed = True
+
+                # Region matching
+                if not failed:
+                    watch_regions = [r.lower() for r in data.get("regions", [])]
+                    if watch_regions:
+                        all_locs = event_locations_lower
+                        hit = next(
+                            (wr for wr in watch_regions if wr in all_locs or wr in event_text),
+                            None,
+                        )
+                        if hit:
+                            matched_criteria.append(f"region:{hit}")
+                        else:
+                            failed = True
+
+                # Structured query evaluation (if keyword matching didn't fire)
+                if failed or not matched_criteria:
+                    structured = data.get("structured_query")
+                    if structured:
+                        try:
+                            from legba.shared.watchlist_eval import evaluate_structured_query
+                            sq = structured if isinstance(structured, dict) else json.loads(structured)
+                            event_dict = {
+                                "title": title,
+                                "category": category,
+                                "actors": list(actors),
+                                "locations": list(locations),
+                                "severity": "medium",  # default; not available at cluster time
+                            }
+                            result = evaluate_structured_query(sq, event_dict)
+                            if result and result.get("matched"):
+                                matched_criteria = result.get("reasons", [])
+                                failed = False
+                        except Exception as sq_err:
+                            logger.debug("Structured query eval failed: %s", sq_err)
+
+                if not failed and matched_criteria:
+                    # Record the trigger
+                    await self._pool.execute(
+                        "INSERT INTO watch_triggers "
+                        "(id, watch_id, signal_id, watch_name, event_title, match_reasons, priority) "
+                        "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) "
+                        "ON CONFLICT DO NOTHING",
+                        uuid4(), row["id"], event_id,
+                        row["name"], title,
+                        json.dumps(matched_criteria), row["priority"],
+                    )
+                    await self._pool.execute(
+                        "UPDATE watchlist SET trigger_count = trigger_count + 1, "
+                        "last_triggered_at = NOW() WHERE id = $1",
+                        row["id"],
+                    )
+                    logger.info(
+                        "Watchlist trigger: '%s' matched event '%s' (%s)",
+                        row["name"], title[:60], matched_criteria,
+                    )
+
+                    # Notify via dispatcher if available
+                    if self._notifier:
+                        await self._notifier.notify_watchlist_trigger(
+                            watch_name=row["name"],
+                            signal_title=title,
+                            priority=row["priority"],
+                            match_reasons=matched_criteria,
+                        )
+        except Exception as e:
+            logger.debug("Watchlist trigger check failed (non-fatal): %s", e)

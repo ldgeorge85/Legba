@@ -15,10 +15,12 @@ It is not a chatbot, not a task runner, not an AutoGPT-style goal chaser. It is 
 
 ```
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
-├── Docker Compose (project: legba, 14 containers)
+├── Docker Compose (project: legba, 16 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
 │   ├── Agent (ephemeral) — One container per cycle, 7 cycle types, self-modifiable code
 │   ├── Ingestion Service — Background signal fetching, normalization, deterministic clustering
+│   ├── Maintenance       — Deterministic housekeeping daemon (lifecycle decay, entity GC, adversarial detection)
+│   ├── Subconscious      — SLM-powered validation and enrichment (signal QA, entity resolution, fact refresh)
 │   ├── Operator UI v1    — Web console with CRUD + consultation (FastAPI + htmx, :8501)
 │   ├── Operator UI v2    — Multi-panel intelligence workstation (React + Dockview, :8503)
 │   ├── Redis             — Transient state, journal, reports
@@ -29,8 +31,19 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 │   ├── TimescaleDB       — Time-series metrics (cycle, ingestion, source health, HDX conflict baselines: 242 countries, 2018-2025)
 │   ├── Grafana           — Operational dashboards (auto-provisioned TimescaleDB datasource)
 │   └── Airflow           — 4 DAGs (metrics rollup, source health, decision surfacing, eval rubrics)
-└── External LLM: GPT-OSS 120B via vLLM or Claude Sonnet via Anthropic API
+└── External LLMs:
+    ├── GPT-OSS 120B via vLLM (primary — agent cycles)
+    ├── Llama 3.1 8B via vLLM (SLM — subconscious validation)
+    └── Claude Sonnet via Anthropic API (alternative primary / consultation)
 ```
+
+### Three-Layer Cognitive Architecture
+
+Processing is organized into three layers that run concurrently:
+
+- **Unconscious** (maintenance daemon) — Deterministic, no LLM. Lifecycle decay, entity garbage collection, corroboration scoring, adversarial detection, calibration tracking, integrity verification. Tick-based scheduler.
+- **Subconscious** (subconscious service) — SLM-powered (Llama 3.1 8B). Signal quality validation, entity resolution, classification refinement, fact corroboration, graph consistency. Three concurrent async loops.
+- **Conscious** (agent cycle) — Full primary LLM. Planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation. Discrete cycles with full context assembly.
 
 ## Agent Cycle
 
@@ -109,7 +122,7 @@ docker compose -p legba exec supervisor \
 
 | Metric | Value |
 |--------|-------|
-| Python source files | 100+ |
+| Python source files | 130+ |
 | Tests | 200+ |
 | Built-in tools | 66 across 19 modules |
 | Signals ingested | ~30,500 |
@@ -119,9 +132,11 @@ docker compose -p legba exec supervisor \
 | Entity links | ~16,500 signal-level, ~1,280 event-level |
 | Active sources | 138 (all categorized) |
 | Platform services | 9 (Redis, Postgres/AGE, Qdrant, NATS, OpenSearch x2, TimescaleDB, Grafana, Airflow) |
+| Containers | 16 (supervisor, agent, ingestion, maintenance, subconscious, UI x2, infra x9) |
 | Canonical relationship types | 30 |
 | LLM context window | 128k tokens (120k budget) |
 | Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |
+| Cognitive layers | 3 (unconscious/maintenance, subconscious/SLM, conscious/agent) |
 
 ## Configuration
 
@@ -193,7 +208,7 @@ docker compose -p legba --profile test run --rm --no-deps test python -m pytest 
 
 ## Technology Stack
 
-Python 3.12 (async) | Docker Compose | GPT-OSS 120B via vLLM | PostgreSQL 18 + Apache AGE | Qdrant | OpenSearch 2.x | NATS + JetStream | Apache Airflow | FastAPI + htmx | React 18 + Vite + TypeScript | Sigma.js + Graphology | MapLibre GL JS | Dockview | TanStack Query | Zustand | Pydantic v2 | PyOD | spaCy | NetworkX | feedparser | pycountry
+Python 3.12 (async) | Docker Compose | GPT-OSS 120B via vLLM | Llama 3.1 8B via vLLM (SLM) | PostgreSQL 18 + Apache AGE | Qdrant | OpenSearch 2.x | NATS + JetStream | Apache Airflow | FastAPI + htmx | React 18 + Vite + TypeScript | Sigma.js + Graphology | MapLibre GL JS | Dockview | TanStack Query | Zustand | Pydantic v2 | PyOD | spaCy | NetworkX | feedparser | pycountry
 
 ## Contact
 

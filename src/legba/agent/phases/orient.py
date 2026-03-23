@@ -155,25 +155,32 @@ class OrientMixin:
                     host=pg.host, port=pg.port, user=pg.user,
                     password=pg.password, database=pg.database,
                 )
-                total_sources = await conn.fetchval("SELECT COUNT(*) FROM sources")
-                sources_with_signals = await conn.fetchval(
-                    "SELECT COUNT(DISTINCT source_id) FROM signals WHERE source_id IS NOT NULL"
+                active_sources = await conn.fetchval(
+                    "SELECT COUNT(*) FROM sources WHERE status = 'active'"
+                )
+                sources_fetched_recently = await conn.fetchval(
+                    "SELECT COUNT(*) FROM sources WHERE status = 'active' "
+                    "AND last_successful_fetch_at > NOW() - INTERVAL '6 hours'"
                 )
                 total_signals = await conn.fetchval("SELECT COUNT(*) FROM signals")
+                signals_last_hour = await conn.fetchval(
+                    "SELECT COUNT(*) FROM signals WHERE created_at > NOW() - INTERVAL '1 hour'"
+                )
                 await conn.close()
 
-                utilization = (sources_with_signals / total_sources * 100) if total_sources else 0
+                fetch_rate = (sources_fetched_recently / active_sources * 100) if active_sources else 0
                 health_line = (
                     f"\n## Source Health\n"
-                    f"**{total_sources} sources registered**, "
-                    f"**{sources_with_signals} have produced signals** "
-                    f"({utilization:.0f}% utilization), "
-                    f"**{total_signals} total signals**"
+                    f"**{active_sources} active sources**, "
+                    f"**{sources_fetched_recently} fetched in last 6h** "
+                    f"({fetch_rate:.0f}% fetch rate), "
+                    f"**{total_signals} total signals** "
+                    f"({signals_last_hour} in last hour)"
                 )
-                if utilization < 50:
+                if fetch_rate < 50:
                     health_line += (
-                        f"\n**WARNING: Source utilization is very low.** "
-                        f"Focus on parsing existing sources rather than adding new ones."
+                        f"\n**NOTE: Some sources may be slow or failing.** "
+                        f"This is normal — not all sources update frequently."
                     )
                 self._source_health = health_line
 
@@ -420,6 +427,51 @@ class OrientMixin:
                 snapshot = await self.memory.registers.get_json("analysis_snapshot")
                 if snapshot and isinstance(snapshot, dict):
                     self._last_analysis_cycle = snapshot.get("cycle", 0)
+        except Exception:
+            pass
+
+        # --- Event lifecycle distribution ---
+        self._lifecycle_distribution = ""
+        try:
+            if self.memory.structured and self.memory.structured._available:
+                async with self.memory.structured._pool.acquire() as conn:
+                    try:
+                        lifecycle_rows = await conn.fetch("""
+                            SELECT lifecycle_status, count(*) AS cnt
+                            FROM events
+                            GROUP BY lifecycle_status
+                            ORDER BY cnt DESC
+                        """)
+                        if lifecycle_rows:
+                            parts = [f"{r['lifecycle_status']}({r['cnt']})" for r in lifecycle_rows]
+                            self._lifecycle_distribution = (
+                                f"\n## Event Lifecycle Distribution\n"
+                                f"**{', '.join(parts)}**"
+                            )
+                            if self._graph_inventory:
+                                self._graph_inventory += self._lifecycle_distribution
+                            else:
+                                self._graph_inventory = self._lifecycle_distribution
+                    except Exception:
+                        pass  # Column may not exist yet
+        except Exception:
+            pass
+
+        # --- Subconscious differential (from background processing) ---
+        self._subconscious_differential = ""
+        try:
+            if self.memory and self.memory.registers:
+                redis = self.memory.registers._redis
+                diff_raw = await redis.get("legba:subconscious:differential")
+                if diff_raw:
+                    diff_text = diff_raw if isinstance(diff_raw, str) else diff_raw.decode("utf-8")
+                    self._subconscious_differential = (
+                        f"\n## Subconscious Differential\n{diff_text}"
+                    )
+                    if self._graph_inventory:
+                        self._graph_inventory += self._subconscious_differential
+                    else:
+                        self._graph_inventory = self._subconscious_differential
         except Exception:
             pass
 

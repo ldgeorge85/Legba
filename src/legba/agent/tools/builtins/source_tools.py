@@ -87,10 +87,10 @@ SOURCE_ADD_DEF = ToolDefinition(
 
 SOURCE_LIST_DEF = ToolDefinition(
     name="source_list",
-    description="List registered sources. Optionally filter by status or type.",
+    description="List registered sources. Defaults to active sources only. Set status='all' to see all.",
     parameters=[
         ToolParameter(name="status", type="string",
-                      description="Filter by status: active, paused, error, retired",
+                      description="Filter by status: active (default), paused, error, retired, or 'all'",
                       required=False),
         ToolParameter(name="source_type", type="string",
                       description="Filter by type: rss, api, scrape, manual",
@@ -307,7 +307,9 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
         if err:
             return err
 
-        status = args.get("status")
+        status = args.get("status", "active")
+        if status == "all":
+            status = None
         source_type = args.get("source_type")
         limit = int(args.get("limit", 50))
 

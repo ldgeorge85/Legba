@@ -1,7 +1,7 @@
 # Legba — Implementation Design
 
 *Key design decisions, data flows, and component interactions.*
-*Last updated: 2026-03-22*
+*Last updated: 2026-03-23*
 
 ---
 
@@ -75,6 +75,27 @@ Each store serves a different access pattern:
 - **AGE** for "how are these entities connected?" (Cypher pattern matching)
 - **OpenSearch** for "find all signals/events mentioning this term" (full-text search + aggregations)
 - **Redis** for "what happened last cycle?" (fast key-value, no persistence guarantees needed)
+
+### Fact Evidence Tracking
+
+Each fact accumulates an `evidence_set` — a list of evidence items linking the fact to the signals, events, or tool results that support it. Evidence items record:
+
+- **signal_id / event_id** — the backing evidence
+- **relationship** — how the evidence relates to the fact (`supports`, `corroborates`, `challenges`)
+- **confidence** — the evidence item's individual strength
+- **observed_at** — when the evidence was recorded
+
+This allows traceability: any stored fact can answer "what signals support this claim?" The maintenance daemon and subconscious service both write evidence items as they detect corroboration or contradiction.
+
+### Contradiction Detection
+
+When a new fact is stored, the structured store checks for contradictions against existing facts sharing the same subject. Contradictions are detected via two mechanisms:
+
+1. **Predicate-level incompatibility** — A table of semantically contradictory predicate pairs (e.g., `AlliedWith` contradicts `HostileTo`; `MemberOf` contradicts `WithdrewFrom`). If the new fact's predicate contradicts an existing active fact on the same subject, the existing fact is flagged.
+
+2. **Value-level conflict** — For predicates like `LeaderOf` or `CapitalOf` where only one value is valid at a time, a new fact with a different value automatically supersedes the old one (volatile auto-supersede).
+
+Contradicted facts are not deleted — they are lowered in confidence (typically -0.3) and retain a `contradiction_of` back-reference. This preserves the full evidence chain and lets the agent or operator review conflicting information rather than silently discarding it.
 
 ### Entity Resolution Cascade
 
@@ -320,6 +341,28 @@ Source → Fetch → Normalize → Dedup → Signal (Postgres + OpenSearch)
             └── Upsert vertex + MERGE edge in AGE
 ```
 
+### Composite Confidence Scoring
+
+Each signal carries a composite confidence score derived from a gatekeeper formula:
+
+```
+Gate     = source_reliability * classification_confidence
+Modifier = 0.4 * temporal_freshness + 0.35 * corroboration + 0.25 * specificity
+Confidence = Gate * Modifier
+```
+
+The gate ensures unreliable sources or poorly classified signals can never produce high confidence regardless of other factors. The modifier captures freshness, corroboration, and specificity:
+
+| Component | Source | Range |
+|-----------|--------|-------|
+| `source_reliability` | `sources.reliability` column | 0.0-1.0 |
+| `classification_confidence` | Classifier self-reported score | 0.0-1.0 |
+| `temporal_freshness` | Linear decay: 1.0 at 0h, 0.5 at 24h, 0.0 at 168h | 0.0-1.0 |
+| `corroboration` | Independent source count on the same event (maintenance daemon) | 0.0-1.0 |
+| `specificity` | SLM-assessed signal specificity (subconscious service) | 0.0-1.0 |
+
+Individual components are stored as `confidence_components` JSONB on the signal row so the composite can be recomputed when any input changes. Weights are configurable via environment variables.
+
 ### 3-Tier Signal Dedup
 
 1. **GUID fast-path** — Exact match on RSS guid / Atom id. Instant rejection.
@@ -361,6 +404,45 @@ When new signals cluster into an existing event:
 - `time_end` is extended to `max(timestamps)`
 - Actors/locations sets are merged
 - Threshold alerts logged at 3, 5, 10, 20 signals
+
+### Event Lifecycle State Machine
+
+Every derived event has a `lifecycle_status` that transitions deterministically based on signal activity and temporal rules. The maintenance daemon evaluates transitions on a 5-minute tick:
+
+```
+                ┌──────────┐  signal_count >= 3   ┌────────────┐
+                │ EMERGING ├─────────────────────>│ DEVELOPING │
+                │          │                       │            │
+                │          │  no signals 48h       │            │  signal_count >= 5
+                │          ├──────────┐            │            │  AND confidence >= 0.6
+                └──────────┘          │            │            ├──────────┐
+                                      v            └─────┬──────┘          v
+                                ┌──────────┐             │          ┌──────────┐
+                                │ RESOLVED │<────────────┘          │  ACTIVE  │
+                                │          │  no signals 72h        │          │
+                                │          │                        │          │  velocity > 2.0
+                                │          │<───────────────────────┤          ├──────────┐
+                                │          │  no signals 7d         └─────┬────┘          v
+                                └─────┬────┘                              ^        ┌──────────┐
+                                      │                                   │        │ EVOLVING │
+                                      │  new signal linked                │        │          │
+                                      v                                   │        └─────┬────┘
+                                ┌──────────────┐   immediate              │              │
+                                │ REACTIVATED  ├──────────────>───────────┘  velocity    │
+                                └──────────────┘   (→ DEVELOPING)            < 1.5      │
+                                                                             ───────────┘
+```
+
+| Status | Meaning | Entry condition |
+|--------|---------|-----------------|
+| `EMERGING` | New event, few signals | Default on creation |
+| `DEVELOPING` | Gaining corroboration | signal_count >= 3, or reactivated |
+| `ACTIVE` | Confirmed, well-sourced | signal_count >= 5 AND confidence >= 0.6 |
+| `EVOLVING` | Rapid development | signal velocity > 2.0 signals/hour |
+| `RESOLVED` | No longer developing | No new signals within the decay window |
+| `REACTIVATED` | Resolved event re-emerges | New signal linked to a resolved event |
+
+Velocity is measured as signals per hour over a 6-hour trailing window. All transitions are deterministic — no LLM involved.
 
 ### Agent Curation (CURATE cycle)
 
@@ -544,7 +626,7 @@ Key syntax differences that affect LLM-generated queries:
 | Get vertex label | `labels(n)` | `label(n)` |
 | Return aliases | Optional | Required for clean output (`AS name`) |
 
-These differences are documented in the `graph_query` tool description so the LLM sees them when generating Cypher.
+The `graph_query` tool does **not** expose raw Cypher. Instead it provides named operations (`top_connected`, `shared_connections`, `path`, `triangles`, `by_type`, `edge_types`, `isolated`, `recent_edges`) that map to pre-built AGE-compatible queries. This prevents the LLM from generating Neo4j-style Cypher that AGE rejects.
 
 ### Graph Schema
 
@@ -600,3 +682,54 @@ Same branching logic as the agent, applied locally:
 - **Empty responses**: If the provider returns empty content, the engine re-prompts once ("You returned an empty response — please try again").
 - **400 retry**: For vLLM, 400 errors (typically GPT-OSS Harmony multi-message issues) trigger a single retry.
 - **Timeout / 5xx**: Surfaced to the operator as an error message in the chat UI.
+
+---
+
+## 13. Cognitive Architecture
+
+### Three-Layer Model
+
+Legba's processing is organized into three layers, analogous to levels of cognitive awareness:
+
+| Layer | Service | LLM | Purpose |
+|-------|---------|-----|---------|
+| **Unconscious** | Maintenance daemon | None | Deterministic housekeeping: lifecycle decay, entity GC, fact expiration, corroboration scoring, integrity verification, adversarial detection, calibration tracking. Runs on a tick-based scheduler (default 60s). |
+| **Subconscious** | Subconscious service | SLM (Llama 3.1 8B) | Continuous validation and enrichment: signal quality assessment, entity resolution, classification refinement, fact corroboration, graph consistency, relationship validation. Runs three concurrent async loops (NATS consumer, timer, differential accumulator). |
+| **Conscious** | Agent cycle | Primary LLM (GPT-OSS 120B / Claude) | Deliberate analytical work: planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation. Runs discrete cycles with full context assembly and tool loops. |
+
+The layers operate independently and concurrently. The unconscious layer requires no LLM at all — it is purely rule-based SQL and heuristics. The subconscious layer uses a small, fast, cheap model for tasks that benefit from language understanding but do not require the full reasoning capability of the primary LLM. The conscious layer uses the full primary model for complex analytical work.
+
+### Information Flow Between Layers
+
+The three layers communicate through shared data stores, not direct API calls:
+
+- **Unconscious -> Conscious**: The maintenance daemon writes lifecycle transitions, corroboration scores, and integrity metrics to Postgres and TimescaleDB. The agent reads these during ORIENT.
+- **Subconscious -> Conscious**: The subconscious service writes a differential summary to Redis (`legba:subconscious:differential`) capturing state changes between conscious cycles. The agent reads and clears this at the start of each cycle.
+- **Conscious -> Subconscious**: The agent's actions (creating events, storing facts, resolving entities) naturally create work for the subconscious via NATS triggers.
+- **Unconscious -> Subconscious**: The maintenance daemon flags adversarial signals and integrity issues that the subconscious service can pick up for SLM-powered validation.
+
+### Maintenance Daemon (Unconscious Layer)
+
+Nine scheduled tasks, each on its own modulo interval:
+
+| Task | Default Interval | Purpose |
+|------|-----------------|---------|
+| Lifecycle decay | 5 min | Event lifecycle state machine transitions, situation dormancy |
+| Corroboration scoring | 10 min | Count independent sources per event, update corroboration scores |
+| Metric collection | 5 min | Extended operational metrics to TimescaleDB for Grafana |
+| Situation detection | 30 min | Propose new situations from event clusters (3+ events, shared region/category/entities) |
+| Adversarial detection | 30 min | Source velocity spikes, semantic echo detection, provenance grouping |
+| Entity GC | 60 min | Mark dormant entities, detect duplicates, clean orphan graph edges, source health |
+| Fact decay | 60 min | Expire facts past `valid_until`, apply confidence decay to stale facts |
+| Calibration tracking | 60 min | Record claimed confidence vs actual outcomes for systematic bias detection |
+| Integrity verification | 12 hr | Evidence chain verification, eval rubrics (event dedup rate, graph quality, source health) |
+
+### Subconscious Service (Subconscious Layer)
+
+Three concurrent async loops:
+
+1. **NATS consumer** — Triggered work items from other services (signal validation, entity resolution, relationship validation). Listens on `legba.subconscious.*` subjects.
+2. **Timer loop** — Periodic tasks on modulo schedule: signal validation (15 min), entity resolution (30 min), classification refinement (30 min), fact refresh (60 min), graph consistency (daily), source reliability recalc (daily).
+3. **Differential accumulator** — Tracks state changes between conscious agent cycles. Writes a JSON summary to Redis every 5 minutes capturing new signals per situation, event lifecycle transitions, entity anomalies, fact changes, hypothesis evidence changes, and watchlist matches.
+
+The SLM provider supports both vLLM (OpenAI-compatible, with `guided_json` for constrained decoding) and Anthropic (with `tool_use` for structured output). Default model: Llama 3.1 8B Instruct at temperature 0.1 for deterministic validation.

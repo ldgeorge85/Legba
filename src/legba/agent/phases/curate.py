@@ -92,15 +92,30 @@ class CurateMixin:
                     lines.append("### Unclustered Signals\n(None found — all signals are linked to events)\n")
 
                 # 2. Recent auto-created events with low signal count
-                low_confidence_events = await conn.fetch("""
-                    SELECT e.id, e.title, e.severity, e.event_type,
-                           e.signal_count, e.confidence, e.created_at
-                    FROM events e
-                    WHERE e.source_method = 'auto'
-                      AND e.signal_count <= 2
-                    ORDER BY e.created_at DESC
-                    LIMIT 15
-                """)
+                # Try to include lifecycle_status if the column exists
+                try:
+                    low_confidence_events = await conn.fetch("""
+                        SELECT e.id, e.title, e.severity, e.event_type,
+                               e.signal_count, e.confidence, e.created_at,
+                               e.lifecycle_status
+                        FROM events e
+                        WHERE e.source_method = 'auto'
+                          AND e.signal_count <= 2
+                        ORDER BY e.created_at DESC
+                        LIMIT 15
+                    """)
+                    _has_lifecycle = True
+                except Exception:
+                    low_confidence_events = await conn.fetch("""
+                        SELECT e.id, e.title, e.severity, e.event_type,
+                               e.signal_count, e.confidence, e.created_at
+                        FROM events e
+                        WHERE e.source_method = 'auto'
+                          AND e.signal_count <= 2
+                        ORDER BY e.created_at DESC
+                        LIMIT 15
+                    """)
+                    _has_lifecycle = False
 
                 if low_confidence_events:
                     lines.append("### Auto-Created Events (low signal count, need review)")
@@ -108,29 +123,43 @@ class CurateMixin:
                     for r in low_confidence_events:
                         sev = r['severity'] or 'unset'
                         etype = r['event_type'] or 'unset'
+                        lc = f", lifecycle={r['lifecycle_status']}" if _has_lifecycle and r.get('lifecycle_status') else ""
                         lines.append(
                             f"- **[{r['id']}]** (signals={r['signal_count']}, "
-                            f"conf={r['confidence']:.2f}, sev={sev}, type={etype}) "
+                            f"conf={r['confidence']:.2f}, sev={sev}, type={etype}{lc}) "
                             f"{r['title'][:120]}"
                         )
                     lines.append("")
 
                 # 3. Trending events (high signal count)
-                trending = await conn.fetch("""
-                    SELECT e.id, e.title, e.severity, e.event_type,
-                           e.signal_count, e.confidence
-                    FROM events e
-                    WHERE e.signal_count > 2
-                    ORDER BY e.signal_count DESC
-                    LIMIT 5
-                """)
+                try:
+                    trending = await conn.fetch("""
+                        SELECT e.id, e.title, e.severity, e.event_type,
+                               e.signal_count, e.confidence, e.lifecycle_status
+                        FROM events e
+                        WHERE e.signal_count > 2
+                        ORDER BY e.signal_count DESC
+                        LIMIT 5
+                    """)
+                    _trending_has_lifecycle = True
+                except Exception:
+                    trending = await conn.fetch("""
+                        SELECT e.id, e.title, e.severity, e.event_type,
+                               e.signal_count, e.confidence
+                        FROM events e
+                        WHERE e.signal_count > 2
+                        ORDER BY e.signal_count DESC
+                        LIMIT 5
+                    """)
+                    _trending_has_lifecycle = False
 
                 if trending:
                     lines.append("### Trending Events (high signal count)")
                     for r in trending:
                         sev = r['severity'] or 'unset'
+                        lc = f", lifecycle={r['lifecycle_status']}" if _trending_has_lifecycle and r.get('lifecycle_status') else ""
                         lines.append(
-                            f"- **[{r['id']}]** (signals={r['signal_count']}, sev={sev}) "
+                            f"- **[{r['id']}]** (signals={r['signal_count']}, sev={sev}{lc}) "
                             f"{r['title'][:120]}"
                         )
                     lines.append("")
