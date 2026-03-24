@@ -186,6 +186,7 @@ src/legba/
     adversarial.py                   (494 lines) — AdversarialDetector: source velocity spikes, semantic echo detection, provenance grouping
     calibration.py                   (368 lines) — CalibrationTracker: claimed confidence vs actual outcomes, systematic bias detection
     propagation.py                   (615 lines) — Reactive state propagation: 5 rules cascading state changes across portfolio (watch triggers, hypothesis shifts, situation escalation, event lifecycle, stale goals)
+    backfill.py                      — Startup backfill: creates event graph vertices in AGE from existing events table (runs once on daemon boot)
 
   subconscious/
     __init__.py                      (1 line)    — Package docstring
@@ -1107,6 +1108,9 @@ Deterministic background maintenance service. No LLM. Runs continuously on a con
 
 #### `maintenance/calibration.py`
 **Purpose:** `CalibrationTracker` — when hypotheses are CONFIRMED or REFUTED, records claimed confidence at creation vs actual outcome. Computes confidence discrimination metric to detect systematic over/under-confidence.
+
+#### `maintenance/backfill.py`
+**Purpose:** Startup backfill module — creates event graph vertices in Apache AGE from the existing `events` table. Runs once on maintenance daemon boot to ensure all events have corresponding graph nodes. Idempotent (skips already-existing vertices).
 
 ---
 

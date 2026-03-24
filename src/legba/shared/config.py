@@ -337,7 +337,7 @@ class AgentConfig:
     cluster_threshold: float = 0.6            # Raised from 0.5 — tighter clustering
     autolink_entity_freq_threshold: float = 0.1  # 10% of events
     survey_base_score: float = 0.50           # Tier 3 dynamic: SURVEY base priority
-    curate_score_cap: float = 0.45            # Tier 3 dynamic: CURATE max score
+    curate_score_cap: float = 0.50            # Tier 3 dynamic: CURATE max score (equal to SURVEY, cooldown alternates)
     maintenance_check_interval: int = 60      # Seconds between maintenance checks
 
     # Subconscious LLM (lightweight model for background tasks)

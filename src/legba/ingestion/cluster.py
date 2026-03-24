@@ -55,6 +55,32 @@ _CLUSTER_THRESHOLD = 0.6
 
 # Max auto-created event confidence
 _AUTO_CONFIDENCE_CAP = 0.6
+
+# Categories that imply higher default severity
+_HIGH_SEVERITY_CATEGORIES = frozenset({"conflict", "disaster"})
+
+
+def _infer_severity(category: str, confidence: float, signal_count: int) -> str:
+    """Infer event severity from category, confidence, and corroboration.
+
+    Rules:
+      - conflict/disaster with confidence >= 0.6 → high
+      - conflict/disaster with lower confidence → medium
+      - 5+ corroborating signals → boost one level
+      - everything else → medium (agent can override in CURATE)
+    """
+    if category in _HIGH_SEVERITY_CATEGORIES and confidence >= 0.6:
+        sev = "high"
+    elif category in _HIGH_SEVERITY_CATEGORIES:
+        sev = "medium"
+    else:
+        sev = "medium"
+
+    # Corroboration boost: many signals on same event = higher confidence = higher severity
+    if signal_count >= 5 and sev == "medium":
+        sev = "high"
+
+    return sev
 _REINFORCED_CONFIDENCE_CAP = 0.8
 
 # Signal count milestones that trigger reinforcement alerts
@@ -248,6 +274,31 @@ class SignalClusterer:
 
         for cluster_indices in clusters:
             cluster_feats = [features[i] for i in cluster_indices]
+
+            # Cohesion check: reject clusters where the weakest internal pair
+            # is below a floor. Single-linkage can chain A-B-C where A and C
+            # are unrelated. This catches that.
+            if len(cluster_indices) >= 4:
+                min_sim = 1.0
+                # Sample pairs for large clusters (full pairwise is O(n^2))
+                check_pairs = min(len(cluster_indices) * 2, 20)
+                import random
+                idxs = list(cluster_indices)
+                for _ in range(check_pairs):
+                    a, b = random.sample(idxs, 2)
+                    s = sim_fn(a, b)
+                    if s < min_sim:
+                        min_sim = s
+                if min_sim < 0.3:
+                    # Cluster is too loose — split into singletons
+                    logger.debug(
+                        "Rejecting loose cluster of %d (min_sim=%.2f), treating as singletons",
+                        len(cluster_indices), min_sim,
+                    )
+                    for feat in cluster_feats:
+                        if feat["source_name"] in _STRUCTURED_SOURCES and feat["category"] != "environment":
+                            events_affected += await self._create_singleton_event(feat)
+                    continue
 
             if len(cluster_indices) >= 2:
                 # Multi-signal cluster → create or merge event
@@ -606,7 +657,7 @@ class SignalClusterer:
                 "summary": "",
                 "category": category,
                 "event_type": "incident",
-                "severity": "medium",
+                "severity": _infer_severity(category, confidence, signal_count),
                 "time_start": time_start.isoformat() if time_start else None,
                 "time_end": time_end.isoformat() if time_end else None,
                 "actors": list(all_actors),
@@ -775,19 +826,20 @@ class SignalClusterer:
                 if not key_entities:
                     continue
 
-                # Case-insensitive substring match: does any event entity appear
-                # in a situation entity or vice versa?
-                matched = False
+                # Require 2+ entity overlaps to link (not just 1 substring match).
+                # Single-entity overlap produces too many false positives
+                # (e.g., "United States" matches everything).
+                match_count = 0
                 for ke in key_entities:
-                    ke_low = ke.lower()
+                    ke_low = ke.lower().strip()
+                    if not ke_low or len(ke_low) < 3:
+                        continue
                     for ee in event_entities:
-                        if ee in ke_low or ke_low in ee:
-                            matched = True
-                            break
-                    if matched:
-                        break
+                        if ee == ke_low or (len(ke_low) > 5 and ke_low in ee) or (len(ee) > 5 and ee in ke_low):
+                            match_count += 1
+                            break  # One match per key_entity
 
-                if matched:
+                if match_count >= 2:
                     await self._pool.execute(
                         "INSERT INTO situation_events (situation_id, event_id) "
                         "VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -812,7 +864,7 @@ class SignalClusterer:
                 "summary": data.get("summary", ""),
                 "category": feat["category"],
                 "event_type": "incident",
-                "severity": "medium",
+                "severity": _infer_severity(feat["category"], feat["confidence"], 1),
                 "time_start": feat["timestamp"].isoformat() if feat["timestamp"] else None,
                 "time_end": feat["timestamp"].isoformat() if feat["timestamp"] else None,
                 "actors": data.get("actors") or [],
@@ -997,15 +1049,15 @@ class SignalClusterer:
                     else:
                         failed = True
 
-                # Keyword matching
+                # Keyword matching (optional boost, not required)
+                # Keywords are checked against title but don't fail the match —
+                # entity + category is sufficient to trigger.
                 if not failed:
                     watch_keywords = [k.lower() for k in data.get("keywords", [])]
                     if watch_keywords:
                         hit = next((kw for kw in watch_keywords if kw in event_text), None)
                         if hit:
                             matched_criteria.append(f"keyword:{hit}")
-                        else:
-                            failed = True
 
                 # Category matching
                 if not failed:

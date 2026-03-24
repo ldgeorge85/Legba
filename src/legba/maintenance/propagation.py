@@ -367,6 +367,7 @@ class StatePropagator:
                 )
 
                 if result["recommendation"] in ("full_portfolio", "situation_and_watchlist"):
+                    # Route to SURVEY (frequent) not EVOLVE (every 30 cycles)
                     await self.backlog.add_task(
                         task_type="create_investigative_goal",
                         target={
@@ -376,7 +377,7 @@ class StatePropagator:
                             "recommendation": result["recommendation"],
                         },
                         priority=min(0.9, result["score"]),
-                        cycle_type="EVOLVE",
+                        cycle_type="SURVEY",
                         context=(
                             f"Situation '{sit['name']}' escalated: "
                             f"{', '.join(result['reasons'][:3])}. "

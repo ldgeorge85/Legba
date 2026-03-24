@@ -31,11 +31,26 @@ def _thesis_words(text: str) -> set[str]:
 
 
 def _thesis_similarity(a: str, b: str) -> float:
-    """Jaccard similarity of thesis words."""
+    """Jaccard similarity of thesis words (fast fallback)."""
     wa, wb = _thesis_words(a), _thesis_words(b)
     if not wa or not wb:
         return 0.0
     return len(wa & wb) / len(wa | wb)
+
+
+async def _thesis_cosine(a: str, b: str, embed_fn) -> float:
+    """Cosine similarity of thesis embeddings (semantic dedup)."""
+    try:
+        emb_a = await embed_fn(a)
+        emb_b = await embed_fn(b)
+        if not emb_a or not emb_b:
+            return 0.0
+        dot = sum(x * y for x, y in zip(emb_a, emb_b))
+        norm_a = sum(x * x for x in emb_a) ** 0.5
+        norm_b = sum(x * x for x in emb_b) ** 0.5
+        return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+    except Exception:
+        return 0.0
 
 if TYPE_CHECKING:
     from ...memory.structured import StructuredStore
@@ -119,8 +134,8 @@ HYPOTHESIS_LIST_DEF = ToolDefinition(
 _VALID_STATUSES = {"active", "confirmed", "refuted", "superseded", "stale"}
 
 
-def register(registry: ToolRegistry, *, structured: StructuredStore, state: CycleState) -> None:
-    """Register hypothesis (ACH) tools."""
+def register(registry: ToolRegistry, *, structured: StructuredStore, state: CycleState, embed_fn=None) -> None:
+    """Register hypothesis (ACH) tools. embed_fn: async (text) -> list[float] for semantic dedup."""
 
     def _check_available() -> str | None:
         if structured is None or not structured._available:
@@ -140,6 +155,7 @@ def register(registry: ToolRegistry, *, structured: StructuredStore, state: Cycl
             return "Error: counter_thesis is required — every hypothesis needs a competing explanation"
 
         # --- Dedup: check for existing active hypotheses with similar thesis ---
+        # Uses embedding cosine similarity (semantic) when available, Jaccard as fallback.
         try:
             async with structured._pool.acquire() as conn:
                 active = await conn.fetch(
@@ -147,15 +163,24 @@ def register(registry: ToolRegistry, *, structured: StructuredStore, state: Cycl
                     "WHERE status = 'active' ORDER BY created_at DESC",
                 )
                 for row in active:
-                    sim = _thesis_similarity(thesis, row["thesis"])
-                    if sim >= 0.45:
+                    # Try semantic similarity first, fall back to Jaccard
+                    if embed_fn:
+                        sim = await _thesis_cosine(thesis, row["thesis"], embed_fn)
+                        method = "cosine"
+                        threshold = 0.80
+                    else:
+                        sim = _thesis_similarity(thesis, row["thesis"])
+                        method = "jaccard"
+                        threshold = 0.45
+                    if sim >= threshold:
                         return json.dumps({
                             "status": "duplicate_detected",
                             "existing_hypothesis_id": str(row["id"]),
                             "existing_thesis": row["thesis"][:120],
                             "similarity": round(sim, 3),
+                            "method": method,
                             "reason": (
-                                f"An active hypothesis already covers this topic (Jaccard {sim:.2f}). "
+                                f"An active hypothesis already covers this topic ({method} {sim:.2f}). "
                                 "Use hypothesis_evaluate to add evidence to it, or update its status."
                             ),
                         }, indent=2)

@@ -45,8 +45,10 @@ class SubconsciousConfig:
 
     # SLM provider config
     llm_provider: str = "vllm"             # "vllm" or "anthropic"
-    llm_base_url: str = ""                 # vLLM endpoint base URL
-    llm_api_key: str = ""                  # API key for the SLM
+    llm_base_url: str = ""                 # vLLM/llama.cpp endpoint base URL
+    llm_api_key: str = ""                  # Bearer token (vLLM) or API key (Anthropic)
+    llm_auth_user: str = ""                # HTTP basic auth user (for Caddy-proxied endpoints)
+    llm_auth_pass: str = ""                # HTTP basic auth password
     llm_model: str = "meta-llama/Llama-3.1-8B-Instruct"
     max_tokens: int = 2048                 # Max output tokens per SLM call
     llm_timeout: int = 60                  # SLM request timeout (seconds)
@@ -77,6 +79,8 @@ class SubconsciousConfig:
             llm_provider=os.getenv("SUBCONSCIOUS_LLM_PROVIDER", "vllm"),
             llm_base_url=os.getenv("SUBCONSCIOUS_LLM_BASE_URL", os.getenv("SLM_BASE_URL", "")),
             llm_api_key=os.getenv("SUBCONSCIOUS_LLM_API_KEY", os.getenv("SLM_API_KEY", "")),
+            llm_auth_user=os.getenv("SUBCONSCIOUS_LLM_AUTH_USER", os.getenv("MODELS_API_USER", "")),
+            llm_auth_pass=os.getenv("SUBCONSCIOUS_LLM_AUTH_PASS", os.getenv("MODELS_API_PASS", "")),
             llm_model=os.getenv("SUBCONSCIOUS_LLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
             max_tokens=int(os.getenv("SUBCONSCIOUS_MAX_TOKENS", "2048")),
             llm_timeout=int(os.getenv("SUBCONSCIOUS_LLM_TIMEOUT", "60")),

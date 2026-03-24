@@ -78,6 +78,8 @@ class VLLMSLMProvider(BaseSLMProvider):
         max_tokens: int = 2048,
         temperature: float = 0.1,
         timeout: int = 60,
+        auth_user: str = "",
+        auth_pass: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -85,18 +87,23 @@ class VLLMSLMProvider(BaseSLMProvider):
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
+        self._auth_user = auth_user
+        self._auth_pass = auth_pass
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(self.timeout),
-            )
+            kwargs: dict[str, Any] = {
+                "base_url": self.base_url,
+                "headers": {"Content-Type": "application/json"},
+                "timeout": httpx.Timeout(self.timeout),
+            }
+            # Basic auth (Caddy-proxied endpoints) takes precedence over Bearer
+            if self._auth_user and self._auth_pass:
+                kwargs["auth"] = httpx.BasicAuth(self._auth_user, self._auth_pass)
+            elif self.api_key:
+                kwargs["headers"]["Authorization"] = f"Bearer {self.api_key}"
+            self._client = httpx.AsyncClient(**kwargs)
         return self._client
 
     async def complete(
@@ -351,4 +358,6 @@ def create_provider(config: SubconsciousConfig) -> BaseSLMProvider:
             max_tokens=config.max_tokens,
             temperature=config.llm_temperature,
             timeout=config.llm_timeout,
+            auth_user=config.llm_auth_user,
+            auth_pass=config.llm_auth_pass,
         )

@@ -406,7 +406,13 @@ For each target entity:
 - Add or update the entity summary
 - **Common mistake**: researching 5 entities shallowly (2-3 facts each). Instead, research 2-3 entities deeply (10+ facts each). A thin profile is almost as useless as no profile.
 
-### 4. Strengthen the Graph
+### 4. Store Structured Facts
+- For key findings from research, use **store_fact** to record them as structured triples (subject/predicate/value). These go into the facts database and are retrievable across cycles.
+- Example: `store_fact(subject="Russia", predicate="GDP_nominal", value="$2.1 trillion (2025)", confidence=0.7)`
+- Entity profiles hold attributes; **facts capture relationships, claims, and observations** that feed into hypothesis evaluation and reporting.
+- TARGET: 3-5 store_fact calls per researched entity, covering key metrics, relationships, and recent developments.
+
+### 5. Strengthen the Graph
 - For each researched entity, check its graph relationships with graph_query
 - Add missing relationships discovered through research (e.g., if Wikipedia says X is a member of NATO, add MemberOf edge)
 - Verify existing relationships — if research contradicts a stored relationship, update it
@@ -1339,11 +1345,18 @@ Use tags liberally to add context and enable filtering. Tags are freeform lowerc
 
 SITUATION_GUIDANCE = """## Situations vs Events
 
-- A **situation** is an ongoing analytical theme spanning multiple events over time (e.g., "US-Iran Military Tensions", "2026 Iran Energy Crisis")
-- A single incident (accident, speech, court ruling) is an **event**, NOT a situation
-- Before creating a situation, verify: Does this pattern span 3+ events? Will it develop over days/weeks? Does it require ongoing monitoring?
-- DO NOT create situations for: individual incidents, one-time events, sports scores, entertainment news, routine weather alerts
-- When linking events to situations, verify relevance — an event about basketball should NOT link to "French Political Controversies"
+**MANDATORY BEFORE situation_create:**
+1. Call `situation_list` FIRST. Read EVERY existing situation name carefully.
+2. For each event you want to track, ask: "Does ANY existing situation already cover this topic?"
+3. If yes — use `situation_link_event`. DO NOT create a new situation.
+4. If you see near-duplicates (e.g., "US-Iran Tensions" and "Iran-US Gulf Tensions"), use the EXISTING one. Do not create another variant.
+5. ONLY create a new situation after you have confirmed via situation_list that no existing situation covers the topic, and the pattern genuinely spans 3+ events over multiple days.
+
+**What qualifies:** Ongoing conflicts, developing crises, sustained economic disruptions, persistent security threats — broad analytical themes spanning many events over weeks.
+
+**What does NOT qualify:** Individual incidents, entertainment, sports, routine weather, calendar events, one-time stories. These are events, not situations.
+
+**Naming:** Broad themes. "US-Iran Military Tensions" not "Iran Naval Threat - Gulf of Oman March 2026".
 """
 
 ENTITY_GUIDANCE = """## Entity Intelligence — Persistent World Model

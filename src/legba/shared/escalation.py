@@ -45,6 +45,8 @@ def compute_escalation_score(
     reasons: list[str] = []
 
     # --- Base: event count weight ---
+    # Minimum 3 events before any meaningful score — 1-2 event situations
+    # should not generate investigative goals or watchlist items.
     if event_count >= 10:
         score += 0.7
         reasons.append(f"{event_count} events (high cluster)")
@@ -55,10 +57,12 @@ def compute_escalation_score(
         score += 0.3
         reasons.append(f"{event_count} events in cluster")
     else:
-        # Fewer than 3 events — minimal base
-        score += event_count * 0.1
-        if event_count > 0:
-            reasons.append(f"only {event_count} event(s)")
+        # Fewer than 3 events — too early to escalate
+        return {
+            "score": round(event_count * 0.05, 3),
+            "recommendation": "ignore",
+            "reasons": [f"only {event_count} event(s) — below escalation threshold"],
+        }
 
     # --- Severity boost ---
     critical_count = severity_distribution.get("critical", 0)

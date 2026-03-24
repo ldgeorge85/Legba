@@ -289,7 +289,10 @@ class WakeMixin:
         prediction_tools.register(self.registry, structured=self.memory.structured, state=self.state)
 
         # Hypothesis (ACH) tools — competing hypothesis pairs with evidence tracking
-        hypothesis_tools.register(self.registry, structured=self.memory.structured, state=self.state)
+        hypothesis_tools.register(
+            self.registry, structured=self.memory.structured, state=self.state,
+            embed_fn=self.llm.generate_embedding if hasattr(self, 'llm') and self.llm else None,
+        )
 
         # Metrics query tool — time-series baselines from TimescaleDB
         metrics_tools.register(self.registry)

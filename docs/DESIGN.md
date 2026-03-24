@@ -363,6 +363,17 @@ The gate ensures unreliable sources or poorly classified signals can never produ
 
 Individual components are stored as `confidence_components` JSONB on the signal row so the composite can be recomputed when any input changes. Weights are configurable via environment variables.
 
+### Signal Provenance
+
+Every signal carries a `provenance` JSONB column recording its full processing trace through the ingestion pipeline. This is an append-only log of each processing step:
+
+- **normalizer** — source, fetch timestamp, title/body extraction
+- **dedup** — which dedup tier resolved (GUID, source_url, Jaccard), or `new` if no match
+- **confidence** — the individual component values and final composite score
+- **clusterer** — event assignment (event_id, method: new_cluster / reinforced / singleton_promoted / unclustered)
+
+Provenance is immutable after creation. It provides an end-to-end audit trail answering "how did this signal get here and why does it have this confidence?"
+
 ### 3-Tier Signal Dedup
 
 1. **GUID fast-path** — Exact match on RSS guid / Atom id. Instant rejection.

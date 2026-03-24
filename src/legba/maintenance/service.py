@@ -87,6 +87,16 @@ class MaintenanceService:
 
         logger.info("Maintenance daemon initialized, entering main loop")
 
+        # One-time backfill on startup (idempotent — skips already-done work)
+        try:
+            from .backfill import BackfillManager
+            backfill = BackfillManager(self._pg_pool)
+            ev_count = await backfill.backfill_event_graph_vertices()
+            sit_count = await backfill.backfill_situation_graph()
+            logger.info("Startup backfill: %d event vertices, %d situation edges", ev_count, sit_count)
+        except Exception as e:
+            logger.warning("Startup backfill failed (non-fatal): %s", e)
+
         # Start health server in background
         asyncio.create_task(self._health_server())
 
