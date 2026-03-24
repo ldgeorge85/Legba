@@ -6,6 +6,7 @@ Handles category inference, timestamp parsing, and source-specific mappings.
 from __future__ import annotations
 
 import calendar
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -401,5 +402,13 @@ def normalize_entry(
                         setattr(sig, key, value)
             except Exception as e:
                 logger.warning("Source normalizer failed for %s: %s", source_name, e)
+
+    # Signal provenance: start tracking processing lineage via prov: tag transport
+    prov = {
+        "raw_source": source_name or (entry.source_type if hasattr(entry, 'source_type') else ""),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "normalized_by": "rss_normalizer",
+    }
+    sig.tags = list(sig.tags) + [f"prov:{json.dumps(prov)}"]
 
     return sig

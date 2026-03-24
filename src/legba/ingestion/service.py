@@ -424,6 +424,18 @@ class IngestionService:
                     deduped += 1
                     continue
 
+                # Signal provenance: record dedup results
+                try:
+                    prov_tag = next((t for t in sig.tags if t.startswith("prov:")), None)
+                    if prov_tag:
+                        prov = json.loads(prov_tag[5:])
+                        has_vectors = self._qdrant is not None
+                        prov["dedup_checked"] = {"guid": True, "url": True, "vector": has_vectors, "jaccard": True}
+                        prov["dedup_passed"] = True
+                        sig.tags = [t for t in sig.tags if not t.startswith("prov:")] + [f"prov:{json.dumps(prov)}"]
+                except Exception:
+                    pass
+
                 # Geo resolution (best-effort)
                 await self._resolve_geo(sig)
 
@@ -536,6 +548,19 @@ class IngestionService:
             signal.actors = list(actors)[:15]
             signal.locations = list(locations)[:10]
 
+            # Signal provenance: record model enrichment details
+            try:
+                prov_tag = next((t for t in signal.tags if t.startswith("prov:")), None)
+                if prov_tag:
+                    prov = json.loads(prov_tag[5:])
+                    prov["classified_by"] = "deberta_v3_zeroshot"
+                    prov["classification_confidence"] = classification_conf
+                    prov["ner_by"] = "spacy_en_core_web_trf"
+                    prov["entities_extracted"] = (signal.actors[:5] + signal.locations[:3])
+                    signal.tags = [t for t in signal.tags if not t.startswith("prov:")] + [f"prov:{json.dumps(prov)}"]
+            except Exception:
+                pass
+
         except Exception as e:
             logger.debug("Model enrichment failed for signal: %s", e)
 
@@ -576,6 +601,17 @@ class IngestionService:
             # Store components as a tag for downstream use (storage layer picks this up)
             # Components are preserved in signal data JSONB via model_dump_json()
             signal.tags = list(signal.tags) + [f"cc:{json.dumps(components)}"]
+
+            # Signal provenance: record confidence formula details
+            try:
+                prov_tag = next((t for t in signal.tags if t.startswith("prov:")), None)
+                if prov_tag:
+                    prov = json.loads(prov_tag[5:])
+                    prov["confidence_formula"] = "gatekeeper_hybrid"
+                    prov["source_quality_score"] = source_quality_score
+                    signal.tags = [t for t in signal.tags if not t.startswith("prov:")] + [f"prov:{json.dumps(prov)}"]
+            except Exception:
+                pass
         except Exception:
             pass  # Non-fatal — keep existing confidence
 

@@ -417,7 +417,8 @@ class SignalClusterer:
             new_count = old_count + len(feats)
 
             # Extend actors/locations
-            merged_actors = list(set(old_data.get("actors") or []) | new_actors)
+            old_data_actors_before = set(old_data.get("actors") or [])
+            merged_actors = list(old_data_actors_before | new_actors)
             merged_locations = list(set(old_data.get("locations") or []) | new_locations)
 
             # Extend geo from new signals
@@ -510,6 +511,27 @@ class SignalClusterer:
 
             # Cognitive architecture: update corroboration after reinforcement
             await self._update_corroboration(event_id)
+
+            # Event graph: link newly added actors to event vertex
+            try:
+                old_actor_set = set(old_data_actors_before) if old_data_actors_before else set()
+                truly_new_actors = new_actors - old_actor_set
+                if truly_new_actors:
+                    from legba.shared.graph_events import link_entity_to_event
+                    event_title = old_data.get("title", "")
+                    for actor in list(truly_new_actors)[:10]:
+                        try:
+                            await link_entity_to_event(
+                                self._pool, 'legba_graph',
+                                entity_name=actor,
+                                event_title=event_title,
+                                role='actor',
+                                confidence=0.6,
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
             # Check reinforcement thresholds
             crossed = {t for t in _REINFORCEMENT_THRESHOLDS if old_count < t <= new_count}
@@ -653,6 +675,30 @@ class SignalClusterer:
 
             # Cognitive architecture: compute corroboration from independent sources
             await self._update_corroboration(event_id)
+
+            # Event graph: create Event vertex and link actors in AGE graph
+            try:
+                from legba.shared.graph_events import upsert_event_vertex, link_entity_to_event
+                await upsert_event_vertex(
+                    self._pool, 'legba_graph',
+                    event_id=str(event_id),
+                    event_title=title,
+                    category=category,
+                    lifecycle_status='emerging',
+                )
+                for actor in list(all_actors)[:10]:
+                    try:
+                        await link_entity_to_event(
+                            self._pool, 'legba_graph',
+                            entity_name=actor,
+                            event_title=title,
+                            role='actor',
+                            confidence=0.6,
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug("Event graph vertex creation failed: %s", e)
 
             # Auto-link to active situations
             await self._auto_link_situations(event_id, all_actors, all_locations, category)
@@ -832,9 +878,33 @@ class SignalClusterer:
                 feat["id"], event_id,
             )
 
-            # Auto-link to active situations
+            # Event graph: create Event vertex and link actors in AGE graph
             actors = data.get("actors") or []
             locations = data.get("locations") or []
+            try:
+                from legba.shared.graph_events import upsert_event_vertex, link_entity_to_event
+                await upsert_event_vertex(
+                    self._pool, 'legba_graph',
+                    event_id=str(event_id),
+                    event_title=feat["title"],
+                    category=feat["category"],
+                    lifecycle_status='emerging',
+                )
+                for actor in actors[:10]:
+                    try:
+                        await link_entity_to_event(
+                            self._pool, 'legba_graph',
+                            entity_name=actor,
+                            event_title=feat["title"],
+                            role='actor',
+                            confidence=0.6,
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug("Singleton event graph vertex creation failed: %s", e)
+
+            # Auto-link to active situations
             await self._auto_link_situations(event_id, set(actors), set(locations), feat["category"])
 
             # Check watchlist triggers for singleton events

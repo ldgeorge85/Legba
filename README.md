@@ -45,6 +45,8 @@ Processing is organized into three layers that run concurrently:
 - **Subconscious** (subconscious service) — SLM-powered (Llama 3.1 8B). Signal quality validation, entity resolution, classification refinement, fact corroboration, graph consistency. Three concurrent async loops.
 - **Conscious** (agent cycle) — Full primary LLM. Planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation. Discrete cycles with full context assembly.
 
+A planning layer ties goals, situations, watchlists, and hypotheses into a detect-escalate-plan-execute loop. Standing goals weight analytical priority; investigative goals decompose into typed tasks that feed the cycle router. Reactive propagation ensures state changes cascade across the portfolio.
+
 ## Agent Cycle
 
 Every cycle (~2-10 minutes), the agent runs one of **7 cycle types** (selected by priority):

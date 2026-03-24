@@ -1025,13 +1025,20 @@ When you find concrete issues, fix them:
 - **Goals**: Create goals to address structural issues (e.g., "Verify leader profiles for top 10 entities" or "Fetch African sources for 5 consecutive acquire cycles").
 - **DO NOT modify for the sake of it.** Only change things where you have evidence of a problem.
 
-### 4. Workflow Audit
+### 4. Portfolio Review (MANDATORY)
+Review the portfolio summary below. For each active goal:
+- Is it still relevant? If no progress in 30+ cycles, consider deferring or retiring.
+- Does the coverage map show gaps? Propose new standing goals for uncovered regions/domains with high event activity.
+- Are investigative goals producing results? If a hypothesis has zero evidence after 15 cycles, consider closing the investigation.
+- Are watchlists triggering? If a watchlist has 0 triggers after 20 cycles, review its criteria.
+
+### 5. Workflow Audit
 Check your Airflow workflows with `workflow_list`:
 - Are existing workflows running successfully? Check with `workflow_status`.
 - Are there recurring tasks you do manually every few cycles that should be automated as a DAG?
 - Consider: daily entity completeness re-scoring, periodic source health reports, scheduled data exports.
 
-### 5. Track Your Changes
+### 6. Track Your Changes
 Before calling cycle_complete, use note_to_self to log:
 - What you assessed
 - What you changed (file, what, why)

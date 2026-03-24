@@ -249,6 +249,41 @@ Each cycle type sees only the tools relevant to its purpose. SURVEY can't fetch 
 
 ---
 
+## The Planning Loop: Maintaining Coherent Focus
+
+The cognitive layers handle *how* to think. The planning loop handles *what* to think about. Without it, analytical work drifts — the system responds to whatever signals arrive next rather than maintaining coherent investigative threads across thousands of cycles.
+
+```
+ DETECT ──► ESCALATE ──► DEDUPLICATE ──► PLAN ──► EXECUTE ──► EVALUATE ──► ADJUST
+   │                                                                          │
+   └──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Detect** is continuous and deterministic. The ingestion pipeline and maintenance daemon produce events, lifecycle transitions, watchlist triggers, and situation candidates without any LLM involvement.
+
+**Escalate** answers "does this deserve attention?" Not everything detected warrants analytical investment. A single routine event is noise. A cluster of five conflict events in an unmonitored region is a signal. Escalation scoring assesses novelty, severity, entity overlap with existing portfolio, and coverage gaps to produce a recommendation: ignore, monitor passively, create a situation, or spin up a full analytical campaign (goal + watchlist + hypothesis + research tasks).
+
+**Deduplicate** prevents portfolio sprawl. Before creating anything, the system checks overlap with existing situations, goals, and hypotheses. Semantic matching, not just name matching — "Iran Hormuz Naval Activity" and "US-Iran Military Tensions" might be the same analytical thread at different zoom levels.
+
+**Plan** converts passed-escalation items into the portfolio. Two goal types drive everything:
+
+- **Standing goals** are persistent priorities — "maintain situational awareness on Iran energy infrastructure." They don't decompose into tasks. They weight: an Iran energy event scores higher than a sports event when the system chooses what to work on next.
+- **Investigative goals** are time-bound analytical campaigns — "investigate whether Iran is deliberately curtailing oil exports." They decompose into concrete tasks: research specific entities, create watchlists, evaluate specific evidence. They complete when the underlying hypothesis resolves or the situation closes.
+
+Tasks enter a priority backlog (Redis sorted set) tagged by cycle type. Each task knows whether it belongs to RESEARCH, SURVEY, SYNTHESIZE, or ANALYSIS.
+
+**Execute** is where the cycle router draws from the backlog. Goal relevance amplifies priority but never constrains — the agent can always pivot to something unexpected. RESEARCH picks the highest-priority entity enrichment task. SYNTHESIZE picks the most active situation. SURVEY picks the most urgent analytical work. If the backlog is empty, cycles fall back to their normal heuristic selection.
+
+**Evaluate** tracks whether the work accomplished anything. Did RESEARCH improve entity completeness? Did the hypothesis accumulate evidence? Did the prediction hold? The calibration system tracks this. INTROSPECTION reviews analytical health.
+
+**Adjust** happens every 30 cycles during EVOLVE. A structured portfolio view presents: active goals and their progress, situations ranked by goal linkage and activity, hypothesis health (are they accumulating evidence or stalling?), watchlist effectiveness (trigger rate, false positives), coverage gaps (regions or domains with high event volume but no analytical coverage), and the task backlog. EVOLVE can retire stale goals, promote active situations to goals, adjust priorities, and flag portfolio imbalances.
+
+**Reactive propagation** keeps the portfolio internally consistent between EVOLVE reviews. When a watchlist fires, the event is linked to the parent situation. When hypothesis evidence shifts past a threshold, the situation is flagged for SYNTHESIZE. When a situation severity escalates and no goal covers it, an escalation candidate is created. When an event reaches ACTIVE lifecycle under an investigative goal, research tasks are created for its entities. When a goal goes 50 cycles without progress, it's flagged for EVOLVE review.
+
+The result: an autonomous system that doesn't just react to incoming information but maintains coherent analytical threads — some running for hundreds of cycles — while still responding to novel developments.
+
+---
+
 ## Safety and Trust
 
 **Structural isolation.** The agent cannot reach supervisor code, audit logs, or the seed goal (read-only). The agent container is ephemeral — created fresh each cycle, destroyed after. Every prompt, response, and tool call is logged to an isolated audit OpenSearch that the agent cannot access.

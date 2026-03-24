@@ -36,6 +36,7 @@ class MaintenanceConfig:
     situation_detect_interval: int = 30    # Situation detection (30 min)
     adversarial_detect_interval: int = 30  # Adversarial signal detection (30 min)
     calibration_track_interval: int = 60   # Confidence calibration tracking (60 min)
+    propagation_interval: int = 5          # State propagation (5 min)
 
     # Backing store configs
     postgres: PostgresConfig = PostgresConfig()
@@ -59,6 +60,7 @@ class MaintenanceConfig:
             situation_detect_interval=int(os.getenv("MAINTENANCE_SITUATION_DETECT_INTERVAL", "30")),
             adversarial_detect_interval=int(os.getenv("MAINTENANCE_ADVERSARIAL_DETECT_INTERVAL", "30")),
             calibration_track_interval=int(os.getenv("MAINTENANCE_CALIBRATION_TRACK_INTERVAL", "60")),
+            propagation_interval=int(os.getenv("MAINTENANCE_PROPAGATION_INTERVAL", "5")),
             postgres=PostgresConfig.from_env(),
             redis=RedisConfig.from_env(),
             opensearch=OpenSearchConfig.from_env(),

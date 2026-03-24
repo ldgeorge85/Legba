@@ -210,6 +210,16 @@ class AnalyzeMixin:
         except Exception as e:
             lines.append(f"(Could not load analysis context: {e})")
 
+        # --- Adversarial context: flag coordinated/suspicious signals ---
+        try:
+            from legba.shared.adversarial_context import get_adversarial_summary
+            adv_summary = await get_adversarial_summary(self.memory.structured._pool)
+            if adv_summary:
+                lines.append("")
+                lines.append(adv_summary)
+        except Exception:
+            pass  # Graceful degradation
+
         # --- Differential reporting: compare against previous snapshot ---
         try:
             if self.memory and self.memory.registers:

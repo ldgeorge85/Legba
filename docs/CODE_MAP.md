@@ -23,7 +23,7 @@ src/legba/
       entity_profiles.py             (147 lines) — EntityProfile, Assertion, EntityType
       signals.py                     (118 lines) — Signal, SignalCategory, create_signal (was events.py)
       derived_events.py              (85 lines)  — DerivedEvent, EventType, EventSeverity, SignalEventLink
-      goals.py                       (141 lines) — Goal hierarchy: Goal, Milestone, GoalType
+      goals.py                       (159 lines) — Goal hierarchy: Goal, Milestone, GoalType (standing/investigative), situation/hypothesis links
       memory.py                      (93 lines)  — Episode, Fact, Entity, Relationship
       modifications.py               (115 lines) — Self-modification tracking schemas
       sources.py                     (131 lines) — Source registry with trust metadata
@@ -40,6 +40,9 @@ src/legba/
     situation_severity.py            (172 lines) — Situation severity aggregation from linked events (pure functions)
     adversarial_context.py           (132 lines) — Adversarial flag summary for ANALYSIS phase prompt injection
     schema_extensions.py             (169 lines) — Idempotent ALTER TABLE statements for cognitive architecture columns (confidence_components, evidence_set, lifecycle_status, provenance)
+    escalation.py                    (114 lines) — Escalation scoring: pure function scoring event clusters for portfolio promotion (ignore/monitor/situation/full_portfolio)
+    task_backlog.py                  (278 lines) — Task backlog: Redis sorted set operations, 9 task types, goal-driven priority queue, cycle-type routing
+    portfolio.py                     (554 lines) — Portfolio view builder: 7-section structured query for EVOLVE context (goals, situations, hypotheses, watchlists, predictions, coverage gaps, task backlog)
 
   agent/
     __init__.py
@@ -182,6 +185,7 @@ src/legba/
     situation_detect.py              (258 lines) — SituationDetector: automated situation proposals from event clusters (3+ events, shared region/category/entities)
     adversarial.py                   (494 lines) — AdversarialDetector: source velocity spikes, semantic echo detection, provenance grouping
     calibration.py                   (368 lines) — CalibrationTracker: claimed confidence vs actual outcomes, systematic bias detection
+    propagation.py                   (615 lines) — Reactive state propagation: 5 rules cascading state changes across portfolio (watch triggers, hypothesis shifts, situation escalation, event lifecycle, stale goals)
 
   subconscious/
     __init__.py                      (1 line)    — Package docstring
@@ -263,14 +267,15 @@ legba-models/
 **External deps:** `pydantic`
 
 #### `shared/schemas/goals.py`
-**Purpose:** Goal hierarchy: Seed Goal -> Meta Goals -> Goals -> Sub-goals -> Tasks.
+**Purpose:** Goal hierarchy: Seed Goal -> Meta Goals -> Goals -> Sub-goals -> Tasks. Extended with standing/investigative goal types for portfolio management.
 
 **Key classes:**
 - `GoalType` enum — meta_goal, goal, subgoal, task
+- `GoalPurpose` enum — standing (persistent, weights priority), investigative (time-bound, decomposes into tasks)
 - `GoalStatus` enum — active, paused, blocked, deferred, completed, abandoned
 - `GoalSource` enum — seed, agent, human, subgoal
 - `Milestone` — Weighted completion milestones
-- `Goal` — Full goal model: hierarchy (parent_id, child_ids), progress (progress_pct, milestones), dependencies (blocked_by, blocks), deferral (deferred_until_cycle, defer_reason)
+- `Goal` — Full goal model: hierarchy (parent_id, child_ids), progress (progress_pct, milestones), dependencies (blocked_by, blocks), deferral (deferred_until_cycle, defer_reason), purpose (standing/investigative), linked_situation_ids, linked_hypothesis_ids
 - `GoalUpdate` — Partial update model
 - Factory functions: `create_goal()`, `create_subgoal()`, `create_task()`
 

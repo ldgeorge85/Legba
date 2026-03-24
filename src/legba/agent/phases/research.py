@@ -90,6 +90,37 @@ class ResearchMixin:
 
     async def _build_entity_health_summary(self: AgentCycle) -> str:
         """Build a summary of entity completeness for the research prompt."""
+        context_parts = []
+
+        # Check task backlog for goal-driven research targets
+        try:
+            _redis = self.memory.registers._redis if self.memory and self.memory.registers else None
+            if _redis:
+                from ...shared.task_backlog import TaskBacklog
+                backlog = TaskBacklog(_redis)
+                research_tasks = await backlog.get_tasks(cycle_type="RESEARCH", limit=3)
+                if research_tasks:
+                    goal_entities = []
+                    for task in research_tasks:
+                        target = task.get('target', {})
+                        if target.get('entity_name'):
+                            goal_entities.append(
+                                f"**[GOAL-DRIVEN]** {target['entity_name']} — "
+                                f"{task.get('context', '')}"
+                            )
+                        else:
+                            goal_entities.append(
+                                f"**[GOAL-DRIVEN]** {task.get('task_type', '?')} — "
+                                f"{task.get('context', '')}"
+                            )
+                    if goal_entities:
+                        context_parts.append(
+                            "### Priority Research Targets (from active goals)\n"
+                            + "\n".join(f"- {e}" for e in goal_entities)
+                        )
+        except Exception:
+            pass
+
         try:
             async with self.memory.structured._pool.acquire() as conn:
                 # Get entities with lowest completeness that appear in signals
@@ -107,7 +138,8 @@ class ResearchMixin:
                 """)
 
                 if not rows:
-                    return "(No entity profiles found)"
+                    prefix = "\n\n".join(context_parts) + "\n\n" if context_parts else ""
+                    return prefix + "(No entity profiles found)"
 
                 # Summary stats
                 stats_row = await conn.fetchrow("""
@@ -128,10 +160,12 @@ class ResearchMixin:
                 for r in rows:
                     lines.append(f"| {r['canonical_name']} | {r['entity_type']} | {r['completeness_score']:.0%} | {r['event_count']} |")
 
-                return "\n".join(lines)
+                prefix = "\n\n".join(context_parts) + "\n\n" if context_parts else ""
+                return prefix + "\n".join(lines)
 
         except Exception as e:
-            return f"(Could not load entity health: {e})"
+            prefix = "\n\n".join(context_parts) + "\n\n" if context_parts else ""
+            return prefix + f"(Could not load entity health: {e})"
 
     def _parse_json_with_key(self: AgentCycle, text: str, required_key: str) -> dict:
         """Extract first JSON object from text that contains the required key."""

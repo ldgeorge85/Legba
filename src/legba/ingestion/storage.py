@@ -100,21 +100,27 @@ class StorageLayer:
         These components are preserved for downstream confidence recomputation.
         """
         try:
-            # Extract confidence_components from tags if present, merge into data JSONB
+            # Extract confidence_components and provenance from tags if present, merge into data JSONB
             data_json = signal.model_dump_json()
             try:
+                import json as _json
                 cc_tag = next((t for t in signal.tags if t.startswith("cc:")), None)
-                if cc_tag:
-                    import json as _json
+                prov_tag = next((t for t in signal.tags if t.startswith("prov:")), None)
+                if cc_tag or prov_tag:
                     data_dict = _json.loads(data_json)
-                    data_dict["confidence_components"] = _json.loads(cc_tag[3:])
-                    # Remove the cc: tag from tags list in data (it's a transport mechanism)
-                    data_dict["tags"] = [t for t in data_dict.get("tags", []) if not t.startswith("cc:")]
+                    if cc_tag:
+                        data_dict["confidence_components"] = _json.loads(cc_tag[3:])
+                    if prov_tag:
+                        data_dict["provenance"] = _json.loads(prov_tag[5:])
+                    # Remove transport tags from tags list in data
+                    data_dict["tags"] = [t for t in data_dict.get("tags", [])
+                                         if not t.startswith("cc:") and not t.startswith("prov:")]
                     data_json = _json.dumps(data_dict)
                     # Also clean up the signal's tags in-place
-                    signal.tags = [t for t in signal.tags if not t.startswith("cc:")]
+                    signal.tags = [t for t in signal.tags
+                                   if not t.startswith("cc:") and not t.startswith("prov:")]
             except Exception:
-                pass  # Non-fatal — store signal even if cc parsing fails
+                pass  # Non-fatal — store signal even if tag parsing fails
 
             await self._pool.execute(
                 """

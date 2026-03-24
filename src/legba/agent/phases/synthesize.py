@@ -122,6 +122,25 @@ class SynthesizeMixin:
 
         recent_thread_topics = {e.get("topic", "").lower() for e in recent_threads[:3]}
 
+        # Check task backlog for goal-driven investigation targets
+        try:
+            _redis = self.memory.registers._redis if self.memory and self.memory.registers else None
+            if _redis:
+                from ...shared.task_backlog import TaskBacklog
+                backlog = TaskBacklog(_redis)
+                synth_tasks = await backlog.get_tasks(cycle_type="SYNTHESIZE", limit=2)
+                if synth_tasks:
+                    lines.append("### Priority Investigation Targets (from active goals)")
+                    for task in synth_tasks:
+                        target = task.get('target', {})
+                        name = target.get('situation_name', target.get('situation_id', '?'))
+                        lines.append(
+                            f"- **[GOAL-DRIVEN]** {name} — {task.get('context', '')}"
+                        )
+                    lines.append("")
+        except Exception:
+            pass
+
         try:
             async with self.memory.structured._pool.acquire() as conn:
                 # Candidate situations ranked by novelty and intensity

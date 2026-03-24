@@ -32,7 +32,9 @@ from .metrics import MetricCollector
 from .situation_detect import SituationDetector
 from .adversarial import AdversarialDetector
 from .calibration import CalibrationTracker
+from .propagation import StatePropagator
 from ..shared.metrics import MetricsClient
+from ..shared.task_backlog import TaskBacklog
 
 logger = logging.getLogger("legba.maintenance")
 
@@ -67,7 +69,7 @@ class MaintenanceService:
         logger.info(
             "Task intervals (ticks): lifecycle=%d, entity_gc=%d, fact_decay=%d, "
             "corroboration=%d, metrics=%d, integrity=%d, situation_detect=%d, "
-            "adversarial=%d, calibration=%d",
+            "adversarial=%d, calibration=%d, propagation=%d",
             self.config.lifecycle_decay_interval,
             self.config.entity_gc_interval,
             self.config.fact_decay_interval,
@@ -77,6 +79,7 @@ class MaintenanceService:
             self.config.situation_detect_interval,
             self.config.adversarial_detect_interval,
             self.config.calibration_track_interval,
+            self.config.propagation_interval,
         )
 
         # Connect to backing stores
@@ -202,6 +205,10 @@ class MaintenanceService:
         if tick % self.config.situation_detect_interval == 0:
             await self._run_task("situation_detection", self._situation_detection)
 
+        # State propagation — every propagation_interval ticks
+        if tick % self.config.propagation_interval == 0:
+            await self._run_task("state_propagation", self._state_propagation)
+
         # Adversarial signal detection — every adversarial_detect_interval ticks
         if tick % self.config.adversarial_detect_interval == 15:
             await self._run_task("adversarial_detect", self._adversarial_detect)
@@ -323,6 +330,20 @@ class MaintenanceService:
         proposed = await detector.detect_situations()
         if proposed:
             logger.info("Situation detection: %d proposals created", proposed)
+
+    async def _state_propagation(self) -> None:
+        """Reactive state propagation — watch triggers, hypothesis shifts,
+        situation escalation, event lifecycle, stale goals."""
+        backlog = TaskBacklog(self._redis)
+        propagator = StatePropagator(self._pg_pool, self._redis, backlog)
+        propagated = await propagator.propagate()
+        # Also expire stale tasks
+        expired = await backlog.expire_stale(max_age_hours=72.0)
+        if propagated or expired:
+            logger.info(
+                "State propagation: %d propagations applied, %d stale tasks expired",
+                propagated, expired,
+            )
 
     async def _adversarial_detect(self) -> None:
         """Adversarial signal detection — coordinated inauthentic behavior."""

@@ -243,6 +243,21 @@ class AgentCycle(
         # ensures it wins most Tier-3 slots unless backlog is high.
         scores["SURVEY"] = self.config.agent.survey_base_score
 
+        # Goal-driven task backlog boost: if there are pending tasks for a
+        # cycle type, give it a 20% score boost to pull it forward.
+        # Counts are pre-cached in orient (async) since this method is sync.
+        try:
+            _survey_tasks = getattr(self, '_backlog_survey_count', 0)
+            _research_tasks = getattr(self, '_backlog_research_count', 0)
+            if _survey_tasks > 0:
+                scores["SURVEY"] *= 1.2  # 20% boost for pending goal tasks
+            if _survey_tasks or _research_tasks:
+                self.logger.log("task_backlog_routing",
+                                survey_tasks=_survey_tasks,
+                                research_tasks=_research_tasks)
+        except Exception:
+            pass  # Graceful degradation
+
         # Cooldown: don't repeat the same dynamic type back-to-back
         last_types = getattr(self, '_recent_cycle_types', [])
         if last_types and last_types[-1] in scores:

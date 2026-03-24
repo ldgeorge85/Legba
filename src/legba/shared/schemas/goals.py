@@ -16,6 +16,12 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 
+class GoalPurpose(str, Enum):
+    """Distinguishes standing vs investigative goals."""
+    STANDING = "standing"          # Persistent portfolio items, inform priority weighting
+    INVESTIGATIVE = "investigative"  # Time-bound, attached to situation/hypothesis
+
+
 class GoalType(str, Enum):
     META_GOAL = "meta_goal"
     GOAL = "goal"
@@ -55,9 +61,16 @@ class Goal(BaseModel):
     status: GoalStatus = GoalStatus.ACTIVE
     source: GoalSource = GoalSource.AGENT
 
+    # Purpose: standing (persistent) vs investigative (time-bound)
+    goal_purpose: GoalPurpose = GoalPurpose.STANDING
+
     # Hierarchy
     parent_id: UUID | None = None
     child_ids: list[UUID] = Field(default_factory=list)
+
+    # Investigation links (for investigative goals)
+    linked_situation_id: UUID | None = None
+    linked_hypothesis_id: UUID | None = None
 
     # Context
     context: dict[str, Any] = Field(default_factory=dict)
@@ -109,6 +122,9 @@ def create_goal(
     source: GoalSource = GoalSource.AGENT,
     parent_id: UUID | None = None,
     success_criteria: list[str] | None = None,
+    goal_purpose: GoalPurpose = GoalPurpose.STANDING,
+    linked_situation_id: UUID | None = None,
+    linked_hypothesis_id: UUID | None = None,
 ) -> Goal:
     return Goal(
         description=description,
@@ -117,6 +133,9 @@ def create_goal(
         source=source,
         parent_id=parent_id,
         success_criteria=success_criteria or [],
+        goal_purpose=goal_purpose,
+        linked_situation_id=linked_situation_id,
+        linked_hypothesis_id=linked_hypothesis_id,
     )
 
 

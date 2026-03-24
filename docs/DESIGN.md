@@ -733,3 +733,74 @@ Three concurrent async loops:
 3. **Differential accumulator** — Tracks state changes between conscious agent cycles. Writes a JSON summary to Redis every 5 minutes capturing new signals per situation, event lifecycle transitions, entity anomalies, fact changes, hypothesis evidence changes, and watchlist matches.
 
 The SLM provider supports both vLLM (OpenAI-compatible, with `guided_json` for constrained decoding) and Anthropic (with `tool_use` for structured output). Default model: Llama 3.1 8B Instruct at temperature 0.1 for deterministic validation.
+
+---
+
+## 14. Planning Layer
+
+Goals, situations, watchlists, hypotheses, and predictions existed as individual features but operated as islands. The planning layer ties them into a coherent loop:
+
+```
+DETECT → ESCALATE → DEDUPLICATE → PLAN → EXECUTE → EVALUATE → ADJUST
+  │                                                               │
+  └───────────────────────────────────────────────────────────────┘
+```
+
+### Goal Types
+
+| Type | Persistence | Created By | Purpose |
+|------|-------------|-----------|---------|
+| **Standing** | Persistent until retired | Human / seed / EVOLVE | Weights analytical priority. "Maintain SA on Iran energy infrastructure" — doesn't decompose into tasks, but an unlinked Iran energy event scores higher in SURVEY task selection. |
+| **Investigative** | Time-bound, attached to hypothesis/situation | Agent (SURVEY/ANALYSIS escalation) | Decomposes into concrete tasks. "Investigate whether Iran is deliberately curtailing oil exports" — creates research tasks, watchlists, hypothesis evaluations. Completes when the hypothesis resolves. |
+
+### Escalation Scoring
+
+A pure function (`shared/escalation.py`) that scores novel event clusters for portfolio promotion. Inputs: event count, entity overlap with existing portfolio, severity distribution, region novelty, domain coverage gap. Returns a score (0-1) and a recommendation: `ignore`, `monitor`, `situation`, `situation_and_watchlist`, or `full_portfolio` (goal + watchlist + hypothesis + research tasks).
+
+Runs in the maintenance daemon when automated situation detection finds a candidate. Also callable by the agent during SURVEY/ANALYSIS when it notices a novel pattern.
+
+### Task Backlog
+
+A persistent priority queue (Redis sorted set, `shared/task_backlog.py`) that bridges goals to cycle execution. Nine task types:
+
+| Task Type | Target Cycle |
+|-----------|-------------|
+| `research_entity` | RESEARCH |
+| `evaluate_hypothesis` | SURVEY / ANALYSIS |
+| `deep_dive_situation` | SYNTHESIZE |
+| `create_watchlist` | SURVEY |
+| `link_events` | CURATE |
+| `resolve_contradiction` | SURVEY / ANALYSIS |
+| `review_proposed_edges` | SURVEY |
+| `coverage_gap` | SURVEY / RESEARCH |
+| `stale_goal_review` | EVOLVE |
+
+Each cycle type checks the backlog for matching tasks. If a matching task exists, it's injected into the cycle's context as a focused directive. If no tasks match, the cycle runs its normal heuristic selection. Goal alignment amplifies task priority but never constrains it — the agent can always pivot.
+
+### Reactive State Propagation
+
+Five rules in the maintenance daemon (`maintenance/propagation.py`) that cascade state changes across the portfolio:
+
+| Trigger | Effect |
+|---------|--------|
+| Watchlist fires (new trigger) | Link event to watchlist's parent situation. Update goal progress if linked. |
+| Hypothesis evidence shifts | Update parent situation severity. If balance crosses threshold, flag for SYNTHESIZE. |
+| Situation severity escalates | If no goal covers it, create escalation candidate. |
+| Event reaches ACTIVE lifecycle | If linked to a situation with an investigative goal, add research tasks for event entities. |
+| Goal stale (no progress in 50 cycles) | Flag for EVOLVE review. |
+
+### Portfolio Review (EVOLVE cycle)
+
+EVOLVE receives a structured portfolio view (`shared/portfolio.py`) with seven sections: active goals + progress, situations ranked by goal linkage, hypothesis health (evidence accumulation rate), watchlist effectiveness (trigger rate), prediction track record, coverage gaps (regions/domains with events but no analytical coverage), and task backlog summary. EVOLVE can retire goals, promote situations to goals, adjust priority, and flag imbalances.
+
+### Goal-Weighted Cycle Routing
+
+Tier 3 dynamic scoring is extended with goal alignment:
+
+```
+base_score  = normal_heuristic_score  (CURATE backlog, SURVEY baseline, etc.)
+goal_weight = sum(goal.priority for aligned goals) / 10
+final_score = base_score * (1 + goal_weight)
+```
+
+Goals amplify, not constrain. A RESEARCH cycle for an entity linked to a high-priority goal scores higher than one for a random low-completeness entity.

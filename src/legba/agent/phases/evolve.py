@@ -207,7 +207,17 @@ class EvolveMixin:
         except Exception as e:
             lines.append(f"(Coverage stats unavailable: {e})")
 
-        # --- 6. Previous evolve log ---
+        # --- 6. Portfolio review (goals, backlog, coverage, hypothesis/watchlist health) ---
+        try:
+            from ...shared.portfolio import build_portfolio_view
+            _redis = self.memory.registers._redis if self.memory and self.memory.registers else None
+            portfolio = await build_portfolio_view(self.memory.structured._pool, _redis)
+            if portfolio:
+                lines.append(portfolio)
+        except Exception:
+            pass
+
+        # --- 7. Previous evolve log ---
         try:
             prev_log = await self.memory.registers.get_json(_EVOLVE_LOG_KEY)
             if prev_log:

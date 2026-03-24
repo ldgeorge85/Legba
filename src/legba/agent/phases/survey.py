@@ -100,6 +100,25 @@ class SurveyMixin:
             lines.append("Complete the assigned tasks above before doing general analytical work.")
             lines.append("")
 
+        # Task backlog summary for awareness
+        try:
+            _redis = self.memory.registers._redis if self.memory and self.memory.registers else None
+            if _redis:
+                from ...shared.task_backlog import TaskBacklog
+                backlog = TaskBacklog(_redis)
+                pending = await backlog.get_tasks(cycle_type="SURVEY", limit=5)
+                if pending:
+                    lines.append("## Goal-Driven Task Backlog")
+                    for t in pending:
+                        ctx = (t.get('context', '') or '')[:150]
+                        lines.append(
+                            f"- [{t.get('task_type', '?')}] {ctx} "
+                            f"(priority={t.get('priority', 0):.2f})"
+                        )
+                    lines.append("")
+        except Exception:
+            pass
+
         lines.append("## Context Data")
         try:
             async with self.memory.structured._pool.acquire() as conn:
@@ -279,6 +298,25 @@ class SurveyMixin:
     async def _identify_survey_tasks(self: AgentCycle) -> list[dict]:
         """Identify concrete, scoped tasks for this SURVEY cycle based on system state."""
         tasks = []
+
+        # Check task backlog for goal-driven survey tasks (priority over heuristics)
+        try:
+            _redis = self.memory.registers._redis if self.memory and self.memory.registers else None
+            if _redis:
+                from ...shared.task_backlog import TaskBacklog
+                backlog = TaskBacklog(_redis)
+                goal_tasks = await backlog.get_tasks(cycle_type="SURVEY", limit=3)
+                for task in goal_tasks:
+                    tasks.append({
+                        "name": f"goal_task:{task.get('task_type', 'unknown')}",
+                        "description": f"[GOAL-DRIVEN] {task.get('context', '')}",
+                        "priority": task.get('priority', 0.5) + 0.2,  # boost above heuristic tasks
+                        "task_id": task.get('task_id'),
+                        "target": task.get('target', {}),
+                    })
+        except Exception:
+            pass
+
         try:
             if not self.memory.structured or not self.memory.structured._available:
                 return tasks

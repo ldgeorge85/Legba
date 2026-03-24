@@ -475,6 +475,20 @@ class OrientMixin:
         except Exception:
             pass
 
+        # --- Cache task backlog counts for Tier 3 scoring ---
+        # _select_cycle_type() is sync, so we pre-fetch counts here.
+        self._backlog_survey_count = 0
+        self._backlog_research_count = 0
+        try:
+            _redis = self.memory.registers._redis if self.memory and self.memory.registers else None
+            if _redis:
+                from ...shared.task_backlog import TaskBacklog
+                _backlog = TaskBacklog(_redis)
+                self._backlog_survey_count = await _backlog.task_count(cycle_type="SURVEY")
+                self._backlog_research_count = await _backlog.task_count(cycle_type="RESEARCH")
+        except Exception:
+            pass
+
         self.logger.log("orient_complete",
                         episodes=len(self._memory_context.get("episodes", [])),
                         goals=len(self._active_goals),
