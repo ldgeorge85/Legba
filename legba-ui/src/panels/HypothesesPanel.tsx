@@ -80,6 +80,9 @@ function HypothesisCard({ hypothesis: h }: { hypothesis: HypothesisSummary }) {
       </div>
 
       {/* Thesis */}
+      {/* TODO (Phase 6d.2): Entity linking in thesis/counter_thesis prose text requires
+          a custom text renderer that detects known entity names and wraps them with
+          <EntityLink>. This needs a lookup set of entity names from the entities API. */}
       <div className="space-y-1">
         <div className="flex items-start gap-1.5">
           <span className="text-[10px] font-semibold text-green-400 mt-0.5 shrink-0">H1</span>

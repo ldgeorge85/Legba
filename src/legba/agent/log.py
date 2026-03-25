@@ -75,6 +75,7 @@ class CycleLogger:
         latency_ms: float,
         tool_calls: list[dict] | None = None,
         error: str | None = None,
+        provider: str | None = None,
     ) -> None:
         """Log a complete LLM call with full prompt/response."""
         self.log(
@@ -87,6 +88,7 @@ class CycleLogger:
             latency_ms=latency_ms,
             tool_calls=tool_calls or [],
             error=error,
+            provider=provider,
         )
 
     def log_tool_call(

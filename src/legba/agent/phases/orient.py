@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from typing import Any, TYPE_CHECKING
 
+from ...shared.schemas.comms import MessagePriority
+from ...shared.schemas.goals import GoalSource, GoalPurpose, Goal
+
 if TYPE_CHECKING:
     from ..cycle import AgentCycle
+
+logger = logging.getLogger("legba.phases.orient")
 
 
 def _format_differential_briefing(diff: dict[str, Any]) -> str:
@@ -128,6 +134,50 @@ class OrientMixin:
 
         # Load active goals first so we can use them in the query
         self._active_goals = await self.goals.get_active_goals()
+
+        # Auto-create operator priority goals from DIRECTIVE inbox messages
+        for msg_data in self.state.inbox_messages:
+            try:
+                msg_priority = msg_data.get("priority", "normal")
+                if msg_priority != MessagePriority.DIRECTIVE.value:
+                    continue
+
+                content = msg_data.get("content", "").strip()
+                if not content:
+                    continue
+
+                # Dedup: skip if an active/paused goal already covers this directive
+                content_words = set(content.lower().split())
+                duplicate = False
+                for g in self._active_goals:
+                    goal_words = set(g.description.lower().split())
+                    if content_words and goal_words:
+                        overlap = len(content_words & goal_words) / min(len(content_words), len(goal_words))
+                        if overlap > 0.75:
+                            logger.info(
+                                "Skipping directive goal creation — duplicate of goal %s: %s",
+                                g.id, g.description[:80],
+                            )
+                            duplicate = True
+                            break
+                if duplicate:
+                    continue
+
+                goal = Goal(
+                    description=content,
+                    source=GoalSource.HUMAN,
+                    goal_purpose=GoalPurpose.INVESTIGATIVE,
+                    priority=1,
+                    context={"from_message_id": msg_data.get("id", "")},
+                )
+                await self.goals._store.save_goal(goal)
+                self._active_goals.append(goal)
+                logger.info("Created operator priority goal from directive: %s", content[:80])
+                self.logger.log("directive_goal_created",
+                                goal_id=str(goal.id),
+                                directive=content[:100])
+            except Exception as e:
+                logger.warning("Failed to create goal from directive: %s", e)
 
         # Enrich query with the highest-priority active goal
         if self._active_goals:
@@ -511,6 +561,62 @@ class OrientMixin:
                 snapshot = await self.memory.registers.get_json("analysis_snapshot")
                 if snapshot and isinstance(snapshot, dict):
                     self._last_analysis_cycle = snapshot.get("cycle", 0)
+        except Exception:
+            pass
+
+        # --- Hypothesis count + top severity (for hybrid LLM routing) ---
+        self._active_hypothesis_count = 0
+        self._top_situation_severity = "medium"
+        try:
+            if self.memory.structured and self.memory.structured._available:
+                async with self.memory.structured._pool.acquire() as conn:
+                    self._active_hypothesis_count = await conn.fetchval(
+                        "SELECT count(*) FROM hypotheses WHERE status = 'active'"
+                    ) or 0
+                    top_sev_row = await conn.fetchval("""
+                        SELECT data->>'severity' FROM situations
+                        WHERE status IN ('active', 'escalating')
+                        ORDER BY
+                          CASE data->>'severity'
+                            WHEN 'critical' THEN 1
+                            WHEN 'high' THEN 2
+                            WHEN 'medium' THEN 3
+                            WHEN 'low' THEN 4
+                            ELSE 5
+                          END
+                        LIMIT 1
+                    """)
+                    if top_sev_row:
+                        self._top_situation_severity = top_sev_row
+        except Exception:
+            pass
+
+        # --- Recent operator corrections ---
+        self._operator_corrections = ""
+        try:
+            if self.memory.structured and self.memory.structured._available:
+                async with self.memory.structured._pool.acquire() as conn:
+                    corrections = await conn.fetch("""
+                        SELECT entity_type, action, old_value->>'name' as old_name,
+                               new_value->>'name' as new_name, corrected_at
+                        FROM operator_corrections WHERE corrected_at > NOW() - INTERVAL '48 hours'
+                        ORDER BY corrected_at DESC LIMIT 10
+                    """)
+                    if corrections:
+                        lines = ["## Recent Operator Corrections (last 48h)", ""]
+                        for c in corrections:
+                            desc = f"**{c['action']}** {c['entity_type']}"
+                            if c['old_name']:
+                                desc += f' "{c["old_name"]}"'
+                            if c['new_name'] and c['new_name'] != c['old_name']:
+                                desc += f' -> "{c["new_name"]}"'
+                            ts = c['corrected_at'].strftime("%m-%d %H:%M") if c['corrected_at'] else ""
+                            lines.append(f"- {desc} ({ts})")
+                        self._operator_corrections = "\n".join(lines)
+                        if self._graph_inventory:
+                            self._graph_inventory += "\n" + self._operator_corrections
+                        else:
+                            self._graph_inventory = self._operator_corrections
         except Exception:
             pass
 

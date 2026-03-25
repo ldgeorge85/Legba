@@ -42,6 +42,7 @@ class GoalSource(str, Enum):
     SEED = "seed"        # Derived from immutable seed goal
     AGENT = "agent"      # Agent-generated
     HUMAN = "human"      # From inbox directive
+    OPERATOR = "operator"  # Created by human operator via API
     SUBGOAL = "subgoal"  # Decomposed from parent
 
 
@@ -91,6 +92,9 @@ class Goal(BaseModel):
     completed_at: datetime | None = None
     last_progress_at: datetime | None = None
 
+    # Operator priority — goals created by the human operator that take precedence
+    operator_priority: bool = False
+
     # Deferral
     deferred_until_cycle: int | None = None
     defer_reason: str | None = None
@@ -125,6 +129,7 @@ def create_goal(
     goal_purpose: GoalPurpose = GoalPurpose.STANDING,
     linked_situation_id: UUID | None = None,
     linked_hypothesis_id: UUID | None = None,
+    operator_priority: bool = False,
 ) -> Goal:
     return Goal(
         description=description,
@@ -136,6 +141,7 @@ def create_goal(
         goal_purpose=goal_purpose,
         linked_situation_id=linked_situation_id,
         linked_hypothesis_id=linked_hypothesis_id,
+        operator_priority=operator_priority,
     )
 
 

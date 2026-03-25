@@ -137,3 +137,48 @@ class BackfillManager:
 
         logger.info("Situation graph backfill: %d TRACKED_BY edges created", linked)
         return linked
+
+    async def backfill_edge_properties(self) -> int:
+        """Set default temporal properties on graph edges that predate Phase 4.5.1.
+
+        Edges from the seed CSV import lack weight, confidence, evidence_count,
+        last_evidenced, and volatility.  This sets sensible defaults on any edge
+        where evidence_count IS NULL, making the backfill idempotent.
+
+        Returns the number of edges updated.
+        """
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("LOAD 'age'")
+                await conn.execute("SET search_path = ag_catalog, public")
+
+                rows = await conn.fetch(f"""
+                    SELECT * FROM cypher('{GRAPH_NAME}', $$
+                        MATCH ()-[r]->()
+                        WHERE r.evidence_count IS NULL
+                        SET r.weight = 0.5,
+                            r.confidence = 0.5,
+                            r.evidence_count = 1,
+                            r.last_evidenced = '{today}',
+                            r.volatility = 0.0
+                        RETURN count(r)
+                    $$) AS (cnt agtype)
+                """)
+
+                updated = 0
+                if rows:
+                    raw = rows[0]["cnt"]
+                    # AGE returns agtype — strip quotes if stringified
+                    updated = int(str(raw).strip('"'))
+
+                logger.info(
+                    "Edge property backfill: %d edges updated with default temporal properties",
+                    updated,
+                )
+                return updated
+
+        except Exception as e:
+            logger.warning("Edge property backfill failed: %s", e)
+            return 0

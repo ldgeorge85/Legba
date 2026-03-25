@@ -203,6 +203,56 @@ class PersistMixin:
             if reflection_forward:
                 await self.memory.registers.set_json("reflection_forward", reflection_forward)
 
+        # Forward-cycle escalation: agent can request escalation for next cycle
+        try:
+            escalate_flag = self._reflection_data.get("escalate_next_cycle")
+            if escalate_flag and self.memory and self.memory.registers:
+                reason = ""
+                if isinstance(escalate_flag, dict):
+                    reason = escalate_flag.get("reason", "agent-requested")
+                elif isinstance(escalate_flag, bool) and escalate_flag:
+                    reason = "agent-requested"
+                elif isinstance(escalate_flag, str):
+                    reason = escalate_flag
+                if reason:
+                    await self.memory.registers.set_json(
+                        "escalate_next_cycle",
+                        {"escalate": True, "reason": reason[:500]},
+                    )
+                    self.logger.log("escalate_next_cycle_set", reason=reason[:100])
+        except Exception:
+            pass
+
+        # Record escalation token usage if router was active this cycle
+        try:
+            if (self.llm and self.llm.router
+                    and self.llm.router._escalated
+                    and self.llm.router.escalation_provider
+                    and self.memory and self.memory.registers):
+                from ...shared.token_budget import record_usage, prune_old
+                # Estimate total tokens from this cycle's LLM usage
+                total_tokens = 0
+                for entry in self.logger._entries:
+                    if (entry.get("type") == "llm_call"
+                            and entry.get("provider") == "anthropic"):
+                        usage = entry.get("usage", {})
+                        total_tokens += usage.get("input_tokens", 0)
+                        total_tokens += usage.get("output_tokens", 0)
+                        total_tokens += usage.get("prompt_tokens", 0)
+                        total_tokens += usage.get("completion_tokens", 0)
+                if total_tokens > 0:
+                    await record_usage(
+                        self.memory.registers._redis,
+                        tokens=total_tokens,
+                        cycle=self.state.cycle_number,
+                        prompt_name="cycle_total",
+                    )
+                # Periodic pruning (every 50 cycles)
+                if self.state.cycle_number % 50 == 0:
+                    await prune_old(self.memory.registers._redis)
+        except Exception:
+            pass
+
         # Auto-promote memories flagged in reflection
         memories_to_promote = self._reflection_data.get("memories_to_promote", [])
         if memories_to_promote and self.memory and self.llm:
@@ -289,6 +339,10 @@ class PersistMixin:
                     in_reply_to=msg.id,
                     content=self._final_response[:500] if self._final_response else "Cycle completed.",
                     cycle_number=self.state.cycle_number,
+                    metadata={
+                        "reply_cycle": self.state.cycle_number,
+                        "original_priority": msg.priority.value,
+                    },
                 ))
 
         # On reporting cycles, add cycle summary to outbox as a fallback report.

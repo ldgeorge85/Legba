@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { useEvents } from '@/api/hooks'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEvents, useEntity } from '@/api/hooks'
 import { useSelectionStore } from '@/stores/selection'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { X } from 'lucide-react'
 import 'vis-timeline/styles/vis-timeline-graph2d.min.css'
 
 const CATEGORIES = ['conflict', 'political', 'economic', 'disaster', 'health', 'technology', 'environment', 'social', 'other'] as const
@@ -121,9 +122,58 @@ export function TimelinePanel() {
   const [hiddenCats, setHiddenCats] = useState<Set<string>>(new Set())
   const [activeRange, setActiveRange] = useState<string>('all')
   const [densityTs, setDensityTs] = useState<{ ms: number; cat: string }[]>([])
-  const { data } = useEvents({ offset: page * 200, limit: 200 })
+  const { data: rawData } = useEvents({ offset: page * 200, limit: 200 })
   const select = useSelectionStore((s) => s.select)
+  const focusEntity = useSelectionStore((s) => s.focusEntity)
+  const setFocusEntity = useSelectionStore((s) => s.setFocusEntity)
   const openPanel = useWorkspaceStore((s) => s.openPanel)
+
+  // Resolve entity name/aliases for filtering
+  const { data: focusEntityData } = useEntity(focusEntity)
+
+  // Build the filtered data set
+  const data = useMemo(() => {
+    if (!rawData) return rawData
+    if (!focusEntity || !focusEntityData) return rawData
+
+    // Build search terms from entity name + aliases
+    const searchTerms = [focusEntityData.name.toLowerCase()]
+    if (focusEntityData.aliases) {
+      for (const alias of focusEntityData.aliases) {
+        searchTerms.push(alias.toLowerCase())
+      }
+    }
+
+    const filtered = rawData.items.filter((ev) => {
+      const title = ev.title.toLowerCase()
+      return searchTerms.some((term) => title.includes(term))
+    })
+
+    return {
+      ...rawData,
+      items: filtered,
+      total: filtered.length,
+    }
+  }, [rawData, focusEntity, focusEntityData])
+
+  // Track which event IDs match the entity filter (for highlight styling)
+  const entityFilteredIds = useMemo(() => {
+    if (!focusEntity || !focusEntityData || !rawData) return new Set<string>()
+    const searchTerms = [focusEntityData.name.toLowerCase()]
+    if (focusEntityData.aliases) {
+      for (const alias of focusEntityData.aliases) {
+        searchTerms.push(alias.toLowerCase())
+      }
+    }
+    const ids = new Set<string>()
+    for (const ev of rawData.items) {
+      const title = ev.title.toLowerCase()
+      if (searchTerms.some((term) => title.includes(term))) {
+        ids.add(ev.event_id)
+      }
+    }
+    return ids
+  }, [rawData, focusEntity, focusEntityData])
 
   // Track container size
   const wrapRef = useCallback((node: HTMLDivElement | null) => {
@@ -215,6 +265,8 @@ export function TimelinePanel() {
         // Short label for timeline items — keeps things compact at overview zoom
         const label = ev.title.length > 28 ? ev.title.slice(0, 25) + '...' : ev.title
         const sevStyle = sevColor ? `border-left: 3px solid ${sevColor};` : ''
+        const isEntityMatch = entityFilteredIds.size > 0 && entityFilteredIds.has(ev.event_id)
+        const highlightStyle = isEntityMatch ? 'box-shadow: 0 0 0 2px #3b82f6; z-index: 5;' : ''
         processed.push({
           id: ev.event_id,
           group: cat,
@@ -222,7 +274,7 @@ export function TimelinePanel() {
           start: ms,
           type: 'point',
           title: `${ev.title}${ev.severity ? ` [${ev.severity}]` : ''}`,
-          style: `background:${color}30; border-color:${color}; color:${color}; font-size:11px; cursor:pointer; ${sevStyle}`,
+          style: `background:${color}30; border-color:${color}; color:${color}; font-size:11px; cursor:pointer; ${sevStyle} ${highlightStyle}`,
         })
       }
       if (processed.length === 0 || allTimestamps.length === 0) return
@@ -306,7 +358,7 @@ export function TimelinePanel() {
         timelineRef.current = null
       }
     }
-  }, [data, tlHeight, hiddenCats, select])
+  }, [data, tlHeight, hiddenCats, select, entityFilteredIds])
 
   // Dark theme CSS + density improvements
   useEffect(() => {
@@ -409,10 +461,30 @@ export function TimelinePanel() {
         {page > 0 && (
           <button onClick={() => setPage(page - 1)} className="px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80 text-[10px] text-foreground">Newer</button>
         )}
-        {data && data.total > (page + 1) * 200 && (
+        {rawData && rawData.total > (page + 1) * 200 && (
           <button onClick={() => setPage(page + 1)} className="px-1.5 py-0.5 rounded bg-secondary hover:bg-secondary/80 text-[10px] text-foreground">Older</button>
         )}
       </div>
+
+      {/* Entity filter banner */}
+      {focusEntity && focusEntityData && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-blue-500/30 bg-blue-500/10 shrink-0">
+          <span className="text-xs text-blue-400 font-medium">
+            Filtered by: {focusEntityData.name}
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            ({data?.items.length ?? 0} matching events)
+          </span>
+          <div className="flex-1" />
+          <button
+            onClick={() => setFocusEntity(null)}
+            className="p-0.5 rounded hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 transition-colors"
+            title="Clear entity filter"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Main content area */}
       <div ref={wrapRef} className="flex-1 min-h-0 flex flex-col">

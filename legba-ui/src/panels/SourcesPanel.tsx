@@ -4,9 +4,11 @@ import { useSources } from '@/api/hooks'
 import { api } from '@/api/client'
 import { Badge } from '@/components/common/Badge'
 import { TimeAgo } from '@/components/common/TimeAgo'
-import { Search, ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Check, X } from 'lucide-react'
+import { Search, ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Check, X, Circle } from 'lucide-react'
 
 const PAGE_SIZE = 50
+
+const SOURCE_TYPES = ['rss', 'api', 'telegram', 'geojson', 'csv', 'static_json'] as const
 
 function healthColor(s: { fetch_count: number; fail_count: number }) {
   if (s.fetch_count === 0) return 'text-muted-foreground'
@@ -16,10 +18,43 @@ function healthColor(s: { fetch_count: number; fail_count: number }) {
   return 'text-green-400'
 }
 
+/** Health dot: green=active+recent, yellow=active+stale, red=error, gray=paused */
+function HealthDot({ source }: { source: { status: string; last_fetched: string | null; fetch_count: number; fail_count: number } }) {
+  let color = 'text-gray-500'  // paused / unknown
+  let title = 'Paused'
+
+  if (source.status === 'failed') {
+    color = 'text-red-500'
+    title = 'Error'
+  } else if (source.status === 'active') {
+    if (!source.last_fetched) {
+      color = 'text-yellow-500'
+      title = 'Active - never fetched'
+    } else {
+      const lastMs = new Date(source.last_fetched).getTime()
+      const ageHours = (Date.now() - lastMs) / (1000 * 60 * 60)
+      // Recent = fetched within 6 hours
+      if (source.fail_count > 0 && source.fail_count / Math.max(source.fetch_count, 1) > 0.5) {
+        color = 'text-red-500'
+        title = `Error - ${source.fail_count} failures`
+      } else if (ageHours <= 6) {
+        color = 'text-green-500'
+        title = 'Active - recent fetch'
+      } else {
+        color = 'text-yellow-500'
+        title = `Active - stale (${Math.round(ageHours)}h ago)`
+      }
+    }
+  }
+
+  return <span title={title}><Circle size={8} className={`${color} fill-current`} /></span>
+}
+
 export function SourcesPanel() {
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
+  const [typeFilter, setTypeFilter] = useState('')
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editFields, setEditFields] = useState<{ name: string; url: string; status: string }>({ name: '', url: '', status: '' })
@@ -27,6 +62,13 @@ export function SourcesPanel() {
 
   const queryClient = useQueryClient()
   const { data, isLoading } = useSources({ offset, limit: PAGE_SIZE, q: search || undefined, status: status || undefined })
+
+  // Client-side type filter (API does not support type filter natively)
+  const filteredItems = data?.items
+    ? typeFilter
+      ? data.items.filter((s) => s.source_type === typeFilter)
+      : data.items
+    : []
 
   const createMutation = useMutation({
     mutationFn: (body: { name: string; url: string; source_type: string }) =>
@@ -98,6 +140,16 @@ export function SourcesPanel() {
           <option value="paused">Paused</option>
           <option value="failed">Failed</option>
         </select>
+        <select
+          value={typeFilter}
+          onChange={(e) => { setTypeFilter(e.target.value); setOffset(0) }}
+          className="text-sm bg-secondary border border-border rounded px-2 py-1 focus:outline-none"
+        >
+          <option value="">All types</option>
+          {SOURCE_TYPES.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
           className="flex items-center gap-1 px-2 py-1 text-xs bg-primary/20 text-primary border border-primary/30 rounded hover:bg-primary/30 transition-colors"
@@ -130,9 +182,9 @@ export function SourcesPanel() {
             onChange={(e) => setAddFields({ ...addFields, source_type: e.target.value })}
             className="text-sm bg-secondary border border-border rounded px-2 py-1 focus:outline-none"
           >
-            <option value="rss">rss</option>
-            <option value="api">api</option>
-            <option value="scrape">scrape</option>
+            {SOURCE_TYPES.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
           </select>
           <button
             type="submit"
@@ -156,27 +208,31 @@ export function SourcesPanel() {
       <div className="flex-1 overflow-auto">
         {isLoading ? (
           <div className="p-4 text-sm text-muted-foreground">Loading...</div>
-        ) : !data?.items.length ? (
+        ) : !filteredItems.length ? (
           <div className="p-4 text-sm text-muted-foreground">No sources found</div>
         ) : (
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-card border-b border-border">
               <tr className="text-left text-xs text-muted-foreground">
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Type</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Events</th>
-                <th className="px-3 py-2 font-medium">Health</th>
-                <th className="px-3 py-2 font-medium">Last Fetch</th>
-                <th className="px-3 py-2 font-medium w-16"></th>
+                <th className="px-2 py-2 font-medium w-6"></th>
+                <th className="px-2 py-2 font-medium">Name</th>
+                <th className="px-2 py-2 font-medium">Type</th>
+                <th className="px-2 py-2 font-medium">Status</th>
+                <th className="px-2 py-2 font-medium">Signals</th>
+                <th className="px-2 py-2 font-medium">Health</th>
+                <th className="px-2 py-2 font-medium">Last Fetch</th>
+                <th className="px-2 py-2 font-medium w-16"></th>
               </tr>
             </thead>
             <tbody>
-              {data.items.map((source) => (
+              {filteredItems.map((source) => (
                 <tr key={source.source_id} className="border-b border-border/50 hover:bg-secondary/50">
                   {editingId === source.source_id ? (
                     <>
-                      <td className="px-3 py-1">
+                      <td className="px-2 py-2">
+                        <HealthDot source={source} />
+                      </td>
+                      <td className="px-2 py-1">
                         <input
                           type="text"
                           value={editFields.name}
@@ -184,10 +240,10 @@ export function SourcesPanel() {
                           className="w-full px-1.5 py-0.5 text-sm bg-secondary border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
                         />
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-2">
                         <Badge className="bg-secondary text-[10px]">{source.source_type}</Badge>
                       </td>
-                      <td className="px-3 py-1">
+                      <td className="px-2 py-1">
                         <select
                           value={editFields.status}
                           onChange={(e) => setEditFields({ ...editFields, status: e.target.value })}
@@ -198,14 +254,14 @@ export function SourcesPanel() {
                           <option value="failed">failed</option>
                         </select>
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">{source.event_count}</td>
-                      <td className={`px-3 py-2 ${healthColor(source)}`}>
+                      <td className="px-2 py-2 text-muted-foreground">{source.event_count}</td>
+                      <td className={`px-2 py-2 ${healthColor(source)}`}>
                         {source.fetch_count > 0 ? `${source.fetch_count - source.fail_count}/${source.fetch_count}` : '-'}
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-2">
                         {source.last_fetched ? <TimeAgo date={source.last_fetched} className="text-xs text-muted-foreground" /> : '-'}
                       </td>
-                      <td className="px-3 py-1">
+                      <td className="px-2 py-1">
                         <div className="flex items-center gap-0.5">
                           <button
                             onClick={() => saveEdit(source.source_id)}
@@ -227,23 +283,32 @@ export function SourcesPanel() {
                     </>
                   ) : (
                     <>
-                      <td className="px-3 py-2 truncate max-w-[200px]">{source.name}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-2">
+                        <HealthDot source={source} />
+                      </td>
+                      <td className="px-2 py-2 truncate max-w-[200px]" title={source.url}>
+                        {source.name}
+                      </td>
+                      <td className="px-2 py-2">
                         <Badge className="bg-secondary text-[10px]">{source.source_type}</Badge>
                       </td>
-                      <td className="px-3 py-2">
-                        <Badge className={source.status === 'active' ? 'bg-green-500/20 text-green-400' : 'bg-secondary text-muted-foreground'}>
+                      <td className="px-2 py-2">
+                        <Badge className={
+                          source.status === 'active' ? 'bg-green-500/20 text-green-400'
+                          : source.status === 'failed' ? 'bg-red-500/20 text-red-400'
+                          : 'bg-secondary text-muted-foreground'
+                        }>
                           {source.status}
                         </Badge>
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">{source.event_count}</td>
-                      <td className={`px-3 py-2 ${healthColor(source)}`}>
+                      <td className="px-2 py-2 text-muted-foreground">{source.event_count}</td>
+                      <td className={`px-2 py-2 ${healthColor(source)}`}>
                         {source.fetch_count > 0 ? `${source.fetch_count - source.fail_count}/${source.fetch_count}` : '-'}
                       </td>
-                      <td className="px-3 py-2">
-                        {source.last_fetched ? <TimeAgo date={source.last_fetched} className="text-xs text-muted-foreground" /> : '-'}
+                      <td className="px-2 py-2">
+                        {source.last_fetched ? <TimeAgo date={source.last_fetched} className="text-xs text-muted-foreground" /> : <span className="text-xs text-muted-foreground">-</span>}
                       </td>
-                      <td className="px-3 py-1">
+                      <td className="px-2 py-1">
                         <div className="flex items-center gap-0.5">
                           <button
                             onClick={() => startEditing(source)}
@@ -273,7 +338,9 @@ export function SourcesPanel() {
 
       {data && data.total > PAGE_SIZE && (
         <div className="flex items-center justify-between px-3 py-1.5 border-t border-border text-xs text-muted-foreground shrink-0">
-          <span>{data.total} sources</span>
+          <span>
+            {typeFilter ? `${filteredItems.length} of ` : ''}{data.total} sources
+          </span>
           <div className="flex items-center gap-1">
             <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} className="p-1 rounded hover:bg-secondary disabled:opacity-30">
               <ChevronLeft size={14} />

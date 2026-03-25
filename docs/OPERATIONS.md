@@ -36,6 +36,8 @@
 | airflow | legba-airflow | Scheduled DAGs | 8080 |
 | caddy | caddy:2-alpine | Reverse proxy for SLM endpoint | — |
 
+**Total: 17 containers** (agent is ephemeral, launched per cycle).
+
 ---
 
 ## 3. Common Operations
@@ -347,7 +349,146 @@ docker compose -p legba up -d maintenance subconscious caddy
 
 ---
 
-## 11. Disk Space Management
+## 11. Authentication
+
+JWT-based auth is disabled by default (backward compatible). To enable:
+
+### Enable Auth
+```bash
+# Add to .env:
+AUTH_ENABLED=true
+AUTH_SECRET_KEY=<your-secret>      # Optional: auto-generated if omitted
+AUTH_DEFAULT_PASSWORD=<password>    # Optional: defaults to "legba"
+
+# Rebuild and restart UI
+docker compose -p legba build ui-v2
+docker compose -p legba up -d ui-v2
+```
+
+### Default Credentials
+On first boot with `AUTH_ENABLED=true`, a default admin user is created:
+- **Username:** `admin`
+- **Password:** value of `AUTH_DEFAULT_PASSWORD` (default: `legba`)
+
+### Change Password
+```bash
+docker exec legba-ui-v2-1 python3 -c "
+import asyncio
+from legba.ui.auth import change_password
+asyncio.run(change_password('admin', 'new_password'))
+"
+```
+
+### Roles
+| Role | Permissions |
+|------|-------------|
+| admin | Read, write, delete, user management |
+| analyst | Read, write |
+| viewer | Read only |
+
+Auth middleware intercepts `/api/` routes. Auth endpoints (`/api/v2/auth/login`, `/logout`, `/me`) and health endpoints are always exempt.
+
+---
+
+## 12. Config Store
+
+Versioned prompt templates, guidance text, and mission config stored in Postgres (`config_versions` table). Every change creates a new version with audit trail.
+
+### View Config via API
+```bash
+# List all config keys
+curl -s http://localhost:8503/api/v2/config | python3 -m json.tool
+
+# Read a specific key
+curl -s http://localhost:8503/api/v2/config/system_prompt | python3 -m json.tool
+
+# View version history
+curl -s http://localhost:8503/api/v2/config/system_prompt/history | python3 -m json.tool
+```
+
+### Update Config via API
+```bash
+curl -X PUT http://localhost:8503/api/v2/config/system_prompt \
+  -H 'Content-Type: application/json' \
+  -d '{"value": "new prompt text...", "notes": "Reason for change"}'
+```
+
+### Rollback Config
+```bash
+curl -X POST http://localhost:8503/api/v2/config/system_prompt/rollback \
+  -H 'Content-Type: application/json' \
+  -d '{"version": 2}'
+```
+
+### Direct DB Access
+```bash
+docker exec legba-postgres-1 psql -U legba -d legba -c \
+  "SELECT key, version, created_by, notes, created_at FROM config_versions WHERE active = true ORDER BY key;"
+```
+
+The agent can also read and update config via `config_read` / `config_update` tools during EVOLVE cycles.
+
+---
+
+## 13. Grafana Dashboards
+
+Access Grafana at `http://localhost:3000` (default credentials: admin/admin).
+
+**8 provisioned dashboards:**
+
+| Dashboard | Content |
+|-----------|---------|
+| **Cycle Performance** | Cycle duration, step count, token usage per cycle, finish reasons, cycle type distribution |
+| **Ingestion Throughput** | Signals/hour, dedup hit rates, source fetch success/failure, clustering activity |
+| **Source Health** | Per-source fetch status, consecutive failures, auto-pause events, utilization % |
+| **Data Growth** | Entity count, event count, fact count, signal count over time, growth rate trends |
+| **Memory Usage** | Qdrant collection sizes, Redis memory, Postgres table sizes, OpenSearch index sizes |
+| **Quality Metrics** | Eval rubric results: event dedup rate, graph quality (RelatedTo%, isolated%), entity link density |
+| **Cognitive Services** | Maintenance daemon task execution, subconscious SLM call rates, differential accumulator output |
+| **Adversarial Detection** | Source velocity spikes, semantic echo detections, provenance group alerts |
+
+All dashboards use TimescaleDB as the data source (auto-provisioned). Metrics are written by the maintenance daemon, ingestion service, and Airflow DAGs.
+
+---
+
+## 14. Temporal Graph Monitoring
+
+The knowledge graph supports temporal analysis via weighted edges, structural balance, and graph entropy.
+
+### Check Structural Balance
+```bash
+docker exec legba-postgres-1 psql -U legba -d legba -c "
+  LOAD 'age'; SET search_path = ag_catalog, public;
+  -- Count AlliedWith and HostileTo edges
+  SELECT * FROM cypher('legba_graph', \$\$
+    MATCH ()-[r]->() WHERE label(r) IN ['AlliedWith', 'HostileTo']
+    RETURN label(r) AS type, count(r) AS cnt
+  \$\$) AS (type agtype, cnt agtype);"
+```
+
+### Check Graph Entropy
+Graph entropy is computed periodically by the maintenance daemon and written to TimescaleDB:
+```bash
+docker exec legba-timescaledb-1 psql -U legba -d legba_metrics -c \
+  "SELECT time, value FROM metrics WHERE metric = 'graph_entropy' ORDER BY time DESC LIMIT 10;"
+```
+
+### View Relationship History
+Edge transitions are logged to TimescaleDB:
+```bash
+docker exec legba-timescaledb-1 psql -U legba -d legba_metrics -c \
+  "SELECT time, dimension, value FROM metrics WHERE metric = 'relationship_transition' ORDER BY time DESC LIMIT 20;"
+```
+
+### Priority Stack
+The priority stack ranks situations by composite score and is injected into the agent's PLAN context:
+```bash
+docker exec legba-redis-1 redis-cli GET legba:priority_stack | python3 -m json.tool
+```
+
+---
+
+## 15. Disk Space Management
 
 The host has 74GB total. Main consumers:
 - Docker images (~15GB active)
@@ -364,7 +505,7 @@ docker image prune -f             # Clean dangling images
 
 ---
 
-## 12. Troubleshooting
+## 16. Troubleshooting
 
 ### Agent Won't Start
 ```bash
@@ -392,7 +533,7 @@ docker volume ls --format '{{.Name}}' | grep legba | xargs -r docker volume rm
 
 ---
 
-## 13. Configuration Reference
+## 17. Configuration Reference
 
 ### Key .env Variables
 | Key | Default | Description |
@@ -412,6 +553,14 @@ docker volume ls --format '{{.Name}}' | grep legba | xargs -r docker volume rm
 | CONSULT_TEMPERATURE | *(agent's temp)* | Consultation engine temperature |
 | CONSULT_MAX_TOKENS | *(agent's max)* | Consultation engine max output tokens |
 | CONSULT_TIMEOUT | *(agent's timeout)* | Consultation engine request timeout (seconds) |
+| AUTH_ENABLED | false | Enable JWT auth on API routes |
+| AUTH_SECRET_KEY | *(auto-generated)* | HMAC-SHA256 secret for JWT signing |
+| AUTH_DEFAULT_PASSWORD | legba | Default password for seeded admin user |
+| ESCALATION_LLM_PROVIDER | *(none)* | Secondary LLM provider for escalated prompts |
+| ESCALATION_API_KEY | *(none)* | API key for escalation provider |
+| ESCALATION_API_BASE | *(none)* | API endpoint for escalation provider |
+| ESCALATION_MODEL | *(none)* | Model name for escalation provider |
+| ESCALATION_DAILY_TOKEN_BUDGET | 500000 | Rolling 24h token budget for escalation provider |
 
 ### Key Cycle Constants
 | Constant | Location | Value | Purpose |
@@ -432,3 +581,6 @@ docker volume ls --format '{{.Name}}' | grep legba | xargs -r docker volume rm
 | legba:reflection_forward | string (JSON) | Last cycle's self-assessment + suggestion |
 | legba:goal_work_tracker | string (JSON) | Per-goal cycle counts and progress tracking |
 | legba:ui:messages | list | Outbound messages for UI display |
+| legba:priority_stack | string (JSON) | Current priority-ranked situation list |
+| legba:subconscious:differential | string (JSON) | Subconscious state changes since last conscious cycle |
+| legba:llm:escalation_tokens | sorted set | Rolling 24h token usage for escalation provider |

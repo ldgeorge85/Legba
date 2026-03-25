@@ -1061,16 +1061,26 @@ class PromptAssembler:
             return "(No active goals yet. Decompose the mission into sub-goals using goal_create.)"
 
         tracker = goal_work_tracker or {}
+
+        # Sort: operator_priority goals first, then by priority
+        sorted_goals = sorted(
+            active_goals,
+            key=lambda g: (0 if g.get("operator_priority") else 1, g.get("priority", 5)),
+        )
+
         lines = []
-        for g in active_goals:
+        for g in sorted_goals:
             status = g.get("status", "active")
             gtype = g.get("goal_type", "goal")
             priority = g.get("priority", 5)
             progress = g.get("progress_pct", 0)
             desc = g.get("description", "?")
             goal_id = str(g.get("id", ""))
+            is_operator = g.get("operator_priority", False)
 
-            line = f"- [{gtype}][P{priority}] {desc} ({progress:.0f}% | {status})"
+            # Prefix operator priority goals
+            prefix = "\u26a1 OPERATOR PRIORITY: " if is_operator else ""
+            line = f"- {prefix}[{gtype}][P{priority}] {desc} ({progress:.0f}% | {status})"
 
             # Append per-goal attempt tracking data (Phase O)
             tracking = tracker.get(goal_id)

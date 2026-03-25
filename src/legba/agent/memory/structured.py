@@ -428,6 +428,48 @@ class StructuredStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_hypotheses_status ON hypotheses(status);
                 CREATE INDEX IF NOT EXISTS idx_hypotheses_situation ON hypotheses(situation_id);
+
+                -- Discovered URLs (potential new sources from signal content)
+                CREATE TABLE IF NOT EXISTS discovered_urls (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    base_domain TEXT NOT NULL,
+                    full_url TEXT NOT NULL,
+                    first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+                    last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+                    seen_count INT DEFAULT 1,
+                    source_signal_id UUID,
+                    status TEXT DEFAULT 'new',
+                    reviewed_at TIMESTAMPTZ,
+                    notes TEXT,
+                    UNIQUE(base_domain)
+                );
+                CREATE INDEX IF NOT EXISTS idx_discovered_urls_status
+                    ON discovered_urls (status, seen_count DESC);
+
+                -- Operator correction tracking
+                CREATE TABLE IF NOT EXISTS operator_corrections (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    entity_type TEXT NOT NULL,
+                    entity_id UUID,
+                    action TEXT NOT NULL,
+                    old_value JSONB,
+                    new_value JSONB,
+                    corrected_by TEXT DEFAULT 'operator',
+                    corrected_at TIMESTAMPTZ DEFAULT NOW(),
+                    notes TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_corrections_time
+                    ON operator_corrections (corrected_at DESC);
+
+                -- Users table (Phase 8: authentication)
+                CREATE TABLE IF NOT EXISTS users (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'viewer',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    last_login TIMESTAMPTZ
+                );
             """)
 
             # --- Cognitive architecture schema extensions ---

@@ -115,6 +115,8 @@ export function MapPanel() {
   const { data: signalGeo } = useSignalGeoData()
   const selected = useSelectionStore((s) => s.selected)
   const select = useSelectionStore((s) => s.select)
+  const timeWindow = useSelectionStore((s) => s.timeWindow)
+  const setTimeWindow = useSelectionStore((s) => s.setTimeWindow)
   const openPanel = useWorkspaceStore((s) => s.openPanel)
 
   const handleMarkerClick = useCallback(
@@ -593,26 +595,52 @@ export function MapPanel() {
   }, [data, mapReady])
 
   // Update event source when event geo data changes
-  // Apply category filter to geo data before setting on sources
+  // Apply category filter and time window filter to geo data before setting on sources
   const filteredEventGeo = useMemo(() => {
-    if (!eventGeo || categoryFilter.size === 0) return eventGeo
-    return {
-      ...eventGeo,
-      features: eventGeo.features.filter((f: { properties?: { category?: string } }) =>
+    if (!eventGeo) return eventGeo
+    let features = eventGeo.features
+    if (categoryFilter.size > 0) {
+      features = features.filter((f: { properties?: { category?: string } }) =>
         categoryFilter.has(f.properties?.category ?? '')
-      ),
+      )
     }
-  }, [eventGeo, categoryFilter])
+    if (timeWindow) {
+      const [start, end] = timeWindow
+      const startMs = new Date(start).getTime()
+      const endMs = new Date(end).getTime()
+      features = features.filter((f: { properties?: { timestamp?: string | null } }) => {
+        const ts = f.properties?.timestamp
+        if (!ts) return false
+        const t = new Date(ts).getTime()
+        return t >= startMs && t <= endMs
+      })
+    }
+    if (features === eventGeo.features) return eventGeo
+    return { ...eventGeo, features }
+  }, [eventGeo, categoryFilter, timeWindow])
 
   const filteredSignalGeo = useMemo(() => {
-    if (!signalGeo || categoryFilter.size === 0) return signalGeo
-    return {
-      ...signalGeo,
-      features: signalGeo.features.filter((f: { properties?: { category?: string } }) =>
+    if (!signalGeo) return signalGeo
+    let features = signalGeo.features
+    if (categoryFilter.size > 0) {
+      features = features.filter((f: { properties?: { category?: string } }) =>
         categoryFilter.has(f.properties?.category ?? '')
-      ),
+      )
     }
-  }, [signalGeo, categoryFilter])
+    if (timeWindow) {
+      const [start, end] = timeWindow
+      const startMs = new Date(start).getTime()
+      const endMs = new Date(end).getTime()
+      features = features.filter((f: { properties?: { timestamp?: string | null } }) => {
+        const ts = f.properties?.timestamp
+        if (!ts) return false
+        const t = new Date(ts).getTime()
+        return t >= startMs && t <= endMs
+      })
+    }
+    if (features === signalGeo.features) return signalGeo
+    return { ...signalGeo, features }
+  }, [signalGeo, categoryFilter, timeWindow])
 
   useEffect(() => {
     const map = mapRef.current
@@ -731,6 +759,21 @@ export function MapPanel() {
           </button>
         </div>
       </div>
+
+      {/* Time window banner */}
+      {timeWindow && (
+        <div className="flex items-center gap-2 px-2 py-1 border-b border-border shrink-0 bg-amber-500/10 text-xs">
+          <span className="text-amber-400">
+            Showing: {new Date(timeWindow[0]).toLocaleDateString()} to {new Date(timeWindow[1]).toLocaleDateString()}
+          </span>
+          <button
+            onClick={() => setTimeWindow(null)}
+            className="ml-auto px-2 py-0.5 text-[10px] rounded border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Category filter pills — for events and signals modes */}
       {(mode === 'events' || mode === 'signals') && (

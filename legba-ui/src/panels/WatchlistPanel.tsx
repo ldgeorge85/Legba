@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useWatchlist, useWatchTriggers, useCreateWatch, useUpdateWatch, useDeleteWatch } from '@/api/hooks'
 import { TimeAgo } from '@/components/common/TimeAgo'
 import { Badge } from '@/components/common/Badge'
+import { EntityLink } from '@/components/EntityLink'
 import { Eye, Bell, Plus, Pencil, Trash2, X, Check } from 'lucide-react'
 
 function priorityColor(priority: string) {
@@ -17,23 +18,151 @@ function priorityColor(priority: string) {
 const inputClass = 'w-full px-2 py-1 text-sm bg-secondary border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary'
 const btnClass = 'p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors'
 
-interface AddFormData {
+const KNOWN_CATEGORIES = [
+  'conflict',
+  'political',
+  'economic',
+  'health',
+  'environment',
+  'technology',
+  'disaster',
+  'social',
+]
+
+const PRIORITY_OPTIONS = ['critical', 'high', 'normal', 'low'] as const
+
+/** Chip input: renders existing chips + a text input to add new ones */
+function ChipInput({
+  label,
+  values,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  values: string[]
+  onChange: (vals: string[]) => void
+  placeholder?: string
+}) {
+  const [inputVal, setInputVal] = useState('')
+
+  const addChip = useCallback(() => {
+    const trimmed = inputVal.trim()
+    if (trimmed && !values.includes(trimmed)) {
+      onChange([...values, trimmed])
+    }
+    setInputVal('')
+  }, [inputVal, values, onChange])
+
+  const removeChip = useCallback(
+    (val: string) => {
+      onChange(values.filter((v) => v !== val))
+    },
+    [values, onChange]
+  )
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      addChip()
+    } else if (e.key === 'Backspace' && inputVal === '' && values.length > 0) {
+      removeChip(values[values.length - 1])
+    }
+  }
+
+  return (
+    <div>
+      <label className="text-[10px] text-muted-foreground uppercase font-medium">{label}</label>
+      <div className="flex flex-wrap items-center gap-1 p-1 min-h-[32px] bg-secondary border border-border rounded mt-0.5">
+        {values.map((v) => (
+          <span
+            key={v}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs bg-primary/15 text-primary border border-primary/20 rounded"
+          >
+            {v}
+            <button
+              type="button"
+              onClick={() => removeChip(v)}
+              className="hover:text-destructive transition-colors"
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={inputVal}
+          onChange={(e) => setInputVal(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={() => { if (inputVal.trim()) addChip() }}
+          placeholder={values.length === 0 ? (placeholder ?? `Add ${label.toLowerCase()}...`) : ''}
+          className="flex-1 min-w-[80px] px-1 py-0.5 text-sm bg-transparent border-none outline-none"
+        />
+      </div>
+    </div>
+  )
+}
+
+/** Category checkbox group */
+function CategoryCheckboxGroup({
+  selected,
+  onChange,
+}: {
+  selected: string[]
+  onChange: (vals: string[]) => void
+}) {
+  const toggle = (cat: string) => {
+    if (selected.includes(cat)) {
+      onChange(selected.filter((c) => c !== cat))
+    } else {
+      onChange([...selected, cat])
+    }
+  }
+
+  return (
+    <div>
+      <label className="text-[10px] text-muted-foreground uppercase font-medium">Categories</label>
+      <div className="grid grid-cols-2 gap-1 mt-0.5">
+        {KNOWN_CATEGORIES.map((cat) => (
+          <label
+            key={cat}
+            className="flex items-center gap-1.5 px-2 py-1 text-xs rounded hover:bg-secondary/80 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              checked={selected.includes(cat)}
+              onChange={() => toggle(cat)}
+              className="rounded border-border bg-secondary accent-primary w-3 h-3"
+            />
+            <span className="capitalize">{cat}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+interface StructuredFormData {
   name: string
   description: string
-  entities: string
-  keywords: string
-  categories: string
+  entities: string[]
+  keywords: string[]
+  categories: string[]
+  regions: string[]
   priority: string
 }
 
-const emptyForm: AddFormData = { name: '', description: '', entities: '', keywords: '', categories: '', priority: 'medium' }
-
-function splitCsv(s: string): string[] {
-  return s.split(',').map((v) => v.trim()).filter(Boolean)
+const emptyStructuredForm: StructuredFormData = {
+  name: '',
+  description: '',
+  entities: [],
+  keywords: [],
+  categories: [],
+  regions: [],
+  priority: 'normal',
 }
 
 function AddWatchForm({ onClose }: { onClose: () => void }) {
-  const [form, setForm] = useState<AddFormData>(emptyForm)
+  const [form, setForm] = useState<StructuredFormData>(emptyStructuredForm)
   const createWatch = useCreateWatch()
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -43,9 +172,9 @@ function AddWatchForm({ onClose }: { onClose: () => void }) {
       {
         name: form.name.trim(),
         description: form.description.trim(),
-        entities: splitCsv(form.entities),
-        keywords: splitCsv(form.keywords),
-        categories: splitCsv(form.categories),
+        entities: form.entities,
+        keywords: [...form.keywords, ...form.regions.map((r) => `region:${r}`)],
+        categories: form.categories,
         priority: form.priority,
       },
       { onSuccess: () => onClose() },
@@ -58,17 +187,61 @@ function AddWatchForm({ onClose }: { onClose: () => void }) {
         <span className="text-xs font-semibold uppercase text-muted-foreground">New Watch Item</span>
         <button type="button" onClick={onClose} className={btnClass}><X size={14} /></button>
       </div>
-      <input placeholder="Name *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} required />
-      <input placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className={inputClass} />
-      <input placeholder="Entities (comma-separated)" value={form.entities} onChange={(e) => setForm({ ...form, entities: e.target.value })} className={inputClass} />
-      <input placeholder="Keywords (comma-separated)" value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} className={inputClass} />
-      <input placeholder="Categories (comma-separated)" value={form.categories} onChange={(e) => setForm({ ...form, categories: e.target.value })} className={inputClass} />
+      <input
+        placeholder="Name *"
+        value={form.name}
+        onChange={(e) => setForm({ ...form, name: e.target.value })}
+        className={inputClass}
+        required
+      />
+      <input
+        placeholder="Description"
+        value={form.description}
+        onChange={(e) => setForm({ ...form, description: e.target.value })}
+        className={inputClass}
+      />
+
+      <ChipInput
+        label="Entities"
+        values={form.entities}
+        onChange={(entities) => setForm({ ...form, entities })}
+        placeholder="Type entity name and press Enter..."
+      />
+
+      <ChipInput
+        label="Keywords"
+        values={form.keywords}
+        onChange={(keywords) => setForm({ ...form, keywords })}
+        placeholder="Type keyword and press Enter..."
+      />
+
+      <CategoryCheckboxGroup
+        selected={form.categories}
+        onChange={(categories) => setForm({ ...form, categories })}
+      />
+
+      <ChipInput
+        label="Regions"
+        values={form.regions}
+        onChange={(regions) => setForm({ ...form, regions })}
+        placeholder="Type region and press Enter..."
+      />
+
       <div className="flex items-center gap-2">
-        <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className={`${inputClass} w-auto`}>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
-        </select>
+        <div>
+          <label className="text-[10px] text-muted-foreground uppercase font-medium">Priority</label>
+          <select
+            value={form.priority}
+            onChange={(e) => setForm({ ...form, priority: e.target.value })}
+            className={`${inputClass} w-auto mt-0.5`}
+          >
+            {PRIORITY_OPTIONS.map((p) => (
+              <option key={p} value={p}>
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex-1" />
         <button type="button" onClick={onClose} className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground">Cancel</button>
         <button type="submit" disabled={createWatch.isPending || !form.name.trim()} className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/80 disabled:opacity-50">
@@ -120,9 +293,11 @@ function WatchItemCard({ w }: { w: { watch_id: string; entity_name: string; watc
         <input value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} className={inputClass} placeholder="Description" />
         <div className="flex items-center gap-2">
           <select value={editForm.priority} onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })} className={`${inputClass} w-auto`}>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
+            {PRIORITY_OPTIONS.map((p) => (
+              <option key={p} value={p}>
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </option>
+            ))}
           </select>
           <div className="flex-1" />
           <button onClick={() => setEditing(false)} className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground">Cancel</button>
@@ -156,22 +331,24 @@ function WatchItemCard({ w }: { w: { watch_id: string; entity_name: string; watc
       {w.description && (
         <p className="text-xs text-muted-foreground pl-[22px]">{w.description}</p>
       )}
-      {w.entities.length > 0 && (
+      {(w.entities ?? []).length > 0 && (
         <div className="flex flex-wrap gap-1 pl-[22px]">
           <span className="text-[10px] text-muted-foreground">Entities:</span>
           {w.entities.map((e) => (
-            <Badge key={e} className="text-[10px] bg-blue-500/10 text-blue-400">{e}</Badge>
+            <Badge key={e} className="text-[10px] bg-blue-500/10">
+              <EntityLink name={e} className="text-blue-400 text-[10px]" />
+            </Badge>
           ))}
         </div>
       )}
-      {w.keywords.length > 0 && (
+      {(w.keywords ?? []).length > 0 && (
         <div className="flex flex-wrap gap-1 pl-[22px]">
           {w.keywords.map((kw) => (
             <Badge key={kw} className="text-[10px] bg-purple-500/10 text-purple-400">{kw}</Badge>
           ))}
         </div>
       )}
-      {w.categories.length > 0 && (
+      {(w.categories ?? []).length > 0 && (
         <div className="flex flex-wrap gap-1 pl-[22px]">
           {w.categories.map((cat) => (
             <Badge key={cat} className="text-[10px] bg-secondary text-muted-foreground">{cat}</Badge>

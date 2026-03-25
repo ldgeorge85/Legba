@@ -141,9 +141,16 @@ class LLMClient:
 
         self._embedding_client: httpx.AsyncClient | None = None
         self.working_memory = WorkingMemory()
+        self.router = None  # Optional PromptRouter for hybrid LLM routing
 
     async def close(self) -> None:
         await self.provider.close()
+        # Close escalation provider if router has one
+        if self.router and self.router.escalation_provider:
+            try:
+                await self.router.escalation_provider.close()
+            except Exception:
+                pass
         if self._embedding_client:
             await self._embedding_client.aclose()
             self._embedding_client = None
@@ -159,20 +166,36 @@ class LLMClient:
         Single completion call with logging.
 
         Formats messages per provider and sends to LLM.
+        If a PromptRouter is attached, the router selects the provider
+        based on the purpose (prompt name).
         """
         start = time.monotonic()
 
+        # Determine which provider to use for this call
+        active_provider = self.provider
+        active_provider_type = self.provider_type
+        if self.router:
+            routed = self.router.route(purpose)
+            if routed is not self.provider:
+                active_provider = routed
+                # Detect provider type from class name
+                active_provider_type = (
+                    "anthropic" if type(routed).__name__ == "AnthropicProvider"
+                    else "vllm"
+                )
+
         # Log full messages for debugging (no truncation)
-        log.info("LLM call [%s]: system=%d chars, user=%d chars, msgs=%d",
+        log.info("LLM call [%s]: system=%d chars, user=%d chars, msgs=%d, provider=%s",
                  purpose,
                  len(messages[0].content) if messages else 0,
                  sum(len(m.content) for m in messages[1:]),
-                 len(messages))
+                 len(messages),
+                 active_provider_type)
 
         try:
-            if self.provider_type == "anthropic":
+            if active_provider_type == "anthropic":
                 system_text, chat_msgs = to_anthropic_messages(messages)
-                response = await self.provider.chat_complete(
+                response = await active_provider.chat_complete(
                     messages=chat_msgs,
                     max_tokens=max_tokens or self.config.max_tokens,
                     temperature=temperature,
@@ -180,7 +203,7 @@ class LLMClient:
                 )
             else:
                 chat_msgs = to_chat_messages(messages)
-                response = await self.provider.chat_complete(
+                response = await active_provider.chat_complete(
                     messages=chat_msgs,
                     max_tokens=max_tokens,
                     temperature=temperature,
@@ -197,6 +220,7 @@ class LLMClient:
                 finish_reason=response.finish_reason,
                 usage=response.usage,
                 latency_ms=latency,
+                provider=active_provider_type,
             )
 
             return response

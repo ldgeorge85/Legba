@@ -1,26 +1,26 @@
 # Legba -- Executive Summary
 
-*Last updated: 2026-03-24*
+*Last updated: 2026-03-25*
 
 ---
 
 ## What It Is
 
-Legba is a continuously operating autonomous AI agent platform for situational awareness. It runs 24/7 with no human in the loop -- an automated ingestion pipeline collects and clusters open-source intelligence from 138 active sources, while an AI analyst runs structured analytical cycles to build a knowledge graph, track evolving situations, stress-test competing hypotheses (ACH), and produce named intelligence products (world assessments, situation briefs, predictions). The operator provides a seed goal and data sources. The agent does everything else.
+Legba is a continuously operating autonomous AI agent platform for situational awareness. It runs 24/7 with no human in the loop -- an automated ingestion pipeline collects and clusters open-source intelligence from 112+ active sources, while three concurrent cognitive layers refine raw signals into actionable intelligence. The AI analyst runs structured analytical cycles to build a temporal knowledge graph, track evolving situations, stress-test competing hypotheses (ACH), and produce named intelligence products (world assessments, situation briefs, predictions). The operator provides a seed goal and data sources. The agent does everything else.
 
-Legba is not a chatbot or task runner. Collection is deterministic (no LLM), analysis is LLM-driven, and every cycle type has a specific purpose with a restricted tool set. The same codebase supports multiple deployment targets via configuration: geopolitical situational awareness (current mission), privacy/government overreach monitoring, and attack surface management (cybersecurity).
+Legba is not a chatbot or task runner. Collection is deterministic (no LLM), validation uses a small language model, analysis uses a large one, and every cycle type has a specific purpose with a restricted tool set. Processing maps onto JDL fusion levels L0-L5 across all three cognitive layers. The same codebase supports multiple deployment targets via configuration: geopolitical situational awareness (current mission), privacy/government overreach monitoring, and attack surface management (cybersecurity).
 
 ## Architecture
 
 17 Docker containers on a single Debian 12 VM (8 vCPU, 16 GB RAM). Processing is organized into a three-layer cognitive architecture that runs concurrently:
 
-- **Unconscious** (maintenance daemon) -- Deterministic, no LLM. Lifecycle decay, entity garbage collection, corroboration scoring, adversarial detection (velocity spikes, semantic echoes, provenance clusters), confidence calibration, integrity verification. Tick-based scheduler with reactive state propagation.
-- **Subconscious** (SLM service) -- Llama 3.1 8B. Signal quality validation, entity resolution, classification refinement, fact corroboration, graph consistency checks. Three concurrent async loops on timed intervals.
-- **Conscious** (agent cycle) -- GPT-OSS 120B via vLLM (~42 tps). Planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation. Discrete cycles with full context assembly and a 128k-token window.
+- **Unconscious** (maintenance daemon, 10 modules) -- Deterministic, no LLM. Lifecycle decay, entity garbage collection, corroboration scoring, adversarial detection (velocity spikes, semantic echoes, provenance clusters), confidence calibration, integrity verification, structural balance analysis (signed Laplacian on AlliedWith/HostileTo triads), graph entropy tracking. Tick-based scheduler with reactive state propagation.
+- **Subconscious** (SLM service, 11 modules) -- Llama 3.1 8B. Signal quality validation, entity resolution, classification refinement, fact corroboration, graph consistency checks, situation detection. Three concurrent async loops on timed intervals.
+- **Conscious** (agent cycle, 7 cycle types) -- GPT-OSS 120B via hybrid PromptRouter (static overrides, deterministic complexity scoring, agent-triggered escalation to Claude). Planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation. Discrete cycles with full context assembly and a 128k-token window.
 
 A planning layer ties goals, situations, watchlists, and hypotheses into a detect-escalate-plan-execute loop. Standing goals weight analytical priority; investigative goals decompose into typed tasks that feed the cycle router. Reactive propagation ensures state changes cascade across the portfolio.
 
-**Storage:** Postgres/AGE (structured + graph), Qdrant (semantic/episodic vector search), OpenSearch x2 (full-text + audit), Redis (transient state), TimescaleDB (time-series metrics + HDX conflict baselines). **Orchestration:** NATS (event bus), Airflow (4 DAGs: metrics rollup, source health, decision surfacing, eval rubrics), Grafana (operational dashboards).
+**Storage:** Postgres/AGE (structured + temporal graph with weighted edges: confidence, evidence_count, volatility, event-sourced to TimescaleDB), Qdrant (semantic/episodic vector search), OpenSearch x2 (full-text + audit), Redis (transient state), TimescaleDB (time-series metrics + graph history). **Orchestration:** NATS (event bus), Airflow (4 DAGs: metrics rollup, source health, decision surfacing, eval rubrics), Grafana (8 dashboards incl. fusion levels and temporal graph). **Config:** Versioned DB-backed config store (prompts, mission, guidance -- UI-editable, rollback-capable). **Auth:** JWT with 3 roles (admin/analyst/viewer). **Proxy:** Caddy (HTTPS termination).
 
 ## Fusion Architecture
 
@@ -57,24 +57,23 @@ Each cycle follows a fixed phase sequence: WAKE (connect, register tools, drain 
 
 | Metric | Value |
 |--------|-------|
-| Signals ingested | ~30,500 |
-| Derived events | ~1,100 |
-| Active facts | ~13,400 |
-| Entities | ~598 |
-| Active sources | 138 (all categorized) |
-| Built-in tools | 66 across 19 modules |
 | Containers | 17 |
-| Cognitive layers | 3 (unconscious, subconscious, conscious) |
-| Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |
+| Cognitive layers | 3 (unconscious/10 modules, subconscious/11 modules, conscious/7 cycle types) |
+| Fusion levels | JDL L0-L5 mapped across all layers |
+| Built-in tools | 66 across 19 modules |
+| Active sources | 112+ (all categorized) |
 | Canonical relationship types | 30 |
+| Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |
+| UI panels | 25 (React + Dockview workstation) |
+| Grafana dashboards | 8 (incl. fusion levels, temporal graph) |
+| Authentication | JWT with 3 roles (admin/analyst/viewer) |
 | Python source files | 176 |
 | Tests | 200+ |
-| UI panels | 22+ |
 
 ## Data Pipeline
 
 ```
-Sources (138 feeds: RSS, APIs, weather alerts, conflict data)
+Sources (112+ feeds: RSS, APIs, weather alerts, conflict data)
     |
 Signal Ingestion (deterministic, no LLM)
   Fetch -> Normalize -> Classify -> NER -> Embed -> 4-tier Dedup -> Store
@@ -104,14 +103,15 @@ Intelligence Products (SYNTHESIZE + INTROSPECTION cycles)
 
 **Mission:** Continuous Global Situational Awareness -- monitoring geopolitical, conflict, health, environmental, and economic developments worldwide.
 
-**Primary LLM:** GPT-OSS 120B via vLLM (self-hosted, ~42 tps, ~5.3 cycles/hour). **SLM:** Llama 3.1 8B Q5_K_M via llama.cpp (~40 tps). **Alternative:** Claude Sonnet via Anthropic API (tested, viable for enterprise budgets).
+**Primary LLM:** GPT-OSS 120B via vLLM (self-hosted, ~42 tps, ~5.3 cycles/hour). **SLM:** Llama 3.1 8B via vLLM (~40 tps). **Escalation:** Claude Sonnet via Anthropic API (hybrid routing -- PromptRouter selects provider per-prompt based on static overrides, deterministic complexity scoring, and agent-triggered escalation).
 
-**Operator interface:** 22+ panel React intelligence workstation (Dockview layout) with knowledge graph explorer, geospatial map, timeline, live signal feed, derived events, AI consultation, world assessment reports, hypothesis tracker (ACH), situation briefs, and analytics dashboards.
+**Operator interface:** 25-panel React intelligence workstation (Dockview layout) with JWT authentication (admin/analyst/viewer). Knowledge graph explorer with entity deep linking, geospatial map, timeline, live signal feed, derived events, AI consultation, world assessment reports, hypothesis tracker (ACH), situation briefs, evidence chain modal, command palette, layout presets, and analytics dashboards. All prompts and mission config editable via the UI through the versioned config store.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
+| [Architecture Guide](ARCHITECTURE_GUIDE.md) | Conceptual orientation -- why the system is built the way it is |
 | [LEGBA.md](LEGBA.md) | Full platform reference -- architecture, prompts, memory, tools, config |
 | [DESIGN.md](DESIGN.md) | Implementation design -- decisions, data flows, component interactions |
 | [CODE_MAP.md](CODE_MAP.md) | Complete code map -- every file, function flows, dependencies |

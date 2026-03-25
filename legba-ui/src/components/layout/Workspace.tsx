@@ -31,6 +31,9 @@ import { ScorecardPanel } from '@/panels/ScorecardPanel'
 import { ProposedEdgesPanel } from '@/panels/ProposedEdgesPanel'
 import { HypothesesPanel } from '@/panels/HypothesesPanel'
 import { BriefsPanel } from '@/panels/BriefsPanel'
+import { ConfigPanel } from '@/panels/ConfigPanel'
+import { InboxPanel } from '@/panels/InboxPanel'
+import { UsersPanel } from '@/panels/UsersPanel'
 
 const PANEL_TITLES: Record<PanelType, string> = {
   dashboard: 'Dashboard',
@@ -57,6 +60,9 @@ const PANEL_TITLES: Record<PanelType, string> = {
   'proposed-edges': 'Proposed Edges',
   hypotheses: 'Hypotheses',
   briefs: 'Situation Briefs',
+  inbox: 'Inbox',
+  config: 'Config Editor',
+  users: 'Users',
 }
 
 function PanelContent({ type, params }: { type: PanelType; params?: Record<string, string> }) {
@@ -85,6 +91,9 @@ function PanelContent({ type, params }: { type: PanelType; params?: Record<strin
     case 'proposed-edges': return <ProposedEdgesPanel />
     case 'hypotheses': return <HypothesesPanel />
     case 'briefs': return <BriefsPanel />
+    case 'inbox': return <InboxPanel />
+    case 'config': return <ConfigPanel />
+    case 'users': return <UsersPanel />
     default: return <div className="p-4 text-muted-foreground">Unknown panel type</div>
   }
 }
@@ -113,12 +122,43 @@ function saveLayout(api: DockviewApi) {
   } catch { /* ignore */ }
 }
 
+function clearAllPanels(api: DockviewApi) {
+  // Remove all panels — iterate a copy since we're mutating
+  const panels = [...api.panels]
+  for (const panel of panels) {
+    panel.api.close()
+  }
+}
+
+function addPresetPanels(api: DockviewApi, panelTypes: PanelType[]) {
+  panelTypes.forEach((type) => {
+    api.addPanel({
+      id: `${type}-preset`,
+      component: 'panel',
+      params: { type },
+      title: PANEL_TITLES[type] ?? type,
+    })
+  })
+}
+
 export function Workspace() {
   const apiRef = useRef<DockviewApi | null>(null)
-  const { pendingPanel, clearPending } = useWorkspaceStore()
+  const { pendingPanel, clearPending, pendingPreset, clearPreset, pendingCustomLayout, clearCustomLayout, setDockviewApiRef } =
+    useWorkspaceStore()
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api
+
+    // Register the API ref so the store can read layout JSON
+    setDockviewApiRef({
+      getLayoutJSON: () => {
+        try {
+          return JSON.stringify(event.api.toJSON())
+        } catch {
+          return null
+        }
+      },
+    })
 
     // Try to restore saved layout
     try {
@@ -142,7 +182,7 @@ export function Workspace() {
 
     // Save on every layout change
     event.api.onDidLayoutChange(() => saveLayout(event.api))
-  }, [])
+  }, [setDockviewApiRef])
 
   // Handle panel open requests from sidebar
   useEffect(() => {
@@ -168,6 +208,28 @@ export function Workspace() {
 
     clearPending()
   }, [pendingPanel, clearPending])
+
+  // Handle preset application
+  useEffect(() => {
+    if (!pendingPreset || !apiRef.current) return
+
+    clearAllPanels(apiRef.current)
+    addPresetPanels(apiRef.current, pendingPreset.panels)
+    saveLayout(apiRef.current)
+    clearPreset()
+  }, [pendingPreset, clearPreset])
+
+  // Handle custom layout restoration
+  useEffect(() => {
+    if (!pendingCustomLayout || !apiRef.current) return
+
+    try {
+      const layout = JSON.parse(pendingCustomLayout.layoutJSON)
+      apiRef.current.fromJSON(layout)
+      saveLayout(apiRef.current)
+    } catch { /* ignore corrupt layout */ }
+    clearCustomLayout()
+  }, [pendingCustomLayout, clearCustomLayout])
 
   return (
     <DockviewReact

@@ -28,16 +28,27 @@ const CATEGORIES = [
   'other',
 ]
 
+const LIFECYCLE_STATUSES = [
+  'emerging',
+  'developing',
+  'active',
+  'evolving',
+  'resolved',
+  'reactivated',
+] as const
+
 interface EventFilters {
   categories: string[]
   severity: string
   eventType: string
+  lifecycleStatuses: string[]
 }
 
 const DEFAULT_FILTERS: EventFilters = {
   categories: [],
   severity: '',
   eventType: '',
+  lifecycleStatuses: [],
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -49,6 +60,24 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced
 }
 
+const LIFECYCLE_COLORS: Record<string, string> = {
+  emerging: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  developing: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+  active: 'bg-green-500/20 text-green-400 border-green-500/30',
+  evolving: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+  resolved: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  reactivated: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+}
+
+function LifecycleBadge({ status }: { status: string }) {
+  const color = LIFECYCLE_COLORS[status.toLowerCase()] ?? 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+  return (
+    <span className={cn('inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded border', color)}>
+      {status}
+    </span>
+  )
+}
+
 export function EventsPanel() {
   const [offset, setOffset] = useState(0)
   const [search, setSearch] = useState('')
@@ -58,6 +87,7 @@ export function EventsPanel() {
     categories: true,
     severity: true,
     type: true,
+    lifecycle: true,
   })
 
   const debouncedFilters = useDebounce(filters, 300)
@@ -79,11 +109,19 @@ export function EventsPanel() {
   const openPanel = useWorkspaceStore((s) => s.openPanel)
   const select = useSelectionStore((s) => s.select)
 
+  // Client-side lifecycle filter
+  const filteredItems = data?.items.filter((event) => {
+    if (debouncedFilters.lifecycleStatuses.length === 0) return true
+    if (!event.lifecycle_status) return false
+    return debouncedFilters.lifecycleStatuses.includes(event.lifecycle_status.toLowerCase())
+  })
+
   // Count active filters
   const activeFilterCount =
     (filters.categories.length > 0 ? 1 : 0) +
     (filters.severity ? 1 : 0) +
-    (filters.eventType ? 1 : 0)
+    (filters.eventType ? 1 : 0) +
+    (filters.lifecycleStatuses.length > 0 ? 1 : 0)
 
   const toggleCategory = useCallback(
     (cat: string) => {
@@ -92,6 +130,19 @@ export function EventsPanel() {
         categories: f.categories.includes(cat)
           ? f.categories.filter((c) => c !== cat)
           : [...f.categories, cat],
+      }))
+      setOffset(0)
+    },
+    []
+  )
+
+  const toggleLifecycleStatus = useCallback(
+    (status: string) => {
+      setFilters((f) => ({
+        ...f,
+        lifecycleStatuses: f.lifecycleStatuses.includes(status)
+          ? f.lifecycleStatuses.filter((s) => s !== status)
+          : [...f.lifecycleStatuses, status],
       }))
       setOffset(0)
     },
@@ -127,6 +178,14 @@ export function EventsPanel() {
     activeChips.push({
       label: `type: ${filters.eventType}`,
       onRemove: () => setFilters((f) => ({ ...f, eventType: '' })),
+    })
+  }
+  if (filters.lifecycleStatuses.length > 0) {
+    filters.lifecycleStatuses.forEach((status) => {
+      activeChips.push({
+        label: `status: ${status}`,
+        onRemove: () => toggleLifecycleStatus(status),
+      })
     })
   }
 
@@ -286,6 +345,33 @@ export function EventsPanel() {
                 </select>
               </div>
             </FilterSection>
+
+            {/* Lifecycle Status */}
+            <FilterSection
+              title="Lifecycle Status"
+              open={sectionsOpen.lifecycle}
+              onToggle={() => toggleSection('lifecycle')}
+            >
+              {LIFECYCLE_STATUSES.map((status) => {
+                const isSelected = filters.lifecycleStatuses.includes(status)
+                return (
+                  <label
+                    key={status}
+                    className="flex items-center gap-2 px-3 py-1 hover:bg-secondary/50 cursor-pointer text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleLifecycleStatus(status)}
+                      className="rounded border-border bg-secondary accent-primary w-3 h-3"
+                    />
+                    <span className="flex-1">
+                      <LifecycleBadge status={status} />
+                    </span>
+                  </label>
+                )
+              })}
+            </FilterSection>
           </div>
         )}
 
@@ -293,13 +379,14 @@ export function EventsPanel() {
         <div className="flex-1 overflow-auto">
           {isLoading ? (
             <div className="p-4 text-sm text-muted-foreground">Loading...</div>
-          ) : !data?.items.length ? (
+          ) : !filteredItems?.length ? (
             <div className="p-4 text-sm text-muted-foreground">No events found</div>
           ) : (
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-card border-b border-border z-10">
                 <tr className="text-left text-xs text-muted-foreground">
                   <th className="px-3 py-2 font-medium">Severity</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Category</th>
                   <th className="px-3 py-2 font-medium">Type</th>
                   <th className="px-3 py-2 font-medium">Title</th>
@@ -309,55 +396,65 @@ export function EventsPanel() {
                 </tr>
               </thead>
               <tbody>
-                {data.items.map((event) => (
-                  <tr
-                    key={event.event_id}
-                    className="border-b border-border/50 hover:bg-secondary/50 cursor-pointer"
-                    onClick={() => {
-                      select({
-                        type: 'event',
-                        id: event.event_id,
-                        name: event.title,
-                      })
-                      openPanel('event-detail', { id: event.event_id })
-                    }}
-                  >
-                    <td className="px-3 py-2">
-                      {event.severity ? (
-                        <SeverityBadge severity={event.severity} />
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground">--</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <Badge
-                        className={cn('text-[10px]', categoryColor(event.category))}
-                      >
-                        {event.category}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">
-                      {event.event_type ?? '--'}
-                    </td>
-                    <td className="px-3 py-2 truncate max-w-[300px]">{event.title}</td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums text-center">
-                      {event.signal_count > 0 ? event.signal_count : '--'}
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {Math.round(event.confidence * 100)}%
-                    </td>
-                    <td className="px-3 py-2">
-                      {(event.time_start || event.timestamp) ? (
-                        <TimeAgo
-                          date={event.time_start || event.timestamp}
-                          className="text-xs text-muted-foreground"
-                        />
-                      ) : (
-                        <span className="text-xs text-muted-foreground">--</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {filteredItems.map((event) => {
+                  const lifecycleStatus = event.lifecycle_status
+                  return (
+                    <tr
+                      key={event.event_id}
+                      className="border-b border-border/50 hover:bg-secondary/50 cursor-pointer"
+                      onClick={() => {
+                        select({
+                          type: 'event',
+                          id: event.event_id,
+                          name: event.title,
+                        })
+                        openPanel('event-detail', { id: event.event_id })
+                      }}
+                    >
+                      <td className="px-3 py-2">
+                        {event.severity ? (
+                          <SeverityBadge severity={event.severity} />
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">--</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {lifecycleStatus ? (
+                          <LifecycleBadge status={lifecycleStatus} />
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">--</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <Badge
+                          className={cn('text-[10px]', categoryColor(event.category))}
+                        >
+                          {event.category}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {event.event_type ?? '--'}
+                      </td>
+                      <td className="px-3 py-2 truncate max-w-[300px]">{event.title}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums text-center">
+                        {event.signal_count > 0 ? event.signal_count : '--'}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">
+                        {Math.round(event.confidence * 100)}%
+                      </td>
+                      <td className="px-3 py-2">
+                        {(event.time_start || event.timestamp) ? (
+                          <TimeAgo
+                            date={event.time_start || event.timestamp}
+                            className="text-xs text-muted-foreground"
+                          />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">--</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}

@@ -1,8 +1,8 @@
 # Legba Code Map
 
-**Generated:** 2026-03-23
+**Generated:** 2026-03-25
 **Total Python files:** 176
-**Total lines of Python:** ~28,600
+**Total lines of Python:** ~30,900
 
 ---
 
@@ -43,19 +43,23 @@ src/legba/
     escalation.py                    (114 lines) — Escalation scoring: pure function scoring event clusters for portfolio promotion (ignore/monitor/situation/full_portfolio)
     task_backlog.py                  (278 lines) — Task backlog: Redis sorted set operations, 9 task types, goal-driven priority queue, cycle-type routing
     portfolio.py                     (554 lines) — Portfolio view builder: 7-section structured query for EVOLVE context (goals, situations, hypotheses, watchlists, predictions, coverage gaps, task backlog)
+    priority.py                      (456 lines) — Priority stack: composite situation ranking (velocity, goal overlap, watchlist density, recency, structural instability boost), JDL Level 3
+    config_store.py                  (337 lines) — Versioned config store: Postgres-backed prompt/guidance/mission config with version history and rollback
+    structural_balance.py            (219 lines) — Structural balance analysis: AlliedWith/HostileTo signed triads, unbalanced triad detection, JDL Level 2
+    graph_entropy.py                 (143 lines) — Graph entropy: information-theoretic diversity of relationship type distribution
+    relationship_history.py          (67 lines)  — Relationship transition history: immutable edge change records to TimescaleDB
+    token_budget.py                  (56 lines)  — Rolling 24h token budget for escalation LLM provider (Redis sorted set)
 
   agent/
     __init__.py
     main.py                          (49 lines)  — Entry point: asyncio.run(run_cycle())
     log.py                           (149 lines) — Structured JSON logging (CycleLogger)
-    cycle.py                         (~435 lines) — Orchestrator: 15 phase mixins, CYCLE_TYPE worker mode, dynamic CURATE promotion
+    cycle.py                         (~588 lines) — Orchestrator: 13 phase mixins (plan/act merged into cycle.py), CYCLE_TYPE worker mode, dynamic CURATE promotion
 
     phases/
       __init__.py                    (25 lines)  — Interval constants (Tier 1: 10,15,30; Tier 2 coprime: 4,7,9)
       wake.py                        (387 lines) — WakeMixin: init, connections, tool registration
       orient.py                      (212 lines) — OrientMixin: context from all memory layers
-      plan.py                        (75 lines)  — PlanMixin: LLM plan + tool filtering
-      act.py                         (65 lines)  — ActMixin: REASON+ACT tool loop
       reflect.py                     (181 lines) — ReflectMixin: structured extraction, fact/graph storage
       narrate.py                     (178 lines) — NarrateMixin: journal entries, consolidation, archival
       persist.py                     (362 lines) — PersistMixin: save state, liveness check, heartbeat
@@ -72,6 +76,7 @@ src/legba/
       client.py                      (460 lines) — LLMClient + WorkingMemory + reason_with_tools
       tool_parser.py                 (167 lines) — Parse {"actions":[...]} from LLM output
       harmony_legacy.py              — Legacy harmony token handling (unused)
+      router.py                      (117 lines) — PromptRouter: per-prompt LLM provider routing (static overrides, escalation flags, default fallback)
 
     memory/
       __init__.py
@@ -112,6 +117,7 @@ src/legba/
         geo.py                       (177 lines) — Location normalization (pycountry + GeoNames)
         situation_tools.py           (506 lines) — situation_create, situation_update, situation_list, situation_link_event; name dedup (word overlap Jaccard >= 0.5)
         watchlist_tools.py           (329 lines) — watchlist_add, watchlist_list, watchlist_remove; term overlap dedup (Jaccard on entities+keywords >= 0.5)
+        config_tools.py              (148 lines) — config_read, config_update: versioned config store CRUD (EVOLVE tool set)
 
     prompt/
       __init__.py
@@ -143,6 +149,9 @@ src/legba/
     app.py                           (188 lines) — FastAPI app: Jinja2 + htmx + Tailwind
     messages.py                      (226 lines) — MessageStore (Redis) + UINatsClient
     stores.py                        (294 lines) — StoreHolder: read-only store connections + Qdrant helpers
+    auth.py                          (176 lines) — JWT auth: HMAC-SHA256 tokens, 3 roles (admin/analyst/viewer), user CRUD, PBKDF2 password hashing
+    middleware.py                    (76 lines)  — Auth middleware: JWT cookie validation on /api/ routes, AUTH_ENABLED toggle
+    responses.py                     (41 lines)  — Standardized API error envelope (status, message, detail)
     routes/
       __init__.py
       dashboard.py                   (71 lines)  — GET / stats dashboard
@@ -157,6 +166,7 @@ src/legba/
       reports.py                     (47 lines)  — GET /reports
       facts.py                       (161 lines) — CRUD /facts: list, paginated rows, delete, inline edit
       memory.py                      (87 lines)  — GET /memory + DELETE episodes from Qdrant
+      auth.py                        (100 lines) — POST /api/v2/auth/login, /logout, GET /me
 
   ingestion/
     __init__.py
@@ -200,6 +210,7 @@ src/legba/
     differential.py                  (282 lines) — DifferentialAccumulator: tracks state changes between conscious cycles, writes JSON summary to Redis
     prompts.py                       (223 lines) — SLM prompt templates: signal validation, classification, entity resolution, fact refresh, graph consistency
     schemas.py                       (103 lines) — Pydantic models for SLM structured responses (SignalValidationVerdict, ClassificationVerdict, etc.)
+    situation_detect.py              (387 lines) — SLM-based situation detection: event cluster evaluation, narrative coherence assessment, Jaccard dedup, JDL Level 2
 
 scripts/
   migrate_signals_events.sql         (131 lines) — DDL migration: events→signals, events_derived→events
@@ -396,7 +407,7 @@ legba-models/
 
 ---
 
-### 2.4 `src/legba/agent/cycle.py` — Core Agent Cycle (1827 lines)
+### 2.4 `src/legba/agent/cycle.py` — Core Agent Cycle (~588 lines)
 
 **Purpose:** The heart of Legba. Executes one complete cycle through all phases.
 
@@ -708,7 +719,7 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 - `explain_tool` — Get full parameter details for any tool on demand
 - `spawn_subagent` — Delegate work to a sub-agent with its own context window
 
-**Total registered tools: 73+**
+**Total registered tools: 72+** (66 builtin + 2 config + 4 inline cycle tools)
 
 ---
 
@@ -1144,6 +1155,68 @@ Async service running alongside the conscious agent, using a side-channel SLM (L
 
 #### `subconscious/schemas.py`
 **Purpose:** Pydantic models for SLM structured responses: `SignalValidationVerdict`, `ClassificationVerdict`, `EntityResolutionVerdict`, `FactRefreshVerdict`, `RelationshipVerdict`. Used for both response parsing and `guided_json` constrained decoding.
+
+#### `subconscious/situation_detect.py`
+**Purpose:** SLM-based situation detection (JDL Level 2). Replaces the mechanical entity-concatenation approach in the maintenance daemon. Queries events from last 48h grouped by (category, primary_region), filters to clusters with 8+ events, asks the SLM to evaluate narrative coherence, deduplicates against existing situations via Jaccard similarity on name, inserts passing clusters as proposed situations.
+
+---
+
+### 2.22 `src/legba/shared/` — Priority Stack and Temporal Graph
+
+#### `shared/priority.py`
+**Purpose:** Priority stack (JDL Level 3) — ranks active situations by composite score. Four components: event velocity (0.3), goal overlap (0.25), watchlist trigger density (0.25), recency penalty (0.2), plus optional structural instability boost (capped at 0.10) from unbalanced triads. Adaptive staleness thresholds vary by severity.
+
+#### `shared/config_store.py`
+**Purpose:** Versioned config store backed by Postgres `config_versions` table. Stores prompt templates, world briefing, mission config, and guidance addons as versioned text records. Each update creates a new version; supports rollback to any previous version. Keys defined in `CONFIG_KEYS` list.
+
+#### `shared/structural_balance.py`
+**Purpose:** Structural balance analysis (JDL Level 2) on the knowledge graph. Computes balance score from AlliedWith (+) / HostileTo (-) triads. Unbalanced triads (friend-of-friend-is-enemy) predict relationship realignment.
+
+#### `shared/graph_entropy.py`
+**Purpose:** Information-theoretic entropy of the knowledge graph's relationship type distribution. Higher entropy = more diverse relationship landscape. Entropy spikes indicate structural reorganization.
+
+#### `shared/relationship_history.py`
+**Purpose:** Immutable transition records for every graph edge create/update/delete, written to TimescaleDB via the existing MetricsClient infrastructure. Enables temporal reconstruction and trend analysis.
+
+#### `shared/token_budget.py`
+**Purpose:** Rolling 24h token budget for the escalation LLM provider. Tracks usage in Redis sorted set. Hard stops escalation when budget exceeded. Archives daily totals to TimescaleDB.
+
+---
+
+### 2.23 `src/legba/agent/llm/router.py` — Prompt Router
+
+**Purpose:** Per-prompt LLM provider routing. Routes individual prompts to different providers based on static overrides (config-driven, per prompt name), escalation flags (agent-requested or deterministic), and default provider fallback. Sits between the prompt assembler and the LLM client.
+
+**Key class: `PromptRouter`**
+- `__init__(default_provider, escalation_provider, config)` — Configures routing with static overrides from config
+- `route(prompt_name)` — Returns the provider to use for the given prompt
+- `escalate()` / `de_escalate()` — Intra-cycle escalation flag control
+
+---
+
+### 2.24 `src/legba/agent/tools/builtins/config_tools.py` — Config Tools
+
+**Purpose:** Agent-facing tools for the versioned config store. Provides `config_read` and `config_update` for inspecting and modifying prompt templates, guidance text, and mission config. Registered in the EVOLVE tool set only — replaces `fs_write` for prompt self-modification.
+
+**Tools:** `config_read(key)`, `config_update(key, value, notes)`
+
+---
+
+### 2.25 `src/legba/ui/` — Auth and Middleware
+
+#### `ui/auth.py`
+**Purpose:** JWT authentication with HMAC-SHA256 (no external dependency). 3 roles: admin (full access), analyst (read/write), viewer (read-only). User CRUD against Postgres `users` table, PBKDF2 password hashing.
+
+**Key functions:** `create_token(user_id, role)`, `verify_token(token)`, `authenticate_user(username, password)`, `create_user(username, password, role)`
+
+#### `ui/middleware.py`
+**Purpose:** Starlette auth middleware. Checks JWT cookie on `/api/` routes when `AUTH_ENABLED=true`. Skips auth entirely when disabled (backward compatible). Auth endpoints and health checks are always exempt.
+
+#### `ui/responses.py`
+**Purpose:** Standardized API error envelope (`{error: {status, message, detail}}`). Used across all API endpoints for consistent error formatting.
+
+#### `ui/routes/auth.py`
+**Purpose:** Auth API routes — `POST /api/v2/auth/login` (returns JWT in HttpOnly cookie, 24h TTL), `POST /api/v2/auth/logout` (clears cookie), `GET /api/v2/auth/me` (returns current user from token).
 
 ---
 

@@ -87,6 +87,7 @@ export interface EventSummary {
   time_start: string | null
   time_end: string | null
   source_method: string | null
+  lifecycle_status: string | null
 }
 
 export interface LinkedSignal {
@@ -459,6 +460,15 @@ export interface PaginatedResponse<T> {
   limit: number
 }
 
+// Alert notifications (from Grafana via NATS -> SSE)
+export interface AlertNotification {
+  id: string
+  title: string
+  severity: 'critical' | 'warning' | 'info'
+  message: string
+  timestamp: string
+}
+
 // SSE event types
 export type SSEEventType =
   | 'event:new'
@@ -467,6 +477,7 @@ export type SSEEventType =
   | 'cycle:end'
   | 'agent:status'
   | 'situation:update'
+  | 'alert:fired'
 
 export interface SSEEvent {
   type: SSEEventType

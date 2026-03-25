@@ -106,7 +106,11 @@ class MaintenanceService:
             backfill = BackfillManager(self._pg_pool)
             ev_count = await backfill.backfill_event_graph_vertices()
             sit_count = await backfill.backfill_situation_graph()
-            logger.info("Startup backfill: %d event vertices, %d situation edges", ev_count, sit_count)
+            edge_count = await backfill.backfill_edge_properties()
+            logger.info(
+                "Startup backfill: %d event vertices, %d situation edges, %d edge properties",
+                ev_count, sit_count, edge_count,
+            )
         except Exception as e:
             logger.warning("Startup backfill failed (non-fatal): %s", e)
 

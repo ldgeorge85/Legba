@@ -429,7 +429,7 @@ function transformGraphResponse(raw: any): GraphData {
   return { nodes, edges, rel_types: [] }
 }
 
-export function useGraph() {
+export function useGraph(enabled = true) {
   return useQuery({
     queryKey: ['graph'],
     queryFn: async () => {
@@ -437,6 +437,7 @@ export function useGraph() {
       return transformGraphResponse(raw)
     },
     staleTime: 60_000,
+    enabled,
   })
 }
 
@@ -581,5 +582,111 @@ export function useBriefs(limit: number = 20) {
     queryFn: () => api.get<SituationBrief[]>(`/api/v2/briefs?limit=${limit}`),
     staleTime: 30_000,
     refetchInterval: 60_000,
+  })
+}
+
+// ── Auth / Users ──
+
+export function useUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: () => api.get<{ users: Array<{ id: string; username: string; role: string; created_at: string | null; last_login: string | null }> }>('/api/v2/auth/users'),
+    staleTime: 10_000,
+  })
+}
+
+export function useCreateUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { username: string; password: string; role: string }) =>
+      api.post('/api/v2/auth/users', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useUpdateUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ userId, body }: { userId: string; body: { role?: string; password?: string } }) =>
+      api.put(`/api/v2/auth/users/${userId}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useDeleteUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (userId: string) => api.delete(`/api/v2/auth/users/${userId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (body: { current_password: string; new_password: string }) =>
+      api.put('/api/v2/auth/password', body),
+  })
+}
+
+// ── Config Store ──
+
+export function useConfigKeys() {
+  return useQuery({
+    queryKey: ['config', 'keys'],
+    queryFn: () => api.get<{ keys: Array<{ key: string; version: number; updated_at: string | null }> }>('/api/v2/config'),
+    staleTime: 10_000,
+  })
+}
+
+export function useConfigValue(key: string | null) {
+  return useQuery({
+    queryKey: ['config', 'value', key],
+    queryFn: () => api.get<{ key: string; value: string }>(`/api/v2/config/${key}`),
+    enabled: !!key,
+  })
+}
+
+export function useConfigHistory(key: string | null) {
+  return useQuery({
+    queryKey: ['config', 'history', key],
+    queryFn: () =>
+      api.get<{
+        key: string
+        versions: Array<{
+          version: number
+          created_at: string | null
+          created_by: string
+          notes: string
+          active: boolean
+          preview: string
+        }>
+      }>(`/api/v2/config/${key}/history`),
+    enabled: !!key,
+  })
+}
+
+export function useUpdateConfig() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ key, value, notes }: { key: string; value: string; notes: string }) =>
+      api.put(`/api/v2/config/${key}`, { value, notes }),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config', 'keys'] })
+      qc.invalidateQueries({ queryKey: ['config', 'value', variables.key] })
+      qc.invalidateQueries({ queryKey: ['config', 'history', variables.key] })
+    },
+  })
+}
+
+export function useRollbackConfig() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ key, version }: { key: string; version: number }) =>
+      api.post(`/api/v2/config/${key}/rollback/${version}`),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config', 'keys'] })
+      qc.invalidateQueries({ queryKey: ['config', 'value', variables.key] })
+      qc.invalidateQueries({ queryKey: ['config', 'history', variables.key] })
+    },
   })
 }

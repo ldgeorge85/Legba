@@ -153,6 +153,15 @@ SITUATION_LINK_EVENT_DEF = ToolDefinition(
 
 _VALID_STATUSES = {"active", "escalating", "de_escalating", "dormant", "resolved"}
 
+_FILLER_WORDS = {"the", "and", "in", "of", "to", "a", "an", "with", "for", "on", "by",
+                 "recent", "analyze", "investigate", "monitor", "track", "assess",
+                 "focusing", "including", "developments", "situation", "within", "active"}
+
+
+def _content_words(text: str) -> set:
+    """Extract meaningful words from text, stripping filler."""
+    return {w for w in text.lower().split() if w not in _FILLER_WORDS and len(w) > 2}
+
 
 def _parse_csv(val) -> list[str]:
     """Parse a comma-separated string or list into a clean list of strings."""
@@ -185,12 +194,8 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
             return "Error: name is required"
 
         description = args.get("description", "").strip()
-        if not description:
-            return (
-                "Error: description is required. Situations are analytical themes "
-                "spanning multiple events, not labels for individual events. "
-                "Provide a description explaining the developing pattern or ongoing condition."
-            )
+        if not description or len(description) < 50:
+            return "Error: situation description must be at least 50 characters explaining why this is a coherent narrative."
 
         await _ensure_tables(structured._pool)
 
@@ -233,6 +238,32 @@ def register(registry: ToolRegistry, *, structured: StructuredStore) -> None:
                                 "existing_name": row["name"],
                                 "overlap_words": sorted(new_words & ex_words),
                                 "hint": f"Similar situation exists (word overlap {overlap}/{union}). "
+                                        "Use situation_update to modify it.",
+                            }, indent=2)
+
+                # Content-word dedup on descriptions (catches semantic duplicates)
+                new_desc_words = _content_words(description)
+                if new_desc_words and len(new_desc_words) >= 3:
+                    desc_rows = await conn.fetch(
+                        "SELECT id, name, data FROM situations "
+                        "WHERE status IN ('active', 'escalating')",
+                    )
+                    for row in desc_rows:
+                        raw = row["data"]
+                        ex_data = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else {}
+                        ex_desc = ex_data.get("description", "")
+                        ex_desc_words = _content_words(ex_desc)
+                        if not ex_desc_words:
+                            continue
+                        shared = len(new_desc_words & ex_desc_words)
+                        smaller = min(len(new_desc_words), len(ex_desc_words))
+                        if smaller > 0 and shared / smaller > 0.6:
+                            return json.dumps({
+                                "status": "duplicate_detected",
+                                "existing_id": str(row["id"]),
+                                "existing_name": row["name"],
+                                "overlap_words": sorted(new_desc_words & ex_desc_words),
+                                "hint": f"Similar situation exists (description overlap {shared}/{smaller}). "
                                         "Use situation_update to modify it.",
                             }, indent=2)
         except Exception:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -211,6 +212,21 @@ class WakeMixin:
                         self.logger.log("inbox_read", source="file", count=len(inbox.messages))
                 except Exception:
                     pass
+
+        # Persist inbox acknowledgment record to Redis
+        if self.state.inbox_messages:
+            try:
+                ack_record = {
+                    "cycle": self.state.cycle_number,
+                    "message_ids": [m.get("id", "") for m in self.state.inbox_messages],
+                    "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await self.memory.registers.set_json("inbox:acknowledged", ack_record)
+                self.logger.log("inbox_acknowledged",
+                                count=len(self.state.inbox_messages),
+                                cycle=self.state.cycle_number)
+            except Exception:
+                pass
 
         self.state.phase = "wake"
 

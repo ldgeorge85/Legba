@@ -300,7 +300,8 @@ def _compute_goal_overlap(
     """Compute goal overlap score for a situation.
 
     Returns:
-        1.0 if a goal is directly linked to this situation.
+        1.0 if a goal is directly linked to this situation, OR if an
+            operator_priority goal overlaps with this situation.
         0.5 if a goal shares key entities with this situation.
         0.0 otherwise.
     """
@@ -311,6 +312,7 @@ def _compute_goal_overlap(
 
     for goal in active_goals:
         gdata = goal["data"]
+        is_operator = gdata.get("operator_priority", False)
 
         # Direct link: goal has linked_situation_id matching this situation
         linked_sit = gdata.get("linked_situation_id")
@@ -321,16 +323,40 @@ def _compute_goal_overlap(
         desc = (gdata.get("description") or "").lower()
         name_lower = sit_name.lower()
         if name_lower and len(name_lower) > 5 and name_lower in desc:
+            # Operator priority goals always get max overlap
+            if is_operator:
+                return 1.0
             return 1.0
 
     # Entity overlap: check if any goal description mentions entities from this situation
     if sit_entities:
         for goal in active_goals:
             gdata = goal["data"]
+            is_operator = gdata.get("operator_priority", False)
             desc = (gdata.get("description") or "").lower()
             overlap = sum(1 for e in sit_entities if e in desc)
             if overlap >= 2:
-                return 0.5
+                # Operator priority goals boost to 1.0 even on entity overlap
+                return 1.0 if is_operator else 0.5
+
+    # Check if any operator_priority goal has even partial relevance
+    # (single entity overlap or partial name match)
+    for goal in active_goals:
+        gdata = goal["data"]
+        if not gdata.get("operator_priority", False):
+            continue
+        desc = (gdata.get("description") or "").lower()
+        # Any entity overlap for operator goals => max score
+        if sit_entities:
+            if any(e in desc for e in sit_entities):
+                return 1.0
+        # Partial name match for operator goals
+        name_lower = sit_name.lower()
+        name_words = {w for w in name_lower.split() if len(w) > 3}
+        if name_words:
+            desc_words = set(desc.split())
+            if len(name_words & desc_words) >= 1:
+                return 1.0
 
     return 0.0
 

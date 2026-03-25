@@ -20,8 +20,10 @@ from pydantic import BaseModel, Field
 class SourceType(str, Enum):
     RSS = "rss"
     API = "api"
-    SCRAPE = "scrape"
-    MANUAL = "manual"
+    TELEGRAM = "telegram"
+    GEOJSON = "geojson"
+    CSV = "csv"
+    STATIC_JSON = "static_json"
 
 
 class BiasLabel(str, Enum):

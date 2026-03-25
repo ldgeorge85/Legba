@@ -325,6 +325,22 @@ class MetricCollector:
         except Exception as e:
             logger.debug("Fusion L5 consult sessions metric failed: %s", e)
 
+        # 10. Source diversity
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT data->>'category' as category, COUNT(*) as cnt
+                    FROM sources WHERE data->>'status' = 'active'
+                    GROUP BY category
+                """)
+                total = sum(r['cnt'] for r in rows)
+                if total > 0:
+                    max_concentration = max(r['cnt'] / total for r in rows)
+                    points.append(("source_diversity_max_concentration", "all", max_concentration))
+                    points.append(("source_diversity_category_count", "all", float(len(rows))))
+        except Exception as e:
+            logger.debug("Source diversity metric failed: %s", e)
+
         # Write all metrics in one batch
         if points:
             await self._metrics.write_batch(points)

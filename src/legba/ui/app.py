@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +57,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Config store bootstrap failed (non-fatal): %s", exc)
 
+    # Auth: initialize secret key + bootstrap users table
+    try:
+        from .auth import init_auth, ensure_users_table, seed_default_admin
+        secret = os.getenv("AUTH_SECRET_KEY", "legba-dev-secret-change-me")
+        init_auth(secret)
+        if stores.structured._available:
+            await ensure_users_table(stores.structured._pool)
+            await seed_default_admin(stores.structured._pool)
+    except Exception as exc:
+        logger.warning("Auth bootstrap failed (non-fatal): %s", exc)
+
     # Messages: NATS client + message store
     ui_nats = UINatsClient(url=NatsConfig.from_env().url)
     await ui_nats.connect()
@@ -97,7 +110,15 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "http://localhost:8503"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+
+# JWT auth middleware (only active when AUTH_ENABLED=true)
+from .middleware import AuthMiddleware  # noqa: E402
+app.add_middleware(AuthMiddleware)
+
+# Track startup time for health endpoint
+_STARTUP_TIME = time.time()
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -193,12 +214,56 @@ def get_stores(request: Request) -> StoreHolder:
 
 
 # ------------------------------------------------------------------
-# Health endpoint
+# Health endpoints
 # ------------------------------------------------------------------
 
 @app.get("/health")
 async def health():
+    """Legacy health endpoint — simple OK response."""
     return JSONResponse({"status": "ok"})
+
+
+@app.get("/api/v2/health")
+async def health_v2(request: Request):
+    """Standardized health endpoint with component checks.
+
+    Same JSON shape as maintenance, subconscious, and ingestion services:
+    {service, status, version, uptime_s, checks: {component: status}}
+    """
+    uptime = int(time.time() - _STARTUP_TIME)
+    checks = {}
+
+    # Postgres
+    try:
+        stores = get_stores(request)
+        if stores.structured._available:
+            async with stores.structured._pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            checks["postgres"] = "ok"
+        else:
+            checks["postgres"] = "unavailable"
+    except Exception:
+        checks["postgres"] = "error"
+
+    # Redis
+    try:
+        stores = get_stores(request)
+        await stores.registers._redis.ping()
+        checks["redis"] = "ok"
+    except Exception:
+        checks["redis"] = "error"
+
+    # Overall status
+    all_ok = all(v == "ok" for v in checks.values())
+    status = "healthy" if all_ok else "degraded"
+
+    return JSONResponse({
+        "service": "ui",
+        "status": status,
+        "version": "1.0.0",
+        "uptime_s": uptime,
+        "checks": checks,
+    })
 
 
 # ------------------------------------------------------------------
@@ -222,6 +287,7 @@ from .routes.situations import router as situations_router
 from .routes.consult import router as consult_router
 from .routes.analytics import router as analytics_router
 from .routes.api_v2 import router as api_v2_router
+from .routes.auth import router as auth_router
 from .routes.sse import router as sse_router
 
 app.include_router(dashboard_router)
@@ -241,4 +307,5 @@ app.include_router(situations_router)
 app.include_router(consult_router)
 app.include_router(analytics_router)
 app.include_router(api_v2_router)
+app.include_router(auth_router)
 app.include_router(sse_router)

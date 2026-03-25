@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..app import get_stores
+from ..responses import api_error
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,25 @@ router = APIRouter(prefix="/api/v2", tags=["api-v2"])
 
 def _json(data, status=200):
     return JSONResponse(content=data, status_code=status)
+
+
+async def _log_correction(pool, entity_type: str, entity_id, action: str,
+                          old_value=None, new_value=None, notes: str = None):
+    """Best-effort logging of operator corrections."""
+    try:
+        await pool.execute(
+            "INSERT INTO operator_corrections "
+            "(entity_type, entity_id, action, old_value, new_value, notes) "
+            "VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)",
+            entity_type,
+            entity_id,
+            action,
+            json.dumps(old_value) if old_value is not None else None,
+            json.dumps(new_value) if new_value is not None else None,
+            notes,
+        )
+    except Exception as e:
+        logger.debug("Correction log failed (non-fatal): %s", e)
 
 
 def _serialize_event(ev) -> dict:
@@ -438,7 +458,7 @@ async def get_signal(request: Request, signal_id: UUID):
     stores = get_stores(request)
     ev = await stores.get_event(signal_id)
     if not ev:
-        return _json({"error": "not found"}, 404)
+        return api_error(404, "Signal not found", f"No signal with id {signal_id}")
 
     data = _serialize_event(ev)
 
@@ -471,7 +491,7 @@ async def delete_signal(request: Request, signal_id: UUID):
             await conn.execute("DELETE FROM signals WHERE id = $1", signal_id)
         return _json({"status": "deleted"})
     except Exception as exc:
-        return _json({"error": str(exc)}, 500)
+        return api_error(500, "Failed to delete signal", str(exc))
 
 
 # ------------------------------------------------------------------
@@ -640,13 +660,13 @@ async def get_event(request: Request, event_id: UUID):
     """Get a single derived event with linked signals."""
     stores = get_stores(request)
     if not stores.structured._available:
-        return _json({"error": "not available"}, 503)
+        return api_error(503, "Database unavailable")
 
     try:
         async with stores.structured._pool.acquire() as conn:
             row = await conn.fetchrow("SELECT data FROM events WHERE id = $1", event_id)
             if not row:
-                return _json({"error": "not found"}, 404)
+                return api_error(404, "Event not found", f"No event with id {event_id}")
 
             d = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
 
@@ -677,7 +697,7 @@ async def get_event(request: Request, event_id: UUID):
         return _json(d)
     except Exception as exc:
         logger.warning("Event detail query failed: %s", exc)
-        return _json({"error": str(exc)}, 500)
+        return api_error(500, "Event detail query failed", str(exc))
 
 
 # ------------------------------------------------------------------
@@ -791,7 +811,7 @@ async def get_entity(request: Request, entity_id: str):
             logger.debug("Entity name lookup failed for %r: %s", entity_id, e)
 
     if not ep:
-        return _json({"error": "not found"}, 404)
+        return api_error(404, "Entity not found", f"No entity with id {entity_id}")
 
     data = _serialize_entity(ep)
 
@@ -849,14 +869,14 @@ async def delete_entity(request: Request, entity_id: str):
     try:
         uid = UUID(entity_id)
     except (ValueError, AttributeError):
-        return _json({"error": "invalid entity_id"}, 400)
+        return api_error(400, "Invalid entity_id", f"Could not parse '{entity_id}' as UUID")
     try:
         async with stores.structured._pool.acquire() as conn:
             await conn.execute("DELETE FROM signal_entity_links WHERE entity_id = $1", uid)
             await conn.execute("DELETE FROM entity_profiles WHERE id = $1", uid)
         return _json({"status": "deleted"})
     except Exception as exc:
-        return _json({"error": str(exc)}, 500)
+        return api_error(500, "Failed to delete entity", str(exc))
 
 
 # ------------------------------------------------------------------
@@ -1034,6 +1054,60 @@ async def list_goals(request: Request):
         return _json([])
 
 
+class GoalCreateRequest(BaseModel):
+    description: str
+    priority: int = 5
+    success_criteria: list[str] = []
+    operator_priority: bool = False
+
+
+@router.post("/goals")
+async def create_goal(request: Request, body: GoalCreateRequest):
+    """Create a new goal from the operator UI."""
+    stores = get_stores(request)
+
+    if not stores.structured._available:
+        return _json({"error": "database unavailable"}, 503)
+
+    try:
+        from ...shared.schemas.goals import (
+            Goal, GoalSource, GoalPurpose,
+        )
+
+        goal = Goal(
+            description=body.description,
+            priority=max(1, min(10, body.priority)),
+            source=GoalSource.OPERATOR,
+            goal_purpose=(
+                GoalPurpose.INVESTIGATIVE if body.operator_priority
+                else GoalPurpose.STANDING
+            ),
+            success_criteria=body.success_criteria,
+            operator_priority=body.operator_priority,
+        )
+
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO goals (id, data, status, goal_type, priority, parent_id, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                """,
+                goal.id,
+                goal.model_dump_json(),
+                goal.status.value,
+                goal.goal_type.value,
+                goal.priority,
+                goal.parent_id,
+                goal.created_at,
+            )
+
+        return _json({"goal_id": str(goal.id), "status": "created"}, 201)
+
+    except Exception as exc:
+        logger.warning("Goal creation failed: %s", exc)
+        return _json({"error": str(exc)}, 500)
+
+
 @router.put("/goals/{goal_id}")
 async def update_goal(request: Request, goal_id: str, body: dict = Body(...)):
     stores = get_stores(request)
@@ -1046,7 +1120,8 @@ async def update_goal(request: Request, goal_id: str, body: dict = Body(...)):
             row = await conn.fetchrow("SELECT data FROM goals WHERE id = $1", uid)
             if not row:
                 return _json({"error": "not found"}, 404)
-            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            old_data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            data = dict(old_data)
             # Update allowed fields
             for k in ("status", "priority", "description", "progress_pct"):
                 if k in body:
@@ -1064,6 +1139,10 @@ async def update_goal(request: Request, goal_id: str, body: dict = Body(...)):
                 f"UPDATE goals SET {', '.join(sets)}, updated_at = NOW() WHERE id = ${len(params)}",
                 *params,
             )
+        await _log_correction(
+            stores.structured._pool, "goal", uid, "update",
+            old_value=old_data, new_value=data,
+        )
         return _json({"status": "updated"})
     except Exception as exc:
         return _json({"error": str(exc)}, 500)
@@ -1078,9 +1157,15 @@ async def delete_goal(request: Request, goal_id: str):
         return _json({"error": "invalid goal_id"}, 400)
     try:
         async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT data FROM goals WHERE id = $1", uid)
+            old_data = (json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]) if row else None
             # Unparent children before deleting
             await conn.execute("UPDATE goals SET parent_id = NULL WHERE parent_id = $1", uid)
             await conn.execute("DELETE FROM goals WHERE id = $1", uid)
+        await _log_correction(
+            stores.structured._pool, "goal", uid, "delete",
+            old_value=old_data,
+        )
         return _json({"status": "deleted"})
     except Exception as exc:
         return _json({"error": str(exc)}, 500)
@@ -1508,7 +1593,18 @@ async def delete_fact(request: Request, fact_id: str):
         return _json({"error": "invalid fact_id"}, 400)
     try:
         async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT subject, predicate, value, confidence FROM facts WHERE id = $1", uid
+            )
+            old_data = {
+                "subject": row["subject"], "predicate": row["predicate"],
+                "value": row["value"], "confidence": float(row["confidence"]),
+            } if row else None
             await conn.execute("DELETE FROM facts WHERE id = $1", uid)
+        await _log_correction(
+            stores.structured._pool, "fact", uid, "delete",
+            old_value=old_data,
+        )
         return _json({"status": "deleted"})
     except Exception as exc:
         return _json({"error": str(exc)}, 500)
@@ -2050,6 +2146,61 @@ async def global_search(request: Request, q: str = Query(..., min_length=2)):
 
 
 # ---------------------------------------------------------------------------
+# Discovered URLs (potential new data sources)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/discovered-urls")
+async def list_discovered_urls(
+    request: Request,
+    min_count: int = Query(default=1, ge=1),
+    status: str = "new",
+    limit: int = Query(default=50, le=200),
+):
+    """Return discovered URLs sorted by seen_count DESC.
+
+    Useful for EVOLVE cycles and operator source discovery.
+    """
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"items": [], "total": 0})
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, base_domain, full_url, first_seen_at, last_seen_at, "
+                "seen_count, source_signal_id, status, notes "
+                "FROM discovered_urls "
+                "WHERE status = $1 AND seen_count >= $2 "
+                "ORDER BY seen_count DESC "
+                "LIMIT $3",
+                status, min_count, limit,
+            )
+            items = [
+                {
+                    "id": str(r["id"]),
+                    "base_domain": r["base_domain"],
+                    "full_url": r["full_url"],
+                    "first_seen_at": r["first_seen_at"].isoformat() if r["first_seen_at"] else None,
+                    "last_seen_at": r["last_seen_at"].isoformat() if r["last_seen_at"] else None,
+                    "seen_count": r["seen_count"],
+                    "source_signal_id": str(r["source_signal_id"]) if r["source_signal_id"] else None,
+                    "status": r["status"],
+                    "notes": r["notes"],
+                }
+                for r in rows
+            ]
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM discovered_urls WHERE status = $1 AND seen_count >= $2",
+                status, min_count,
+            )
+            return _json({"items": items, "total": total})
+    except Exception as exc:
+        logger.warning("Discovered URLs query failed: %s", exc)
+        return _json({"items": [], "total": 0})
+
+
+# ---------------------------------------------------------------------------
 # Proposed Edges (relationship inference queue)
 # ---------------------------------------------------------------------------
 
@@ -2181,3 +2332,173 @@ async def rollback_config(request: Request, key: str, version: int):
     except Exception as exc:
         logger.exception("rollback_config failed")
         return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Temporal Graph
+# ------------------------------------------------------------------
+
+@router.get("/graph/temporal")
+async def graph_temporal(
+    request: Request,
+    entity: str = Query(..., description="Entity name to query relationship history for"),
+    days: int = Query(default=30, le=365),
+):
+    """Return relationship change history for an entity from TimescaleDB.
+
+    Queries metric='relationship_change' where the dimension contains
+    the entity name. Returns a list of temporal transitions.
+    """
+    try:
+        from ...shared.metrics import MetricsClient, METRICS_DSN
+        client = MetricsClient(METRICS_DSN)
+        connected = await client.connect()
+        if not connected:
+            return _json({"items": [], "error": "TimescaleDB unavailable"})
+
+        try:
+            hours = days * 24
+            async with client._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT time, dimension, value FROM metrics "
+                    "WHERE metric = 'relationship_change' "
+                    "AND dimension LIKE '%' || $1 || '%' "
+                    "AND time > NOW() - make_interval(hours => $2) "
+                    "ORDER BY time DESC "
+                    "LIMIT 500",
+                    entity, hours,
+                )
+
+            items = []
+            for row in rows:
+                dim = row["dimension"]  # format: "action:rel_type:source->target"
+                parts = dim.split(":", 2)
+                if len(parts) < 3:
+                    continue
+                action = parts[0]
+                rel_type = parts[1]
+                edge_part = parts[2]
+                # Parse "source->target"
+                arrow_idx = edge_part.find("->")
+                if arrow_idx < 0:
+                    continue
+                source_ent = edge_part[:arrow_idx]
+                target_ent = edge_part[arrow_idx + 2:]
+                # Determine which is the "other" entity
+                other = target_ent if source_ent == entity else source_ent
+                items.append({
+                    "timestamp": row["time"].isoformat(),
+                    "rel_type": rel_type,
+                    "action": action,
+                    "target_entity": other,
+                    "weight": row["value"],
+                })
+
+            return _json({"items": items})
+        finally:
+            await client.close()
+    except Exception as exc:
+        logger.exception("graph_temporal failed")
+        return _json({"error": str(exc), "items": []}, 500)
+
+
+# ------------------------------------------------------------------
+# Messages (Operator ↔ Agent)
+# ------------------------------------------------------------------
+
+@router.get("/messages")
+async def list_messages(request: Request, limit: int = Query(default=200, le=500)):
+    """Return the message thread (inbound + outbound) in chronological order."""
+    from ..messages import MessageStore, UINatsClient
+
+    nats_client: UINatsClient = request.app.state.ui_nats
+    store: MessageStore = request.app.state.msg_store
+
+    # Drain any pending outbound messages from NATS
+    try:
+        for msg in await nats_client.drain_outbound():
+            await store.store_outbound(msg)
+    except Exception as exc:
+        logger.debug("drain_outbound during GET /messages: %s", exc)
+
+    thread = await store.get_thread(limit=limit)
+    return _json({
+        "messages": thread,
+        "nats_available": nats_client.available,
+    })
+
+
+class MessageSend(BaseModel):
+    content: str
+    priority: str = "normal"
+    requires_response: bool = False
+
+
+@router.post("/messages")
+async def send_message_v2(request: Request, body: MessageSend):
+    """Send an operator→agent message via NATS."""
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz
+    from ..messages import MessageStore, UINatsClient
+    from ...shared.schemas.comms import InboxMessage, MessagePriority
+
+    nats_client: UINatsClient = request.app.state.ui_nats
+    store: MessageStore = request.app.state.msg_store
+
+    msg = InboxMessage(
+        id=str(_uuid.uuid4()),
+        timestamp=_dt.now(_tz.utc),
+        content=body.content.strip(),
+        priority=MessagePriority(body.priority),
+        requires_response=body.requires_response,
+    )
+
+    await store.store_inbound(msg)
+    try:
+        await nats_client.publish_inbound(msg)
+    except Exception as exc:
+        logger.warning("NATS publish failed: %s", exc)
+
+    # Drain any immediate responses
+    try:
+        for out in await nats_client.drain_outbound():
+            await store.store_outbound(out)
+    except Exception:
+        pass
+
+    thread = await store.get_thread(limit=200)
+    return _json({
+        "messages": thread,
+        "nats_available": nats_client.available,
+        "sent_id": msg.id,
+    }, 201)
+
+
+@router.get("/graph/balance")
+async def graph_balance(request: Request):
+    """Return structural balance data: balance_score, unbalanced triads.
+
+    Computes live from the knowledge graph via structural_balance.py.
+    """
+    try:
+        stores = get_stores(request)
+        if not stores.structured._available:
+            return _json({
+                "balance_score": 1.0,
+                "balanced_triads": 0,
+                "unbalanced_triads": [],
+                "total_signed_edges": 0,
+            })
+
+        from ...shared.structural_balance import compute_structural_balance
+        result = await compute_structural_balance(stores.structured._pool)
+        return _json(result)
+    except Exception as exc:
+        logger.exception("graph_balance failed")
+        return _json({
+            "balance_score": 1.0,
+            "balanced_triads": 0,
+            "unbalanced_triads": [],
+            "total_signed_edges": 0,
+            "error": str(exc),
+        }, 500)

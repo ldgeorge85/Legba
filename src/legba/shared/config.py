@@ -350,6 +350,11 @@ class AgentConfig:
     subconscious_uncertainty_low: float = 0.3
     subconscious_uncertainty_high: float = 0.7
 
+    # Hybrid LLM routing (Phase 7)
+    llm_route_overrides: str = ""          # "prompt_name:provider,prompt_name:provider"
+    escalation_threshold: str = "0.6"      # Score threshold for deterministic escalation
+    escalation_token_budget: int = 500000  # Rolling 24h token budget for escalation provider
+
     @classmethod
     def from_env(cls) -> AgentConfig:
         return cls(
@@ -384,6 +389,10 @@ class AgentConfig:
             subconscious_llm_model=os.getenv("SUBCONSCIOUS_LLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
             subconscious_uncertainty_low=float(os.getenv("SUBCONSCIOUS_UNCERTAINTY_LOW", "0.3")),
             subconscious_uncertainty_high=float(os.getenv("SUBCONSCIOUS_UNCERTAINTY_HIGH", "0.7")),
+            # Hybrid LLM routing
+            llm_route_overrides=os.getenv("LLM_ROUTE_OVERRIDES", ""),
+            escalation_threshold=os.getenv("ESCALATION_THRESHOLD", "0.6"),
+            escalation_token_budget=int(os.getenv("ESCALATION_TOKEN_BUDGET", "500000")),
         )
 
 

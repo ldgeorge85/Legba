@@ -34,6 +34,7 @@ export class SSEClient {
       'cycle:end',
       'agent:status',
       'situation:update',
+      'alert:fired',
     ]
 
     for (const type of eventTypes) {

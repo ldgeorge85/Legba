@@ -1,6 +1,3 @@
 legba.civislux.us {
-	basic_auth * {
-		legba $2a$14$UZSHzxxIe/zmkuPINBLSQeI4wwECpiGO4CxhVBup70n.V3a9O.cQ.
-	}
 	reverse_proxy ui-v2:8503
 }

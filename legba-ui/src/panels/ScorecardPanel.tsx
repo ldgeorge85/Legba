@@ -1,6 +1,7 @@
 import { useScorecard } from '@/api/hooks'
 import { cn } from '@/lib/utils'
 import { TimeAgo } from '@/components/common/TimeAgo'
+import { EntityLink } from '@/components/EntityLink'
 
 function MetricCard({
   label,
@@ -178,7 +179,7 @@ export function ScorecardPanel() {
           <tbody>
             {topEntities.map(([name, count]) => (
               <tr key={name} className="border-b border-border/50 hover:bg-secondary/50">
-                <td className="py-1">{name}</td>
+                <td className="py-1"><EntityLink name={name} /></td>
                 <td className="py-1 text-right tabular-nums text-muted-foreground">{count}</td>
               </tr>
             ))}

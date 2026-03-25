@@ -9,7 +9,7 @@ models.ai1.infra.innoscale.net {
     usman $2a$14$dtc87OLLqOWHv8cvJMimV.3XWZwTf9pOd06vw0p0XSUFLSsXd2eli
     phil $2a$14$4xKJLx.f8OiG/7nnh30OnuLh5QcvZQ9I.rJuyvOaMhd583X99NeLq
     alan $2a$14$16JAyJ8wQR0m.eDQJ0L0LeIJ7/5Wnn5oNyW3WsOHmsVWuBZ2xvHiC
-    legba $2a$14$oqlXvNPXT2fbXgRS8K7VjeqZU3rnknJS.RUCgx8fEqjWWDn8e1JGq
+    legba $2a$14$X/NIN8LbTo5lqRO/8TVKU.dIbcsKHZG46pxhSiNnae5RdCVo5dFL2
   }
 
   reverse_proxy legba-models:8700

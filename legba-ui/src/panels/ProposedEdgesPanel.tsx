@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { TimeAgo } from '@/components/common/TimeAgo'
+import { EntityLink } from '@/components/EntityLink'
 import { Check, X, ArrowRight, Loader2, GitPullRequest } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -102,13 +103,13 @@ export function ProposedEdgesPanel() {
               >
                 {/* Relationship line */}
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="font-medium text-foreground">{edge.source_entity}</span>
+                  <EntityLink name={edge.source_entity} className="font-medium" />
                   <ArrowRight size={12} className="text-muted-foreground shrink-0" />
                   <span className={cn('text-xs font-mono', REL_COLORS[edge.relationship_type] ?? 'text-muted-foreground')}>
                     {edge.relationship_type}
                   </span>
                   <ArrowRight size={12} className="text-muted-foreground shrink-0" />
-                  <span className="font-medium text-foreground">{edge.target_entity}</span>
+                  <EntityLink name={edge.target_entity} className="font-medium" />
                 </div>
 
                 {/* Evidence */}

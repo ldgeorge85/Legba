@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import forceAtlas2 from 'graphology-layout-forceatlas2'
-import { random, circular } from 'graphology-layout'
+import { random } from 'graphology-layout'
 import louvain from 'graphology-communities-louvain'
 import { useEgoGraph, useGraph } from '@/api/hooks'
 import type { GraphData, GraphNode } from '@/api/types'
@@ -18,6 +18,7 @@ const TYPE_COLORS: Record<string, string> = {
   concept: '#06b6d4',
   weapon: '#ef4444',
   military_unit: '#f43f5e',
+  armed_group: '#f97316',
 }
 const DEFAULT_COLOR = '#6b7280'
 
@@ -50,6 +51,12 @@ const EDGE_REL_TYPES = [
   'PartOf', 'BordersWith',
 ] as const
 
+// Top-5 relationship types for filter toolbar
+const TOP_REL_TYPES = ['AlliedWith', 'HostileTo', 'MemberOf', 'OperatesIn', 'LeaderOf']
+
+// Entity types for filter toolbar
+const ENTITY_TYPE_FILTERS = ['person', 'country', 'organization', 'armed_group']
+
 // Distinct palette for community coloring (12 colors)
 const COMMUNITY_PALETTE = [
   '#f59e0b', // amber
@@ -75,9 +82,7 @@ function getNodeColor(type: string): string {
 }
 
 // ── Build graphology graph from API data ──
-type LayoutType = 'force' | 'circular' | 'random'
-
-function buildGraph(data: GraphData, typeFilters: Set<string>, layout: LayoutType = 'force'): Graph {
+function buildGraph(data: GraphData, typeFilters: Set<string>): Graph {
   const g = new Graph({ multi: true, type: 'undirected' })
 
   // Track seen node IDs to skip duplicates from API
@@ -124,14 +129,32 @@ function buildGraph(data: GraphData, typeFilters: Set<string>, layout: LayoutTyp
     if (!g.hasEdge(edgeKey)) {
       const pairKey = [edge.source, edge.target].sort().join('||')
       const multiplicity = edgePairCount.get(pairKey) ?? 1
-      // Edge thickness: base 1, up to 4 for highly connected pairs
-      const edgeSize = Math.min(1 + (multiplicity - 1) * 0.6, 4)
+
+      // Edge thickness: prefer weight from temporal graph enrichment, fallback to multiplicity
+      const weight = (edge.properties?.weight as number) ?? undefined
+      const edgeSize = weight != null
+        ? Math.min(1 + weight * 2, 6)
+        : Math.min(1 + (multiplicity - 1) * 0.6, 4)
+
+      // Edge opacity from confidence
+      const confidence = (edge.properties?.confidence as number) ?? undefined
+      const baseColor = getEdgeColor(edge.rel_type)
+      // Convert confidence (0-1) to hex alpha suffix (40-FF)
+      const alphaHex = confidence != null
+        ? Math.round(0x40 + confidence * (0xFF - 0x40)).toString(16).padStart(2, '0')
+        : ''
+
+      const evidenceCount = (edge.properties?.evidence_count as number) ?? undefined
+
       g.addEdgeWithKey(edgeKey, edge.source, edge.target, {
         label: edge.rel_type,
-        color: getEdgeColor(edge.rel_type),
+        color: baseColor + alphaHex,
         size: edgeSize,
         type: 'line',
         relType: edge.rel_type,
+        weight: weight,
+        confidence: confidence,
+        evidenceCount: evidenceCount,
       })
     }
   }
@@ -140,43 +163,32 @@ function buildGraph(data: GraphData, typeFilters: Set<string>, layout: LayoutTyp
   random.assign(g)
 
   // Size nodes by combined signal: visible degree + API global degree
-  // This makes hub nodes visually prominent even if some edges are filtered
   g.forEachNode((node, attrs) => {
     const visDegree = g.degree(node)
     const apiDeg = (attrs.apiDegree as number) ?? 0
-    // Blend: use max of visible and API degree so ego-graph nodes
-    // that are hubs in the full graph still appear large
     const effectiveDegree = Math.max(visDegree, apiDeg)
-    // Logarithmic scaling: avoids mega-hubs dominating, keeps small nodes visible
     const size = Math.min(4 + Math.sqrt(effectiveDegree) * 2.5, 25)
     g.setNodeAttribute(node, 'size', size)
   })
 
-  // Apply layout
+  // Apply ForceAtlas2 layout with improved settings
   const nodeCount = g.order
-  if (layout === 'circular') {
-    circular.assign(g)
-  } else if (layout === 'random') {
-    random.assign(g)
-  } else {
-    // Force-directed (ForceAtlas2)
-    const iterations = nodeCount > 500 ? 80 : nodeCount > 200 ? 150 : 250
-    forceAtlas2.assign(g, {
-      iterations,
-      settings: {
-        linLogMode: false,
-        outboundAttractionDistribution: true,
-        adjustSizes: true,
-        edgeWeightInfluence: 1,
-        scalingRatio: nodeCount > 200 ? 20 : 10,
-        strongGravityMode: false,
-        gravity: 1,
-        slowDown: 5,
-        barnesHutOptimize: nodeCount > 100,
-        barnesHutTheta: 0.5,
-      },
-    })
-  }
+  const iterations = nodeCount > 500 ? 80 : nodeCount > 200 ? 150 : 250
+  forceAtlas2.assign(g, {
+    iterations,
+    settings: {
+      linLogMode: false,
+      outboundAttractionDistribution: true,
+      adjustSizes: true,
+      edgeWeightInfluence: 1,
+      scalingRatio: 2,
+      strongGravityMode: false,
+      gravity: 1,
+      slowDown: 5,
+      barnesHutOptimize: true,
+      barnesHutTheta: 0.5,
+    },
+  })
 
   return g
 }
@@ -185,7 +197,7 @@ function buildGraph(data: GraphData, typeFilters: Set<string>, layout: LayoutTyp
 function Tooltip({ text, x, y }: { text: string; x: number; y: number }) {
   return (
     <div
-      className="absolute pointer-events-none z-50 px-2 py-1 rounded text-xs bg-popover text-popover-foreground border border-border shadow-md whitespace-nowrap"
+      className="absolute pointer-events-none z-50 px-2 py-1 rounded text-xs bg-popover text-popover-foreground border border-border shadow-md whitespace-pre-line max-w-xs"
       style={{ left: x + 14, top: y - 10 }}
     >
       {text}
@@ -263,9 +275,52 @@ function Legend({
   )
 }
 
+// ── Ego graph prompt (shown when no entity is selected) ──
+function EgoPrompt({ onShowAll }: { onShowAll: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="48"
+        height="48"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="opacity-30"
+      >
+        <circle cx="12" cy="12" r="2" />
+        <circle cx="6" cy="6" r="1.5" />
+        <circle cx="18" cy="6" r="1.5" />
+        <circle cx="6" cy="18" r="1.5" />
+        <circle cx="18" cy="18" r="1.5" />
+        <line x1="12" y1="10" x2="7" y2="7" />
+        <line x1="12" y1="10" x2="17" y2="7" />
+        <line x1="12" y1="14" x2="7" y2="17" />
+        <line x1="12" y1="14" x2="17" y2="17" />
+      </svg>
+      <div className="text-center">
+        <p className="text-sm mb-1">Select an entity to explore its neighborhood</p>
+        <p className="text-xs opacity-60">
+          Click an entity in the Entities panel, or use the search above
+        </p>
+      </div>
+      <button
+        onClick={onShowAll}
+        className="mt-2 h-8 px-4 text-xs rounded border border-border bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+      >
+        Show All
+      </button>
+    </div>
+  )
+}
+
 // ── Main component ──
 export function GraphPanel() {
   const selected = useSelectionStore((s) => s.selected)
+  const focusEntity = useSelectionStore((s) => s.focusEntity)
   const select = useSelectionStore((s) => s.select)
   const openPanel = useWorkspaceStore((s) => s.openPanel)
 
@@ -275,7 +330,6 @@ export function GraphPanel() {
 
   // Use a ref for highlighted nodes so reducers always see latest without
   // recreating the Sigma instance on every search keystroke.
-  // The first entry is the "best" match (camera target); all are highlighted.
   const highlightedNodesRef = useRef<Set<string>>(new Set())
   const edgeFiltersRef = useRef<Set<string>>(new Set())
   const bestMatchRef = useRef<string | null>(null)
@@ -284,10 +338,12 @@ export function GraphPanel() {
 
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchCount, setSearchMatchCount] = useState(0)
-  const [showEgo, setShowEgo] = useState(true)
+
+  // Graph mode: 'ego' (default) or 'full' (explicit user action)
+  const [graphMode, setGraphMode] = useState<'ego' | 'full'>('ego')
   const [egoDepth, setEgoDepth] = useState(2)
+
   const [typeFilters, setTypeFilters] = useState<Set<string>>(new Set())
-  const [layoutType, setLayoutType] = useState<LayoutType>('force')
   const [edgeFilters, setEdgeFilters] = useState<Set<string>>(new Set())
   // Keep ref in sync for reducer access
   useEffect(() => { edgeFiltersRef.current = edgeFilters }, [edgeFilters])
@@ -313,26 +369,41 @@ export function GraphPanel() {
   const [edgeLoading, setEdgeLoading] = useState(false)
   const [edgeMsg, setEdgeMsg] = useState<string | null>(null)
 
-  // Layout toggle (FA2 is run synchronously in buildGraph; no live FA2 to toggle)
-  // NOTE: ForceAtlas2 runs synchronously during graph build — there is no
-  // live animation loop to stop/start. A live FA2 supervisor would require
-  // importing graphology-layout-forceatlas2/worker, which is not set up.
-  // This is a placeholder for when live layout is added.
-
   // Determine which entity to use for ego graph
-  const entityName = selected?.type === 'entity' ? selected.name : null
+  // Subscribe to both selected and focusEntity — prefer focusEntity, fallback to selected entity
+  const entityName = useMemo(() => {
+    if (focusEntity) return focusEntity
+    if (selected?.type === 'entity') return selected.name
+    return null
+  }, [focusEntity, selected])
+
+  // Auto-switch to ego mode when entity selection changes
+  const prevEntityRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (entityName && entityName !== prevEntityRef.current) {
+      setGraphMode('ego')
+    }
+    prevEntityRef.current = entityName
+  }, [entityName])
+
+  // Determine if ego graph should be fetched
+  const shouldFetchEgo = graphMode === 'ego' && !!entityName
+  const shouldFetchFull = graphMode === 'full'
 
   // Fetch both datasets; only one is active at a time
   const { data: egoData, isLoading: egoLoading } = useEgoGraph(
-    showEgo ? entityName : null,
+    shouldFetchEgo ? entityName : null,
     egoDepth,
   )
-  const { data: fullData, isLoading: fullLoading } = useGraph()
+  const { data: fullData, isLoading: fullLoading } = useGraph(shouldFetchFull)
 
   // Decide which graph data to use
-  const useEgo = showEgo && !!entityName && !!egoData
-  const graphData = useEgo ? egoData : fullData
+  const useEgo = graphMode === 'ego' && !!entityName && !!egoData
+  const graphData = useEgo ? egoData : (graphMode === 'full' ? fullData : null)
   const isLoading = useEgo ? egoLoading : fullLoading
+
+  // Show the ego prompt when in ego mode with no entity selected
+  const showEgoPrompt = graphMode === 'ego' && !entityName
 
   // Collect unique entity types for the legend and filter pills
   const entityTypes = useMemo(() => {
@@ -348,12 +419,12 @@ export function GraphPanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const typeFilterKey = useMemo(() => [...typeFilters].sort().join(','), [typeFilters])
 
-  // Build the graphology graph when data, type filter, or layout changes
+  // Build the graphology graph when data or type filter changes
   const builtGraph = useMemo(() => {
-    if (!graphData || graphData.nodes.length === 0) return null
-    return buildGraph(graphData, typeFilters, layoutType)
+    if (!graphData || !graphData?.nodes?.length) return null
+    return buildGraph(graphData, typeFilters)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graphData, typeFilterKey, layoutType])
+  }, [graphData, typeFilterKey])
 
   // Build a lookup from node id -> GraphNode for click handling
   const nodeMap = useMemo(() => {
@@ -370,7 +441,6 @@ export function GraphPanel() {
   nodeMapRef.current = nodeMap
 
   // ── Search logic ──
-  // Rank: exact match > starts-with > word-boundary match > substring includes
   const handleSearch = useCallback(
     (query: string) => {
       setSearchQuery(query)
@@ -390,7 +460,6 @@ export function GraphPanel() {
       const wordBoundary: string[] = []
       const substring: string[] = []
 
-      // Word-boundary regex: match q preceded by start-of-string or non-letter
       const wbRe = new RegExp(`(?:^|[^a-z])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
 
       g.forEachNode((node, attrs) => {
@@ -407,7 +476,6 @@ export function GraphPanel() {
         }
       })
 
-      // All matches highlighted; best match gets camera focus
       const allMatches = [...exact, ...prefix, ...wordBoundary, ...substring]
       highlightedNodesRef.current = new Set(allMatches)
       const best = allMatches[0] ?? null
@@ -416,7 +484,6 @@ export function GraphPanel() {
       setHighlightTick((t) => t + 1)
       sigma.refresh()
       if (best) {
-        // Center camera on best match
         const pos = sigma.getNodeDisplayData(best)
         if (pos) {
           sigma.getCamera().animate(
@@ -453,7 +520,6 @@ export function GraphPanel() {
       bestMatchRef.current = pathNodes[0] ?? null
       setHighlightTick((t) => t + 1)
       sigmaRef.current?.refresh()
-      // Center camera on first path node
       if (pathNodes[0] && sigmaRef.current) {
         const pos = sigmaRef.current.getNodeDisplayData(pathNodes[0])
         if (pos) {
@@ -550,13 +616,11 @@ export function GraphPanel() {
         if (hlSet.size === 0) return data
         const res = { ...data }
         if (hlSet.has(node)) {
-          // Matched node: full color, bigger, label shown
           res.highlighted = true
           res.zIndex = 10
           res.size = (data.size ?? 5) * 1.3
           res.forceLabel = true
         } else {
-          // Check if neighbor of ANY highlighted node
           let isNeighbor = false
           for (const hl of hlSet) {
             if (builtGraph.areNeighbors(node, hl)) {
@@ -565,11 +629,9 @@ export function GraphPanel() {
             }
           }
           if (isNeighbor) {
-            // Neighbor: slightly dimmed but visible
             res.zIndex = 5
             res.color = data.color ? data.color + '99' : '#6b728099'
           } else {
-            // Not connected: almost invisible
             res.color = '#27272a'
             res.label = undefined
             res.size = 1.5
@@ -592,7 +654,6 @@ export function GraphPanel() {
 
         const hEdge = hoveredEdgeRef.current
 
-        // Show label only on hovered edge (or connected to highlighted node)
         if (edge === hEdge) {
           res.forceLabel = true
           res.size = Math.max((data.size ?? 1) * 1.5, 2)
@@ -615,7 +676,6 @@ export function GraphPanel() {
 
     // ── Click handler: select node + highlight neighbors ──
     sigma.on('clickNode', ({ node }) => {
-      // Highlight this node and its neighbors
       const neighbors = new Set([node])
       builtGraph.forEachNeighbor(node, (neighbor) => neighbors.add(neighbor))
       highlightedNodesRef.current = neighbors
@@ -623,7 +683,6 @@ export function GraphPanel() {
       setHighlightTick((t) => t + 1)
       sigma.refresh()
 
-      // Select but don't open detail — double click for that
       const apiNode = nodeMapRef.current.get(node)
       if (apiNode) {
         const entityName = apiNode.label || apiNode.id
@@ -662,7 +721,6 @@ export function GraphPanel() {
     sigma.getMouseCaptor().on('mouseup', () => {
       if (draggedNode) {
         sigma.getCamera().enable()
-        // If we were dragging (not just clicking), don't trigger click
         if (isDragging) {
           draggedNode = null
           isDragging = false
@@ -716,25 +774,33 @@ export function GraphPanel() {
       }
     })
 
-    // ── Edge hover: show rel_type label ──
+    // ── Edge hover: show tooltip with relationship type, weight, confidence, evidence_count ──
     sigma.on('enterEdge', ({ edge }) => {
       hoveredEdgeRef.current = edge
       sigma.refresh()
-      // Show tooltip with relationship info
       const extremities = builtGraph.extremities(edge)
       const relType = builtGraph.getEdgeAttribute(edge, 'relType') as string || ''
+      const weight = builtGraph.getEdgeAttribute(edge, 'weight') as number | undefined
+      const confidence = builtGraph.getEdgeAttribute(edge, 'confidence') as number | undefined
+      const evidenceCount = builtGraph.getEdgeAttribute(edge, 'evidenceCount') as number | undefined
+
       if (extremities.length === 2) {
         const srcLabel = builtGraph.getNodeAttribute(extremities[0], 'label') as string || extremities[0]
         const tgtLabel = builtGraph.getNodeAttribute(extremities[1], 'label') as string || extremities[1]
-        // We can't easily get mouse position from sigma edge events,
-        // so we approximate using midpoint of the two endpoints
         const srcData = sigma.getNodeDisplayData(extremities[0])
         const tgtData = sigma.getNodeDisplayData(extremities[1])
         if (srcData && tgtData) {
           const midGraph = { x: (srcData.x + tgtData.x) / 2, y: (srcData.y + tgtData.y) / 2 }
           const viewPos = sigma.framedGraphToViewport(midGraph)
+
+          // Build multi-line tooltip
+          const lines = [`${srcLabel} \u2014[${relType}]\u2192 ${tgtLabel}`]
+          if (weight != null) lines.push(`Weight: ${weight.toFixed(2)}`)
+          if (confidence != null) lines.push(`Confidence: ${(confidence * 100).toFixed(0)}%`)
+          if (evidenceCount != null) lines.push(`Evidence: ${evidenceCount}`)
+
           setTooltip({
-            text: `${srcLabel} \u2014[${relType}]\u2192 ${tgtLabel}`,
+            text: lines.join('\n'),
             x: viewPos.x,
             y: viewPos.y,
           })
@@ -764,7 +830,6 @@ export function GraphPanel() {
   }, [builtGraph, select, openPanel])
 
   // ── Community detection toggle ──
-  // Runs Louvain on the current graph and recolors nodes without recreating Sigma
   useEffect(() => {
     const g = graphRef.current
     const sigma = sigmaRef.current
@@ -774,28 +839,23 @@ export function GraphPanel() {
     }
 
     if (showCommunities) {
-      // Need at least 1 edge for meaningful community detection
       if (g.size === 0) {
         setCommunityCount(0)
         return
       }
 
-      // Run Louvain -- assigns 'community' attribute to each node
       louvain.assign(g)
 
-      // Count distinct communities
       const communities = new Set<number>()
       g.forEachNode((_node, attrs) => {
         communities.add(attrs.community as number)
       })
       setCommunityCount(communities.size)
 
-      // Recolor nodes by community
       g.forEachNode((node, attrs) => {
         g.setNodeAttribute(node, 'color', getCommunityColor(attrs.community as number))
       })
     } else {
-      // Restore entity-type coloring
       setCommunityCount(0)
       g.forEachNode((node, attrs) => {
         g.setNodeAttribute(node, 'color', getNodeColor(attrs.entityType as string))
@@ -813,12 +873,11 @@ export function GraphPanel() {
   // Sorted entity types for filter pills
   const sortedTypes = useMemo(() => Array.from(entityTypes).sort(), [entityTypes])
 
-  // Community labels: descriptive names instead of "c0", "c1"
+  // Community labels
   const communityLabels = useMemo(() => {
     const g = graphRef.current
     if (!showCommunities || !g || communityCount === 0) return []
 
-    // Group nodes by community
     const communityNodes = new Map<number, { types: Map<string, number>; names: string[] }>()
     g.forEachNode((_node, attrs) => {
       const cid = attrs.community as number
@@ -833,13 +892,11 @@ export function GraphPanel() {
 
     const labels: { id: number; label: string }[] = []
     for (const [cid, info] of Array.from(communityNodes.entries()).sort((a, b) => a[0] - b[0])) {
-      // Find most common type
       let topType = ''
       let topCount = 0
       for (const [t, c] of info.types) {
         if (c > topCount) { topType = t; topCount = c }
       }
-      // Build label: just the descriptive content, no "Community N" prefix
       const topNames = info.names.slice(0, 3).join(', ')
       const total = info.names.length
       let label: string
@@ -869,7 +926,7 @@ export function GraphPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* ── Controls bar ── */}
+      {/* ── Toolbar ── */}
       <div className="flex items-center gap-2 p-2 border-b border-border shrink-0 flex-wrap">
         {/* Search input */}
         <div className="relative">
@@ -880,7 +937,6 @@ export function GraphPanel() {
             placeholder="Search nodes..."
             className="h-7 px-2 text-xs rounded bg-muted border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-44"
           />
-          {/* Search match count badge */}
           {searchQuery && searchMatchCount > 0 && (
             <span className="absolute -top-1.5 -right-1.5 px-1 min-w-[16px] text-center text-[9px] leading-4 rounded-full bg-primary text-primary-foreground font-medium">
               {searchMatchCount}
@@ -899,37 +955,42 @@ export function GraphPanel() {
           </button>
         )}
 
-        {/* Ego / Full graph toggle (only when an entity is selected) */}
-        {entityName && (
+        {/* Ego / Full graph toggle */}
+        <button
+          onClick={() => setGraphMode(graphMode === 'ego' ? 'full' : 'ego')}
+          className={`h-7 px-2.5 text-xs rounded border transition-colors ${
+            graphMode === 'ego'
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+          }`}
+        >
+          {graphMode === 'ego' ? 'Ego Graph' : 'Full Graph'}
+        </button>
+
+        {/* Show All button (when in ego mode, loads full graph) */}
+        {graphMode === 'ego' && (
           <button
-            onClick={() => setShowEgo((v) => !v)}
-            className={`h-7 px-2.5 text-xs rounded border transition-colors ${
-              useEgo
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-muted text-muted-foreground border-border hover:bg-accent'
-            }`}
+            onClick={() => setGraphMode('full')}
+            className="h-7 px-2.5 text-xs rounded border border-border bg-muted text-muted-foreground hover:bg-accent transition-colors"
           >
-            {useEgo ? 'Ego graph' : 'Full graph'}
+            Show All
           </button>
         )}
 
-        {/* Depth selector (only when ego mode is active) */}
-        {useEgo && (
-          <div className="flex items-center bg-muted border border-border rounded overflow-hidden">
-            {[1, 2, 3].map((d) => (
-              <button
-                key={d}
-                onClick={() => setEgoDepth(d)}
-                className={`h-7 px-2 text-[11px] transition-colors ${
-                  egoDepth === d
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent'
-                }`}
-                title={`${d} hop${d > 1 ? 's' : ''}`}
-              >
-                {d}h
-              </button>
-            ))}
+        {/* Depth slider (only when ego mode is active and entity is selected) */}
+        {graphMode === 'ego' && entityName && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-muted-foreground">Depth:</span>
+            <input
+              type="range"
+              min={1}
+              max={3}
+              value={egoDepth}
+              onChange={(e) => setEgoDepth(parseInt(e.target.value))}
+              className="w-16 h-4 accent-primary"
+              title={`Ego graph depth: ${egoDepth}`}
+            />
+            <span className="text-[10px] text-muted-foreground w-3">{egoDepth}</span>
           </div>
         )}
 
@@ -969,114 +1030,140 @@ export function GraphPanel() {
           )}
         </button>
 
-        {/* Layout selector */}
-        <div className="flex items-center bg-muted border border-border rounded overflow-hidden">
-          {(['force', 'circular', 'random'] as LayoutType[]).map((lt) => (
-            <button
-              key={lt}
-              onClick={() => setLayoutType(lt)}
-              className={`h-7 px-2 text-[11px] transition-colors capitalize ${
-                layoutType === lt
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent'
-              }`}
-              title={`${lt} layout`}
-            >
-              {lt === 'force' ? 'Force' : lt === 'circular' ? 'Circle' : 'Random'}
-            </button>
-          ))}
-        </div>
-
         {/* Stats summary */}
         <span className="ml-auto text-[11px] text-muted-foreground">
           {useEgo && entityName
             ? `Ego: ${entityName}`
-            : 'Full graph'}
+            : graphMode === 'full' ? 'Full graph' : 'Ego graph'}
           {stats && ` \u2014 ${stats}`}
         </span>
       </div>
 
-      {/* ── Entity type filter pills ── */}
-      {sortedTypes.length > 1 && (
-        <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border shrink-0 overflow-x-auto">
-          <span className="text-[10px] text-muted-foreground uppercase tracking-wide mr-0.5">Types:</span>
+      {/* ── Entity type filter checkboxes ── */}
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border shrink-0 overflow-x-auto">
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wide mr-0.5">Types:</span>
+        <button
+          onClick={() => setTypeFilters(new Set())}
+          className={`h-5 px-2 text-[10px] rounded-full border transition-colors ${
+            typeFilters.size === 0
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+          }`}
+        >
+          All
+        </button>
+        {ENTITY_TYPE_FILTERS.map((t) => (
           <button
-            onClick={() => setTypeFilters(new Set())}
-            className={`h-5 px-2 text-[10px] rounded-full border transition-colors ${
-              typeFilters.size === 0
+            key={t}
+            onClick={() => setTypeFilters((prev) => {
+              const next = new Set(prev)
+              if (next.has(t)) next.delete(t)
+              else next.add(t)
+              return next
+            })}
+            className={`h-5 px-2 text-[10px] rounded-full border transition-colors flex items-center gap-1 ${
+              typeFilters.has(t)
                 ? 'bg-primary text-primary-foreground border-primary'
                 : 'bg-muted text-muted-foreground border-border hover:bg-accent'
             }`}
           >
-            All
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: getNodeColor(t) }}
+            />
+            {t}
           </button>
-          {sortedTypes.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTypeFilters((prev) => {
-                const next = new Set(prev)
-                if (next.has(t)) next.delete(t)
-                else next.add(t)
-                return next
-              })}
-              className={`h-5 px-2 text-[10px] rounded-full border transition-colors flex items-center gap-1 ${
-                typeFilters.has(t)
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-muted text-muted-foreground border-border hover:bg-accent'
-              }`}
-            >
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full"
-                style={{ backgroundColor: getNodeColor(t) }}
-              />
-              {t}
-            </button>
-          ))}
-        </div>
-      )}
+        ))}
+        {/* Also show any entity types present in data but not in the standard filter list */}
+        {sortedTypes.filter((t) => !ENTITY_TYPE_FILTERS.includes(t)).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTypeFilters((prev) => {
+              const next = new Set(prev)
+              if (next.has(t)) next.delete(t)
+              else next.add(t)
+              return next
+            })}
+            className={`h-5 px-2 text-[10px] rounded-full border transition-colors flex items-center gap-1 ${
+              typeFilters.has(t)
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+            }`}
+          >
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: getNodeColor(t) }}
+            />
+            {t}
+          </button>
+        ))}
+      </div>
 
-      {/* ── Edge type filter pills ── */}
-      {activeEdgeRelTypes.size > 1 && (
-        <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border shrink-0 overflow-x-auto">
-          <span className="text-[10px] text-muted-foreground uppercase tracking-wide mr-0.5">Edges:</span>
+      {/* ── Relationship type filter checkboxes ── */}
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border shrink-0 overflow-x-auto">
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wide mr-0.5">Edges:</span>
+        <button
+          onClick={() => { setEdgeFilters(new Set()); sigmaRef.current?.refresh() }}
+          className={`h-5 px-2 text-[10px] rounded-full border transition-colors ${
+            edgeFilters.size === 0
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+          }`}
+        >
+          All
+        </button>
+        {TOP_REL_TYPES.map((rt) => (
           <button
-            onClick={() => { setEdgeFilters(new Set()); sigmaRef.current?.refresh() }}
-            className={`h-5 px-2 text-[10px] rounded-full border transition-colors ${
-              edgeFilters.size === 0
+            key={rt}
+            onClick={() => {
+              setEdgeFilters((prev) => {
+                const next = new Set(prev)
+                if (next.has(rt)) next.delete(rt)
+                else next.add(rt)
+                return next
+              })
+              setTimeout(() => sigmaRef.current?.refresh(), 0)
+            }}
+            className={`h-5 px-2 text-[10px] rounded-full border transition-colors flex items-center gap-1 ${
+              edgeFilters.has(rt)
                 ? 'bg-primary text-primary-foreground border-primary'
                 : 'bg-muted text-muted-foreground border-border hover:bg-accent'
             }`}
           >
-            All
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: EDGE_COLORS[rt] ?? DEFAULT_EDGE_COLOR }}
+            />
+            {rt}
           </button>
-          {Array.from(activeEdgeRelTypes).sort().map((rt) => (
-            <button
-              key={rt}
-              onClick={() => {
-                setEdgeFilters((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(rt)) next.delete(rt)
-                  else next.add(rt)
-                  return next
-                })
-                // Trigger sigma refresh so reducer picks up new filter
-                setTimeout(() => sigmaRef.current?.refresh(), 0)
-              }}
-              className={`h-5 px-2 text-[10px] rounded-full border transition-colors flex items-center gap-1 ${
-                edgeFilters.has(rt)
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-muted text-muted-foreground border-border hover:bg-accent'
-              }`}
-            >
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full"
-                style={{ backgroundColor: EDGE_COLORS[rt] ?? DEFAULT_EDGE_COLOR }}
-              />
-              {rt}
-            </button>
-          ))}
-        </div>
-      )}
+        ))}
+        {/* Also show active edge types not in the top 5 */}
+        {Array.from(activeEdgeRelTypes).sort().filter((rt) => !TOP_REL_TYPES.includes(rt)).map((rt) => (
+          <button
+            key={rt}
+            onClick={() => {
+              setEdgeFilters((prev) => {
+                const next = new Set(prev)
+                if (next.has(rt)) next.delete(rt)
+                else next.add(rt)
+                return next
+              })
+              setTimeout(() => sigmaRef.current?.refresh(), 0)
+            }}
+            className={`h-5 px-2 text-[10px] rounded-full border transition-colors flex items-center gap-1 ${
+              edgeFilters.has(rt)
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+            }`}
+          >
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{ backgroundColor: EDGE_COLORS[rt] ?? DEFAULT_EDGE_COLOR }}
+            />
+            {rt}
+          </button>
+        ))}
+      </div>
 
       {/* ── Path Finder (collapsible) ── */}
       <div className="border-b border-border shrink-0">
@@ -1177,7 +1264,13 @@ export function GraphPanel() {
 
       {/* ── Graph container ── */}
       <div className="flex-1 relative overflow-hidden" style={{ backgroundColor: '#09090b' }}>
-        {isLoading && !graphData ? (
+        {/* Ego prompt: shown when panel opens with no entity selected in ego mode */}
+        {showEgoPrompt && (
+          <EgoPrompt onShowAll={() => setGraphMode('full')} />
+        )}
+
+        {/* Loading spinner */}
+        {isLoading && !graphData && !showEgoPrompt && (
           <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
             <svg
               className="animate-spin h-5 w-5 mr-2 text-muted-foreground"
@@ -1200,11 +1293,14 @@ export function GraphPanel() {
             </svg>
             Loading graph data...
           </div>
-        ) : graphData && graphData.nodes.length === 0 ? (
+        )}
+
+        {/* Empty state */}
+        {!showEgoPrompt && graphData && graphData.nodes.length === 0 && (
           <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
             No graph data available
           </div>
-        ) : null}
+        )}
 
         {/* Sigma renders into this div */}
         <div

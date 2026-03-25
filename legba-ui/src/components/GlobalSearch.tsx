@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Search, Loader2, Users, Newspaper, FileText, AlertTriangle, X } from 'lucide-react'
 import { useGlobalSearch } from '@/api/hooks'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useSelectionStore } from '@/stores/selection'
 import { cn, categoryColor, entityTypeColor } from '@/lib/utils'
 import type { SearchResults } from '@/api/types'
 
@@ -12,6 +13,7 @@ export function GlobalSearch({ collapsed }: { collapsed: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const openPanel = useWorkspaceStore((s) => s.openPanel)
+  const selectEntity = useSelectionStore((s) => s.select)
 
   // Debounce: update query 300ms after user stops typing
   useEffect(() => {
@@ -50,9 +52,10 @@ export function GlobalSearch({ collapsed }: { collapsed: boolean }) {
   }, [])
 
   const handleSelect = useCallback(
-    (type: string, id: string) => {
+    (type: string, id: string, name?: string) => {
       switch (type) {
         case 'entity':
+          if (name) selectEntity({ type: 'entity', id, name })
           openPanel('entity-detail', { id })
           break
         case 'event':
@@ -69,7 +72,7 @@ export function GlobalSearch({ collapsed }: { collapsed: boolean }) {
       setInputValue('')
       setDebouncedQuery('')
     },
-    [openPanel],
+    [openPanel, selectEntity],
   )
 
   const clearInput = useCallback(() => {
@@ -173,7 +176,7 @@ export function GlobalSearch({ collapsed }: { collapsed: boolean }) {
                   {results.entities.map((e) => (
                     <ResultItem
                       key={e.id}
-                      onClick={() => handleSelect('entity', e.id)}
+                      onClick={() => handleSelect('entity', e.id, e.canonical_name)}
                     >
                       <span className="truncate flex-1">{e.canonical_name}</span>
                       <span

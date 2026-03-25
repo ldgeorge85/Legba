@@ -27,11 +27,14 @@ import json
 import os
 from datetime import datetime, timezone
 
+import logging
+
 from ..shared.config import LegbaConfig
 from ..shared.schemas.cycle import CycleResponse, CycleState
 from ..shared.schemas.comms import OutboxMessage
 from .llm.client import LLMClient
 from .llm.format import Message
+from .llm.router import PromptRouter
 from .memory.manager import MemoryManager
 from .goals.manager import GoalManager
 from .tools.registry import ToolRegistry
@@ -42,6 +45,8 @@ from .memory.opensearch import OpenSearchStore
 from .prompt.assembler import PromptAssembler
 from .selfmod.engine import SelfModEngine
 from .log import CycleLogger
+
+_log = logging.getLogger("legba.agent.cycle")
 
 # Phase mixins
 from .phases.wake import WakeMixin
@@ -115,6 +120,9 @@ class AgentCycle(
         try:
             await self._wake()
             await self._orient()
+
+            # --- Hybrid LLM routing (Phase 7) ---
+            await self._setup_prompt_router()
 
             # Worker mode: if CYCLE_TYPE env var is set, bypass interval routing
             # and run only that cycle type. Enables parallel workers.
@@ -360,6 +368,155 @@ class AgentCycle(
     def _should_promote_to_curate(self) -> bool:
         """Check if uncurated backlog warrants promoting SURVEY to CURATE."""
         return getattr(self, '_uncurated_count', 0) > 100
+
+    # -----------------------------------------------------------------------
+    # Hybrid LLM routing (Phase 7)
+    # -----------------------------------------------------------------------
+
+    async def _setup_prompt_router(self) -> None:
+        """Create PromptRouter after ORIENT, optionally with escalation provider.
+
+        Reads LLM_ALT_* env for the escalation provider config. If no alternate
+        provider is configured, the router is a no-op pass-through.
+        """
+        from ..shared.config import LLMConfig
+
+        # Build escalation provider from LLM_ALT_* env vars (same as for_cycle_type)
+        escalation_provider = None
+        alt_provider_name = os.environ.get("LLM_ALT_PROVIDER", "").strip()
+        if alt_provider_name:
+            alt_config = LLMConfig(
+                provider=alt_provider_name,
+                api_base=os.environ.get("LLM_ALT_API_BASE", self.config.llm.api_base),
+                api_key=os.environ.get("LLM_ALT_API_KEY", self.config.llm.api_key),
+                model=os.environ.get("LLM_ALT_MODEL", self.config.llm.model),
+                max_tokens=int(os.environ.get("LLM_ALT_MAX_TOKENS", str(self.config.llm.max_tokens))),
+                temperature=float(os.environ.get("LLM_ALT_TEMPERATURE", "0.7")),
+                top_p=self.config.llm.top_p,
+                timeout=int(os.environ.get("LLM_ALT_TIMEOUT", str(self.config.llm.timeout))),
+                max_context_tokens=self.config.llm.max_context_tokens,
+            )
+            if alt_config.provider == "anthropic":
+                from .llm.anthropic_provider import AnthropicProvider
+                escalation_provider = AnthropicProvider(
+                    api_key=alt_config.api_key,
+                    model=alt_config.model,
+                    timeout=alt_config.timeout,
+                    temperature=alt_config.temperature,
+                    max_tokens=alt_config.max_tokens,
+                )
+            else:
+                from .llm.provider import VLLMProvider
+                escalation_provider = VLLMProvider(
+                    api_base=alt_config.api_base,
+                    api_key=alt_config.api_key,
+                    model=alt_config.model,
+                    timeout=alt_config.timeout,
+                    temperature=alt_config.temperature,
+                    top_p=alt_config.top_p,
+                )
+            _log.info(
+                "Escalation provider configured: %s / %s",
+                alt_config.provider, alt_config.model,
+            )
+
+        router = PromptRouter(
+            default_provider=self.llm.provider,
+            escalation_provider=escalation_provider,
+            config=self.config.agent,
+        )
+
+        # Check for forward-escalation from previous cycle
+        try:
+            if self.memory and self.memory.registers:
+                esc_flag = await self.memory.registers.get_json("escalate_next_cycle")
+                if esc_flag and isinstance(esc_flag, dict) and esc_flag.get("escalate"):
+                    reason = esc_flag.get("reason", "previous cycle requested escalation")
+                    _log.info("Forward-escalation from previous cycle: %s", reason)
+                    self.logger.log("forward_escalation", reason=reason)
+                    router.escalate()
+                    # Clear the flag so it doesn't repeat
+                    await self.memory.registers.set_json(
+                        "escalate_next_cycle", {"escalate": False},
+                    )
+        except Exception:
+            pass
+
+        # Deterministic scoring (only if not already escalated and provider exists)
+        if not router._escalated and escalation_provider:
+            orient_context = self._build_orient_context_for_routing()
+
+            # Check token budget before allowing escalation
+            budget_ok = True
+            try:
+                if self.memory and self.memory.registers:
+                    from ..shared.token_budget import budget_available
+                    budget_ok = await budget_available(
+                        self.memory.registers._redis,
+                        daily_budget=self.config.agent.escalation_token_budget,
+                    )
+                    if not budget_ok:
+                        self.logger.log("escalation_budget_exhausted")
+            except Exception:
+                pass  # If budget check fails, allow escalation
+
+            if budget_ok and router.should_escalate(orient_context):
+                router.escalate()
+                self.logger.log(
+                    "deterministic_escalation",
+                    orient_context=orient_context,
+                )
+
+        # Attach router to LLM client
+        self.llm.router = router
+
+    def _build_orient_context_for_routing(self) -> dict:
+        """Extract orient-phase data into a dict for the router's scoring."""
+        context: dict = {}
+
+        # Contradiction count (from subconscious differential)
+        try:
+            if hasattr(self, '_differential_briefing') and self._differential_briefing:
+                # Count contradiction-related lines
+                text = self._differential_briefing.lower()
+                context['contradiction_count'] = text.count('contradict') + text.count('conflict')
+            else:
+                context['contradiction_count'] = 0
+        except Exception:
+            context['contradiction_count'] = 0
+
+        # Active hypothesis count
+        try:
+            if (self.memory and self.memory.structured
+                    and self.memory.structured._available):
+                # Use cached count if available from orient queries
+                context['active_hypothesis_count'] = getattr(
+                    self, '_active_hypothesis_count', 0,
+                )
+            else:
+                context['active_hypothesis_count'] = 0
+        except Exception:
+            context['active_hypothesis_count'] = 0
+
+        # Top situation severity from priority stack
+        try:
+            context['top_situation_severity'] = getattr(
+                self, '_top_situation_severity', 'medium',
+            )
+        except Exception:
+            context['top_situation_severity'] = 'medium'
+
+        # Operator priority goals
+        try:
+            has_operator = any(
+                getattr(g, 'operator_priority', False)
+                for g in getattr(self, '_active_goals', [])
+            )
+            context['has_operator_priority_goals'] = has_operator
+        except Exception:
+            context['has_operator_priority_goals'] = False
+
+        return context
 
     # -----------------------------------------------------------------------
     # Graceful shutdown support

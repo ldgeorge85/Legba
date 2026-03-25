@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { useBriefs } from '@/api/hooks'
 import { TimeAgo } from '@/components/common/TimeAgo'
+import { IntelMarkdown } from '@/components/IntelMarkdown'
 import { BookOpen, ChevronRight } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 
 export function BriefsPanel() {
   const { data: briefs, isLoading } = useBriefs()
@@ -61,7 +60,7 @@ export function BriefsPanel() {
 
               {isOpen && (
                 <div className="border-t border-border px-4 py-4">
-                  <div className="prose prose-invert prose-sm max-w-none
+                  <IntelMarkdown className="prose prose-invert prose-sm max-w-none
                     prose-headings:text-foreground prose-headings:font-semibold prose-headings:border-b prose-headings:border-border/50 prose-headings:pb-2 prose-headings:mb-3
                     prose-h1:text-lg prose-h2:text-base prose-h3:text-sm
                     prose-p:text-foreground/85 prose-p:leading-relaxed
@@ -75,9 +74,7 @@ export function BriefsPanel() {
                     prose-a:text-primary prose-a:no-underline hover:prose-a:underline
                     prose-code:text-primary/80 prose-code:bg-secondary prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs
                     prose-blockquote:border-primary/30 prose-blockquote:text-muted-foreground"
-                  >
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{brief.content}</ReactMarkdown>
-                  </div>
+                  >{brief.content}</IntelMarkdown>
                 </div>
               )}
             </div>

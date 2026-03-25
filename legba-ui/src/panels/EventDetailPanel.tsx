@@ -1,9 +1,12 @@
+import { useState } from 'react'
 import { useEvent } from '@/api/hooks'
 import { useSelectionStore } from '@/stores/selection'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { cn, categoryColor, entityTypeColor } from '@/lib/utils'
 import { Badge } from '@/components/common/Badge'
 import { TimeAgo } from '@/components/common/TimeAgo'
+import { EntityLink } from '@/components/EntityLink'
+import { EvidenceChainModal } from '@/components/EvidenceChain'
+import { Link2 } from 'lucide-react'
 
 interface Props {
   eventId: string | null
@@ -11,8 +14,7 @@ interface Props {
 
 export function EventDetailPanel({ eventId: propId }: Props) {
   const selected = useSelectionStore((s) => s.selected)
-  const openPanel = useWorkspaceStore((s) => s.openPanel)
-  const select = useSelectionStore((s) => s.select)
+  const [showChain, setShowChain] = useState(false)
 
   const id = propId ?? (selected?.type === 'event' ? selected.id : null)
   const { data, isLoading } = useEvent(id)
@@ -33,7 +35,15 @@ export function EventDetailPanel({ eventId: propId }: Props) {
       <div>
         <div className="flex items-center gap-2 mb-1">
           <Badge className={cn(categoryColor(data.category))}>{data.category}</Badge>
-          <span className="text-xs text-muted-foreground font-mono">{data.event_id.slice(0, 8)}</span>
+          <span className="text-xs text-muted-foreground font-mono">{(data.event_id ?? '').slice(0, 8)}</span>
+          <button
+            onClick={() => setShowChain(true)}
+            className="flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+            title="View evidence chain"
+          >
+            <Link2 className="h-3 w-3" />
+            Evidence
+          </button>
         </div>
         <h2 className="text-lg font-semibold">{data.title}</h2>
         <TimeAgo date={data.timestamp} className="text-xs text-muted-foreground" />
@@ -66,7 +76,7 @@ export function EventDetailPanel({ eventId: propId }: Props) {
       </div>
 
       {/* Tags */}
-      {data.tags.length > 0 && (
+      {(data.tags ?? []).length > 0 && (
         <div className="flex flex-wrap gap-1">
           {data.tags.map((tag) => (
             <Badge key={tag} className="bg-secondary text-secondary-foreground text-[10px]">{tag}</Badge>
@@ -75,23 +85,19 @@ export function EventDetailPanel({ eventId: propId }: Props) {
       )}
 
       {/* Linked Entities */}
-      {data.entities.length > 0 && (
+      {(data.entities ?? []).length > 0 && (
         <div>
           <h3 className="text-sm font-medium mb-1">Linked Entities</h3>
           <div className="space-y-1">
             {data.entities.map((ent) => (
               <div
                 key={ent.entity_id}
-                className="flex items-center gap-2 px-2 py-1 rounded hover:bg-secondary cursor-pointer text-sm"
-                onClick={() => {
-                  select({ type: 'entity', id: ent.entity_id, name: ent.name })
-                  openPanel('entity-detail', { id: ent.entity_id })
-                }}
+                className="flex items-center gap-2 px-2 py-1 rounded hover:bg-secondary text-sm"
               >
                 <Badge className={cn('text-[10px]', entityTypeColor(ent.entity_type))}>
                   {ent.entity_type}
                 </Badge>
-                <span>{ent.name}</span>
+                <EntityLink name={ent.name} id={ent.entity_id} type={ent.entity_type} />
                 {ent.role && <span className="text-xs text-muted-foreground">({ent.role})</span>}
               </div>
             ))}
@@ -124,6 +130,16 @@ export function EventDetailPanel({ eventId: propId }: Props) {
           </div>
         )}
       </div>
+
+      {/* Evidence chain modal */}
+      {showChain && id && data && (
+        <EvidenceChainModal
+          entityType="event"
+          entityId={id}
+          label={data.title}
+          onClose={() => setShowChain(false)}
+        />
+      )}
     </div>
   )
 }

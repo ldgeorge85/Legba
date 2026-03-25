@@ -55,7 +55,7 @@ function GoalNode({ goal, depth = 0 }: { goal: Goal; depth?: number }) {
   }
 
   const handleDelete = () => {
-    if (window.confirm(`Delete goal "${goal.description.slice(0, 60)}"?`)) {
+    if (window.confirm(`Delete goal "${(goal.description ?? '').slice(0, 60)}"?`)) {
       deleteMutation.mutate()
     }
   }
@@ -149,9 +149,113 @@ function GoalNode({ goal, depth = 0 }: { goal: Goal; depth?: number }) {
   )
 }
 
+function CreateGoalForm({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient()
+  const [description, setDescription] = useState('')
+  const [priority, setPriority] = useState(5)
+  const [operatorPriority, setOperatorPriority] = useState(false)
+  const [criteria, setCriteria] = useState('')
+
+  const createMutation = useMutation({
+    mutationFn: (payload: { description: string; priority: number; operator_priority: boolean; success_criteria: string[] }) =>
+      api.post('/api/v2/goals', payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['goals'] })
+      onClose()
+    },
+  })
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!description.trim()) return
+    createMutation.mutate({
+      description: description.trim(),
+      priority,
+      operator_priority: operatorPriority,
+      success_criteria: criteria.split('\n').map(s => s.trim()).filter(Boolean),
+    })
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="p-3 border-b border-border bg-secondary/30 space-y-3">
+      <div>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">Description</label>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="What should the system investigate or accomplish?"
+          className="w-full px-2 py-1.5 text-sm bg-secondary border border-border rounded resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+          rows={2}
+          autoFocus
+        />
+      </div>
+
+      <div className="flex items-center gap-4">
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Priority (1-10)</label>
+          <input
+            type="number"
+            value={priority}
+            onChange={(e) => setPriority(Number(e.target.value))}
+            min={1}
+            max={10}
+            className="w-16 px-2 py-1 text-sm bg-secondary border border-border rounded focus:outline-none"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 mt-4">
+          <input
+            type="checkbox"
+            id="op-priority"
+            checked={operatorPriority}
+            onChange={(e) => setOperatorPriority(e.target.checked)}
+            className="rounded border-border"
+          />
+          <label htmlFor="op-priority" className="text-sm text-foreground cursor-pointer">
+            Operator Priority
+          </label>
+          <span className="text-[10px] text-muted-foreground">(forces top ranking, requires detailed result)</span>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">Success Criteria (one per line, optional)</label>
+        <textarea
+          value={criteria}
+          onChange={(e) => setCriteria(e.target.value)}
+          placeholder="Entity profiles for key actors&#10;Timeline of major events&#10;Situation brief produced"
+          className="w-full px-2 py-1.5 text-sm bg-secondary border border-border rounded resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+          rows={3}
+        />
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="submit"
+          disabled={createMutation.isPending || !description.trim()}
+          className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50 transition-colors"
+        >
+          {createMutation.isPending ? 'Creating...' : operatorPriority ? '⚡ Create Priority Goal' : 'Create Goal'}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Cancel
+        </button>
+        {createMutation.isError && (
+          <span className="text-xs text-red-400">Failed to create goal</span>
+        )}
+      </div>
+    </form>
+  )
+}
+
 export function GoalsPanel() {
   const { data, isLoading } = useGoals()
   const [statusFilter, setStatusFilter] = useState('')
+  const [showCreate, setShowCreate] = useState(false)
 
   const filtered = useMemo(() => {
     if (!data) return []
@@ -163,7 +267,7 @@ export function GoalsPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Status filter */}
+      {/* Header with filter + create button */}
       <div className="flex items-center gap-2 p-2 border-b border-border shrink-0">
         <select
           value={statusFilter}
@@ -175,7 +279,17 @@ export function GoalsPanel() {
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
+        <div className="flex-1" />
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          className="px-3 py-1 text-sm bg-primary/20 text-primary hover:bg-primary/30 rounded transition-colors"
+        >
+          {showCreate ? 'Cancel' : '+ New Goal'}
+        </button>
       </div>
+
+      {/* Create form */}
+      {showCreate && <CreateGoalForm onClose={() => setShowCreate(false)} />}
 
       {/* Goal tree */}
       <div className="flex-1 overflow-auto">

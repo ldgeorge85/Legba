@@ -1,7 +1,7 @@
 # Legba — Implementation Design
 
 *Key design decisions, data flows, and component interactions.*
-*Last updated: 2026-03-23*
+*Last updated: 2026-03-25*
 
 ---
 
@@ -66,6 +66,8 @@ This saves ~5-10k tokens per cycle without limiting the agent's capabilities.
 | Graph | Apache AGE | Indefinite | Entity relationships (Cypher queries) |
 | Bulk | OpenSearch | Indefinite | Full-text search, signal/event indices, aggregations |
 | Journal archive | OpenSearch | Indefinite | Permanent record of all journal entries and consolidations (`legba-journal` index) |
+| Config versions | Postgres | Indefinite | Versioned prompt templates, guidance, mission config (`config_versions` table) |
+| Temporal graph | AGE + TimescaleDB | Indefinite | Weighted edges, structural balance triads, graph entropy, relationship history |
 
 ### Why Separate Stores
 
@@ -118,14 +120,14 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 
 ### Module Structure
 
-`cycle.py` is a thin orchestrator (~435 lines) that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
+`cycle.py` is a thin orchestrator (~435 lines) that inherits from 13 phase mixins in the `phases/` directory (plan/act logic merged into cycle.py). Each mixin owns one phase of the cycle:
 
 | Mixin | File | Phase |
 |-------|------|-------|
 | `WakeMixin` | `phases/wake.py` | Service init, tool registration |
 | `OrientMixin` | `phases/orient.py` | Memory/context gathering, live infra health check |
-| `PlanMixin` | `phases/plan.py` | LLM planning + tool selection |
-| `ActMixin` | `phases/act.py` | Tool loop execution |
+| *(plan logic)* | *(merged into cycle.py)* | LLM planning + tool selection |
+| *(act logic)* | *(merged into cycle.py)* | Tool loop execution |
 | `ReflectMixin` | `phases/reflect.py` | Significance, facts, graph extraction |
 | `NarrateMixin` | `phases/narrate.py` | Journal entries + consolidation |
 | `PersistMixin` | `phases/persist.py` | Memory storage, goal completion, heartbeat |
@@ -148,7 +150,7 @@ main.py:main()
         ├── _wake()                     [phases/wake.py]
         │     ├── Load challenge.json, seed goal, world briefing
         │     ├── Connect: Redis, Postgres/AGE, Qdrant, OpenSearch, NATS, Airflow
-        │     ├── _register_builtin_tools() → 66 tools from 19 modules
+        │     ├── _register_builtin_tools() → 66 tools from 19 modules + 2 config tools
         │     └── Drain NATS inbox
         │
         ├── _orient()                   [phases/orient.py]
@@ -160,7 +162,9 @@ main.py:main()
         │     ├── Query source health stats (total sources, utilization %)
         │     ├── Get NATS queue summary
         │     ├── Load previous reflection forward
-        │     └── Load journal context (consolidation + recent entries)
+        │     ├── Load journal context (consolidation + recent entries)
+        │     ├── Compute priority stack (situation ranking by velocity/goals/watches/recency)
+        │     └── Inject differential briefing from subconscious accumulator (Redis)
         │
         ├── _plan()                     [phases/plan.py]
         │     ├── assemble_plan_prompt() → [system, user]
@@ -658,7 +662,7 @@ Entity deduplication: `upsert_entity` first checks for any existing vertex with 
 - **Dud cycles**: Occasionally the LLM generates a brief instead of executing tools (0 actions). The forced-final mechanism catches this but the cycle is wasted.
 
 ### Tool Utilization Gap
-Only ~40% of registered tools have been used (20 of 50). Entire modules untouched: analytics (5 tools), orchestration (5), raw OpenSearch (6). The agent has converged on a core loop of ~15 tools focused on RSS ingestion → event storage → entity resolution → graph building. The analytical and orchestration tools represent future capability that the agent hasn't been guided to explore yet.
+The agent has converged on a core working set of ~15-20 tools (entity resolution, event curation, graph building, hypothesis/situation management). Orchestration tools (5) and some raw OpenSearch tools see limited use. Analytics tools are now used during ANALYSIS cycles. Config tools (`config_read`, `config_update`) are available in EVOLVE cycles for prompt self-modification via the versioned config store.
 
 ### Context Pressure
 The full system prompt with all guidance addons is ~20k tokens. With tool definitions, goals, memories, and world briefing, REASON calls regularly hit 40-60k tokens — half the budget used before the LLM generates anything. The planned-tool filtering helps, but long-running tool loops with many results still approach the 120k budget.
@@ -697,7 +701,86 @@ Same branching logic as the agent, applied locally:
 
 ---
 
-## 13. Cognitive Architecture
+## 13. Priority Stack
+
+### Design
+
+The priority stack (`shared/priority.py`) ranks active situations by composite score to guide agent focus. Computed during ORIENT and injected into PLAN context as a differential briefing.
+
+**Scoring formula:**
+```
+score = (event_velocity * 0.3) + (goal_overlap * 0.25)
+      + (watchlist_trigger_density * 0.25) + (recency_penalty * 0.2)
+      + structural_instability_boost  (capped at 0.10)
+```
+
+**Components:**
+- **Event velocity** — new events linked to the situation per unit time
+- **Goal overlap** — how many active goals reference this situation
+- **Watchlist trigger density** — recent watch triggers matching situation entities/regions
+- **Recency penalty** — cycles since last agent attention, with adaptive staleness thresholds by severity (critical: 5 cycles, high: 10, medium: 20, low: 30)
+- **Structural instability boost** — derived from structural balance analysis; situations whose entities appear in unbalanced triads (friend-of-friend-is-enemy) receive a scoring boost
+
+The stack is advisory — it informs the agent's planning but does not override cycle type routing.
+
+---
+
+## 14. Config Store Architecture
+
+Versioned configuration store (`shared/config_store.py`) backed by a Postgres `config_versions` table. Replaces filesystem-based prompt self-modification with tracked, rollback-capable versioned storage.
+
+**Schema:** `config_versions(id SERIAL, key TEXT, value TEXT, version INT, created_at TIMESTAMPTZ, created_by TEXT, notes TEXT, active BOOL)`
+
+**Operations:**
+- `get(key)` — returns the active version's value
+- `set(key, value, created_by, notes)` — creates a new version, deactivates the previous
+- `history(key, limit)` — returns version history for a key
+- `rollback(key, version)` — reactivates a specific version, deactivates the current
+
+**Seeding:** On first boot, `templates.py` contents are loaded as version 1. Subsequent changes via `config_update` tool or UI create new versions.
+
+**Access paths:**
+- Agent: `config_read` / `config_update` tools (EVOLVE cycle tool set)
+- Operator: UI config panel or `/api/v2/config` REST endpoints
+- Audit: every version records `created_by` (agent cycle number or operator username) and `notes`
+
+---
+
+## 15. Hybrid LLM Routing
+
+The `PromptRouter` (`agent/llm/router.py`) routes individual prompts to different LLM providers:
+
+1. **Static overrides** — config-driven map of prompt name to provider (e.g., always route `analysis_report` to Claude)
+2. **Escalation flags** — the agent can request escalation mid-cycle for complex reasoning, or deterministic rules can trigger it
+3. **Default provider** — all unmatched prompts go to the default (typically GPT-OSS 120B)
+
+**Token budget:** A rolling 24h budget (`shared/token_budget.py`) tracks escalation provider usage in a Redis sorted set. When the budget is exceeded, escalation is disabled and all prompts fall back to the default provider. Daily totals are archived to TimescaleDB.
+
+**Integration point:** The router sits between the prompt assembler and `LLMClient`. `LLMClient.complete()` consults the router to select the provider for each call.
+
+---
+
+## 16. Auth Middleware
+
+JWT authentication (`ui/auth.py`, `ui/middleware.py`) with 3 roles:
+
+| Role | Permissions |
+|------|-------------|
+| admin | read, write, delete, admin (user management) |
+| analyst | read, write |
+| viewer | read only |
+
+**Architecture:**
+- `auth.py` — HMAC-SHA256 JWT implementation (no external dependency), user CRUD against Postgres `users` table, password hashing with PBKDF2
+- `middleware.py` — Starlette middleware that intercepts `/api/` routes, validates JWT from HttpOnly cookie, injects user context into request state
+- `routes/auth.py` — login/logout/me endpoints at `/api/v2/auth/*`
+- `responses.py` — standardized API error envelope
+
+**Backward compatibility:** Auth is disabled by default (`AUTH_ENABLED=false`). When disabled, the middleware passes all requests through. Enabling auth requires setting `AUTH_ENABLED=true` and optionally `AUTH_SECRET_KEY` and `AUTH_DEFAULT_PASSWORD`.
+
+---
+
+## 17. Cognitive Architecture
 
 ### Three-Layer Model
 
@@ -748,7 +831,7 @@ The SLM provider supports both vLLM (OpenAI-compatible, with `guided_json` for c
 
 ---
 
-## 14. Planning Layer
+## 18. Planning Layer
 
 Goals, situations, watchlists, hypotheses, and predictions existed as individual features but operated as islands. The planning layer ties them into a coherent loop:
 

@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSignals, useSignalFacets } from '@/api/hooks'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { useSelectionStore } from '@/stores/selection'
 import { cn, categoryColor } from '@/lib/utils'
 import { Badge } from '@/components/common/Badge'
@@ -83,7 +82,6 @@ export function SignalsPanel() {
   }
 
   const { data, isLoading } = useSignals(queryParams)
-  const openPanel = useWorkspaceStore((s) => s.openPanel)
   const select = useSelectionStore((s) => s.select)
 
   // Count active filters
@@ -377,11 +375,10 @@ export function SignalsPanel() {
                     className="border-b border-border/50 hover:bg-secondary/50 cursor-pointer"
                     onClick={() => {
                       select({
-                        type: 'event',
+                        type: 'signal',
                         id: signal.event_id,
                         name: signal.title,
                       })
-                      openPanel('event-detail', { id: signal.event_id })
                     }}
                   >
                     <td className="px-3 py-2">

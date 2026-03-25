@@ -177,7 +177,7 @@ export function DashboardPanel() {
       </div>
 
       {/* Active Situations */}
-      {data.active_situations.length > 0 && (
+      {(data.active_situations ?? []).length > 0 && (
         <div className="bg-card border border-border rounded-lg p-3">
           <h3 className="text-sm font-medium mb-2">Active Situations</h3>
           <div className="space-y-1">

@@ -5,6 +5,7 @@ import { useSelectionStore } from '@/stores/selection'
 import { cn, entityTypeColor } from '@/lib/utils'
 import { Badge } from '@/components/common/Badge'
 import { TimeAgo } from '@/components/common/TimeAgo'
+import { EntityLink } from '@/components/EntityLink'
 import {
   Search,
   ChevronLeft,
@@ -247,7 +248,9 @@ export function EntitiesPanel() {
                       {entity.entity_type}
                     </Badge>
                   </td>
-                  <td className="px-3 py-2">{entity.name}</td>
+                  <td className="px-3 py-2">
+                    <EntityLink name={entity.name} id={entity.entity_id} type={entity.entity_type} />
+                  </td>
                   <td className="px-3 py-2 text-muted-foreground">
                     {entity.completeness != null ? `${Math.round(entity.completeness * 100)}%` : '--'}
                   </td>

@@ -29,10 +29,17 @@ def register(
     import logging as _logging
     _goal_logger = _logging.getLogger("legba.tools.goal")
 
+    FILLER_WORDS = {"the", "and", "in", "of", "to", "a", "an", "with", "for", "on", "by",
+                    "recent", "analyze", "investigate", "monitor", "track", "assess",
+                    "focusing", "including", "developments", "situation", "within", "active"}
+
+    def _content_words(text: str) -> set:
+        return {w for w in text.lower().split() if w not in FILLER_WORDS and len(w) > 2}
+
     def _word_overlap(a: str, b: str) -> float:
-        """Fraction of words shared between two strings."""
-        wa = set(a.lower().split())
-        wb = set(b.lower().split())
+        """Fraction of content words shared between two strings (filler stripped)."""
+        wa = _content_words(a)
+        wb = _content_words(b)
         if not wa or not wb:
             return 0.0
         return len(wa & wb) / min(len(wa), len(wb))
@@ -153,6 +160,18 @@ def register(
         elif action == "complete":
             if not reason:
                 return "Error: reason is required for completion."
+
+            # Operator priority goals require detailed result_summary
+            goal_obj = await goals.get_goal(goal_id)
+            if goal_obj and getattr(goal_obj, "operator_priority", False):
+                if len(reason) < 100:
+                    return (
+                        "Operator priority goals require a detailed result_summary "
+                        "(100+ characters). Describe what you found, what analytical "
+                        "products were produced, and what evidence supports your "
+                        "conclusions."
+                    )
+
             ok = await goals.complete_goal(goal_id, reason, reason)
             return f"Goal {goal_id} completed." if ok else "Error: goal not found."
 
@@ -190,6 +209,13 @@ def register(
         elif action == "defer":
             if not reason:
                 return "Error: reason is required for deferral."
+            # Operator priority goals cannot be deferred
+            goal_obj = await goals.get_goal(goal_id)
+            if goal_obj and getattr(goal_obj, "operator_priority", False):
+                return (
+                    "Error: operator priority goals cannot be deferred. "
+                    "They must be actively worked on until completion."
+                )
             revisit_after = int(args.get("revisit_after_cycles", 15))
             current_cycle = state.cycle_number if state else 0
             ok = await goals.defer_goal(

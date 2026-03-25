@@ -1,7 +1,7 @@
 # Legba — Platform Reference
 
 *Autonomous intelligence analysis platform.*
-*Last updated: 2026-03-22 | Cycle redesign (SURVEY/SYNTHESIZE), hypothesis engine (ACH), 22+ UI panels, worker mode, hybrid LLM routing*
+*Last updated: 2026-03-25 | Config store, temporal graph, JWT auth, priority stack, SLM situation detection, hybrid LLM routing (PromptRouter), 25 UI panels*
 
 ---
 
@@ -13,13 +13,13 @@ Legba is a continuously operating AI intelligence analyst. It does not collect d
 
 - **Collection layer** (deterministic, no LLM): Fetches 100+ RSS/API sources, normalizes signals, 4-tier dedup, spaCy NER, embeds to Qdrant, clusters signals into events. Runs continuously and independently.
 - **Analytical layer** (LLM-driven): 7 cycle types with restricted tool sets. SURVEY cycles review events, build graph relationships, and stress-test hypotheses. SYNTHESIZE cycles deep-dive into situations and produce named briefs. ANALYSIS detects patterns. RESEARCH enriches entities. INTROSPECTION produces world assessment reports. EVOLVE audits the agent itself.
-- **Operator layer**: 22+ panel intelligence workstation, consultation engine with 15+ tools, inbox for directives, real-time SSE feed.
+- **Operator layer**: 25-panel intelligence workstation (JWT auth, 3 roles), consultation engine with 15+ tools, inbox for directives, real-time SSE feed, 8 Grafana dashboards.
 
 **Current deployment:** Continuous Global Situational Awareness — monitoring geopolitical, conflict, health, environmental, and economic developments. Same codebase supports privacy/overreach monitoring and attack surface management via configuration (seed goal + source portfolio).
 
 **Two-tier data model:** Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). Signals are evidence; events are the analytical unit. Reports, situations, hypotheses, and graph analysis operate on events.
 
-**Key numbers:** 100+ Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules, ~30,500 signals, ~1,100 events, ~13,400 active facts, ~598 entities, 138 active sources, 17 Docker containers.
+**Key numbers:** 176 Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules + 2 config tools, 17 Docker containers, 8 Grafana dashboards, JDL fusion levels L0-L5.
 
 ---
 
@@ -42,7 +42,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   +-- Agent Container (ephemeral, one per cycle)
 |   |   - PYTHONPATH=/agent/src (self-modifiable)
 |   |   - Cycle: WAKE > ORIENT > [cycle type routing] > REFLECT > NARRATE > PERSIST
-|   |   - cycle.py orchestrator + 15 phase mixins (phases/ directory)
+|   |   - cycle.py orchestrator + 13 phase mixins (phases/ directory)
 |   |   - 66 built-in tools (incl. cycle_complete pseudo-tool)
 |   |
 |   +-- Ingestion Service Container
@@ -71,6 +71,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |
 |   +-- Operator Console v1 :8501  -- Web UI + consultation (FastAPI + htmx)
 |   +-- Operator Console v2 :8503  -- Multi-panel workstation (React + Dockview + Sigma.js + MapLibre)
+|   |   - JWT auth (3 roles: admin/analyst/viewer), config store API, temporal graph API
 |   |
 |   +-- Optional: OpenSearch Dashboards :5601
 |
@@ -171,10 +172,10 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 
 ### Agent Cycle
 
-The cycle is implemented as a mixin-based architecture: `cycle.py` (~435 lines) is a thin orchestrator that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
+The cycle is implemented as a mixin-based architecture: `cycle.py` (~435 lines) is a thin orchestrator that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 66 tools, drain inbox
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 66+ tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (3-tier):
    Tier 1 — Scheduled outputs (fixed intervals):
@@ -207,6 +208,8 @@ else: score(CURATE vs SURVEY) based on uncurated backlog
 ```
 
 **Cycle type distribution (per 90 cycles):** 3 evolve (3%), 3 introspection (3%), 6 synthesize (7%), 18 analysis (20%), 8 research (9%), 5 curate (6% guaranteed + dynamic), 47 survey/dynamic (52%). Tier 2 intervals are coprime (4, 7, 9) to minimize masking. ANALYSIS is intentionally frequent — pattern detection benefits from running often on fresh data. Each cycle type uses a filtered tool set. SURVEY replaces the old NORMAL cycle — no collection tools, explicitly analytical.
+
+**Priority stack influence:** During ORIENT, a priority stack ranks active situations by composite score (event velocity, goal overlap, watchlist trigger density, recency, structural instability from unbalanced triads). The stack is injected into PLAN context as a differential briefing, guiding the agent to focus on the highest-priority situations. Adaptive staleness thresholds vary by severity (critical: 5 cycles, low: 30 cycles).
 
 Each step in the REASON+ACT loop rebuilds the full [system, user] message pair (no multi-turn growth). A sliding window keeps the 8 most recent tool results in full, condensing older ones to one-line summaries. Re-grounding prompts inject every 8 steps to keep the LLM on track.
 
@@ -480,6 +483,8 @@ Note: System and user messages are combined into a single `{"role": "user"}` mes
 | **Entity profiles** | Postgres (JSONB) | Rich profiles with versioned assertions | SQL + JSONB |
 | **Bulk data** | OpenSearch | Documents, event indices, aggregations | Full-text + structured search |
 | **Time-series metrics** | TimescaleDB | Cycle metrics, ingestion metrics, source health, HDX conflict baselines (242 countries, 2018-2025) | SQL + hypertables |
+| **Config store** | Postgres | Versioned prompt templates, guidance text, mission config (`config_versions` table) | SQL, version rollback |
+| **Temporal graph** | Postgres (AGE) | Weighted edges, structural balance triads, graph entropy metrics | Cypher + SQL |
 
 ### Entity Intelligence Layer
 
@@ -503,7 +508,62 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 | General | AffiliatedWith, PartOf, CreatedBy, MaintainedBy, RelatedTo |
 | Technical | UsesArchitecture, UsesPersistence, HasSafety, HasLimitation, HasFeature, Extends, DependsOn, AlternativeTo, InspiredBy |
 
-**Temporal edges:** Relationships support `since` and `until` properties.
+**Temporal edges:** Relationships support `since` and `until` properties. Weighted edges carry a composite weight derived from evidence count, recency, and confidence. Structural balance analysis (AlliedWith = positive, HostileTo = negative) detects unbalanced triads that predict relationship realignment. Graph entropy tracks the diversity of the relationship landscape — spikes indicate relationship reorganization.
+
+### Config Store
+
+Versioned Postgres-backed store for prompt templates, guidance text, world briefing, and mission configuration. Each update creates a new version; only one version per key is active. Supports rollback to any previous version.
+
+- **Schema:** `config_versions(id, key, value, version, created_at, created_by, notes, active)`
+- **Access:** Agent uses `config_read`/`config_update` tools (EVOLVE cycles). Operator uses UI config panel or direct API (`/api/v2/config`).
+- **Seeding:** On first boot, templates from `prompt/templates.py` are loaded as version 1. Subsequent agent self-modifications create new versions through the config store rather than filesystem writes.
+
+### Temporal Graph
+
+The knowledge graph supports temporal analysis beyond simple `since`/`until` properties:
+- **Weighted edges:** Composite weight from evidence count, recency, and confidence
+- **Structural balance:** Signed-network analysis on AlliedWith (+) / HostileTo (-) triads. Unbalanced triads (friend-of-friend-is-enemy) are analytically interesting — they predict realignment.
+- **Graph entropy:** Information-theoretic entropy of the relationship type distribution. Higher entropy = more diverse relationship landscape. Entropy spikes indicate structural reorganization.
+- **Relationship history:** Immutable transition records for every edge create/update/delete, stored in TimescaleDB for temporal reconstruction.
+
+### Authentication
+
+JWT-based authentication with 3 roles:
+
+| Role | Permissions |
+|------|-------------|
+| **admin** | Full read/write/delete access, user management (create/update/delete users, reset passwords) |
+| **analyst** | Read/write access — can create and modify signals, events, entities, etc. |
+| **viewer** | Read-only access — can view all data but cannot modify anything |
+
+**Enabling auth:** Set `AUTH_ENABLED=true` in the environment (disabled by default for backward compatibility). When disabled, all API routes are open with no authentication required.
+
+**Default credentials:** On first boot, a default `admin` user is created in the `users` Postgres table with the password set by `AUTH_DEFAULT_PASSWORD` (default: `legba`). Change this password immediately after first login via the Users panel or the password change API.
+
+**How it works:** Auth middleware intercepts all `/api/` routes; auth endpoints (`/api/v2/auth/*`) and health checks are exempt. JWT tokens are signed with `AUTH_SECRET_KEY` (auto-generated if not set) and stored in HttpOnly cookies with a 24-hour TTL.
+
+**User management endpoints** (admin only):
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v2/auth/users` | List all users |
+| `POST` | `/api/v2/auth/users` | Create a new user (username, password, role) |
+| `PUT` | `/api/v2/auth/users/{id}` | Update user role or reset password |
+| `DELETE` | `/api/v2/auth/users/{id}` | Delete a user (cannot delete yourself) |
+| `PUT` | `/api/v2/auth/password` | Change own password (any authenticated user) |
+| `GET` | `/api/v2/auth/me` | Get current user info and permissions |
+| `POST` | `/api/v2/auth/login` | Authenticate, returns JWT cookie |
+| `POST` | `/api/v2/auth/logout` | Clear JWT cookie |
+
+### JDL Fusion Levels
+
+The platform implements the Joint Directors of Laboratories (JDL) data fusion model:
+- **L0 — Signal Assessment:** Ingestion service (dedup, normalization, confidence scoring)
+- **L1 — Object Assessment:** Entity resolution, profile building, graph construction
+- **L2 — Situation Assessment:** Structural balance, graph entropy, SLM situation detection
+- **L3 — Impact Assessment:** Priority stack, escalation scoring, differential accumulator
+- **L4 — Process Refinement:** EVOLVE cycles, calibration tracker, eval rubrics
+- **L5 — User Refinement:** Operator console, consultation engine, directive system
 
 ---
 
@@ -536,6 +596,9 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 | `graph_analyze` | NetworkX (centrality, PageRank, community, paths) |
 | `correlate` | scikit-learn (correlation, clustering, PCA) |
 | `temporal_query` | Postgres date_trunc (event trends, category breakdown, trend detection) |
+
+### Config Store Tools (2 tools)
+`config_read`, `config_update` — Read and update versioned config store entries (prompt templates, guidance text, mission config). Changes tracked with version history and audit trail. Available in EVOLVE tool set.
 
 ### Orchestration (5 tools)
 `workflow_define`, `workflow_trigger`, `workflow_status`, `workflow_list`, `workflow_pause`
@@ -783,7 +846,7 @@ Multi-panel intelligence workstation built with React, running as a separate con
 
 **Access:** `ssh -L 8503:localhost:8503 user@<your-host>` then `http://localhost:8503`
 
-**22+ panels across 7 groups:**
+**25 panels across 7 groups:**
 
 | Group | Panels |
 |-------|--------|
@@ -861,9 +924,11 @@ docker compose -p legba logs supervisor -f
 
 ### Web Interfaces (SSH tunnel)
 ```bash
-ssh -L 8501:localhost:8501 -L 5601:localhost:5601 -L 8080:localhost:8080 user@<your-host>
+ssh -L 8501:localhost:8501 -L 8503:localhost:8503 -L 5601:localhost:5601 -L 8080:localhost:8080 -L 3000:localhost:3000 user@<your-host>
 ```
-- **Operator Console** (localhost:8501)
+- **Operator Console v2** (localhost:8503) — recommended
+- **Operator Console v1** (localhost:8501) — legacy, feature-frozen
+- Grafana (localhost:3000) — 8 dashboards
 - OpenSearch Dashboards (localhost:5601)
 - Airflow UI (localhost:8080)
 
@@ -915,6 +980,26 @@ ssh -L 8501:localhost:8501 -L 5601:localhost:5601 -L 8080:localhost:8080 user@<y
 | INGESTION_LOG_LEVEL | INFO | Log level |
 
 **Ingestion Redis keys:** `ingestion:activity` (recent fetch log), `ingestion:status` (service health), `last_ingestion_cycle` (gap tracking).
+
+**Hybrid LLM routing** (PromptRouter):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| ESCALATION_LLM_PROVIDER | *(none)* | Secondary LLM provider for escalated prompts (`anthropic` or `vllm`) |
+| ESCALATION_API_KEY | *(none)* | API key for escalation provider |
+| ESCALATION_API_BASE | *(none)* | API endpoint for escalation provider (vLLM only) |
+| ESCALATION_MODEL | *(none)* | Model name for escalation provider |
+| ESCALATION_DAILY_TOKEN_BUDGET | 500000 | Rolling 24h token budget for escalation provider |
+
+The `PromptRouter` routes individual prompts to different providers based on static overrides (per prompt name) and escalation flags. Token budget tracked in Redis sorted set, archived daily to TimescaleDB.
+
+**Authentication:**
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| AUTH_ENABLED | false | Enable JWT auth on API routes (backward-compatible when disabled) |
+| AUTH_SECRET_KEY | *(auto-generated)* | HMAC-SHA256 secret for JWT signing |
+| AUTH_DEFAULT_PASSWORD | legba | Default password for seeded admin user |
 
 ---
 
@@ -975,7 +1060,7 @@ for f in sorted(os.listdir('/logs/archive/cycle_000NNN')):
 | Research Cycles | Dedicated research phase every 5 cycles — entity enrichment via Wikipedia/reference sources, entity health summary, gap-filling, conflict resolution |
 | UI CRUD | Operator console CRUD: fact delete/edit, memory delete, entity assertion add/remove, event delete/edit, graph edge add/remove, source full edit (htmx inline) |
 | Cycle Decomposition | cycle.py split from 2005 lines to 192-line orchestrator + 10 phase mixin modules (phases/ directory) |
-| V2 Cycle Architecture | 7 cycle types via 3-tier routing: Tier 1 scheduled (EVOLVE/30, INTROSPECTION/15, SYNTHESIZE/10), Tier 2 guaranteed modulo (ANALYSIS/4, RESEARCH/7, CURATE/9), Tier 3 dynamic fill (CURATE vs SURVEY scored by backlog). 15 phase mixins. Coprime Tier 2 intervals (4,7,9) minimize masking. SURVEY replaces NORMAL (analytical, no collection). SYNTHESIZE produces situation briefs. |
+| V2 Cycle Architecture | 7 cycle types via 3-tier routing: Tier 1 scheduled (EVOLVE/30, INTROSPECTION/15, SYNTHESIZE/10), Tier 2 guaranteed modulo (ANALYSIS/4, RESEARCH/7, CURATE/9), Tier 3 dynamic fill (CURATE vs SURVEY scored by backlog). 13 phase mixins. Coprime Tier 2 intervals (4,7,9) minimize masking. SURVEY replaces NORMAL (analytical, no collection). SYNTHESIZE produces situation briefs. |
 | Data Pipeline Hardening | 3-tier event dedup (GUID → source_url → adaptive Jaccard), source domain dedup relaxed (path-prefix instead of domain-level), entity completeness depth-weighted (assertions/3 per section), graph fuzzy match limit 100→500 |
 | Watchlists & Situations | Persistent watch patterns (entities, keywords, categories, regions) with trigger tracking. Situation tracking (persistent narratives with status, event accumulation, intensity scoring). Both with full agent tools + operator UI CRUD. |
 | EVOLVE Cycle | Self-improvement + source discovery cycle (every 30, highest priority). Operational scorecard, source discovery, prompt/tool evaluation, implement improvements, change tracking via `evolve_log`. 18-tool filtered set including filesystem + code_test for self-modification. |
@@ -1010,14 +1095,18 @@ legba/
 |   +-- shared/
 |   |   +-- schemas/                 -- Pydantic models (cycle, goals, memory, tools, signals, events, entities, sources, comms, modifications)
 |   |   +-- config.py               -- LegbaConfig (temperature default 1.0)
+|   |   +-- config_store.py         -- Versioned config store (Postgres-backed)
+|   |   +-- priority.py             -- Priority stack (situation ranking, JDL L3)
+|   |   +-- structural_balance.py   -- Structural balance analysis (JDL L2)
+|   |   +-- graph_entropy.py        -- Graph entropy computation
+|   |   +-- relationship_history.py -- Temporal edge transition records
+|   |   +-- token_budget.py         -- Escalation LLM token budget
 |   +-- agent/
 |   |   +-- main.py                  -- Entry point
-|   |   +-- cycle.py                 -- Orchestrator (~195 lines), inherits 15 phase mixins
+|   |   +-- cycle.py                 -- Orchestrator (~435 lines), inherits 13 phase mixins, plan/act logic inline
 |   |   +-- phases/                  -- Phase mixin modules
-|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (63 tools)
-|   |   |   +-- orient.py           -- OrientMixin: memory/context + live infra health check + ingestion gap tracking + journal leads
-|   |   |   +-- plan.py             -- PlanMixin: LLM planning + tool selection
-|   |   |   +-- act.py              -- ActMixin: tool loop execution
+|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (66+ tools)
+|   |   |   +-- orient.py           -- OrientMixin: memory/context + infra health + priority stack + differential briefing
 |   |   |   +-- reflect.py          -- ReflectMixin: significance, facts, graph
 |   |   |   +-- narrate.py          -- NarrateMixin: journal + consolidation + lead extraction
 |   |   |   +-- persist.py          -- PersistMixin: storage, goals, ingestion tracking, heartbeat
@@ -1029,13 +1118,13 @@ legba/
 |   |   |   +-- analyze.py          -- AnalyzeMixin: pattern detection, graph mining, anomaly detection
 |   |   |   +-- evolve.py           -- EvolveMixin: self-improvement, operational scorecard, change tracking
 |   |   +-- log.py                   -- CycleLogger (JSONL structured logging)
-|   |   +-- llm/                     -- format.py, provider.py, client.py, tool_parser.py
+|   |   +-- llm/                     -- format.py, provider.py, client.py, tool_parser.py, router.py (PromptRouter)
 |   |   +-- memory/                  -- manager.py, registers.py, episodic.py, structured.py, graph.py, opensearch.py
 |   |   +-- goals/                   -- Goal CRUD + decomposition
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 19 modules (66 tools) + geo.py utility
+|   |   |   +-- builtins/            -- 19 modules (66 tools) + config_tools.py + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/
@@ -1044,8 +1133,8 @@ legba/
 |   +-- supervisor/
 |   |   +-- main.py, lifecycle.py, heartbeat.py, comms.py, cli.py, audit.py, drain.py
 |   +-- ui/
-|       +-- app.py, stores.py, messages.py, static/
-|       +-- routes/                    -- dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph, facts, memory, watchlist, situations, consult, analytics
+|       +-- app.py, stores.py, messages.py, auth.py, middleware.py, responses.py, static/
+|       +-- routes/                    -- dashboard, entities, events, sources, goals, cycles, messages, journal, reports, graph, facts, memory, watchlist, situations, consult, analytics, auth
 |       +-- templates/                 -- Jinja2 (base.html + per-page dirs)
 +-- tests/                           -- 200+ tests (unit + integration + graph)
 +-- docs/

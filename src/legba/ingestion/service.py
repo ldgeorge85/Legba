@@ -303,6 +303,62 @@ class IngestionService:
             except Exception as e:
                 logger.warning("Signal clusterer failed: %s", e)
 
+    async def _extract_and_store_urls(self, pool, signal_content: str, signal_id) -> None:
+        """Extract URLs from signal content and store as discovered potential sources.
+
+        Best-effort — wrapped in try/except so failures don't affect signal processing.
+        Skips domains already registered as sources.
+        """
+        import re
+        from urllib.parse import urlparse
+
+        try:
+            urls = re.findall(r'https?://[^\s<>"\')\]]+', signal_content or "")
+            if not urls:
+                return
+
+            # Deduplicate by domain within this batch
+            seen_domains: dict[str, str] = {}
+            for url in urls:
+                try:
+                    parsed = urlparse(url.rstrip(".,;:"))
+                    domain = parsed.netloc.lower()
+                    if not domain or len(domain) < 4:
+                        continue
+                    if domain not in seen_domains:
+                        seen_domains[domain] = url.rstrip(".,;:")
+                except Exception:
+                    continue
+
+            if not seen_domains:
+                return
+
+            async with pool.acquire() as conn:
+                # Get existing source domains to skip
+                source_rows = await conn.fetch("SELECT url FROM sources")
+                existing_domains = set()
+                for r in source_rows:
+                    try:
+                        existing_domains.add(urlparse(r["url"]).netloc.lower())
+                    except Exception:
+                        continue
+
+                for domain, full_url in seen_domains.items():
+                    if domain in existing_domains:
+                        continue
+                    try:
+                        await conn.execute("""
+                            INSERT INTO discovered_urls (base_domain, full_url, source_signal_id)
+                            VALUES ($1, $2, $3)
+                            ON CONFLICT (base_domain) DO UPDATE SET
+                                seen_count = discovered_urls.seen_count + 1,
+                                last_seen_at = NOW()
+                        """, domain, full_url, signal_id)
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug("URL extraction failed (non-fatal): %s", e)
+
     async def _process_source(self, source: ScheduledSource) -> None:
         """Fetch, dedup, store signals from a single source."""
         async with self._fetch_sem:
@@ -446,6 +502,12 @@ class IngestionService:
                     stored += 1
                     self._signals_total += 1
                     self._dedup.add_to_cache(sig.title)
+
+                    # Extract and store discovered URLs (best-effort)
+                    content = getattr(sig, 'summary', '') or getattr(sig, 'title', '') or ''
+                    if hasattr(sig, 'source_url') and sig.source_url:
+                        content += ' ' + sig.source_url
+                    await self._extract_and_store_urls(self._pg_pool, content, sig.id)
 
             # Record source success
             await self._storage.record_source_success(source.id, stored)

@@ -12,6 +12,9 @@ function cycleTypeColor(type: string) {
     case 'ANALYSIS': return 'bg-cyan-500/20 text-cyan-400'
     case 'RESEARCH': return 'bg-blue-500/20 text-blue-400'
     case 'ACQUIRE': return 'bg-green-500/20 text-green-400'
+    case 'CURATE': return 'bg-amber-500/20 text-amber-400'
+    case 'SURVEY': return 'bg-sky-500/20 text-sky-400'
+    case 'SYNTHESIZE': return 'bg-violet-500/20 text-violet-400'
     case 'NORMAL': return 'bg-secondary text-muted-foreground'
     default: return 'bg-secondary text-muted-foreground'
   }
@@ -22,7 +25,7 @@ export function CycleMonitorPanel() {
   const { data, isLoading } = useCycles({ offset, limit: PAGE_SIZE })
 
   if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading...</div>
-  if (!data?.items.length) return <div className="p-4 text-sm text-muted-foreground">No cycles found</div>
+  if (!data?.items?.length) return <div className="p-4 text-sm text-muted-foreground">No cycles found</div>
 
   return (
     <div className="flex flex-col h-full">

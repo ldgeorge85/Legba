@@ -3,14 +3,18 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useFacts, useFactPredicates } from '@/api/hooks'
 import { api } from '@/api/client'
 import { TimeAgo } from '@/components/common/TimeAgo'
+import { EntityLink } from '@/components/EntityLink'
+import { EvidenceChainModal } from '@/components/EvidenceChain'
 import {
   Search,
   ChevronLeft,
   ChevronRight,
   SlidersHorizontal,
+  Link2,
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { Fact } from '@/api/types'
 
 const PAGE_SIZE = 50
 
@@ -40,6 +44,7 @@ export function FactsPanel() {
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<FactFilters>(DEFAULT_FILTERS)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [chainFact, setChainFact] = useState<Fact | null>(null)
 
   const debouncedSearch = useDebounce(search, 300)
   const debouncedFilters = useDebounce(filters, 300)
@@ -231,18 +236,30 @@ export function FactsPanel() {
                 <th className="px-3 py-2 font-medium">Source</th>
                 <th className="px-3 py-2 font-medium">Time</th>
                 <th className="px-3 py-2 font-medium w-8"></th>
+                <th className="px-3 py-2 font-medium w-8"></th>
               </tr>
             </thead>
             <tbody>
               {data.items.map((fact) => (
                 <tr key={fact.fact_id} className="border-b border-border/50 hover:bg-secondary/50">
-                  <td className="px-3 py-2 font-medium">{fact.subject}</td>
+                  <td className="px-3 py-2 font-medium">
+                    <EntityLink name={fact.subject} />
+                  </td>
                   <td className="px-3 py-2 text-muted-foreground">{fact.predicate}</td>
                   <td className="px-3 py-2">{fact.object}</td>
                   <td className="px-3 py-2 text-muted-foreground">{Math.round(fact.confidence * 100)}%</td>
                   <td className="px-3 py-2 text-muted-foreground truncate max-w-[150px]">{fact.source}</td>
                   <td className="px-3 py-2">
                     <TimeAgo date={fact.timestamp} className="text-xs text-muted-foreground" />
+                  </td>
+                  <td className="px-1 py-2">
+                    <button
+                      title="Evidence chain"
+                      onClick={() => setChainFact(fact)}
+                      className="p-0.5 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                    >
+                      <Link2 size={14} />
+                    </button>
                   </td>
                   <td className="px-1 py-2">
                     <button
@@ -293,6 +310,17 @@ export function FactsPanel() {
           </div>
         )}
       </div>
+
+      {/* Evidence chain modal */}
+      {chainFact && (
+        <EvidenceChainModal
+          entityType="fact"
+          entityId={chainFact.fact_id}
+          factSubject={chainFact.subject}
+          label={`${chainFact.subject} ${chainFact.predicate} ${chainFact.object}`}
+          onClose={() => setChainFact(null)}
+        />
+      )}
     </div>
   )
 }
