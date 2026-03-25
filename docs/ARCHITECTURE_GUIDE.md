@@ -6,10 +6,10 @@
 
 ## At a Glance
 
-Legba is a continuously operating autonomous intelligence analyst. It ingests signals from 130+ sources, clusters them into events, tracks developing situations, tests competing hypotheses, and produces named intelligence products — all without human intervention.
+Legba is a continuously operating autonomous intelligence analyst. It ingests signals from 138 sources, clusters them into events, tracks developing situations, tests competing hypotheses, and produces named intelligence products — all without human intervention.
 
 ```
- SOURCES (130+ RSS/API feeds)
+ SOURCES (138 RSS/API feeds)
       |
       v
  ┌─────────────────────────────────────────────────────┐
@@ -53,7 +53,7 @@ Legba is a continuously operating autonomous intelligence analyst. It ingests si
  └─────────────────────────────────────────────────────┘
 ```
 
-**Key numbers:** 130+ source files, 250+ tests, 66 built-in tools, 16 containers, 3 cognitive layers, 7 cycle types, 30 canonical relationship types, 6 memory layers.
+**Key numbers:** 176 source files, 250+ tests, 66 built-in tools, 17 containers, 3 cognitive layers, 7 cycle types, 30 canonical relationship types, 6 memory layers.
 
 ---
 
@@ -127,6 +127,23 @@ The main LLM (120B parameters) running structured analytical cycles. Seven cycle
 | **EVOLVE** | Self-improvement — operational audit, source discovery, scorecards | Every 30 cycles |
 
 The conscious layer does only what a 120B model is actually good at — connecting dots across large context windows, generating analytical narratives, evaluating competing explanations.
+
+---
+
+## JDL Data Fusion Level Mapping
+
+Legba implements all six JDL fusion levels across its three cognitive layers:
+
+|                | Unconscious (Maintenance) | Subconscious (SLM) | Conscious (Agent) |
+|----------------|--------------------------|--------------------|--------------------|
+| **Level 0** Signal Processing | Ingestion pipeline, dedup, clustering | Signal QA, validation | — |
+| **Level 1** Object Assessment | Entity GC, lifecycle | Entity resolution, NER | RESEARCH enrichment |
+| **Level 2** Situation Assessment | Situation detection, propagation | Graph consistency, SLM situation detect | SURVEY, ANALYSIS, CURATE |
+| **Level 3** Impact Assessment | Escalation scoring | Differential accumulator | SYNTHESIZE, ACH hypotheses |
+| **Level 4** Process Refinement | Calibration, metrics | Classification refinement | EVOLVE, INTROSPECTION |
+| **Level 5** User Refinement | — | — | Consult engine, 4D workstation |
+
+This matrix is the system of record for where new capabilities slot in.
 
 ---
 

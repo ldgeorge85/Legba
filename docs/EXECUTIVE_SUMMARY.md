@@ -1,106 +1,121 @@
-# Legba — Executive Summary
+# Legba -- Executive Summary
 
-*Last updated: 2026-03-17*
+*Last updated: 2026-03-24*
 
 ---
 
 ## What It Is
 
-Legba is a continuously operating autonomous AI agent for situational awareness. It runs 24/7 with no human in the loop — ingesting open-source intelligence, building a knowledge graph, producing analytical reports, and improving its own capabilities over time.
+Legba is a continuously operating autonomous AI agent platform for situational awareness. It runs 24/7 with no human in the loop -- an automated ingestion pipeline collects and clusters open-source intelligence from 138 active sources, while an AI analyst runs structured analytical cycles to build a knowledge graph, track evolving situations, stress-test competing hypotheses (ACH), and produce named intelligence products (world assessments, situation briefs, predictions). The operator provides a seed goal and data sources. The agent does everything else.
 
-The operator provides a seed goal. The agent does everything else.
+Legba is not a chatbot or task runner. Collection is deterministic (no LLM), analysis is LLM-driven, and every cycle type has a specific purpose with a restricted tool set. The same codebase supports multiple deployment targets via configuration: geopolitical situational awareness (current mission), privacy/government overreach monitoring, and attack surface management (cybersecurity).
 
-## How It Works
+## Architecture
 
-**Two-tier data model.** Raw source material (RSS feeds, API responses, weather alerts, conflict data) is ingested as **signals**. Signals are automatically deduplicated, embedded, and clustered into **events** — real-world occurrences that multiple signals describe. The agent curates events, sets severity, links entities, and produces intelligence products.
+17 Docker containers on a single Debian 12 VM (8 vCPU, 16 GB RAM). Processing is organized into a three-layer cognitive architecture that runs concurrently:
 
-**Six cycle types.** The agent runs continuously in cycles (~5/hour), each cycle one of:
+- **Unconscious** (maintenance daemon) -- Deterministic, no LLM. Lifecycle decay, entity garbage collection, corroboration scoring, adversarial detection (velocity spikes, semantic echoes, provenance clusters), confidence calibration, integrity verification. Tick-based scheduler with reactive state propagation.
+- **Subconscious** (SLM service) -- Llama 3.1 8B. Signal quality validation, entity resolution, classification refinement, fact corroboration, graph consistency checks. Three concurrent async loops on timed intervals.
+- **Conscious** (agent cycle) -- GPT-OSS 120B via vLLM (~42 tps). Planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation. Discrete cycles with full context assembly and a 128k-token window.
 
-| Cycle | Frequency | Purpose |
-|-------|-----------|---------|
-| CURATE | 27% | Turn raw signals into curated events. Editorial judgment. |
-| NORMAL | 60% | Goal-directed work — research, relationship building, analysis |
-| ANALYSIS | 7% | Pattern detection, anomaly flagging, graph mining |
-| RESEARCH | 3% | Entity enrichment from external sources |
-| INTROSPECTION | 3% | World assessment reports, knowledge audit, scorecard |
-| EVOLVE | 3% | Self-improvement, source discovery, operational review |
+A planning layer ties goals, situations, watchlists, and hypotheses into a detect-escalate-plan-execute loop. Standing goals weight analytical priority; investigative goals decompose into typed tasks that feed the cycle router. Reactive propagation ensures state changes cascade across the portfolio.
 
-**63 tools** across memory, graph, search, HTTP, analytics, entity management, situation tracking, and self-modification.
+**Storage:** Postgres/AGE (structured + graph), Qdrant (semantic/episodic vector search), OpenSearch x2 (full-text + audit), Redis (transient state), TimescaleDB (time-series metrics + HDX conflict baselines). **Orchestration:** NATS (event bus), Airflow (4 DAGs: metrics rollup, source health, decision surfacing, eval rubrics), Grafana (operational dashboards).
+
+## Fusion Architecture
+
+Processing maps onto a multi-level data fusion model (adapted from the JDL framework), with each cognitive layer contributing at specific levels:
+
+| Fusion Level | Purpose | Cognitive Layer |
+|---|---|---|
+| L0 -- Source | Signal ingestion, normalization, dedup | Ingestion (deterministic) |
+| L1 -- Object | Entity resolution, profiling, enrichment | Subconscious (SLM) + Conscious (RESEARCH) |
+| L2 -- Situation | Event clustering, situation tracking, pattern detection | Unconscious (maintenance) + Conscious (CURATE, ANALYSIS) |
+| L3 -- Impact | Hypothesis evaluation, predictions, threat assessment | Conscious (SYNTHESIZE, ANALYSIS) |
+| L4 -- Process | Calibration, self-improvement, source health | Unconscious (calibration) + Conscious (EVOLVE) |
+| L5 -- Operator | Consultation engine, briefings, world assessments | Conscious (INTROSPECTION) + UI |
+
+The three cognitive layers (unconscious, subconscious, conscious) and the six fusion levels form a matrix where each cell represents a specific class of analytical work. This structure ensures that raw signals are systematically refined into actionable intelligence, with each level building on the outputs below it and feeding back corrections downward.
+
+## Agent Cycle
+
+Every cycle (~2-10 minutes), the agent runs one of 7 cycle types selected by 3-tier priority routing:
+
+| Tier | Cycle Type | Frequency | Purpose |
+|------|------------|-----------|---------|
+| 1 (scheduled) | EVOLVE | Every 30 cycles | Self-improvement, source discovery, operational scorecard, portfolio review |
+| 1 (scheduled) | INTROSPECTION | Every 15 cycles | Deep audit, journal consolidation, world assessment reports |
+| 1 (scheduled) | SYNTHESIZE | Every 10 cycles | Deep-dive investigation, named situation briefs, predictions |
+| 2 (modulo) | ANALYSIS | Every 4 cycles | Pattern detection, graph mining, anomaly detection, hypothesis evaluation |
+| 2 (modulo) | RESEARCH | Every 7 cycles | Entity enrichment from Wikipedia and reference sources |
+| 2 (modulo) | CURATE | Every 9 cycles | Event curation from clustered signals, severity assignment, entity linking |
+| 3 (dynamic) | CURATE or SURVEY | Fill cycles | Scored by uncurated backlog vs analytical desk work |
+
+Each cycle follows a fixed phase sequence: WAKE (connect, register tools, drain inbox) -> ORIENT (retrieve memories, goals, health checks, journal leads) -> PLAN -> REASON+ACT (tool loop, up to 20 steps) -> REFLECT -> NARRATE (journal entries + investigation leads) -> PERSIST (store episode, track metrics, heartbeat).
 
 ## Key Numbers
 
 | Metric | Value |
 |--------|-------|
-| Signals ingested | ~17,000+ |
-| Derived events | ~470+ |
-| Entity profiles | 507 |
-| Graph relationships | 1,360 |
-| Active facts | ~1,700 |
-| Active sources | 116 |
-| Tracked situations | 7 |
-| Watchlist patterns | 5 |
-| Docker containers | 12 |
-| Built-in tools | 63 |
-| Passing tests | 122 |
+| Signals ingested | ~30,500 |
+| Derived events | ~1,100 |
+| Active facts | ~13,400 |
+| Entities | ~598 |
+| Active sources | 138 (all categorized) |
+| Built-in tools | 66 across 19 modules |
+| Containers | 17 |
+| Cognitive layers | 3 (unconscious, subconscious, conscious) |
+| Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |
+| Canonical relationship types | 30 |
+| Python source files | 176 |
+| Tests | 200+ |
+| UI panels | 22+ |
 
-## Infrastructure
-
-12 Docker containers on a single Debian 12 VM (8 vCPU, 16GB RAM):
-
-- **LLM**: GPT-OSS 120B via vLLM (self-hosted, ~42 tps) or Claude via Anthropic API
-- **Embeddings**: embedding-inno1 (1024 dims) on vLLM — signals embedded at ingestion
-- **Storage**: Postgres/AGE (structured + graph), Qdrant (vector search), OpenSearch (full-text), Redis (transient state)
-- **Ingestion**: Independent service — fetches 116 sources, 4-tier dedup (GUID → URL → vector cosine → Jaccard), deterministic clustering, NWS alert normalization
-- **UI**: React multi-panel workstation with graph explorer, geo map, timeline, event/signal browsers, dashboard
-
-## Signal-to-Intelligence Pipeline
+## Data Pipeline
 
 ```
-Sources (116 feeds)
-    ↓
+Sources (138 feeds: RSS, APIs, weather alerts, conflict data)
+    |
 Signal Ingestion (deterministic, no LLM)
-  - Fetch → Normalize → Embed → Dedup → Store (Postgres + OpenSearch + Qdrant)
-    ↓
+  Fetch -> Normalize -> Classify -> NER -> Embed -> 4-tier Dedup -> Store
+  (Postgres + OpenSearch + Qdrant)
+    |
 Clustering (every 20 min)
-  - Entity overlap + title similarity + temporal proximity + category match
-  - Signals → Events (many-to-many), auto-links to situations
-    ↓
-Agent Curation (CURATE cycles, 27% of runtime)
-  - Promote singletons, refine auto-events, set severity, link entities
-    ↓
-Analysis (ANALYSIS + INTROSPECTION cycles)
-  - Pattern detection, anomaly flagging, temporal trends, graph mining
-    ↓
-Intelligence Products
-  - World assessment reports (every 15 cycles)
-  - Knowledge graph (entities + typed relationships)
-  - Situation tracking (7 active narratives)
-  - Watchlist alerting (5 active patterns)
+  Entity overlap + title similarity + temporal proximity + category match
+  Signals -> Events (many-to-many), auto-links to situations
+    |
+Subconscious Validation (SLM, continuous)
+  Signal QA, entity resolution, classification refinement, fact corroboration
+    |
+Unconscious Maintenance (daemon, continuous)
+  Lifecycle decay, entity GC, corroboration, adversarial detection, calibration
+    |
+Agent Curation (CURATE cycles)
+  Promote singletons, refine auto-events, set severity, link entities, create situations
+    |
+Analysis (ANALYSIS + RESEARCH + SURVEY cycles)
+  Pattern detection, anomaly flagging, temporal trends, graph mining, entity enrichment
+    |
+Intelligence Products (SYNTHESIZE + INTROSPECTION cycles)
+  Situation briefs, world assessments, hypothesis evaluations, predictions
 ```
 
-## What Makes It Different
+## Current Deployment
 
-- **Autonomous.** No human prompts. The agent sets its own priorities, discovers sources, and decides what to investigate.
-- **Continuous.** Memory persists across cycles. The agent builds on what it learned yesterday.
-- **Two-tier data.** Signals (raw noise) are separated from events (curated intelligence). The agent operates on events, not raw feeds.
-- **Self-improving.** Can modify its own prompts, tools, and normalization rules. Changes are git-tracked with auto-rollback on failure.
-- **Reasoning over knowledge.** The LLM is used for judgment and synthesis, not as a knowledge base. All facts come from live data, not training memory.
+**Mission:** Continuous Global Situational Awareness -- monitoring geopolitical, conflict, health, environmental, and economic developments worldwide.
 
-## Deployment Targets
+**Primary LLM:** GPT-OSS 120B via vLLM (self-hosted, ~42 tps, ~5.3 cycles/hour). **SLM:** Llama 3.1 8B Q5_K_M via llama.cpp (~40 tps). **Alternative:** Claude Sonnet via Anthropic API (tested, viable for enterprise budgets).
 
-Same codebase, different configurations:
-
-1. **Geopolitical situational awareness** (current mission)
-2. **Privacy and government overreach monitoring**
-3. **Attack surface management** (cybersecurity)
+**Operator interface:** 22+ panel React intelligence workstation (Dockview layout) with knowledge graph explorer, geospatial map, timeline, live signal feed, derived events, AI consultation, world assessment reports, hypothesis tracker (ACH), situation briefs, and analytics dashboards.
 
 ## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [LEGBA.md](LEGBA.md) | Full platform reference |
-| [DESIGN.md](DESIGN.md) | Architecture and design decisions |
-| [CODE_MAP.md](CODE_MAP.md) | Source code structure and file guide |
-| [OPERATIONS.md](OPERATIONS.md) | Deployment, monitoring, maintenance |
-| [DATA_SOURCES.md](DATA_SOURCES.md) | Source catalog and API reference |
-| [UI_V2.md](UI_V2.md) | React UI panel documentation |
+| Document | Description |
+|----------|-------------|
+| [LEGBA.md](LEGBA.md) | Full platform reference -- architecture, prompts, memory, tools, config |
+| [DESIGN.md](DESIGN.md) | Implementation design -- decisions, data flows, component interactions |
+| [CODE_MAP.md](CODE_MAP.md) | Complete code map -- every file, function flows, dependencies |
+| [OPERATIONS.md](OPERATIONS.md) | Ops runbook -- deployment, resets, monitoring, debugging, backups |
+| [UI_V2.md](UI_V2.md) | UI v2 operator console -- panels, API, deployment |
+| [DATA_SOURCES.md](DATA_SOURCES.md) | Global data source catalog |
+| [PROMPT_DUMP.md](PROMPT_DUMP.md) | Full assembled prompts for each cycle phase |

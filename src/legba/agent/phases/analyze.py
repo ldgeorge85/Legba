@@ -1,4 +1,7 @@
-"""ANALYZE phase — analytical tools, pattern detection, metrics, differential reporting."""
+"""ANALYZE phase — analytical tools, pattern detection, metrics, differential reporting.
+
+JDL Level 2: Pattern detection and structural analysis.
+"""
 
 from __future__ import annotations
 
@@ -48,6 +51,7 @@ class AnalyzeMixin:
             analysis_context=analysis_context,
             allowed_tools=allowed_tools,
             inbox_messages=inbox_messages if inbox_messages else None,
+            priority_context=getattr(self, "_priority_context", ""),
         )
 
         async def analysis_executor(tool_name: str, arguments: dict) -> str:
@@ -85,6 +89,7 @@ class AnalyzeMixin:
                     analysis_context=reduced_context,
                     allowed_tools=allowed_tools,
                     inbox_messages=inbox_messages if inbox_messages else None,
+                    priority_context=getattr(self, "_priority_context", ""),
                 )
                 self._final_response, self._conversation = await self.llm.reason_with_tools(
                     messages=analysis_messages,

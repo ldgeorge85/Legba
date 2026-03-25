@@ -74,6 +74,10 @@ class ClassificationVerdict(BaseModel):
     corrected_categories: list[str] = Field(
         description="Corrected category list (most likely first)",
     )
+    confidence: float = Field(
+        default=0.5, ge=0.0, le=1.0,
+        description="Confidence in the classification decision",
+    )
     reasoning: str = Field(description="Brief explanation for the reclassification")
 
 
@@ -101,3 +105,25 @@ class FactRefreshVerdict(BaseModel):
         description="Whether recent evidence supports, refutes, or has no bearing on this fact",
     )
     reasoning: str = Field(description="Brief explanation of the evidence assessment")
+
+
+# --- Situation Detection ---
+
+class SituationDetectionVerdict(BaseModel):
+    """SLM verdict on whether an event cluster constitutes a coherent situation."""
+
+    is_situation: bool = Field(
+        description="True if the events represent a coherent, ongoing narrative",
+    )
+    name: str = Field(
+        default="",
+        description="Clear, descriptive situation name (e.g. 'Iran-Israel Military Escalation')",
+    )
+    description: str = Field(
+        default="",
+        description="1-2 sentence description of the situation",
+    )
+    confidence: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Confidence that this cluster is a real situation",
+    )

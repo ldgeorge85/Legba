@@ -1,4 +1,7 @@
-"""CURATE phase — intelligence curation: turn raw signals into analytical events."""
+"""CURATE phase — intelligence curation: turn raw signals into analytical events.
+
+JDL Level 2: Event curation and situation linking.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ class CurateMixin:
             curate_context=curate_context,
             allowed_tools=allowed_tools,
             inbox_messages=inbox_messages if inbox_messages else None,
+            priority_context=getattr(self, "_priority_context", ""),
         )
 
         async def curate_executor(tool_name: str, arguments: dict) -> str:

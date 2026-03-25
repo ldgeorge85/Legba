@@ -172,6 +172,25 @@ class WakeMixin:
             world_briefing=self._world_briefing,
             airflow_available=self.airflow.available if self.airflow else False,
         )
+
+        # Load prompt templates from config store (DB overrides, per-cycle cache)
+        if self.memory.structured and self.memory.structured._available:
+            try:
+                from ...shared.config_store import ensure_config_schema, get_active
+                await ensure_config_schema(self.memory.structured._pool)
+                await self.assembler.load_from_config_store(self.memory.structured._pool)
+
+                # Also load world_briefing from config store
+                db_briefing = await get_active(self.memory.structured._pool, "world_briefing")
+                if db_briefing:
+                    self.assembler._world_briefing = db_briefing
+                    self._world_briefing = db_briefing
+
+                self.logger.log("config_store_loaded",
+                               keys_loaded=len(self.assembler._config_versions))
+            except Exception as e:
+                self.logger.log("config_store_fallback", error=str(e))
+
         await self.airflow.connect()
         self.logger.log("airflow_connect", available=self.airflow.available)
 
@@ -205,9 +224,10 @@ class WakeMixin:
         from ..tools.builtins import (
             fs, shell, http, memory_tools, graph_tools, goal_tools,
             selfmod_tools, nats_tools, opensearch_tools, analytics_tools,
-            orchestration_tools, feed_tools, source_tools, event_tools,
+            feed_tools, source_tools, event_tools,
             entity_tools, watchlist_tools, situation_tools, prediction_tools,
             derived_event_tools, hypothesis_tools, metrics_tools,
+            config_tools,
         )
         from ..tools.subagent import run_subagent
         from ...shared.schemas.tools import ToolDefinition, ToolParameter
@@ -238,7 +258,8 @@ class WakeMixin:
         graph_tools.register(self.registry, graph=self.memory.graph)
 
         # Goal tools — wired to live GoalManager
-        goal_tools.register(self.registry, goals=self.goals, state=self.state)
+        _redis = self.memory.registers._redis if self.memory and self.memory.registers else None
+        goal_tools.register(self.registry, goals=self.goals, state=self.state, redis=_redis)
 
         # NATS tools — wired to live NATS client
         nats_tools.register(self.registry, nats=self.nats)
@@ -253,9 +274,6 @@ class WakeMixin:
             graph=self.memory.graph,
             structured=self.memory.structured,
         )
-
-        # Orchestration tools — wired to live Airflow client
-        orchestration_tools.register(self.registry, airflow=self.airflow)
 
         # SA-1: Feed, source, and event tools
         feed_tools.register(self.registry, structured=self.memory.structured)
@@ -296,6 +314,13 @@ class WakeMixin:
 
         # Metrics query tool — time-series baselines from TimescaleDB
         metrics_tools.register(self.registry)
+
+        # Config store tools — versioned config read/update for EVOLVE cycles
+        config_tools.register(
+            self.registry,
+            structured=self.memory.structured,
+            state=self.state,
+        )
 
         # note_to_self tool — working memory within this cycle
         self._register_note_to_self()

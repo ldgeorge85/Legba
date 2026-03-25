@@ -31,6 +31,7 @@ class SubconsciousConfig:
     entity_resolution_interval: int = 30   # 30 min
     classification_interval: int = 30      # 30 min
     fact_refresh_interval: int = 60        # 60 min
+    situation_detect_interval: int = 60    # 60 min (configurable)
     graph_consistency_interval: int = 1440 # Daily (24h * 60min / 1min tick)
     source_reliability_interval: int = 1440  # Daily
 
@@ -69,6 +70,7 @@ class SubconsciousConfig:
             entity_resolution_interval=int(os.getenv("SUBCONSCIOUS_ENTITY_RESOLUTION_INTERVAL", "30")),
             classification_interval=int(os.getenv("SUBCONSCIOUS_CLASSIFICATION_INTERVAL", "30")),
             fact_refresh_interval=int(os.getenv("SUBCONSCIOUS_FACT_REFRESH_INTERVAL", "60")),
+            situation_detect_interval=int(os.getenv("SUBCONSCIOUS_SITUATION_DETECT_INTERVAL", "60")),
             graph_consistency_interval=int(os.getenv("SUBCONSCIOUS_GRAPH_CONSISTENCY_INTERVAL", "1440")),
             source_reliability_interval=int(os.getenv("SUBCONSCIOUS_SOURCE_RELIABILITY_INTERVAL", "1440")),
             uncertainty_low=float(os.getenv("SUBCONSCIOUS_UNCERTAINTY_LOW", "0.3")),

@@ -2,10 +2,108 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections import Counter
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..cycle import AgentCycle
+
+
+def _format_differential_briefing(diff: dict[str, Any]) -> str:
+    """Format the raw differential JSON into a concise human-readable briefing.
+
+    Produces a "Since Your Last Cycle" section that summarises changes without
+    dumping raw data.  Returns empty string if nothing notable happened.
+    """
+    summary = diff.get("summary", {})
+    lines: list[str] = []
+
+    # --- New signals ---
+    sig_count = summary.get("new_signal_count", 0)
+    if sig_count:
+        # Group by situation name for a quick topic breakdown
+        signals = diff.get("new_signals", [])
+        sit_counter: Counter = Counter()
+        for s in signals:
+            sit_counter[s.get("situation_name", "unlinked")] += 1
+        top_topics = sit_counter.most_common(5)
+        topic_parts = ", ".join(f"{cnt} {name}" for name, cnt in top_topics)
+        lines.append(f"- {sig_count} new signals ({topic_parts})")
+
+    # --- Event transitions ---
+    evt_count = summary.get("event_transition_count", 0)
+    if evt_count:
+        events = diff.get("event_transitions", [])
+        evt_details = []
+        for e in events[:5]:
+            title = (e.get("title") or "untitled")[:60]
+            evt_details.append(f'"{title}"')
+        lines.append(
+            f"- {evt_count} event state change{'s' if evt_count != 1 else ''}: "
+            + ", ".join(evt_details)
+        )
+
+    # --- Watchlist matches ---
+    wl_count = summary.get("watchlist_match_count", 0)
+    if wl_count:
+        matches = diff.get("watchlist_matches", [])
+        # Group by watch name
+        watch_counter: Counter = Counter()
+        for m in matches:
+            watch_counter[m.get("watch_name", "unknown")] += 1
+        wl_parts = ", ".join(
+            f'"{name}" matched {cnt}x' for name, cnt in watch_counter.most_common(3)
+        )
+        lines.append(f"- {wl_count} watchlist trigger{'s' if wl_count != 1 else ''}: {wl_parts}")
+
+    # --- Entity anomalies ---
+    ent_count = summary.get("entity_anomaly_count", 0)
+    if ent_count:
+        entities = diff.get("entity_anomalies", [])
+        ent_details = []
+        for ea in entities[:3]:
+            name = (ea.get("canonical_name") or "unknown")[:40]
+            recent = ea.get("recent_link_count", 0)
+            ent_details.append(f"{name} ({recent} recent links)")
+        lines.append(
+            f"- {ent_count} entity anomal{'ies' if ent_count != 1 else 'y'}: "
+            + ", ".join(ent_details)
+        )
+
+    # --- Fact changes ---
+    fact_count = summary.get("fact_change_count", 0)
+    if fact_count:
+        facts = diff.get("fact_changes", [])
+        created = sum(1 for f in facts if f.get("change_type") == "created")
+        superseded = sum(1 for f in facts if f.get("change_type") == "superseded")
+        updated = fact_count - created - superseded
+        parts = []
+        if created:
+            parts.append(f"{created} new")
+        if updated:
+            parts.append(f"{updated} updated")
+        if superseded:
+            parts.append(f"{superseded} superseded")
+        lines.append(f"- {fact_count} fact change{'s' if fact_count != 1 else ''} ({', '.join(parts)})")
+
+    # --- Hypothesis changes ---
+    hyp_count = summary.get("hypothesis_change_count", 0)
+    if hyp_count:
+        hyps = diff.get("hypothesis_changes", [])
+        hyp_details = []
+        for h in hyps[:3]:
+            thesis = (h.get("thesis") or "?")[:50]
+            balance = h.get("evidence_balance", 0)
+            hyp_details.append(f'"{thesis}" (balance {balance:+d})')
+        lines.append(
+            f"- {hyp_count} hypothesis update{'s' if hyp_count != 1 else ''}: "
+            + ", ".join(hyp_details)
+        )
+
+    if not lines:
+        return ""
+
+    return "## Since Your Last Cycle\n" + "\n".join(lines)
 
 
 class OrientMixin:
@@ -148,25 +246,18 @@ class OrientMixin:
         self._source_health = ""
         try:
             if self.memory and self.memory.structured and self.memory.structured._available:
-                import asyncpg
-                from ...shared.config import PostgresConfig
-                pg = PostgresConfig.from_env()
-                conn = await asyncpg.connect(
-                    host=pg.host, port=pg.port, user=pg.user,
-                    password=pg.password, database=pg.database,
-                )
-                active_sources = await conn.fetchval(
-                    "SELECT COUNT(*) FROM sources WHERE status = 'active'"
-                )
-                sources_fetched_recently = await conn.fetchval(
-                    "SELECT COUNT(*) FROM sources WHERE status = 'active' "
-                    "AND last_successful_fetch_at > NOW() - INTERVAL '6 hours'"
-                )
-                total_signals = await conn.fetchval("SELECT COUNT(*) FROM signals")
-                signals_last_hour = await conn.fetchval(
-                    "SELECT COUNT(*) FROM signals WHERE created_at > NOW() - INTERVAL '1 hour'"
-                )
-                await conn.close()
+                async with self.memory.structured._pool.acquire() as conn:
+                    active_sources = await conn.fetchval(
+                        "SELECT COUNT(*) FROM sources WHERE status = 'active'"
+                    )
+                    sources_fetched_recently = await conn.fetchval(
+                        "SELECT COUNT(*) FROM sources WHERE status = 'active' "
+                        "AND last_successful_fetch_at > NOW() - INTERVAL '6 hours'"
+                    )
+                    total_signals = await conn.fetchval("SELECT COUNT(*) FROM signals")
+                    signals_last_hour = await conn.fetchval(
+                        "SELECT COUNT(*) FROM signals WHERE created_at > NOW() - INTERVAL '1 hour'"
+                    )
 
                 fetch_rate = (sources_fetched_recently / active_sources * 100) if active_sources else 0
                 health_line = (
@@ -269,43 +360,36 @@ class OrientMixin:
                     active_sources = 0
                     total_sources = 0
                     try:
-                        import asyncpg
-                        from ...shared.config import PostgresConfig
-                        pg = PostgresConfig.from_env()
-                        conn = await asyncpg.connect(
-                            host=pg.host, port=pg.port, user=pg.user,
-                            password=pg.password, database=pg.database,
-                        )
-                        total_sources = await conn.fetchval("SELECT COUNT(*) FROM sources")
-                        active_sources = await conn.fetchval(
-                            "SELECT COUNT(*) FROM sources WHERE status = 'active'"
-                        )
-                        # Top categories from recent signals
-                        cat_rows = await conn.fetch("""
-                            SELECT category, COUNT(*) as cnt
-                            FROM signals
-                            WHERE created_at > NOW() - INTERVAL '1 hour'
-                            GROUP BY category
-                            ORDER BY cnt DESC
-                            LIMIT 5
-                        """)
-                        cat_summary = ", ".join(
-                            f"{r['category']}({r['cnt']})" for r in cat_rows
-                        ) if cat_rows else "none yet"
+                        async with self.memory.structured._pool.acquire() as conn:
+                            total_sources = await conn.fetchval("SELECT COUNT(*) FROM sources")
+                            active_sources = await conn.fetchval(
+                                "SELECT COUNT(*) FROM sources WHERE status = 'active'"
+                            )
+                            # Top categories from recent signals
+                            cat_rows = await conn.fetch("""
+                                SELECT category, COUNT(*) as cnt
+                                FROM signals
+                                WHERE created_at > NOW() - INTERVAL '1 hour'
+                                GROUP BY category
+                                ORDER BY cnt DESC
+                                LIMIT 5
+                            """)
+                            cat_summary = ", ".join(
+                                f"{r['category']}({r['cnt']})" for r in cat_rows
+                            ) if cat_rows else "none yet"
 
-                        # High-confidence signal briefing (3.3)
-                        briefing_rows = await conn.fetch("""
-                            SELECT title, category, summary,
-                                   array_to_string(actors, ', ') as actors_str,
-                                   array_to_string(locations, ', ') as locs_str,
-                                   confidence
-                            FROM signals
-                            WHERE created_at > NOW() - INTERVAL '2 hours'
-                              AND confidence >= 0.7
-                            ORDER BY confidence DESC, created_at DESC
-                            LIMIT 10
-                        """)
-                        await conn.close()
+                            # High-confidence signal briefing (3.3)
+                            briefing_rows = await conn.fetch("""
+                                SELECT title, category, summary,
+                                       array_to_string(actors, ', ') as actors_str,
+                                       array_to_string(locations, ', ') as locs_str,
+                                       confidence
+                                FROM signals
+                                WHERE created_at > NOW() - INTERVAL '2 hours'
+                                  AND confidence >= 0.7
+                                ORDER BY confidence DESC, created_at DESC
+                                LIMIT 10
+                            """)
 
                         if briefing_rows:
                             brief_lines = ["## High-Confidence Signal Briefing (last 2h)", ""]
@@ -458,20 +542,25 @@ class OrientMixin:
             pass
 
         # --- Subconscious differential (from background processing) ---
-        self._subconscious_differential = ""
+        # Read the structured differential, format a concise briefing for the
+        # agent, and clear it so it doesn't repeat next cycle.
+        self._differential_briefing = ""
         try:
             if self.memory and self.memory.registers:
                 redis = self.memory.registers._redis
                 diff_raw = await redis.get("legba:subconscious:differential")
                 if diff_raw:
+                    import json as _json
                     diff_text = diff_raw if isinstance(diff_raw, str) else diff_raw.decode("utf-8")
-                    self._subconscious_differential = (
-                        f"\n## Subconscious Differential\n{diff_text}"
-                    )
-                    if self._graph_inventory:
-                        self._graph_inventory += self._subconscious_differential
-                    else:
-                        self._graph_inventory = self._subconscious_differential
+                    diff = _json.loads(diff_text)
+                    briefing = _format_differential_briefing(diff)
+                    if briefing:
+                        self._differential_briefing = briefing
+                        # Push to assembler so all prompt methods can inject it
+                        if self.assembler:
+                            self.assembler._differential_briefing = briefing
+                    # Mark as consumed so the next cycle gets a fresh diff
+                    await redis.delete("legba:subconscious:differential")
         except Exception:
             pass
 
@@ -489,6 +578,27 @@ class OrientMixin:
         except Exception:
             pass
 
+        # --- Priority stack: ranked situation advisory ---
+        self._priority_context = ""
+        try:
+            if (self.memory.structured and self.memory.structured._available
+                    and self.memory and self.memory.registers):
+                from ...shared.priority import compute_priority_stack, format_priority_stack
+                from ..prompt import templates as _prio_tpl
+
+                stack = await compute_priority_stack(
+                    pool=self.memory.structured._pool,
+                    redis_client=self.memory.registers._redis,
+                    top_n=7,
+                )
+                if stack:
+                    formatted = format_priority_stack(stack)
+                    self._priority_context = _prio_tpl.PRIORITY_STACK_TEMPLATE.format(
+                        priority_items=formatted,
+                    )
+        except Exception as e:
+            self.logger.log_error(f"Priority stack computation failed (non-fatal): {e}")
+
         self.logger.log("orient_complete",
                         episodes=len(self._memory_context.get("episodes", [])),
                         goals=len(self._active_goals),
@@ -496,6 +606,8 @@ class OrientMixin:
                         graph_entities=len(self._graph_inventory) > 0,
                         nats_data_streams=len(self._queue_summary.data_streams),
                         has_journal=bool(self._journal_context),
+                        has_differential=bool(self._differential_briefing),
                         uncurated=self._uncurated_count,
                         stale_entities=self._stale_entity_count,
-                        last_analysis=self._last_analysis_cycle)
+                        last_analysis=self._last_analysis_cycle,
+                        has_priority_stack=bool(self._priority_context))

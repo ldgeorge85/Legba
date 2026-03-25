@@ -21,10 +21,13 @@ def register(
     *,
     goals: GoalManager,
     state: Any = None,
+    redis: Any = None,
 ) -> None:
     """Register goal CRUD tools wired to the live GoalManager."""
-    from ....shared.schemas.goals import GoalType, GoalSource, GoalStatus
+    from ....shared.schemas.goals import GoalType, GoalStatus
     from uuid import UUID as _UUID
+    import logging as _logging
+    _goal_logger = _logging.getLogger("legba.tools.goal")
 
     def _word_overlap(a: str, b: str) -> float:
         """Fraction of words shared between two strings."""
@@ -44,7 +47,7 @@ def register(
         for g in existing:
             if g.status.value not in ("active", "paused"):
                 continue
-            if _word_overlap(description, g.description) > 0.6:
+            if _word_overlap(description, g.description) > 0.75:
                 return (
                     f"Duplicate detected: existing goal {g.id} "
                     f"({g.progress_pct:.0f}%) already covers this scope: "
@@ -73,7 +76,34 @@ def register(
             parent_id=parent_id,
             success_criteria=criteria,
         )
-        return f"Goal created: id={goal.id}, type={goal.goal_type.value}, priority={goal.priority}"
+
+        # Auto-complete matching tasks in the backlog
+        completed_tasks = []
+        if redis:
+            try:
+                from ....shared.task_backlog import TaskBacklog
+                backlog = TaskBacklog(redis)
+                pending = await backlog.get_tasks(limit=50)
+                desc_words = set(description.lower().split())
+                for task in pending:
+                    target = task.get("target", {})
+                    # Build a text representation of the task target
+                    target_text = " ".join(str(v) for v in target.values()) if target else ""
+                    context_text = task.get("context", "")
+                    task_text = f"{target_text} {context_text}"
+                    if _word_overlap(description, task_text) > 0.5:
+                        await backlog.complete_task(
+                            task["task_id"],
+                            result=f"Auto-completed: goal {goal.id} created",
+                        )
+                        completed_tasks.append(task["task_id"][:8])
+            except Exception as exc:
+                _goal_logger.debug("Task auto-complete failed: %s", exc)
+
+        result_msg = f"Goal created: id={goal.id}, type={goal.goal_type.value}, priority={goal.priority}"
+        if completed_tasks:
+            result_msg += f" (auto-completed {len(completed_tasks)} backlog task(s): {', '.join(completed_tasks)})"
+        return result_msg
 
     async def goal_list_handler(args: dict) -> str:
         status_filter = args.get("status", "active").lower()

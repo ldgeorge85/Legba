@@ -5,7 +5,7 @@
 <h1 align="center">Legba</h1>
 <p align="center"><em>Autonomous intelligence analysis platform.</em></p>
 
-Legba is a continuously operating AI analyst. An automated ingestion pipeline collects and clusters raw signals from 138 active sources. The AI runs structured analytical cycles — building a knowledge graph, tracking situations, stress-testing competing hypotheses, and producing named intelligence products (world assessments, situation briefs, predictions). An operator interacts through a 22+ panel intelligence workstation and a consultation engine.
+Legba is a continuously operating AI analyst implementing multi-level data fusion for situational awareness. An automated ingestion pipeline collects and clusters raw signals from 138 active sources. The AI runs structured analytical cycles — building a knowledge graph, tracking situations, stress-testing competing hypotheses, and producing named intelligence products (world assessments, situation briefs, predictions). An operator interacts through a 22+ panel intelligence workstation and a consultation engine.
 
 It is not a chatbot, not a task runner, not an AutoGPT-style goal chaser. It is a disciplined analytical system: collection is deterministic, analysis is LLM-driven, and every cycle type has a specific purpose and restricted tool set.
 
@@ -15,7 +15,7 @@ It is not a chatbot, not a task runner, not an AutoGPT-style goal chaser. It is 
 
 ```
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
-├── Docker Compose (project: legba, 16 containers)
+├── Docker Compose (project: legba, 17 containers)
 │   ├── Supervisor        — Agent lifecycle, heartbeat, log drain, audit
 │   ├── Agent (ephemeral) — One container per cycle, 7 cycle types, self-modifiable code
 │   ├── Ingestion Service — Background signal fetching, normalization, deterministic clustering
@@ -124,7 +124,7 @@ docker compose -p legba exec supervisor \
 
 | Metric | Value |
 |--------|-------|
-| Python source files | 130+ |
+| Python source files | 176 |
 | Tests | 200+ |
 | Built-in tools | 66 across 19 modules |
 | Signals ingested | ~30,500 |

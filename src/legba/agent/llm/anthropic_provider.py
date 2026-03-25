@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from .format import safe_response_body as _safe_response_body
 from .provider import LLMResponse, LLMApiError
 
 log = logging.getLogger(__name__)
@@ -35,14 +36,6 @@ _STOP_REASON_MAP = {
     "stop_sequence": "stop",
     "tool_use": "tool_calls",
 }
-
-
-def _safe_response_body(response: httpx.Response) -> str:
-    """Extract response body for error logging, truncated."""
-    try:
-        return response.text[:1000]
-    except Exception:
-        return f"(could not read body, status={response.status_code})"
 
 
 class AnthropicProvider:

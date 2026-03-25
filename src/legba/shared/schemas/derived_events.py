@@ -6,9 +6,9 @@ Multiple signals can evidence the same event (many-to-many via
 signal_event_links). Events are the primary analytical unit — reports,
 situations, and graph analysis operate on events, not raw signals.
 
-During Phase 0 this lives alongside the existing events.py. After
-the Phase 1 migration (events table rename), this becomes the
-canonical events.py.
+This is the canonical events schema. Events are stored in the
+derived_events table with many-to-many signal links via
+signal_event_links.
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ class EventSeverity(str, Enum):
 class DerivedEvent(BaseModel):
     """A real-world occurrence derived from one or more signals.
 
-    Named DerivedEvent during Phase 0 to avoid collision with the
-    existing Event class. Will be renamed to Event after Phase 1 migration.
+    Stored in the derived_events table. Linked to supporting signals
+    via SignalEventLink (many-to-many).
     """
     id: UUID = Field(default_factory=uuid4)
     title: str

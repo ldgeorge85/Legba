@@ -66,6 +66,15 @@ class TaskBacklog:
         Returns:
             task_id (str)
         """
+        # Cap: skip if backlog already has too many items
+        backlog_size = await self.redis.zcard(BACKLOG_KEY)
+        if backlog_size and backlog_size > 100:
+            logger.warning(
+                "Task backlog full (%d items), skipping: %s target=%s",
+                backlog_size, task_type, _summarize_target(target),
+            )
+            return ""
+
         # Dedup: skip if an identical task_type + target already exists
         existing = await self._find_duplicate(task_type, target)
         if existing:
@@ -230,7 +239,10 @@ class TaskBacklog:
     async def _find_duplicate(self, task_type: str, target: dict) -> str | None:
         """Check if an identical task already exists in the backlog.
 
-        Matches on task_type + target keys. Returns task_id if found, else None.
+        Matches on task_type + target keys. Also matches on situation_name
+        within the target so that tasks for the same situation are deduped
+        even if the situation_id differs (e.g. proposed vs promoted).
+        Returns task_id if found, else None.
         """
         raw = await self.redis.zrangebyscore(BACKLOG_KEY, "-inf", "+inf")
         if not raw:
@@ -238,6 +250,7 @@ class TaskBacklog:
 
         # Normalize target for comparison
         target_key = _normalize_target(target)
+        target_name = (target.get("situation_name") or "").strip().lower()
 
         for member in raw:
             try:
@@ -250,9 +263,16 @@ class TaskBacklog:
             if task.get("status") != "pending":
                 continue
 
-            existing_key = _normalize_target(task.get("target", {}))
+            existing_target = task.get("target", {})
+            existing_key = _normalize_target(existing_target)
             if existing_key == target_key:
                 return task.get("task_id")
+
+            # Also match by situation name to catch duplicates across IDs
+            if target_name:
+                existing_name = (existing_target.get("situation_name") or "").strip().lower()
+                if existing_name and existing_name == target_name:
+                    return task.get("task_id")
 
         return None
 

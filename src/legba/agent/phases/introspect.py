@@ -1,4 +1,7 @@
-"""INTROSPECTION phase — deep self-assessment, analysis reports, operator scorecard."""
+"""INTROSPECTION phase — deep self-assessment, analysis reports, operator scorecard.
+
+JDL Level 4: Self-assessment and world reporting.
+"""
 
 from __future__ import annotations
 
@@ -169,21 +172,14 @@ class IntrospectMixin:
                 pass
 
             try:
-                from ...shared.config import PostgresConfig
-                import asyncpg
-                pg = PostgresConfig.from_env()
-                conn = await asyncpg.connect(
-                    host=pg.host, port=pg.port, user=pg.user,
-                    password=pg.password, database=pg.database,
-                )
-                rows = await conn.fetch(
-                    "SELECT data->>'name' AS name, data->>'type' AS type, "
-                    "data->>'summary' AS summary "
-                    "FROM entity_profiles "
-                    "WHERE data->>'summary' IS NOT NULL AND data->>'summary' != '' "
-                    "ORDER BY updated_at DESC LIMIT 60"
-                )
-                await conn.close()
+                async with self.memory.structured._pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT data->>'name' AS name, data->>'type' AS type, "
+                        "data->>'summary' AS summary "
+                        "FROM entity_profiles "
+                        "WHERE data->>'summary' IS NOT NULL AND data->>'summary' != '' "
+                        "ORDER BY updated_at DESC LIMIT 60"
+                    )
                 if rows:
                     ep_lines = []
                     for r in rows:

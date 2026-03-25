@@ -1,8 +1,10 @@
-"""EVOLVE phase — operational self-assessment and self-improvement."""
+"""EVOLVE phase — operational self-assessment and self-improvement.
+
+JDL Level 4: Process refinement, self-improvement.
+"""
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 

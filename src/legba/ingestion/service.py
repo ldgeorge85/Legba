@@ -1,5 +1,7 @@
 """Legba Ingestion Service — main entry point.
 
+JDL Level 0: Signal ingestion, normalization, dedup, clustering.
+
 Deterministic source fetcher. No LLM. Runs continuously, fetching
 sources on their configured intervals, deduplicating signals, storing
 to Postgres + OpenSearch, and publishing notifications via NATS.
@@ -17,7 +19,6 @@ import os
 import signal
 import sys
 from datetime import datetime, timezone
-from uuid import UUID
 
 import asyncpg
 import nats as nats_lib
@@ -318,7 +319,7 @@ class IngestionService:
             source_quality_score = 0.5  # default neutral
             try:
                 sqr = await self._pg_pool.fetchval(
-                    "SELECT COALESCE(source_quality_score, 0.0) FROM sources WHERE id = $1",
+                    "SELECT COALESCE(reliability, 0.0) FROM sources WHERE id = $1",
                     source.id,
                 )
                 if sqr and sqr > 0:
@@ -591,8 +592,8 @@ class IngestionService:
                 "source_reliability": source_quality_score,
                 "classification_confidence": classification_conf,
                 "temporal_freshness": tf,
-                "corroboration": 0.0,  # updated post-clustering when independent sources counted
-                "specificity": 0.5,    # default until SLM validates
+                "corroboration": 0.0,  # ingestion default; maintenance updates post-clustering via independent source count
+                "specificity": 0.7,    # high default for titled signals (named actors/dates/locations); SLM refines later
             }
 
             composite = compute_composite_confidence(components)
@@ -697,7 +698,6 @@ class IngestionService:
         if not auth_config:
             return None
 
-        import os
         resolved = dict(auth_config)
         auth_type = resolved.get("type", "")
 

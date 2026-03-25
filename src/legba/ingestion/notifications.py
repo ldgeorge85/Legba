@@ -164,16 +164,3 @@ class NotificationDispatcher:
             except Exception as e:
                 logger.warning("Webhook delivery failed to %s: %s", url, e)
 
-    async def log_to_db(self, pool, payload: dict) -> None:
-        """Record notification in the database for audit trail."""
-        try:
-            await pool.execute(
-                """
-                INSERT INTO notifications (id, type, payload, created_at)
-                VALUES (gen_random_uuid(), $1, $2, NOW())
-                """,
-                payload.get("type", "unknown"),
-                json.dumps(payload),
-            )
-        except Exception:
-            pass  # Table may not exist yet — best effort

@@ -1,11 +1,14 @@
-"""3-tier signal deduplication engine.
+"""4-tier signal deduplication engine.
+
+JDL Level 0: 4-tier signal deduplication.
 
 Extracted from agent event_tools.py, adapted for batch processing.
 
 Tiers:
   1. GUID exact match (RSS <guid> or Atom <id>)
   2. source_url exact match
-  3. Adaptive Jaccard title similarity (0.4 for short titles, 0.5 for normal)
+  3. Vector cosine similarity via Qdrant (threshold 0.92)
+  4. Adaptive Jaccard title similarity (0.4 for short titles, 0.5 for normal)
 """
 
 from __future__ import annotations

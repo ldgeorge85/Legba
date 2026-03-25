@@ -21,7 +21,6 @@ Existing schema columns used:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 import asyncpg
 
@@ -31,9 +30,11 @@ logger = logging.getLogger("legba.maintenance.metrics")
 class MetricCollector:
     """Extended metric collection for TimescaleDB / Grafana."""
 
-    def __init__(self, pg_pool: asyncpg.Pool, metrics_client=None):
+    def __init__(self, pg_pool: asyncpg.Pool, metrics_client=None,
+                 redis_client=None):
         self._pool = pg_pool
         self._metrics = metrics_client
+        self._redis = redis_client
 
     async def metric_collection(self) -> None:
         """Collect and write extended metrics to TimescaleDB.
@@ -198,6 +199,131 @@ class MetricCollector:
             """)
             for row in rows:
                 points.append(("source_count", row["status"], float(row["count"])))
+
+        # 8. Structural balance and graph entropy (AGE graph metrics)
+        try:
+            from ..shared.structural_balance import compute_structural_balance
+            balance_result = await compute_structural_balance(self._pool)
+            points.append((
+                "graph_balance_score", "all",
+                float(balance_result.get("balance_score", 1.0)),
+            ))
+            points.append((
+                "graph_balanced_triads", "all",
+                float(balance_result.get("balanced_triads", 0)),
+            ))
+            points.append((
+                "graph_unbalanced_triads", "all",
+                float(len(balance_result.get("unbalanced_triads", []))),
+            ))
+            points.append((
+                "graph_signed_edges", "all",
+                float(balance_result.get("total_signed_edges", 0)),
+            ))
+        except Exception as e:
+            logger.debug("Structural balance metrics failed: %s", e)
+
+        try:
+            from ..shared.graph_entropy import compute_graph_entropy
+            entropy = await compute_graph_entropy(self._pool)
+            points.append(("graph_entropy", "all", float(entropy)))
+        except Exception as e:
+            logger.debug("Graph entropy metrics failed: %s", e)
+
+        # Section 9: JDL Fusion Level Quality Metrics
+        try:
+            async with self._pool.acquire() as conn:
+                avg_conf = await conn.fetchval("""
+                    SELECT AVG(confidence) FROM signals
+                    WHERE created_at > NOW() - INTERVAL '24 hours'
+                """)
+            points.append((
+                "fusion_l0_signal_quality", "all",
+                float(avg_conf) if avg_conf is not None else 0.0,
+            ))
+        except Exception as e:
+            logger.debug("Fusion L0 signal quality metric failed: %s", e)
+
+        try:
+            async with self._pool.acquire() as conn:
+                avg_comp = await conn.fetchval("""
+                    SELECT AVG(completeness_score) FROM entity_profiles
+                """)
+            points.append((
+                "fusion_l1_entity_completeness", "all",
+                float(avg_comp) if avg_comp is not None else 0.0,
+            ))
+        except Exception as e:
+            logger.debug("Fusion L1 entity completeness metric failed: %s", e)
+
+        try:
+            async with self._pool.acquire() as conn:
+                total_events = await conn.fetchval(
+                    "SELECT COUNT(*) FROM events"
+                ) or 0
+                linked_events = await conn.fetchval("""
+                    SELECT COALESCE(SUM(event_count), 0) FROM situations
+                """) or 0
+            ratio = float(linked_events) / float(total_events) if total_events > 0 else 0.0
+            points.append(("fusion_l2_situation_coverage", "all", ratio))
+        except Exception as e:
+            logger.debug("Fusion L2 situation coverage metric failed: %s", e)
+
+        try:
+            async with self._pool.acquire() as conn:
+                total_hyp = await conn.fetchval(
+                    "SELECT COUNT(*) FROM hypotheses"
+                ) or 0
+                resolved_hyp = await conn.fetchval("""
+                    SELECT COUNT(*) FROM hypotheses
+                    WHERE status IN ('confirmed', 'refuted')
+                """) or 0
+            ratio = float(resolved_hyp) / float(total_hyp) if total_hyp > 0 else 0.0
+            points.append(("fusion_l3_hypothesis_resolution", "all", ratio))
+        except Exception as e:
+            logger.debug("Fusion L3 hypothesis resolution metric failed: %s", e)
+
+        try:
+            async with self._pool.acquire() as conn:
+                total_pred = await conn.fetchval(
+                    "SELECT COUNT(*) FROM predictions"
+                ) or 0
+                confirmed_pred = await conn.fetchval("""
+                    SELECT COUNT(*) FROM predictions
+                    WHERE status = 'confirmed'
+                """) or 0
+                resolved_pred = await conn.fetchval("""
+                    SELECT COUNT(*) FROM predictions
+                    WHERE status IN ('confirmed', 'refuted')
+                """) or 0
+            ratio = float(confirmed_pred) / float(resolved_pred) if resolved_pred > 0 else 0.0
+            points.append(("fusion_l3_prediction_accuracy", "all", ratio))
+        except Exception as e:
+            logger.debug("Fusion L3 prediction accuracy metric failed: %s", e)
+
+        try:
+            async with self._pool.acquire() as conn:
+                cal_val = await conn.fetchval("""
+                    SELECT value FROM metrics
+                    WHERE metric = 'calibration_discrimination'
+                    ORDER BY time DESC LIMIT 1
+                """)
+            points.append((
+                "fusion_l4_calibration_score", "all",
+                float(cal_val) if cal_val is not None else 0.0,
+            ))
+        except Exception as e:
+            logger.debug("Fusion L4 calibration score metric failed: %s", e)
+
+        try:
+            if self._redis:
+                keys = await self._redis.keys("consult:session:*")
+                count = len(keys) if keys else 0
+            else:
+                count = 0
+            points.append(("fusion_l5_consult_sessions", "all", float(count)))
+        except Exception as e:
+            logger.debug("Fusion L5 consult sessions metric failed: %s", e)
 
         # Write all metrics in one batch
         if points:

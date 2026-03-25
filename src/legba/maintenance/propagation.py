@@ -280,7 +280,7 @@ class StatePropagator:
                 SELECT s.id, s.name, s.status, s.event_count, s.category,
                        s.data, s.intensity_score
                 FROM situations s
-                WHERE s.status IN ('active', 'escalating', 'proposed')
+                WHERE s.status IN ('active', 'escalating')
             """)
 
             new_snapshot: dict[str, dict] = {}

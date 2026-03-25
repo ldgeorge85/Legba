@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import re
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from legba.shared.schemas.signals import Signal, SignalCategory, create_signal
+from legba.shared.schemas.signals import create_signal
 
 from .normalizer import extract_entities_ner, infer_category
 from .telegram import TelegramMessage
@@ -90,9 +90,6 @@ def normalize_telegram_message(
         base_confidence = 0.5
     if msg.forwards > 100:
         base_confidence = min(base_confidence + 0.1, 0.7)
-
-    # Extract any URLs in the message as references
-    urls = _extract_urls(msg.text)
 
     signal = create_signal(
         title=title,

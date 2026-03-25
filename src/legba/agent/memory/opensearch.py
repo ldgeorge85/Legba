@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
-from opensearchpy import OpenSearch, RequestError, NotFoundError
+from opensearchpy import RequestError, NotFoundError
 from opensearchpy._async.client import AsyncOpenSearch
 
 from ...shared.config import OpenSearchConfig

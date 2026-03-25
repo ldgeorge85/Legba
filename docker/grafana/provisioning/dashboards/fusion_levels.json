@@ -1,0 +1,331 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_TIMESCALEDB",
+      "label": "TimescaleDB",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "postgres",
+      "pluginName": "PostgreSQL"
+    }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "L0: Signal Quality",
+      "description": "Average signal confidence (last 24h)",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 3, "x": 0, "y": 0 },
+      "id": 1,
+      "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.3 },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.7 }
+            ]
+          },
+          "decimals": 3,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT time, value FROM metrics WHERE metric = 'fusion_l0_signal_quality' AND dimension = 'all' ORDER BY time DESC LIMIT 1",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "L1: Entity Completeness",
+      "description": "Average entity profile completeness score",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 3, "x": 3, "y": 0 },
+      "id": 2,
+      "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.2 },
+              { "color": "yellow", "value": 0.4 },
+              { "color": "green", "value": 0.6 }
+            ]
+          },
+          "decimals": 3,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT time, value FROM metrics WHERE metric = 'fusion_l1_entity_completeness' AND dimension = 'all' ORDER BY time DESC LIMIT 1",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "L2: Situation Coverage",
+      "description": "Ratio of events linked to situations vs total events",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 4, "x": 6, "y": 0 },
+      "id": 3,
+      "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.2 },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.7 }
+            ]
+          },
+          "decimals": 3,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT time, value FROM metrics WHERE metric = 'fusion_l2_situation_coverage' AND dimension = 'all' ORDER BY time DESC LIMIT 1",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "L3: Hypothesis Resolution",
+      "description": "Ratio of resolved hypotheses vs total",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 4, "x": 10, "y": 0 },
+      "id": 4,
+      "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.1 },
+              { "color": "yellow", "value": 0.3 },
+              { "color": "green", "value": 0.5 }
+            ]
+          },
+          "decimals": 3,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT time, value FROM metrics WHERE metric = 'fusion_l3_hypothesis_resolution' AND dimension = 'all' ORDER BY time DESC LIMIT 1",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "L3: Prediction Accuracy",
+      "description": "Ratio of confirmed predictions vs resolved predictions",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 3, "x": 14, "y": 0 },
+      "id": 5,
+      "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.3 },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 0.7 }
+            ]
+          },
+          "decimals": 3,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT time, value FROM metrics WHERE metric = 'fusion_l3_prediction_accuracy' AND dimension = 'all' ORDER BY time DESC LIMIT 1",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "L4: Calibration Score",
+      "description": "Confidence discrimination (active vs dead event signal confidence spread)",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 3, "x": 17, "y": 0 },
+      "id": 6,
+      "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.02 },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "green", "value": 0.1 }
+            ]
+          },
+          "decimals": 4,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT time, value FROM metrics WHERE metric = 'fusion_l4_calibration_score' AND dimension = 'all' ORDER BY time DESC LIMIT 1",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "L5: Consult Sessions",
+      "description": "Active operator consultation sessions in Redis",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 0 },
+      "id": 7,
+      "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "yellow", "value": 5 },
+              { "color": "orange", "value": 10 }
+            ]
+          },
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_TIMESCALEDB}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT time, value FROM metrics WHERE metric = 'fusion_l5_consult_sessions' AND dimension = 'all' ORDER BY time DESC LIMIT 1",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["legba", "fusion"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Fusion Levels",
+  "uid": "legba-fusion-levels",
+  "version": 1
+}

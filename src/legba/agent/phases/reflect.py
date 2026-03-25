@@ -6,7 +6,6 @@ import json
 from typing import TYPE_CHECKING
 
 from ...shared.schemas.comms import InboxMessage
-from ...shared.schemas.memory import Fact
 
 if TYPE_CHECKING:
     from ..cycle import AgentCycle
@@ -49,10 +48,6 @@ class ReflectMixin:
 
             # Try to parse structured JSON from the reflection
             self._reflection_data = self._parse_reflection(self._reflection)
-
-            # Store extracted facts
-            # Fact extraction removed from REFLECT — handled by deterministic ingestion pipeline
-            # await self._store_reflection_facts()
 
             # Store extracted entities and relationships in graph
             await self._store_reflection_graph()
@@ -118,59 +113,6 @@ class ReflectMixin:
             else:
                 break
         return {}
-
-    async def _store_reflection_facts(self: AgentCycle) -> None:
-        """Store facts extracted from the reflection phase."""
-        from ..memory.fact_normalize import normalize_fact_predicate, normalize_fact_value
-
-        facts = self._reflection_data.get("facts_learned", [])
-        for fact_data in facts:
-            try:
-                subject = str(fact_data.get("subject", "")).strip()
-                predicate = normalize_fact_predicate(str(fact_data.get("predicate", "")))
-                value = normalize_fact_value(str(fact_data.get("value", "")))
-                if not (subject and predicate and value):
-                    continue
-
-                fact = Fact(
-                    subject=subject,
-                    predicate=predicate,
-                    value=value,
-                    confidence=min(float(fact_data.get("confidence", 0.5)), 1.0),
-                    source_cycle=self.state.cycle_number,
-                )
-
-                # Generate embedding for semantic search
-                try:
-                    embedding = await self.llm.generate_embedding(
-                        f"{subject} {predicate} {value}"
-                    )
-                except Exception:
-                    embedding = None
-
-                await self.memory.store_fact(fact, embedding=embedding)
-
-                # Auto-supersede conflicting facts
-                try:
-                    if fact.subject and fact.predicate:
-                        existing = await self.memory.structured.query_facts(
-                            subject=fact.subject, predicate=fact.predicate
-                        )
-                        for old in existing:
-                            if (old.id != fact.id
-                                    and str(old.value) != str(fact.value)
-                                    and not old.superseded_by):
-                                await self.memory.structured.supersede_fact(old.id, fact)
-                                self.logger.log("fact_auto_superseded",
-                                    subject=fact.subject,
-                                    predicate=fact.predicate,
-                                    old_value=str(old.value)[:100],
-                                    new_value=str(fact.value)[:100])
-                except Exception:
-                    pass  # Best-effort, don't break reflect
-
-            except Exception as e:
-                self.logger.log_error(f"Failed to store reflection fact: {e}")
 
     async def _store_reflection_graph(self: AgentCycle) -> None:
         """Store entities and relationships from reflection in the graph."""

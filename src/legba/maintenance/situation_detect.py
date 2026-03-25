@@ -1,5 +1,7 @@
 """Automated situation detection — maintenance daemon task.
 
+JDL Level 2: Mechanical situation candidate detection.
+
 Finds clusters of events that should be proposed as new situations based on
 shared region, category, and entity overlap. Deterministic, no LLM.
 """
@@ -45,7 +47,7 @@ class SituationDetector:
 
             # For each qualifying group, check entity overlap
             for key, group_events in groups.items():
-                if len(group_events) < 3:
+                if len(group_events) < 8:
                     continue
 
                 category, region = key
@@ -164,7 +166,7 @@ class SituationDetector:
         """Check if an existing active situation already covers these entities + region."""
         try:
             rows = await self.pool.fetch(
-                "SELECT id, data FROM situations WHERE status IN ('active', 'escalating')",
+                "SELECT id, data FROM situations WHERE status IN ('active', 'escalating', 'proposed')",
             )
             for row in rows:
                 raw = row["data"]

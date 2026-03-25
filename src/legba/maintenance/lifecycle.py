@@ -3,17 +3,12 @@
 Deterministic state transitions based on signal activity and temporal rules.
 No LLM required — purely rule-based.
 
-Existing schema columns used:
-  - events: id, data (JSONB), signal_count, created_at, updated_at
+Schema columns used:
+  - events: id, data (JSONB), signal_count, created_at, updated_at,
+    lifecycle_status (TEXT), lifecycle_changed_at (TIMESTAMPTZ)
   - signal_event_links: signal_id, event_id, created_at
   - situations: id, status, last_event_at, updated_at
   - situation_events: situation_id, event_id
-
-TODO columns needed (not yet in schema):
-  - events.lifecycle_status TEXT NOT NULL DEFAULT 'emerging'
-    -- Tracks: emerging, developing, active, evolving, resolved, reactivated
-  - events.lifecycle_changed_at TIMESTAMPTZ DEFAULT NOW()
-    -- When the lifecycle_status last changed
 """
 
 from __future__ import annotations
@@ -45,11 +40,6 @@ class LifecycleManager:
           - RESOLVED with new signal linked -> REACTIVATED -> DEVELOPING
 
         Returns the number of transitions applied.
-
-        NOTE: Until lifecycle_status and lifecycle_changed_at columns are added
-        to the events table, this uses the data JSONB field to track state.
-        The data JSONB approach is a working fallback; once the dedicated columns
-        exist, the queries should be updated to use them directly.
         """
         transitions = 0
         async with self._pool.acquire() as conn:
@@ -61,7 +51,7 @@ class LifecycleManager:
                         FROM signal_event_links sel
                         WHERE sel.event_id = e.id) AS last_signal_at
                 FROM events e
-                WHERE COALESCE(e.lifecycle_status, e.data->>'lifecycle_status', 'emerging') = 'emerging'
+                WHERE e.lifecycle_status = 'emerging'
             """)
             cutoff_48h = datetime.now(timezone.utc) - timedelta(hours=48)
             for row in rows:
@@ -86,7 +76,7 @@ class LifecycleManager:
                         FROM signal_event_links sel
                         WHERE sel.event_id = e.id) AS last_signal_at
                 FROM events e
-                WHERE COALESCE(e.lifecycle_status, e.data->>'lifecycle_status') = 'developing'
+                WHERE e.lifecycle_status = 'developing'
             """)
             cutoff_72h = datetime.now(timezone.utc) - timedelta(hours=72)
             for row in rows:
@@ -114,7 +104,7 @@ class LifecycleManager:
                           AND sel.created_at > NOW() - INTERVAL '48 hours'
                           AND sel.created_at <= NOW() - INTERVAL '24 hours') AS prev_signals
                 FROM events e
-                WHERE COALESCE(e.lifecycle_status, e.data->>'lifecycle_status') = 'active'
+                WHERE e.lifecycle_status = 'active'
             """)
             cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
             for row in rows:
@@ -142,7 +132,7 @@ class LifecycleManager:
                           AND sel.created_at > NOW() - INTERVAL '48 hours'
                           AND sel.created_at <= NOW() - INTERVAL '24 hours') AS prev_signals
                 FROM events e
-                WHERE COALESCE(e.lifecycle_status, e.data->>'lifecycle_status') = 'evolving'
+                WHERE e.lifecycle_status = 'evolving'
             """)
             for row in rows:
                 last_sig = row["last_signal_at"]
@@ -157,24 +147,21 @@ class LifecycleManager:
 
             # --- RESOLVED -> DEVELOPING (new signal linked after resolution) ---
             rows = await conn.fetch("""
-                SELECT e.id, e.data, e.signal_count,
+                SELECT e.id, e.data, e.signal_count, e.lifecycle_changed_at,
                        (SELECT MAX(sel.created_at)
                         FROM signal_event_links sel
                         WHERE sel.event_id = e.id) AS last_signal_at
                 FROM events e
-                WHERE COALESCE(e.lifecycle_status, e.data->>'lifecycle_status') = 'resolved'
+                WHERE e.lifecycle_status = 'resolved'
             """)
             for row in rows:
                 last_sig = row["last_signal_at"]
-                lifecycle_changed = None
-                if isinstance(row["data"], dict):
-                    lifecycle_changed = row["data"].get("lifecycle_changed_at")
+                lifecycle_changed = row["lifecycle_changed_at"]
                 if last_sig and lifecycle_changed:
                     try:
-                        changed_dt = datetime.fromisoformat(lifecycle_changed)
                         # Compare timezone-naive for safety (asyncpg may return naive)
                         last_naive = last_sig.replace(tzinfo=None)
-                        changed_naive = changed_dt.replace(tzinfo=None)
+                        changed_naive = lifecycle_changed.replace(tzinfo=None)
                         if last_naive > changed_naive:
                             await self._transition(
                                 conn, row["id"], row["data"], "resolved", "developing",
@@ -197,12 +184,8 @@ class LifecycleManager:
     ) -> None:
         """Apply a lifecycle transition to an event.
 
-        Updates the data JSONB with lifecycle_status and lifecycle_changed_at.
-        Once dedicated columns exist, this should UPDATE those columns directly.
-
-        TODO: When lifecycle_status and lifecycle_changed_at columns exist, change to:
-            UPDATE events SET lifecycle_status = $2, lifecycle_changed_at = NOW(),
-                              updated_at = NOW() WHERE id = $1
+        Updates the dedicated lifecycle_status and lifecycle_changed_at columns
+        as well as the data JSONB for transition history.
         """
         if isinstance(current_data, str):
             try:
@@ -225,18 +208,11 @@ class LifecycleManager:
         })
         data["lifecycle_history"] = history[-20:]  # Keep last 20 transitions
 
-        # Update both the dedicated column AND the data JSONB
-        try:
-            await conn.execute(
-                "UPDATE events SET lifecycle_status = $2, lifecycle_changed_at = NOW(), data = $3, updated_at = NOW() WHERE id = $1",
-                event_id, to_status, json.dumps(data),
-            )
-        except Exception:
-            # Fallback if columns don't exist
-            await conn.execute(
-                "UPDATE events SET data = $2, updated_at = NOW() WHERE id = $1",
-                event_id, json.dumps(data),
-            )
+        await conn.execute(
+            "UPDATE events SET lifecycle_status = $2, lifecycle_changed_at = NOW(), "
+            "data = $3, updated_at = NOW() WHERE id = $1",
+            event_id, to_status, json.dumps(data),
+        )
         logger.debug(
             "Event %s: %s -> %s", event_id, from_status, to_status,
         )

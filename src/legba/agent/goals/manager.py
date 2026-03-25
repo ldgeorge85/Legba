@@ -7,7 +7,6 @@ Goals are stored in Postgres via the structured memory store.
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from ...shared.schemas.goals import (

@@ -35,7 +35,7 @@ Transition rules are evaluated top-to-bottom; the first match wins.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable
 

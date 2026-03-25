@@ -1,5 +1,7 @@
 """Signal normalizer — converts FetchedEntry to Signal schema.
 
+JDL Level 0: Signal normalization and confidence scoring.
+
 Handles category inference, timestamp parsing, and source-specific mappings.
 """
 
@@ -369,7 +371,7 @@ def normalize_entry(
     # Cognitive architecture: confidence is no longer hardcoded at 0.5.
     # The service layer computes composite confidence using the hybrid gatekeeper
     # formula (source_reliability * classification_confidence * modifier).
-    # We use None-coalesced 0.5 here as a safe default that gets overwritten.
+    # Default 0.3 here — overwritten by service.py composite scoring.
     sig = create_signal(
         title=title,
         summary=summary,

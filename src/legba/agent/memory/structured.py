@@ -17,7 +17,7 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-from ...shared.schemas.goals import Goal, GoalStatus
+from ...shared.schemas.goals import Goal
 from ...shared.schemas.memory import Fact
 
 
@@ -535,9 +535,42 @@ class StructuredStore:
             return False
         try:
             # Normalize predicate and value before storage
-            from .fact_normalize import normalize_fact_predicate, normalize_fact_value
+            from .fact_normalize import (
+                normalize_fact_predicate, normalize_fact_value,
+                CANONICAL_FACT_PREDICATES,
+            )
             fact.predicate = normalize_fact_predicate(fact.predicate)
             fact.value = normalize_fact_value(fact.value)
+
+            # Reject vague "noted" predicate — agent must use a canonical form
+            if fact.predicate.lower() == "noted":
+                logger.warning(
+                    "Rejected fact with predicate 'noted' (subject=%s). "
+                    "Use a canonical predicate: 'is', 'has', 'located_in', "
+                    "'member_of', 'operates_in'.",
+                    fact.subject,
+                )
+                return False
+
+            # Reject non-canonical predicates with helpful suggestions
+            if fact.predicate not in CANONICAL_FACT_PREDICATES:
+                from difflib import SequenceMatcher
+                scored = sorted(
+                    CANONICAL_FACT_PREDICATES,
+                    key=lambda c: SequenceMatcher(
+                        None, fact.predicate.lower(), c.lower()
+                    ).ratio(),
+                    reverse=True,
+                )
+                suggestions = scored[:5]
+                logger.warning(
+                    "Rejected fact with non-canonical predicate '%s' "
+                    "(subject=%s). Did you mean: %s?",
+                    fact.predicate,
+                    fact.subject,
+                    ", ".join(suggestions),
+                )
+                return False
 
             async with self._pool.acquire() as conn:
                 # --- BUG 7 fix: Dedup hardening ---

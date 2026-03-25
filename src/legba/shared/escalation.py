@@ -1,5 +1,7 @@
 """Escalation scoring — pure function module.
 
+JDL Level 3: Escalation scoring for portfolio management.
+
 Takes event cluster data and returns a recommendation for portfolio promotion.
 No DB access, no side effects. Used by StatePropagator and agent tools.
 """

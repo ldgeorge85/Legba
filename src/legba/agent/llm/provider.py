@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from .format import strip_harmony_response
+from .format import safe_response_body as _safe_response_body, strip_harmony_response
 
 log = logging.getLogger(__name__)
 
@@ -37,14 +37,6 @@ class LLMApiError(Exception):
         super().__init__(
             f"LLM API {status_code}: messages={msg_count}, chars={total_chars}, body={body[:500]}"
         )
-
-
-def _safe_response_body(response: httpx.Response) -> str:
-    """Extract response body for error logging, truncated."""
-    try:
-        return response.text[:1000]
-    except Exception:
-        return f"(could not read body, status={response.status_code})"
 
 
 @dataclass

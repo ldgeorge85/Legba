@@ -14,7 +14,7 @@ from .schemas import (
     FactRefreshVerdict,
     RelationshipVerdict,
     SignalBatchValidationResponse,
-    SignalValidationVerdict,
+    SituationDetectionVerdict,
 )
 
 # ---------------------------------------------------------------------------
@@ -60,6 +60,15 @@ ENTITY_RESOLUTION_SYSTEM = """\
 You are an entity resolution specialist for an intelligence analysis system.
 
 Your task: given an extracted entity name and its context, determine whether it matches an existing entity in the knowledge base or is a new entity.
+
+Confidence calibration:
+- 0.95+: Name, type, and context ALL clearly match a single candidate. No ambiguity.
+- 0.80-0.94: Strong match but minor ambiguity (e.g., common name, missing context).
+- 0.60-0.79: Probable match but real uncertainty. Another candidate is plausible.
+- 0.40-0.59: Uncertain. Multiple candidates are roughly equally likely.
+- Below 0.40: Very uncertain. Mark as new entity rather than guessing.
+
+Be conservative. A false match (linking "Iran" the country to "Iran" a person's name) is worse than marking a genuine entity as new. When in doubt, mark as new — the conscious agent can merge later.
 
 Rules:
 - Match on semantic identity, not just string similarity. "Vladimir Putin" and "Putin" and "Russian President" may be the same entity depending on context.
@@ -221,3 +230,46 @@ Review the following graph anomalies:
 Output a JSON array of verdicts, one per anomaly. Each verdict:
 {{"anomaly_index": <int>, "needs_action": <bool>, "suggested_action": "<string>", "reasoning": "<string>"}}
 """
+
+
+# ---------------------------------------------------------------------------
+# Situation Detection
+# ---------------------------------------------------------------------------
+
+SITUATION_DETECTION_SYSTEM = """\
+You are an intelligence analyst evaluating whether a cluster of related events \
+represents a coherent situation — an ongoing narrative or developing story that \
+warrants tracking as a single unit.
+
+Rules:
+- A situation is a coherent thread: events connected by causality, actors, or \
+a shared narrative arc (e.g., "EU AI Regulation Rollout", "Sudan Civil War").
+- Events that merely share a region and category but have no narrative connection \
+are NOT a situation (e.g., unrelated tech product launches in the US).
+- Provide a clear, human-readable name. Good: "Iran-Israel Military Escalation". \
+Bad: "Conflict: Ir -- Iran, Israel, IRGC".
+- Keep the description to 1-2 sentences summarizing the developing story.
+- Confidence reflects how certain you are that these events form one coherent narrative.
+- Output MUST be valid JSON matching the schema below.
+"""
+
+SITUATION_DETECTION_PROMPT = """\
+You are analyzing a cluster of {event_count} events in the "{region}" region, \
+category: {category}.
+
+Events:
+{event_list}
+
+Question: Do these events represent a coherent situation (an ongoing narrative \
+or developing story)?
+
+If YES: provide a clear, descriptive name (e.g., "Iran-Israel Military Escalation" \
+not "Conflict: Ir -- Iran, Israel, IRGC") and a 1-2 sentence description.
+
+If NO: these are unrelated events that happen to share a region and category.
+
+Output JSON schema:
+{schema}
+"""
+
+SITUATION_DETECTION_SCHEMA = SituationDetectionVerdict.model_json_schema()

@@ -1,6 +1,6 @@
 # AI Models in Legba
 
-Legba uses five distinct AI models across three services for inference, embedding, and NLP enrichment. None run inside the Legba containers — all are accessed over HTTP.
+Legba uses seven distinct AI models across four services for inference, embedding, NLP enrichment, and continuous validation. None run inside the Legba containers — all are accessed over HTTP.
 
 ## Model Inventory
 
@@ -10,8 +10,10 @@ Legba uses five distinct AI models across three services for inference, embeddin
 | embedding-inno1 | Text embedding | — | Tesla T4 (shared GPU 0) | Same base URL, `/v1/embeddings` | Agent memory, Ingestion |
 | NLLB-200-distilled-600M | Translation | 600M params | Tesla T4 (shared GPU 0) | ``<models-endpoint>`` | Ingestion |
 | DeBERTa-v3 zero-shot | Classification | ~184M params | Tesla T4 (shared GPU 0) | Same as above | Ingestion |
-| REBEL-large | Relation extraction | ~350M params | Tesla T4 (shared GPU 0) | Same as above | Ingestion |
+| GLiREL-large | Relation extraction | ~350M params | Tesla T4 (shared GPU 0) | Same as above | Ingestion |
 | T5-small | Summarization | 60M params | Tesla T4 (shared GPU 0) | Same as above | Ingestion |
+| Llama 3.1 8B (Q5_K_M) | SLM | 8B params (quantized) | GPU 1 on ai1 | ``<slm-endpoint>/v1`` | Subconscious service |
+| spaCy (en_core_web_trf) | NER | — | CPU | In-process | Ingestion (entity linking) |
 
 ## 1. Main LLM — GPT-OSS 120B
 
@@ -66,7 +68,7 @@ Four small transformer models running on a single Tesla T4 via a FastAPI service
 |----------|-------|----------------|---------|---------|------|
 | `POST /translate` | NLLB-200-distilled-600M | `facebook/nllb-200-distilled-600M` | Non-English signal translation | ~650ms | ~1.2GB |
 | `POST /classify` | DeBERTa-v3 zero-shot | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | Signal category classification | ~190ms | ~500MB |
-| `POST /extract` | REBEL-large | `Babelscape/rebel-large` | Subject-predicate-object triple extraction | ~800ms | ~1.5GB |
+| `POST /extract` | GLiREL-large | `jackboyla/glirel-large-v0` | Subject-predicate-object triple extraction | ~800ms | ~1.5GB |
 | `POST /summarize` | T5-small | `google-t5/t5-small` | Cluster title summarization | ~600ms | ~250MB |
 
 Total VRAM: ~3.9GB of 16GB. First call after startup is ~2s (model warmup).
@@ -79,7 +81,30 @@ Total VRAM: ~3.9GB of 16GB. First call after startup is ~2s (model warmup).
 
 **Input truncation:** All text inputs truncated to 512 tokens at the model level. The client truncates to 1000-2000 chars before sending.
 
-## 4. Hybrid LLM Routing (Prepped, Dormant)
+## 4. Subconscious SLM — Llama 3.1 8B
+
+The subconscious service uses a small language model for continuous validation and enrichment between conscious agent cycles. Runs as a quantized (Q5_K_M) Llama 3.1 8B Instruct served via vLLM on a dedicated GPU.
+
+| Parameter | Value |
+|-----------|-------|
+| Model | Llama 3.1 8B Instruct (Q5_K_M quantization) |
+| Hardware | GPU 1 on ai1 |
+| Throughput | ~40 tokens/sec |
+| Temperature | 0.1 (deterministic validation) |
+| Endpoint | `/v1/chat/completions` (OpenAI-compatible) |
+| Structured output | `guided_json` (vLLM constrained decoding) |
+
+**Tasks:** Signal quality assessment, entity resolution, classification refinement, fact corroboration, graph consistency checks, relationship validation. Runs three concurrent async loops (NATS consumer, timer, differential accumulator).
+
+**Key file:** `src/legba/subconscious/service.py`
+
+## 5. spaCy NER — en_core_web_trf
+
+The ingestion pipeline uses spaCy's transformer-based NER model for deterministic entity extraction from signals. Runs in-process on CPU within the ingestion container — no external endpoint.
+
+**Used for:** Batch entity linking during ingestion. Extracts person, organization, location, and other named entities from signal text, linking them to existing entity profiles in Postgres.
+
+## 6. Hybrid LLM Routing (Prepped, Dormant)
 
 Infrastructure exists to route specific cycle types to an alternate LLM provider (e.g., Anthropic Claude for ANALYSIS/INTROSPECTION, GPT-OSS for everything else). Not currently active in production.
 
@@ -108,7 +133,7 @@ LLM_ALT_TEMPERATURE=0.7
 
 **Cost note:** An 18-cycle test with Claude Sonnet showed ~$900/day token cost. Not viable for continuous personal use; the hybrid approach would selectively use Claude only for high-value cycle types.
 
-## 5. Consultation Engine
+## 7. Consultation Engine
 
 The operator-facing "Working" interface (`/consult`) uses its own LLM config, independent of the agent.
 
@@ -124,7 +149,7 @@ The consultation engine reuses both `VLLMProvider` and `AnthropicProvider` but k
 
 **Key file:** `src/legba/ui/consult.py`
 
-## 6. Configuration Reference
+## 8. Configuration Reference
 
 ### Primary LLM (Agent)
 
@@ -181,7 +206,7 @@ The consultation engine reuses both `VLLMProvider` and `AnthropicProvider` but k
 | `CONSULT_TEMPERATURE` | (falls back to main) | Consultation temperature |
 | `CONSULT_TIMEOUT` | (falls back to main) | Consultation timeout |
 
-## 7. Architecture Diagram
+## 9. Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -193,7 +218,7 @@ The consultation engine reuses both `VLLMProvider` and `AnthropicProvider` but k
 │  │  Model: InnoGPT-1     │         │ legba-models (~3.9GB)      │  │
 │  │  /v1/chat/completions  │         │  ├─ NLLB-200 (translate)   │  │
 │  │  /v1/embeddings        │         │  ├─ DeBERTa-v3 (classify)  │  │
-│  └────────┬───────────────┘         │  ├─ REBEL-large (extract)  │  │
+│  └────────┬───────────────┘         │  ├─ GLiREL-large (extract)  │  │
 │           │                         │  └─ T5-small (summarize)   │  │
 │           │                         └──────┬──────────────────────┘  │
 └───────────┼────────────────────────────────┼────────────────────────┘

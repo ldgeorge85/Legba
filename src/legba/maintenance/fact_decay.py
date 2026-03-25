@@ -2,17 +2,12 @@
 
 Deterministic fact lifecycle maintenance. No LLM required.
 
-Existing schema columns used:
+Schema columns used:
   - facts: id, subject, predicate, value, confidence, source_cycle,
     source_type, data (JSONB), valid_from, valid_until, created_at,
-    updated_at, superseded_by
+    updated_at, superseded_by, confidence_components (JSONB),
+    evidence_set (JSONB)
   - signal_event_links: signal_id, event_id, created_at
-
-TODO columns needed (not yet in schema):
-  - facts.confidence_components JSONB DEFAULT '{}'
-    -- Breakdown of confidence score components (base, corroboration, decay)
-  - facts.evidence_set UUID[] DEFAULT '{}'
-    -- Signal IDs that directly support this fact
 """
 
 from __future__ import annotations
@@ -66,14 +61,12 @@ class FactDecayManager:
 
             # --- Open-ended facts with no recent supporting signals ---
             # Find facts that have valid_until IS NULL, are older than 30 days,
-            # and whose source_cycle doesn't correspond to any recent signal activity.
-            #
-            # Since facts don't directly link to signals (TODO: evidence_set column),
-            # we use the fact's subject to check if any signals mentioning the same
-            # entity/topic have been ingested recently. This is a heuristic.
+            # and whose evidence_set signals have no recent activity.
+            # For facts with evidence_set populated, check those specific signals.
+            # For facts without evidence_set, fall back to subject-matching heuristic.
             rows = await conn.fetch("""
                 SELECT f.id, f.subject, f.predicate, f.value, f.confidence,
-                       f.created_at, f.data
+                       f.created_at, f.data, f.evidence_set
                 FROM facts f
                 WHERE f.valid_until IS NULL
                   AND f.superseded_by IS NULL
@@ -84,19 +77,52 @@ class FactDecayManager:
             """)
 
             for row in rows:
-                # Check if any signals mention this fact's subject recently
-                # This is a best-effort heuristic until evidence_set is available
-                recent_signal = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM signals s
-                        WHERE s.created_at > NOW() - INTERVAL '30 days'
-                          AND (
-                              s.title ILIKE '%' || $1 || '%'
-                              OR s.data::text ILIKE '%' || $1 || '%'
-                          )
-                        LIMIT 1
-                    )
-                """, row["subject"])
+                evidence = row["evidence_set"]
+                # Parse evidence_set JSONB (stored as JSON array of UUIDs)
+                evidence_ids = []
+                if evidence:
+                    if isinstance(evidence, list):
+                        evidence_ids = evidence
+                    elif isinstance(evidence, str):
+                        try:
+                            import json as _json
+                            evidence_ids = _json.loads(evidence)
+                        except (ValueError, TypeError):
+                            pass
+
+                if evidence_ids:
+                    # Use evidence_set: check if any linked signals were ingested recently
+                    import uuid as _uuid
+                    uuids = []
+                    for eid in evidence_ids:
+                        try:
+                            uuids.append(_uuid.UUID(str(eid)) if not isinstance(eid, _uuid.UUID) else eid)
+                        except (ValueError, TypeError):
+                            continue
+                    if uuids:
+                        recent_signal = await conn.fetchval("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM signals s
+                                WHERE s.id = ANY($1)
+                                  AND s.created_at > NOW() - INTERVAL '30 days'
+                                LIMIT 1
+                            )
+                        """, uuids)
+                    else:
+                        recent_signal = False
+                else:
+                    # Fallback: subject-matching heuristic for facts without evidence_set
+                    recent_signal = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM signals s
+                            WHERE s.created_at > NOW() - INTERVAL '30 days'
+                              AND (
+                                  s.title ILIKE '%' || $1 || '%'
+                                  OR s.data::text ILIKE '%' || $1 || '%'
+                              )
+                            LIMIT 1
+                        )
+                    """, row["subject"])
 
                 if not recent_signal:
                     await conn.execute(
@@ -133,9 +159,8 @@ class FactDecayManager:
         - Haven't been updated in 30 days
         - Are not already expired
 
-        TODO: When confidence_components JSONB column exists, update the decay
-        component there instead of adjusting the scalar confidence directly:
-            data->'confidence_components'->'decay' = current_decay - 0.05
+        Updates both the scalar confidence and the confidence_components.decay
+        field for full audit trail.
 
         Returns the number of facts with decayed confidence.
         """
@@ -144,6 +169,13 @@ class FactDecayManager:
             result = await conn.execute("""
                 UPDATE facts SET
                     confidence = GREATEST(confidence - 0.05, 0.1),
+                    confidence_components = jsonb_set(
+                        COALESCE(confidence_components, '{}'::jsonb),
+                        '{decay}',
+                        to_jsonb(
+                            COALESCE((confidence_components->>'decay')::numeric, 0.0) - 0.05
+                        )
+                    ),
                     data = jsonb_set(
                         COALESCE(data, '{}'::jsonb),
                         '{last_confidence_decay}',

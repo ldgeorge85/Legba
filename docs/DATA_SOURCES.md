@@ -1,6 +1,6 @@
 # Legba: Global Data Sources Catalog
 
-*Compiled: 2026-03-11 | 76+ sources across 11 categories*
+*Compiled: 2026-03-11 | 138 active sources across 11 categories*
 
 ---
 

@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
-from ...shared.schemas.memory import Entity, Relationship
+from ...shared.schemas.memory import Entity
 
 
 class GraphStore:
@@ -334,27 +334,100 @@ class GraphStore:
         since: str | None = None,
         until: str | None = None,
     ) -> bool:
-        """Create or update a directed relationship (edge) between two entities."""
+        """Create or update a directed relationship (edge) between two entities.
+
+        Temporal properties are maintained automatically:
+        - weight (float 0-1): importance/strength, default 0.5
+        - confidence (float 0-1): certainty, default 0.5
+        - evidence_count (int): incremented on each reinforcement
+        - last_evidenced (ISO timestamp): updated on each reinforcement
+        - volatility (float 0-1): tracks how often weight changes
+        """
         if not self._available:
             return False
         try:
             rel_label = self._sanitize_label(relation_type)
             src_esc = self._escape(source_name)
             tgt_esc = self._escape(target_name)
+            now = datetime.now(timezone.utc).isoformat()
             props = dict(properties) if properties else {}
             if since:
                 props["since"] = since
             if until:
                 props["until"] = until
+
+            # Extract temporal properties from caller or use defaults
+            new_weight = props.pop("weight", 0.5)
+            new_confidence = props.pop("confidence", 0.5)
+
             props_map = self._dict_to_cypher_map(props) if props else "{}"
 
             async with self._pool.acquire() as conn:
-                await self._cypher(conn, f"""
-                    MATCH (a {{name: '{src_esc}'}}), (b {{name: '{tgt_esc}'}})
-                    MERGE (a)-[r:{rel_label}]->(b)
-                    SET r += {props_map}
+                # Check if edge already exists (reinforcement path)
+                existing = await self._cypher(conn, f"""
+                    MATCH (a {{name: '{src_esc}'}})-[r:{rel_label}]->(b {{name: '{tgt_esc}'}})
                     RETURN r
                 """, cols="r agtype")
+
+                if existing:
+                    # Reinforcement: increment evidence_count, update last_evidenced
+                    old_edge = existing[0]["r"]
+                    old_props = old_edge.get("properties", {}) if isinstance(old_edge, dict) else {}
+                    old_count = old_props.get("evidence_count", 1)
+                    old_volatility = old_props.get("volatility", 0.0)
+                    old_weight = old_props.get("weight", 0.5)
+
+                    new_count = (int(old_count) if old_count else 1) + 1
+                    # If weight changed, increase volatility
+                    try:
+                        vol = float(old_volatility) if old_volatility else 0.0
+                        ow = float(old_weight) if old_weight else 0.5
+                    except (TypeError, ValueError):
+                        vol = 0.0
+                        ow = 0.5
+                    if abs(float(new_weight) - ow) > 0.01:
+                        vol = min(1.0, vol + 0.1)
+
+                    await self._cypher(conn, f"""
+                        MATCH (a {{name: '{src_esc}'}})-[r:{rel_label}]->(b {{name: '{tgt_esc}'}})
+                        SET r += {props_map}
+                        SET r.weight = {float(new_weight)}
+                        SET r.confidence = {float(new_confidence)}
+                        SET r.evidence_count = {new_count}
+                        SET r.last_evidenced = '{self._escape(now)}'
+                        SET r.volatility = {vol}
+                        RETURN r
+                    """, cols="r agtype")
+                    action = "update"
+                else:
+                    # New edge: set defaults
+                    await self._cypher(conn, f"""
+                        MATCH (a {{name: '{src_esc}'}}), (b {{name: '{tgt_esc}'}})
+                        MERGE (a)-[r:{rel_label}]->(b)
+                        SET r += {props_map}
+                        SET r.weight = {float(new_weight)}
+                        SET r.confidence = {float(new_confidence)}
+                        SET r.evidence_count = 1
+                        SET r.last_evidenced = '{self._escape(now)}'
+                        SET r.volatility = 0.0
+                        RETURN r
+                    """, cols="r agtype")
+                    action = "create"
+
+            # Record relationship change to TimescaleDB
+            try:
+                from ...shared.relationship_history import record_edge_change
+                await record_edge_change(
+                    source_entity=source_name,
+                    target_entity=target_name,
+                    rel_type=relation_type,
+                    action=action,
+                    weight=float(new_weight),
+                    confidence=float(new_confidence),
+                )
+            except Exception:
+                pass  # Non-fatal: metrics recording failure
+
             return True
         except Exception:
             return False

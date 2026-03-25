@@ -31,10 +31,6 @@ class SignalCategory(str, Enum):
     OTHER = "other"
 
 
-# Backward-compat alias — used across the codebase during transition
-EventCategory = SignalCategory
-
-
 class Signal(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     title: str
@@ -70,10 +66,6 @@ class Signal(BaseModel):
 
     # Metadata
     language: str = "en"
-
-
-# Backward-compat aliases
-Event = Signal
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +104,3 @@ def create_signal(
         language=language,
         guid=guid,
     )
-
-
-# Backward-compat alias
-create_event = create_signal

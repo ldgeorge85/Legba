@@ -130,7 +130,7 @@ Watch item cards showing tracked entities (blue badges), keywords (purple badges
 Dashboard placeholder for Recharts-based analytics (event volume trends, entity distribution, source health).
 
 ### Cycle Monitor
-Audit-sourced cycle table showing cycle number, detected type (NORMAL, ACQUIRE, RESEARCH, ANALYSIS, INTROSPECTION, EVOLVE), duration, tool/LLM call counts, events produced, and errors.
+Audit-sourced cycle table showing cycle number, detected type (SURVEY, CURATE, RESEARCH, ANALYSIS, SYNTHESIZE, INTROSPECTION, EVOLVE), duration, tool/LLM call counts, events produced, and errors.
 
 ### Journal
 Agent's personal journal. Shows the latest **consolidation** report (rendered as markdown) at the top, with individual cycle entries collapsed behind a toggle. Each cycle entry shows the cycle number, timestamp, and reflective observations.

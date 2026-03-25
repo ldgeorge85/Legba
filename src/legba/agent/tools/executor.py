@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from uuid import UUID
 
-from ...shared.schemas.tools import ToolCall, ToolResult
 from ..log import CycleLogger
 from .registry import ToolRegistry
 

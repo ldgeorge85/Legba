@@ -1,5 +1,7 @@
 """Entity resolution using the SLM.
 
+JDL Level 1: SLM entity disambiguation.
+
 Resolves ambiguous entity extractions by querying the SLM to match
 extracted entity names against existing entity profiles.
 """
@@ -75,7 +77,8 @@ async def fetch_entity_candidates(
                 canonical_name,
                 entity_type,
                 completeness_score,
-                (data->>'description')::text AS description
+                (data->>'description')::text AS description,
+                similarity(canonical_name, $2) AS trgm_similarity
             FROM entity_profiles
             WHERE entity_type = $1 OR $1 = 'other'
             ORDER BY similarity(canonical_name, $2) DESC
@@ -96,7 +99,8 @@ async def fetch_entity_candidates(
                 canonical_name,
                 entity_type,
                 completeness_score,
-                (data->>'description')::text AS description
+                (data->>'description')::text AS description,
+                0.0::real AS trgm_similarity
             FROM entity_profiles
             WHERE (entity_type = $1 OR $1 = 'other')
               AND canonical_name ILIKE $2
@@ -145,6 +149,11 @@ async def resolve_entity_batch(
             pool, entity_name, entity_type, limit=10,
         )
 
+        # Build a lookup of candidate trigram similarities for cross-validation
+        candidate_trgm: dict[str, float] = {}
+        for c in candidates:
+            candidate_trgm[c["entity_id"]] = c.get("trgm_similarity", 0.0)
+
         candidates_json = json.dumps(
             [
                 {
@@ -173,6 +182,33 @@ async def resolve_entity_batch(
                 json_schema=ENTITY_RESOLUTION_SCHEMA,
             )
             verdict = EntityResolutionVerdict.model_validate(result)
+
+            # Cross-validation: if SLM matched to an entity, check trigram
+            # similarity between extracted name and candidate canonical_name.
+            # Catches hallucinated matches where the SLM claims a match but
+            # the names are completely dissimilar.
+            if (
+                verdict.matched_entity_id
+                and not verdict.is_new_entity
+                and verdict.confidence > 0.8
+            ):
+                trgm_sim = candidate_trgm.get(verdict.matched_entity_id, 0.0)
+                if trgm_sim < 0.3:
+                    # Find the canonical name for the log message
+                    matched_name = verdict.matched_entity_id
+                    for c in candidates:
+                        if c["entity_id"] == verdict.matched_entity_id:
+                            matched_name = c["canonical_name"]
+                            break
+                    logger.warning(
+                        "Cross-validation downgrade: SLM matched '%s' -> '%s' "
+                        "with confidence=%.2f but trigram similarity=%.3f "
+                        "(below 0.3 threshold). Downgrading confidence to 0.5.",
+                        entity_name, matched_name,
+                        verdict.confidence, trgm_sim,
+                    )
+                    verdict.confidence = 0.5
+
             verdicts.append(verdict)
         except SLMError as exc:
             logger.warning(
@@ -196,8 +232,9 @@ async def apply_entity_verdicts(
 ) -> int:
     """Apply entity resolution verdicts.
 
-    For matches: update signal_entity_links confidence.
-    For new entities: flag for manual review.
+    For high-confidence matches: update signal_entity_links confidence.
+    For high-confidence new entities: create entity_profile.
+    Below threshold: log the recommendation only.
 
     Returns the number of entities processed.
     """
@@ -209,26 +246,76 @@ async def apply_entity_verdicts(
         for verdict in verdicts:
             try:
                 if verdict.is_new_entity:
-                    # TODO: Create new entity_profile and update signal_entity_links
-                    # to point to the new entity. This requires:
-                    # 1. INSERT into entity_profiles
-                    # 2. UPDATE signal_entity_links to replace the ambiguous link
-                    #
-                    # For now, log the recommendation for the conscious agent to handle.
-                    logger.info(
-                        "Entity resolution: '%s' -> NEW ENTITY (confidence=%.2f): %s",
-                        verdict.entity_name, verdict.confidence, verdict.reasoning,
-                    )
+                    if verdict.confidence > 0.85:
+                        # Create a new entity_profile with the extracted name
+                        import uuid as _uuid
+                        new_id = _uuid.uuid4()
+                        entity_type = "other"  # Default; will be refined later
+                        data = json.dumps({
+                            "description": "",
+                            "source": "subconscious_entity_resolution",
+                            "reasoning": verdict.reasoning,
+                        })
+                        await conn.execute(
+                            """
+                            INSERT INTO entity_profiles
+                                (id, canonical_name, entity_type, data,
+                                 completeness_score, created_at, updated_at)
+                            VALUES ($1, $2, $3, $4::jsonb, 0.0, NOW(), NOW())
+                            ON CONFLICT DO NOTHING
+                            """,
+                            new_id,
+                            verdict.entity_name,
+                            entity_type,
+                            data,
+                        )
+                        logger.info(
+                            "Entity resolution: '%s' -> CREATED new entity %s "
+                            "(confidence=%.2f): %s",
+                            verdict.entity_name, str(new_id),
+                            verdict.confidence, verdict.reasoning,
+                        )
+                    else:
+                        logger.info(
+                            "Entity resolution: '%s' -> new entity recommended "
+                            "but confidence=%.2f below 0.85 threshold: %s",
+                            verdict.entity_name, verdict.confidence,
+                            verdict.reasoning,
+                        )
                 elif verdict.matched_entity_id:
-                    # Update link confidence for the matched entity
-                    # TODO: If the matched_entity_id differs from the current entity_id
-                    # in signal_entity_links, we need to update the FK reference.
-                    # This requires knowing the original signal_id from the batch.
-                    logger.info(
-                        "Entity resolution: '%s' -> matched %s (confidence=%.2f): %s",
-                        verdict.entity_name, verdict.matched_entity_id,
-                        verdict.confidence, verdict.reasoning,
-                    )
+                    if verdict.confidence > 0.85:
+                        # Update signal_entity_links confidence for this entity
+                        result = await conn.execute(
+                            """
+                            UPDATE signal_entity_links
+                            SET confidence = $1
+                            WHERE entity_id = $2::uuid
+                              AND confidence < $1
+                            """,
+                            verdict.confidence,
+                            verdict.matched_entity_id,
+                        )
+                        # Parse row count from "UPDATE N"
+                        rows_updated = 0
+                        if result:
+                            try:
+                                rows_updated = int(result.split()[-1])
+                            except (ValueError, IndexError):
+                                pass
+                        logger.info(
+                            "Entity resolution: '%s' -> matched %s "
+                            "(confidence=%.2f, %d links updated): %s",
+                            verdict.entity_name, verdict.matched_entity_id,
+                            verdict.confidence, rows_updated,
+                            verdict.reasoning,
+                        )
+                    else:
+                        logger.info(
+                            "Entity resolution: '%s' -> matched %s but "
+                            "confidence=%.2f below 0.85 threshold: %s",
+                            verdict.entity_name, verdict.matched_entity_id,
+                            verdict.confidence, verdict.reasoning,
+                        )
                 processed += 1
             except Exception as exc:
                 logger.warning(

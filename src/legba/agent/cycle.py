@@ -16,7 +16,7 @@ together into a single AgentCycle class and owns the top-level orchestration.
   Tier 2 — Guaranteed work (coprime modulo intervals):
     ANALYSIS(4) > RESEARCH(7) > CURATE(9)
   Tier 3 — Dynamic fill (state-scored):
-    CURATE (capped 0.45, recent 24h backlog) vs SURVEY (0.50 default)
+    CURATE (capped 0.50, recent 24h backlog) vs SURVEY (0.50 default)
 
 CURATE runs _curate() when ingestion active, _acquire() as legacy fallback.
 """
@@ -26,8 +26,6 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any
-from uuid import uuid4
 
 from ..shared.config import LegbaConfig
 from ..shared.schemas.cycle import CycleResponse, CycleState
@@ -48,8 +46,6 @@ from .log import CycleLogger
 # Phase mixins
 from .phases.wake import WakeMixin
 from .phases.orient import OrientMixin
-from .phases.plan import PlanMixin
-from .phases.act import ActMixin
 from .phases.reflect import ReflectMixin
 from .phases.narrate import NarrateMixin
 from .phases.persist import PersistMixin
@@ -63,7 +59,7 @@ from .phases.survey import SurveyMixin
 from .phases.synthesize import SynthesizeMixin
 
 # Re-export constants for backward compatibility
-from .phases import (REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL,
+from .phases import (REPORT_INTERVAL, RESEARCH_INTERVAL,
                      CURATE_INTERVAL, ANALYSIS_INTERVAL, EVOLVE_INTERVAL,
                      SYNTHESIZE_INTERVAL)
 
@@ -71,8 +67,6 @@ from .phases import (REPORT_INTERVAL, RESEARCH_INTERVAL, ACQUIRE_INTERVAL,
 class AgentCycle(
     WakeMixin,
     OrientMixin,
-    PlanMixin,
-    ActMixin,
     ReflectMixin,
     NarrateMixin,
     PersistMixin,
@@ -202,12 +196,12 @@ class AgentCycle(
           EVOLVE(30) > INTROSPECTION(15) > SYNTHESIZE(10)
 
         Tier 2 — Guaranteed work (modulo floor, ensures all types fire):
-          ANALYSIS(5) > RESEARCH(7) > CURATE(9)
+          ANALYSIS(4) > RESEARCH(7) > CURATE(9)
           These fire on their interval unless a Tier 1 type already claimed it.
 
         Tier 3 — Dynamic fill (state-scored, remaining cycles):
           Scores CURATE vs SURVEY based on recent uncurated backlog.
-          CURATE score capped at 0.45 to prevent monopolization.
+          CURATE score capped at 0.50, equal to SURVEY; cooldown alternates.
           Dedicated CURATE workers (CYCLE_TYPE=CURATE) handle overflow.
         """
         cn = self.state.cycle_number
@@ -232,8 +226,8 @@ class AgentCycle(
         scores = {}
 
         # CURATE: recent uncurated backlog (last 24h signals without event links).
-        # Capped at config value (default 0.45) — SURVEY should win unless
-        # there is a genuine backlog needing attention.
+        # Capped at config value (default 0.50) — equal to SURVEY base,
+        # cooldown alternates between the two.
         uncurated = getattr(self, '_uncurated_count', 0)
         curate_cap = self.config.agent.curate_score_cap
         scores["CURATE"] = min(uncurated / 80.0, curate_cap) if uncurated > 30 else 0.0
@@ -362,21 +356,6 @@ class AgentCycle(
     # -----------------------------------------------------------------------
     # Curate scheduling helpers
     # -----------------------------------------------------------------------
-
-    def _is_curate_cycle(self: AgentCycle) -> bool:
-        """Check if this is a curate cycle (replaces old _is_acquire_cycle in routing).
-
-        Runs every CURATE_INTERVAL cycles, but yields to all higher-priority types.
-        """
-        cn = self.state.cycle_number
-        return (CURATE_INTERVAL > 0
-                and cn > 0
-                and cn % CURATE_INTERVAL == 0
-                and not self._is_evolve_cycle()
-                and not self._is_introspection_cycle()
-                and not self._is_synthesize_cycle()
-                and not self._is_analysis_cycle()
-                and not self._is_research_cycle())
 
     def _should_promote_to_curate(self) -> bool:
         """Check if uncurated backlog warrants promoting SURVEY to CURATE."""

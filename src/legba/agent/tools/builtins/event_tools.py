@@ -173,7 +173,7 @@ async def _check_watchlist_matches(structured: StructuredStore, event) -> list[d
                     from uuid import uuid4
                     await conn.execute(
                         "INSERT INTO watch_triggers "
-                        "(id, watch_id, signal_id, watch_name, event_title, match_reasons, priority) "
+                        "(id, watch_id, event_id, watch_name, event_title, match_reasons, priority) "
                         "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
                         uuid4(), row["id"], event.id,
                         row["name"], event.title,

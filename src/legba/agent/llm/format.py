@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 
 @dataclass
 class Message:
@@ -21,6 +23,14 @@ class Message:
 
     role: str  # system, user, assistant
     content: str
+
+
+def safe_response_body(response: httpx.Response) -> str:
+    """Extract response body for error logging, truncated."""
+    try:
+        return response.text[:1000]
+    except Exception:
+        return f"(could not read body, status={response.status_code})"
 
 
 def strip_harmony_response(text: str) -> str:

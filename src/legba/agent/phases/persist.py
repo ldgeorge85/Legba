@@ -312,6 +312,25 @@ class PersistMixin:
                 outbox = Outbox(messages=self._outbox_messages)
                 outbox_path.write_text(outbox.model_dump_json(indent=2))
 
+        # Record config store versions used in this cycle (audit trail)
+        try:
+            if hasattr(self, 'assembler') and self.assembler._config_versions:
+                config_versions = dict(self.assembler._config_versions)
+                if self.memory and self.memory.registers:
+                    await self.memory.registers.set_json(
+                        "last_cycle_config_versions",
+                        {
+                            "cycle": self.state.cycle_number,
+                            "versions": config_versions,
+                        },
+                    )
+                self.logger.log("config_versions_used",
+                               cycle=self.state.cycle_number,
+                               keys=len(config_versions),
+                               versions=config_versions)
+        except Exception:
+            pass  # Config audit is best-effort
+
         # Sanity checks — log warnings for quality tracking
         await self._run_sanity_checks()
 
@@ -462,11 +481,19 @@ class PersistMixin:
 
             cycle_type = self._selected_cycle_type
 
-            await metrics.write_batch([
+            batch = [
                 ("cycle_duration_s", f"type:{cycle_type}", duration),
                 ("cycle_actions", f"type:{cycle_type}", float(self.state.actions_taken)),
                 ("cycle_success", f"type:{cycle_type}", 1.0),
-            ])
+            ]
+
+            # Context budget utilization from the assembler
+            if hasattr(self, 'assembler') and hasattr(self.assembler, '_last_token_estimate') and self.assembler._last_token_estimate > 0:
+                util = self.assembler.get_context_utilization()
+                batch.append(("context_utilization_pct", f"type:{util['prompt_name']}", util['utilization_pct']))
+                batch.append(("context_tokens", f"type:{util['prompt_name']}", float(util['estimated_tokens'])))
+
+            await metrics.write_batch(batch)
 
             await metrics.close()
         except Exception:

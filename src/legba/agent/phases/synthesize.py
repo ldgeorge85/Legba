@@ -1,5 +1,7 @@
 """SYNTHESIZE phase — deep-dive investigation into a single situation or thread.
 
+JDL Level 3: Impact assessment, situation briefs, hypothesis generation.
+
 Picks ONE investigation target, builds a coherent narrative, generates falsifiable
 predictions. Produces a named deliverable: a Situation Brief stored alongside reports.
 Tracks recently investigated threads to prevent rabbit-holing.
@@ -57,6 +59,7 @@ class SynthesizeMixin:
             synthesize_context=synthesize_context,
             allowed_tools=allowed_tools,
             inbox_messages=inbox_messages if inbox_messages else None,
+            priority_context=getattr(self, "_priority_context", ""),
         )
 
         async def synth_executor(tool_name: str, arguments: dict) -> str:

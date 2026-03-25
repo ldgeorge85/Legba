@@ -5,25 +5,21 @@ and computes quality metrics. Replaces the eval_rubrics Airflow DAG.
 
 No LLM required — purely SQL-based.
 
-Existing schema columns used:
+Schema columns used:
   - events: id, data (JSONB), signal_count, created_at
   - signals: id, source_id, confidence, created_at
   - signal_event_links: signal_id, event_id
   - signal_entity_links: signal_id, entity_id
   - entity_profiles: id, canonical_name
-  - facts: id, subject, confidence, superseded_by, valid_until, data
+  - facts: id, subject, confidence, superseded_by, valid_until, data,
+    evidence_set (JSONB)
   - sources: id, status, consecutive_failures, fetch_success_count, fetch_failure_count
   - hypotheses: id, status, evidence_balance
-
-TODO columns needed (not yet in schema):
-  - facts.evidence_set UUID[] DEFAULT '{}'
-    -- Signal IDs supporting the fact; needed for evidence chain verification
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 import asyncpg
 
@@ -152,7 +148,18 @@ class IntegrityVerifier:
                 """)
                 logger.info("Fixed %d facts with broken superseded_by", count)
 
-            # 6. Situation event_count drift
+            # 6. Facts with empty evidence_set (active, non-superseded facts
+            #    that should ideally have supporting evidence)
+            count = await conn.fetchval("""
+                SELECT COUNT(*) FROM facts f
+                WHERE f.superseded_by IS NULL
+                  AND COALESCE(f.data->>'expired', 'false') != 'true'
+                  AND (f.evidence_set IS NULL
+                       OR f.evidence_set = '[]'::jsonb)
+            """)
+            issues["facts_no_evidence_set"] = count or 0
+
+            # 7. Situation event_count drift
             count = await conn.fetchval("""
                 SELECT COUNT(*) FROM situations s
                 WHERE s.event_count != (

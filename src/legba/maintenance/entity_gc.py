@@ -1,5 +1,7 @@
 """Entity garbage collection, duplicate detection, and source health.
 
+JDL Level 1: Entity lifecycle management.
+
 Deterministic maintenance tasks for entity lifecycle management.
 No LLM required.
 

@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import asyncpg
 
+from .situation_severity import compute_situation_severity
 from .task_backlog import BACKLOG_KEY
 
 logger = logging.getLogger("legba.shared.portfolio")
@@ -217,6 +218,29 @@ async def _build_situations_section(conn: asyncpg.Connection) -> str:
             lines.append("No active situations.\n")
             return "\n".join(lines)
 
+        # Fetch linked events per situation for severity computation
+        situation_severity: dict[str, dict] = {}
+        for row in rows:
+            sit_id = row["id"]
+            try:
+                event_rows = await conn.fetch("""
+                    SELECT e.severity, e.lifecycle_status, e.created_at
+                    FROM events e
+                    JOIN situation_events se ON se.event_id = e.id
+                    WHERE se.situation_id = $1
+                """, sit_id)
+                events_for_sev = [
+                    {
+                        "severity": er["severity"] or "medium",
+                        "lifecycle_status": er["lifecycle_status"] or "active",
+                        "created_at": er["created_at"],
+                    }
+                    for er in event_rows
+                ]
+                situation_severity[str(sit_id)] = compute_situation_severity(events_for_sev)
+            except Exception as exc:
+                logger.debug("Severity computation failed for situation %s: %s", sit_id, exc)
+
         # Group by category/region
         by_region: dict[str, list] = {}
         for row in rows:
@@ -224,6 +248,7 @@ async def _build_situations_section(conn: asyncpg.Connection) -> str:
             data = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else {}
             regions = data.get("regions") or ["unspecified"]
             category = row["category"] or "general"
+            sev_data = situation_severity.get(str(row["id"]), {})
 
             for region in regions[:2]:
                 key = f"{region}/{category}"
@@ -232,6 +257,8 @@ async def _build_situations_section(conn: asyncpg.Connection) -> str:
                     "status": row["status"],
                     "events": row["event_count"] or 0,
                     "intensity": row["intensity_score"] or 0.0,
+                    "severity": sev_data.get("severity", "low"),
+                    "trend": sev_data.get("trend", "stable"),
                 }
                 by_region.setdefault(key, []).append(entry)
 
@@ -241,7 +268,7 @@ async def _build_situations_section(conn: asyncpg.Connection) -> str:
             for e in entries:
                 lines.append(
                     f"  - {e['name']} [{e['status']}] {e['events']} events, "
-                    f"intensity={e['intensity']:.2f}"
+                    f"intensity={e['intensity']:.2f}, severity={e['severity']}, trend={e['trend']}"
                 )
 
         lines.append("")

@@ -9,12 +9,8 @@ No LLM required — purely SQL-based.
 Existing schema columns used:
   - events: id, data (JSONB), signal_count, updated_at
   - signal_event_links: signal_id, event_id, created_at
-  - signals: id, source_id, confidence, data (JSONB)
-
-TODO columns needed (not yet in schema):
-  - signals.confidence_components JSONB DEFAULT '{}'
-    -- Breakdown: {base: float, corroboration: float, source_reliability: float}
-    -- corroboration component is what this module writes
+  - signals: id, source_id, confidence, data (JSONB),
+             confidence_components (JSONB, from schema_extensions)
 """
 
 from __future__ import annotations
@@ -49,8 +45,7 @@ class CorroborationScorer:
           - 5+ sources -> corroboration = 0.9
 
         Also updates the corroboration component in each linked signal's
-        data JSONB (best-effort, since confidence_components column doesn't
-        exist yet).
+        confidence_components JSONB column.
 
         Returns the number of events scored.
         """
@@ -113,34 +108,31 @@ class CorroborationScorer:
                 )
 
                 # Update corroboration component on linked signals
-                # TODO: When confidence_components JSONB column exists on signals,
-                # update signals.confidence_components->'corroboration' directly
-                # instead of using signals.data
                 signal_ids = await conn.fetch("""
                     SELECT sel.signal_id
                     FROM signal_event_links sel
                     WHERE sel.event_id = $1
                 """, event_id)
 
+                corr_value = json.dumps({
+                    "score": corroboration,
+                    "independent_sources": source_count,
+                    "event_id": str(event_id),
+                })
+
                 for sig_row in signal_ids:
                     try:
+                        # Write to dedicated confidence_components column
                         await conn.execute(
                             """
                             UPDATE signals SET
-                                data = jsonb_set(
-                                    COALESCE(data, '{}'::jsonb),
-                                    '{corroboration}',
-                                    $2::jsonb
-                                ),
+                                confidence_components = COALESCE(confidence_components, '{}'::jsonb)
+                                    || jsonb_build_object('corroboration', $2::jsonb),
                                 updated_at = NOW()
                             WHERE id = $1
                             """,
                             sig_row["signal_id"],
-                            json.dumps({
-                                "score": corroboration,
-                                "independent_sources": source_count,
-                                "event_id": str(event_id),
-                            }),
+                            corr_value,
                         )
                     except Exception as e:
                         logger.debug(

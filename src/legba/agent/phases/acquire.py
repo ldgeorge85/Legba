@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from ...shared.schemas.comms import InboxMessage
@@ -13,25 +12,6 @@ if TYPE_CHECKING:
 
 class AcquireMixin:
     """Acquire cycle: dedicated source fetching and event ingestion."""
-
-    def _is_acquire_cycle(self: AgentCycle) -> bool:
-        """Check if this is an acquire cycle.
-
-        Runs every ACQUIRE_INTERVAL cycles, but NOT on introspection,
-        research, or analysis cycles (they take priority).
-
-        When INGESTION_SERVICE_ACTIVE=true, ACQUIRE is repurposed for
-        source discovery instead of data fetching. The cycle still fires
-        on schedule, but the prompt changes (see _acquire).
-        """
-        from . import ACQUIRE_INTERVAL
-        cn = self.state.cycle_number
-        return (ACQUIRE_INTERVAL > 0
-                and cn > 0
-                and cn % ACQUIRE_INTERVAL == 0
-                and not self._is_introspection_cycle()
-                and not self._is_analysis_cycle()
-                and not self._is_research_cycle())
 
     def _ingestion_service_active(self: AgentCycle) -> bool:
         """Check if the standalone ingestion service is handling data acquisition.

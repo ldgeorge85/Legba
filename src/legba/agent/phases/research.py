@@ -1,8 +1,10 @@
-"""RESEARCH phase — entity enrichment via external sources."""
+"""RESEARCH phase — entity enrichment via external sources.
+
+JDL Level 1: Entity enrichment from external sources.
+"""
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from ...shared.schemas.comms import InboxMessage
@@ -167,28 +169,3 @@ class ResearchMixin:
             prefix = "\n\n".join(context_parts) + "\n\n" if context_parts else ""
             return prefix + f"(Could not load entity health: {e})"
 
-    def _parse_json_with_key(self: AgentCycle, text: str, required_key: str) -> dict:
-        """Extract first JSON object from text that contains the required key."""
-        pos = 0
-        while pos < len(text):
-            start = text.find("{", pos)
-            if start < 0:
-                break
-            depth = 0
-            for i in range(start, len(text)):
-                if text[i] == "{":
-                    depth += 1
-                elif text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            candidate = json.loads(text[start:i + 1])
-                            if isinstance(candidate, dict) and required_key in candidate:
-                                return candidate
-                        except (json.JSONDecodeError, ValueError):
-                            pass
-                        pos = i + 1
-                        break
-            else:
-                break
-        return {}

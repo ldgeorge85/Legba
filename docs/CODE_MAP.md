@@ -1,7 +1,7 @@
 # Legba Code Map
 
 **Generated:** 2026-03-23
-**Total Python files:** 130+
+**Total Python files:** 176
 **Total lines of Python:** ~28,600
 
 ---
@@ -48,7 +48,7 @@ src/legba/
     __init__.py
     main.py                          (49 lines)  — Entry point: asyncio.run(run_cycle())
     log.py                           (149 lines) — Structured JSON logging (CycleLogger)
-    cycle.py                         (~280 lines) — Orchestrator: 15 phase mixins, CYCLE_TYPE worker mode, dynamic CURATE promotion
+    cycle.py                         (~435 lines) — Orchestrator: 15 phase mixins, CYCLE_TYPE worker mode, dynamic CURATE promotion
 
     phases/
       __init__.py                    (25 lines)  — Interval constants (Tier 1: 10,15,30; Tier 2 coprime: 4,7,9)
@@ -167,7 +167,7 @@ src/legba/
     fetcher.py                       (588 lines) — HTTP/RSS fetching with retry
     normalizer.py                    (401 lines) — Content normalization pipeline
     source_normalizers.py            (922 lines) — Per-source format normalizers
-    dedup.py                         (329 lines) — 3-tier signal dedup (GUID → source_url → Jaccard)
+    dedup.py                         (329 lines) — 4-tier signal dedup (GUID → source_url → vector cosine → Jaccard)
     storage.py                       (498 lines) — Signal storage to Postgres + OpenSearch
     cluster.py                       (531 lines) — SignalClusterer: deterministic signal-to-event clustering
 
@@ -432,7 +432,7 @@ legba-models/
 - `_store_reflection_graph()` — Store entities/relationships with fuzzy dedup
 - `_parse_planned_tools(plan_text)` — Extract "Tools: a, b, c" from plan
 - `_check_stop_flag()` / `_send_ping()` / `_make_stop_checker()` — Graceful shutdown
-- `_register_builtin_tools()` — Wire all 14 builtin tool modules
+- `_register_builtin_tools()` — Wire all 19 builtin tool modules
 - `_register_note_to_self()` — Working memory notes
 - `_register_cycle_complete()` — Clean exit from tool loop
 - `_register_explain_tool()` — On-demand tool definition lookup
@@ -693,7 +693,7 @@ Each module exports a `register(registry, **deps)` function called by `cycle.py.
 | `orchestration_tools.py` | `workflow_define`, `workflow_trigger`, `workflow_status`, `workflow_list` | Airflow DAG deployment, triggering, monitoring |
 | `feed_tools.py` | `feed_parse` | RSS/Atom feed parsing with feedparser, browser UA retry on 403/405, source reliability tracking via `record_source_fetch()` |
 | `source_tools.py` | `source_register`, `source_list`, `source_update`, `source_get` | Source registry CRUD with dedup (checks existing URL, limit 500), auto-pause at 5 consecutive failures |
-| `event_tools.py` | `signal_store`, `signal_query`, `signal_search` | Signal storage to Postgres + OpenSearch (was event_store/query/search). Auto geo-resolution via `geo.py`. 3-tier dedup. `increment_source_event_count` on store |
+| `event_tools.py` | `signal_store`, `signal_query`, `signal_search` | Signal storage to Postgres + OpenSearch (was event_store/query/search). Auto geo-resolution via `geo.py`. 4-tier dedup. `increment_source_event_count` on store |
 | `derived_event_tools.py` | `event_create`, `event_update`, `event_query`, `event_link_signal` | Derived event CRUD. Agent-created events start at confidence 0.7. Link signals as evidence. Dedup: Jaccard title similarity check before create |
 | `entity_tools.py` | `entity_profile`, `entity_inspect`, `entity_resolve` | Entity profile CRUD in Postgres + AGE sync. Profile versioning. Event-entity linking |
 | `selfmod_tools.py` | `code_test` | Syntax check + import validation before self-modifications |
@@ -934,7 +934,7 @@ Deterministic (no LLM) service that runs independently of the agent cycle. Fetch
 **Purpose:** Main ingestion tick loop. Runs every ~60s: fetch due sources, normalize, deduplicate, store signals, batch entity linking via spaCy NER, run clustering every 20 minutes.
 
 #### `ingestion/dedup.py` (329 lines)
-**Purpose:** 3-tier signal deduplication. GUID fast-path, source_url match, Jaccard title similarity with source suffix/prefix stripping.
+**Purpose:** 4-tier signal deduplication. GUID fast-path, source_url match, vector cosine similarity, Jaccard title similarity with source suffix/prefix stripping.
 
 **Key functions:**
 - `check_duplicate(signal, pool)` — Returns True if duplicate

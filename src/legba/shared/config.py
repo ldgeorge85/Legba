@@ -340,6 +340,9 @@ class AgentConfig:
     curate_score_cap: float = 0.50            # Tier 3 dynamic: CURATE max score (equal to SURVEY, cooldown alternates)
     maintenance_check_interval: int = 60      # Seconds between maintenance checks
 
+    # Priority stack mode: "advisory" (context only) or "active" (also modifies routing)
+    priority_stack_mode: str = "advisory"
+
     # Subconscious LLM (lightweight model for background tasks)
     subconscious_llm_provider: str = "vllm"
     subconscious_llm_base_url: str = ""
@@ -371,8 +374,10 @@ class AgentConfig:
             cluster_threshold=float(os.getenv("CLUSTER_THRESHOLD", "0.6")),
             autolink_entity_freq_threshold=float(os.getenv("AUTOLINK_ENTITY_FREQ_THRESHOLD", "0.1")),
             survey_base_score=float(os.getenv("SURVEY_BASE_SCORE", "0.50")),
-            curate_score_cap=float(os.getenv("CURATE_SCORE_CAP", "0.45")),
+            curate_score_cap=float(os.getenv("CURATE_SCORE_CAP", "0.50")),
             maintenance_check_interval=int(os.getenv("MAINTENANCE_CHECK_INTERVAL", "60")),
+            # Priority stack
+            priority_stack_mode=os.getenv("PRIORITY_STACK_MODE", "advisory"),
             # Subconscious LLM
             subconscious_llm_provider=os.getenv("SUBCONSCIOUS_LLM_PROVIDER", "vllm"),
             subconscious_llm_base_url=os.getenv("SUBCONSCIOUS_LLM_BASE_URL", ""),

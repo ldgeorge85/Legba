@@ -32,7 +32,7 @@
 
 ## 2. Event Dedup Effectiveness
 
-**What it measures**: Are duplicates slipping through the 3-tier dedup?
+**What it measures**: Are duplicates slipping through the 4-tier dedup?
 
 ### Procedure
 1. Pull 100 random events from the last 7 days:

@@ -8,10 +8,9 @@ Provides retrieval (for ORIENT) and storage (for PERSIST) operations.
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID
 
 from ...shared.config import LegbaConfig
-from ...shared.schemas.memory import Episode, EpisodeType, Fact
+from ...shared.schemas.memory import Episode, Fact
 from ...shared.schemas.goals import Goal
 from ..log import CycleLogger
 from .registers import RegisterStore

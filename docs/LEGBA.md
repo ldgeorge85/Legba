@@ -19,7 +19,7 @@ Legba is a continuously operating AI intelligence analyst. It does not collect d
 
 **Two-tier data model:** Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). Signals are evidence; events are the analytical unit. Reports, situations, hypotheses, and graph analysis operate on events.
 
-**Key numbers:** 100+ Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules, ~30,500 signals, ~1,100 events, ~13,400 active facts, ~598 entities, 138 active sources, 14 Docker containers.
+**Key numbers:** 100+ Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules, ~30,500 signals, ~1,100 events, ~13,400 active facts, ~598 entities, 138 active sources, 17 Docker containers.
 
 ---
 
@@ -30,7 +30,7 @@ Legba is a continuously operating AI intelligence analyst. It does not collect d
 ```
 Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |
-+-- Docker Compose (project: legba, 14 containers)
++-- Docker Compose (project: legba, 17 containers)
 |   |
 |   +-- Supervisor Container
 |   |   - Manages agent lifecycle (launch/kill per cycle)
@@ -59,6 +59,15 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - Airflow :8080       -- Scheduled pipelines, 4 DAGs (metrics rollup, source health, decision surfacing, eval rubrics)
 |   |   - TimescaleDB :5433   -- Time-series metrics (cycle, ingestion, source health, HDX conflict baselines)
 |   |   - Grafana :3000       -- Operational dashboards (auto-provisioned TimescaleDB datasource)
+|   |
+|   +-- Maintenance Container
+|   |   - Scheduled maintenance tasks (vacuuming, cleanup, metrics rollup)
+|   |
+|   +-- Subconscious Container
+|   |   - Background analytical processing (SLM-driven)
+|   |
+|   +-- Caddy :443/:80
+|   |   - Reverse proxy, TLS termination
 |   |
 |   +-- Operator Console v1 :8501  -- Web UI + consultation (FastAPI + htmx)
 |   +-- Operator Console v2 :8503  -- Multi-panel workstation (React + Dockview + Sigma.js + MapLibre)
@@ -162,7 +171,7 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 
 ### Agent Cycle
 
-The cycle is implemented as a mixin-based architecture: `cycle.py` (~195 lines) is a thin orchestrator that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
+The cycle is implemented as a mixin-based architecture: `cycle.py` (~435 lines) is a thin orchestrator that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
 1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 66 tools, drain inbox
@@ -207,9 +216,9 @@ Each step in the REASON+ACT loop rebuilds the full [system, user] message pair (
 
 **Reporting reminders:** Every 5 cycles, a reminder is injected prompting the agent to produce a structured intelligence brief (published to NATS outbound / messages page).
 
-### Research Cycles (every 5 cycles)
+### Research Cycles (every 7 cycles)
 
-Every 5 cycles (when not an introspection cycle), the agent runs a dedicated research phase instead of the normal PLAN → ACT flow. Research cycles focus on deepening the knowledge base rather than ingesting new events.
+Every 7 cycles (when not an introspection cycle), the agent runs a dedicated research phase instead of the normal PLAN → ACT flow. Research cycles focus on deepening the knowledge base rather than ingesting new events.
 
 ```
 WAKE → ORIENT → RESEARCH (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
@@ -225,9 +234,9 @@ The research prompt includes an **entity health summary** — a SQL-generated ta
 
 Research cycles use a restricted tool set (no feed ingestion): `http_request`, graph tools, memory tools, entity tools, `os_search`, signal/event query tools, `cycle_complete`.
 
-### Curate Cycles (every 3 cycles)
+### Curate Cycles (every 9 cycles)
 
-Every 3 cycles (when not research/analysis/introspection), the agent runs a dedicated event curation phase. With the ingestion service active, raw signals are already being collected continuously. CURATE cycles focus on reviewing candidate events produced by deterministic clustering and promoting them into the events table.
+Every 9 cycles (when not research/analysis/introspection), the agent runs a dedicated event curation phase. With the ingestion service active, raw signals are already being collected continuously. CURATE cycles focus on reviewing candidate events produced by deterministic clustering and promoting them into the events table.
 
 ```
 WAKE → ORIENT → CURATE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
@@ -244,9 +253,9 @@ Curate cycles use a restricted tool set (curation focus): signal tools (`signal_
 
 **Ingestion gap tracking:** Redis tracks `last_ingestion_cycle`. When no signals have been stored for >5 cycles, a warning is injected into the PLAN context via ORIENT.
 
-### Analysis Cycles (every 10 cycles)
+### Analysis Cycles (every 4 cycles)
 
-Every 10 cycles (when not introspection), the agent runs a dedicated analysis phase:
+Every 4 cycles (when not introspection), the agent runs a dedicated analysis phase:
 
 ```
 WAKE → ORIENT → ANALYZE (REASON+ACT with filtered tools) → REFLECT → NARRATE → PERSIST
@@ -443,7 +452,7 @@ Note: System and user messages are combined into a single `{"role": "user"}` mes
 | Memory context | `MEMORY_CONTEXT_TEMPLATE` | PLAN + REASON |
 | Reflect | `REFLECT_PROMPT` | REFLECT phase |
 | Mission review | `MISSION_REVIEW_PROMPT` | Every 15 cycles |
-| Research | `RESEARCH_PROMPT` | Every 5 cycles (non-introspection) |
+| Research | `RESEARCH_PROMPT` | Every 7 cycles (non-introspection) |
 | SA guidance | `SA_GUIDANCE` | System addon |
 | Entity guidance | `ENTITY_GUIDANCE` | System addon |
 | Re-grounding | `REGROUND_PROMPT` | Every 8 tool steps |
@@ -556,6 +565,12 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 ### SA: Prediction Tracking Tools (3 tools)
 `prediction_create`, `prediction_update`, `prediction_list` — falsifiable hypotheses for future verification. Create predictions when analysis reveals developing patterns, add evidence for/against, adjust confidence, and resolve as confirmed/refuted/expired.
+
+### SA: Hypothesis Tools (3 tools)
+`hypothesis_create`, `hypothesis_evaluate`, `hypothesis_list` — Analysis of Competing Hypotheses (ACH). Create thesis/counter-thesis pairs with diagnostic criteria, evaluate against incoming evidence, track evidence balance and confidence shifts.
+
+### Metrics Tools (1 tool)
+`metrics_query` — query TimescaleDB time-series metrics (cycle performance, ingestion throughput, source health, HDX conflict baselines).
 
 ### Inline Cycle Tools (3 tools)
 | Tool | Purpose |

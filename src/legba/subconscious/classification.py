@@ -1,5 +1,7 @@
 """Classification refinement using the SLM.
 
+JDL Level 4: Classification refinement.
+
 Handles boundary cases where the ML classifier (DeBERTa) is uncertain
 between top categories. The SLM provides semantic tiebreaking.
 """
@@ -62,6 +64,7 @@ async def fetch_boundary_signals(
             s.title,
             s.category,
             s.confidence,
+            s.confidence_components,
             s.created_at::text AS created_at
         FROM signals s
         WHERE s.category = 'other'
@@ -71,7 +74,18 @@ async def fetch_boundary_signals(
         """,
         batch_size,
     )
-    return [dict(r) for r in rows]
+    results = []
+    for r in rows:
+        d = dict(r)
+        # confidence_components comes back as a string from JSONB; parse it
+        cc = d.get("confidence_components")
+        if cc and isinstance(cc, str):
+            try:
+                d["confidence_components"] = json.loads(cc)
+            except (json.JSONDecodeError, TypeError):
+                d["confidence_components"] = {}
+        results.append(d)
+    return results
 
 
 async def refine_classifications(
@@ -95,10 +109,13 @@ async def refine_classifications(
     verdicts: list[ClassificationVerdict] = []
 
     for signal in signals:
-        # Build a synthetic scores dict since we don't have real scores yet
-        # TODO: Use actual classification_scores from the signals table
-        # when that column is available.
-        scores = {signal["category"]: 0.45, "unknown_secondary": 0.40}
+        # Use confidence_components if available, otherwise build synthetic scores
+        scores: dict[str, float] = {}
+        cc = signal.get("confidence_components")
+        if cc and isinstance(cc, dict) and cc.get("classification"):
+            scores = cc["classification"]
+        else:
+            scores = {signal["category"]: 0.45, "unknown_secondary": 0.40}
 
         prompt = CLASSIFICATION_REFINEMENT_PROMPT.format(
             signal_id=signal["signal_id"],
@@ -155,22 +172,42 @@ async def apply_classification_verdicts(
                 new_category = verdict.corrected_categories[0]
                 # Only update if the SLM suggests something other than 'other'
                 if new_category and new_category != "other":
+                    # Update category, data JSONB category field, and
+                    # confidence_components with the SLM classification confidence
+                    classification_cc = json.dumps({
+                        "slm_category": new_category,
+                        "slm_confidence": verdict.confidence,
+                        "slm_all_categories": verdict.corrected_categories,
+                    })
                     result = await conn.execute(
                         """
                         UPDATE signals
                         SET category = $1,
+                            data = jsonb_set(
+                                COALESCE(data, '{}'::jsonb),
+                                '{category}',
+                                to_jsonb($1::text)
+                            ),
+                            confidence_components = jsonb_set(
+                                COALESCE(confidence_components, '{}'::jsonb),
+                                '{classification}',
+                                $3::jsonb
+                            ),
                             updated_at = NOW()
                         WHERE id = $2::uuid
                           AND category = 'other'
                         """,
                         new_category,
                         verdict.signal_id,
+                        classification_cc,
                     )
                     if result and "UPDATE 1" in result:
                         updated += 1
-                        logger.debug(
-                            "Reclassified signal %s: other -> %s (%s)",
-                            verdict.signal_id, new_category, verdict.reasoning,
+                        logger.info(
+                            "Reclassified signal %s: other -> %s "
+                            "(confidence=%.2f): %s",
+                            verdict.signal_id, new_category,
+                            verdict.confidence, verdict.reasoning,
                         )
             except Exception as exc:
                 logger.warning(

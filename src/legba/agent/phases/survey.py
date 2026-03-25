@@ -1,5 +1,7 @@
 """SURVEY phase — analytical desk work replacing the old NORMAL cycle.
 
+JDL Level 2: Situation assessment and graph building.
+
 Reviews recent events, builds graph relationships, updates situations,
 evaluates hypotheses, follows journal leads. No collection, no code modification.
 Rate-limited external access (max 2 http_request calls) for verification only.
@@ -39,6 +41,7 @@ class SurveyMixin:
             survey_context=survey_context,
             allowed_tools=allowed_tools,
             inbox_messages=inbox_messages if inbox_messages else None,
+            priority_context=getattr(self, "_priority_context", ""),
         )
 
         # Rate-limited executor: http_request capped at _SURVEY_HTTP_LIMIT per cycle

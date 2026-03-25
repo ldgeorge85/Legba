@@ -74,9 +74,6 @@ class StorageLayer:
 
         return pg_ok
 
-    # Backward-compat alias
-    store_event = store_signal
-
     async def store_signals_batch(self, signals: list[Signal]) -> tuple[int, int]:
         """Store a batch of signals. Returns (stored_count, failed_count)."""
         stored = 0
@@ -88,9 +85,6 @@ class StorageLayer:
             else:
                 failed += 1
         return stored, failed
-
-    # Backward-compat alias
-    store_events_batch = store_signals_batch
 
     async def _store_pg(self, signal: Signal) -> bool:
         """Insert signal into Postgres.

@@ -1,5 +1,7 @@
 """Confidence calibration tracking — claimed confidence vs actual outcomes.
 
+JDL Level 4: Confidence calibration tracking.
+
 When hypotheses are CONFIRMED or REFUTED, and when events resolve or stall,
 record the claimed confidence at creation time vs the actual outcome.
 This builds the dataset needed to detect systematic over/under-confidence.

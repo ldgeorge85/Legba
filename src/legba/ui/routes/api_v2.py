@@ -1819,6 +1819,155 @@ async def get_scorecard(request: Request):
 
 
 # ------------------------------------------------------------------
+# System Health
+# ------------------------------------------------------------------
+
+@router.get("/health/system")
+async def system_health(request: Request):
+    """Unified system health endpoint aggregating all service statuses."""
+    import asyncio
+    from datetime import timezone
+    stores = get_stores(request)
+    health: dict = {
+        "current_cycle": 0,
+        "recent_cycles": [],
+        "ingestion": {},
+        "services": {},
+        "counts": {},
+    }
+
+    # --- Current cycle number from Redis ---
+    try:
+        cycle_val = await stores.registers._redis.get("legba:cycle_number")
+        if cycle_val:
+            health["current_cycle"] = int(cycle_val.decode() if isinstance(cycle_val, bytes) else cycle_val)
+    except Exception as exc:
+        logger.debug("System health: cycle number fetch failed: %s", exc)
+
+    # --- Recent cycle stats (last 5) from audit ---
+    try:
+        agg_result = await stores.audit.aggregate(
+            "legba-audit-*",
+            aggs={
+                "cycles": {
+                    "terms": {
+                        "field": "cycle",
+                        "size": 5,
+                        "order": {"_key": "desc"},
+                    },
+                    "aggs": {
+                        "min_ts": {"min": {"field": "timestamp"}},
+                        "max_ts": {"max": {"field": "timestamp"}},
+                        "error_count": {
+                            "filter": {"term": {"event": "error"}}
+                        },
+                        "phase_names": {
+                            "filter": {"term": {"event": "phase"}},
+                            "aggs": {
+                                "names": {
+                                    "terms": {"field": "phase", "size": 20}
+                                }
+                            },
+                        },
+                    },
+                }
+            },
+        )
+        buckets = (
+            agg_result.get("aggregations", {})
+            .get("cycles", {})
+            .get("buckets", [])
+        )
+        for b in buckets:
+            min_ts = b.get("min_ts", {}).get("value_as_string")
+            max_ts = b.get("max_ts", {}).get("value_as_string")
+            duration_s = 0
+            if min_ts and max_ts:
+                try:
+                    dt_min = datetime.fromisoformat(str(min_ts).replace("Z", "+00:00"))
+                    dt_max = datetime.fromisoformat(str(max_ts).replace("Z", "+00:00"))
+                    duration_s = int((dt_max - dt_min).total_seconds())
+                except Exception:
+                    pass
+            phase_buckets = (
+                b.get("phase_names", {})
+                .get("names", {})
+                .get("buckets", [])
+            )
+            phase_names = [pb.get("key", "") for pb in phase_buckets]
+            cycle_type = _detect_cycle_type(phase_names)
+            errors = b.get("error_count", {}).get("doc_count", 0)
+            health["recent_cycles"].append({
+                "cycle_number": b.get("key"),
+                "type": cycle_type,
+                "duration_s": duration_s,
+                "success": errors == 0,
+            })
+    except Exception as exc:
+        logger.debug("System health: recent cycles fetch failed: %s", exc)
+
+    # --- Ingestion status (signals in last hour from signals table) ---
+    try:
+        if stores.structured._available:
+            async with stores.structured._pool.acquire() as conn:
+                signals_1h = await conn.fetchval(
+                    "SELECT COUNT(*) FROM signals WHERE created_at > NOW() - INTERVAL '1 hour'"
+                ) or 0
+            health["ingestion"] = {"signals_last_hour": signals_1h}
+        else:
+            health["ingestion"] = {"signals_last_hour": 0, "error": "db unavailable"}
+    except Exception as exc:
+        health["ingestion"] = {"signals_last_hour": 0, "error": str(exc)}
+
+    # --- Service health (HTTP checks) ---
+    import httpx
+
+    async def _check_service(name: str, url: str) -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(url)
+                return {"status": "healthy" if resp.status_code == 200 else "degraded", "code": resp.status_code}
+        except httpx.TimeoutException:
+            return {"status": "timeout"}
+        except Exception as exc:
+            return {"status": "unreachable", "error": str(exc)[:80]}
+
+    service_checks = await asyncio.gather(
+        _check_service("maintenance", "http://maintenance:8700/health"),
+        _check_service("subconscious", "http://subconscious:8800/health"),
+        _check_service("ingestion", "http://ingestion:8600/health"),
+        return_exceptions=True,
+    )
+    service_names = ["maintenance", "subconscious", "ingestion"]
+    for name, result in zip(service_names, service_checks):
+        if isinstance(result, Exception):
+            health["services"][name] = {"status": "error", "error": str(result)[:80]}
+        else:
+            health["services"][name] = result
+
+    # --- Active counts (situations, entities, events) ---
+    try:
+        if stores.structured._available:
+            async with stores.structured._pool.acquire() as conn:
+                sit_count, ent_count, evt_count = await asyncio.gather(
+                    conn.fetchval("SELECT COUNT(*) FROM situations WHERE status IN ('active', 'escalating')"),
+                    conn.fetchval("SELECT COUNT(*) FROM entity_profiles"),
+                    conn.fetchval("SELECT COUNT(*) FROM events"),
+                )
+                health["counts"] = {
+                    "active_situations": sit_count or 0,
+                    "entities": ent_count or 0,
+                    "events": evt_count or 0,
+                }
+        else:
+            health["counts"] = {"active_situations": 0, "entities": 0, "events": 0, "error": "db unavailable"}
+    except Exception as exc:
+        health["counts"] = {"active_situations": 0, "entities": 0, "events": 0, "error": str(exc)[:80]}
+
+    return _json(health)
+
+
+# ------------------------------------------------------------------
 # Global Search
 # ------------------------------------------------------------------
 
@@ -1952,4 +2101,83 @@ async def review_proposed_edge(request: Request, edge_id: str):
 
         return _json({"success": True, "action": action})
     except Exception as exc:
+        return _json({"error": str(exc)}, 500)
+
+
+# ------------------------------------------------------------------
+# Config Store
+# ------------------------------------------------------------------
+
+@router.get("/config")
+async def list_config(request: Request):
+    """List all config keys with active version info."""
+    try:
+        from legba.shared.config_store import list_keys
+        stores = get_stores(request)
+        pool = stores.structured._pool
+        keys = await list_keys(pool)
+        return _json({"keys": keys})
+    except Exception as exc:
+        logger.exception("list_config failed")
+        return _json({"error": str(exc)}, 500)
+
+
+@router.get("/config/{key}")
+async def get_config(request: Request, key: str):
+    """Get the active value for a config key."""
+    try:
+        from legba.shared.config_store import get_active
+        stores = get_stores(request)
+        pool = stores.structured._pool
+        value = await get_active(pool, key)
+        if value is None:
+            return _json({"error": "Key not found"}, 404)
+        return _json({"key": key, "value": value})
+    except Exception as exc:
+        logger.exception("get_config failed")
+        return _json({"error": str(exc)}, 500)
+
+
+@router.put("/config/{key}")
+async def update_config(request: Request, key: str):
+    """Update a config key. Body: {"value": "...", "notes": "why"}"""
+    try:
+        from legba.shared.config_store import update
+        stores = get_stores(request)
+        pool = stores.structured._pool
+        body = await request.json()
+        version = await update(pool, key, body["value"], "operator", body.get("notes", ""))
+        return _json({"key": key, "version": version})
+    except Exception as exc:
+        logger.exception("update_config failed")
+        return _json({"error": str(exc)}, 500)
+
+
+@router.get("/config/{key}/history")
+async def config_history(request: Request, key: str):
+    """Get version history for a config key."""
+    try:
+        from legba.shared.config_store import history
+        stores = get_stores(request)
+        pool = stores.structured._pool
+        versions = await history(pool, key)
+        return _json({"key": key, "versions": versions})
+    except Exception as exc:
+        logger.exception("config_history failed")
+        return _json({"error": str(exc)}, 500)
+
+
+@router.post("/config/{key}/rollback/{version}")
+async def rollback_config(request: Request, key: str, version: int):
+    """Rollback a config key to a previous version."""
+    try:
+        from legba.shared.config_store import rollback
+        stores = get_stores(request)
+        pool = stores.structured._pool
+        ok = await rollback(pool, key, version)
+        if not ok:
+            return _json({"error": "Version not found"}, 404)
+        return _json({"key": key, "rolled_back_to": version})
+    except Exception as exc:
+        logger.exception("rollback_config failed")
         return _json({"error": str(exc)}, 500)

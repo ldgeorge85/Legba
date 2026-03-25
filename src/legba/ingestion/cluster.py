@@ -1,5 +1,7 @@
 """Signal-to-event clustering engine.
 
+JDL Level 0->1: Signal clustering into events, entity propagation.
+
 Deterministic (no LLM). Groups related signals into derived events using
 entity overlap, title similarity, temporal proximity, and category matching.
 Runs periodically in the ingestion service tick alongside batch entity linking.
@@ -519,13 +521,21 @@ class SignalClusterer:
                 time_end,
             )
 
-            # Link signals
+            # Link signals + propagate entity links
             for f in feats:
                 await self._pool.execute(
                     "INSERT INTO signal_event_links (signal_id, event_id, relevance) "
                     "VALUES ($1, $2, 1.0) ON CONFLICT DO NOTHING",
                     f["id"], event_id,
                 )
+                # Propagate entity links from signal to event
+                await self._pool.execute("""
+                    INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
+                    SELECT $1, sel.entity_id, sel.role, sel.confidence
+                    FROM signal_entity_links sel
+                    WHERE sel.signal_id = $2
+                    ON CONFLICT (event_id, entity_id) DO NOTHING
+                """, event_id, f["id"])
 
             # Cognitive architecture: check lifecycle transition after reinforcement
             if _LIFECYCLE_AVAILABLE:
@@ -635,9 +645,17 @@ class SignalClusterer:
         try:
             event_id = uuid4()
 
-            # Title: use highest-confidence signal's title
+            # Title: use highest-confidence signal's title, with fallback
             best = max(feats, key=lambda f: f["confidence"])
             title = best["title"]
+            if not title or title.strip() == "" or title.strip().lower() == "(untitled)":
+                # Fallback: first non-empty signal title from the cluster
+                for f in feats:
+                    if f.get("title") and f["title"].strip() and f["title"].strip().lower() != "(untitled)":
+                        title = f["title"]
+                        break
+                else:
+                    title = f"Event-{str(event_id)[:8]}"
 
             # Category: modal
             category = Counter(categories).most_common(1)[0][0]
@@ -667,6 +685,7 @@ class SignalClusterer:
                 "geo_coordinates": all_geo_coords[:10],  # cap at 10 coords per event
                 "confidence": confidence,
                 "signal_count": signal_count,
+                "lifecycle_status": "emerging",
                 "source_method": "auto",
                 "source_cycle": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -716,13 +735,21 @@ class SignalClusterer:
                     signal_count,
                 )
 
-            # Link signals
+            # Link signals + propagate entity links
             for f in feats:
                 await self._pool.execute(
                     "INSERT INTO signal_event_links (signal_id, event_id, relevance) "
                     "VALUES ($1, $2, 1.0) ON CONFLICT DO NOTHING",
                     f["id"], event_id,
                 )
+                # Propagate entity links from signal to event
+                await self._pool.execute("""
+                    INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
+                    SELECT $1, sel.entity_id, sel.role, sel.confidence
+                    FROM signal_entity_links sel
+                    WHERE sel.signal_id = $2
+                    ON CONFLICT (event_id, entity_id) DO NOTHING
+                """, event_id, f["id"])
 
             # Cognitive architecture: compute corroboration from independent sources
             await self._update_corroboration(event_id)
@@ -858,9 +885,14 @@ class SignalClusterer:
             event_id = uuid4()
             data = feat["data"]
 
+            # Fallback for empty/untitled titles
+            title = feat["title"]
+            if not title or title.strip() == "" or title.strip().lower() == "(untitled)":
+                title = data.get("summary", "")[:120] or f"Event-{str(event_id)[:8]}"
+
             event_data = {
                 "id": str(event_id),
-                "title": feat["title"],
+                "title": title,
                 "summary": data.get("summary", ""),
                 "category": feat["category"],
                 "event_type": "incident",
@@ -874,6 +906,7 @@ class SignalClusterer:
                 "geo_coordinates": data.get("geo_coordinates") or [],
                 "confidence": min(_AUTO_CONFIDENCE_CAP, feat["confidence"]),
                 "signal_count": 1,
+                "lifecycle_status": "emerging",
                 "source_method": "auto",
                 "source_cycle": None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -895,7 +928,7 @@ class SignalClusterer:
                     """,
                     event_id,
                     json.dumps(event_data),
-                    feat["title"],
+                    title,
                     data.get("summary", ""),
                     feat["category"],
                     feat["timestamp"],
@@ -915,7 +948,7 @@ class SignalClusterer:
                     """,
                     event_id,
                     json.dumps(event_data),
-                    feat["title"],
+                    title,
                     data.get("summary", ""),
                     feat["category"],
                     feat["timestamp"],
@@ -929,6 +962,14 @@ class SignalClusterer:
                 "VALUES ($1, $2, 1.0) ON CONFLICT DO NOTHING",
                 feat["id"], event_id,
             )
+            # Propagate entity links from signal to event
+            await self._pool.execute("""
+                INSERT INTO event_entity_links (event_id, entity_id, role, confidence)
+                SELECT $1, sel.entity_id, sel.role, sel.confidence
+                FROM signal_entity_links sel
+                WHERE sel.signal_id = $2
+                ON CONFLICT (event_id, entity_id) DO NOTHING
+            """, event_id, feat["id"])
 
             # Event graph: create Event vertex and link actors in AGE graph
             actors = data.get("actors") or []
@@ -1107,7 +1148,7 @@ class SignalClusterer:
                     # Record the trigger
                     await self._pool.execute(
                         "INSERT INTO watch_triggers "
-                        "(id, watch_id, signal_id, watch_name, event_title, match_reasons, priority) "
+                        "(id, watch_id, event_id, watch_name, event_title, match_reasons, priority) "
                         "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) "
                         "ON CONFLICT DO NOTHING",
                         uuid4(), row["id"], event_id,

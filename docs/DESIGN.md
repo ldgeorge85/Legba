@@ -118,7 +118,7 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 
 ### Module Structure
 
-`cycle.py` is a thin orchestrator (~195 lines) that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
+`cycle.py` is a thin orchestrator (~435 lines) that inherits from 15 phase mixins in the `phases/` directory. Each mixin owns one phase of the cycle:
 
 | Mixin | File | Phase |
 |-------|------|-------|
@@ -148,7 +148,7 @@ main.py:main()
         ├── _wake()                     [phases/wake.py]
         │     ├── Load challenge.json, seed goal, world briefing
         │     ├── Connect: Redis, Postgres/AGE, Qdrant, OpenSearch, NATS, Airflow
-        │     ├── _register_builtin_tools() → 50 tools from 15 modules
+        │     ├── _register_builtin_tools() → 66 tools from 19 modules
         │     └── Drain NATS inbox
         │
         ├── _orient()                   [phases/orient.py]
@@ -374,11 +374,12 @@ Every signal carries a `provenance` JSONB column recording its full processing t
 
 Provenance is immutable after creation. It provides an end-to-end audit trail answering "how did this signal get here and why does it have this confidence?"
 
-### 3-Tier Signal Dedup
+### 4-Tier Signal Dedup
 
 1. **GUID fast-path** — Exact match on RSS guid / Atom id. Instant rejection.
 2. **Source URL dedup** — Exact match on source_url after normalization.
-3. **Jaccard similarity** — Title words with source suffix/prefix stripping (e.g., " - Reuters", "BBC News: "). 50% word overlap within +/-1 day, or last 100 signals if no timestamp.
+3. **Vector cosine similarity** — Embedding-based semantic dedup via Qdrant.
+4. **Jaccard similarity** — Title words with source suffix/prefix stripping (e.g., " - Reuters", "BBC News: "). 50% word overlap within +/-1 day, or last 100 signals if no timestamp.
 
 ### Deterministic Clustering (every 20 min)
 

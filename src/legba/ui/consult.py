@@ -1,6 +1,8 @@
 """
 Consultation Engine — Interactive "Working" Interface
 
+JDL Level 5: Interactive operator consultation.
+
 Lets the operator converse with Legba directly, querying its knowledge
 stores through an LLM-driven tool-calling loop. Uses the same providers
 as the agent but keeps its own lightweight conversation management.

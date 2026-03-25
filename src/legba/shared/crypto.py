@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
-from uuid import UUID
 
 from nacl.signing import SigningKey, VerifyKey
 from nacl.encoding import HexEncoder

@@ -17,9 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import signal
-import sys
 from datetime import datetime, timezone
 
 import asyncpg
@@ -50,6 +48,7 @@ from .prompts import (
 )
 from .provider import BaseSLMProvider, SLMError, create_provider
 from .schemas import FactRefreshVerdict, RelationshipVerdict
+from .situation_detect import detect_situations
 from .validation import (
     apply_signal_verdicts,
     fetch_uncertain_signals,
@@ -320,11 +319,107 @@ class SubconsciousService:
                 valid_count, len(verdicts),
             )
 
-            # TODO: Write verdicts back to proposed_edges table
-            # await self._apply_relationship_verdicts(verdicts)
+            await self._apply_relationship_verdicts(verdicts, triples, source_text)
 
         except (SLMError, Exception) as exc:
             logger.warning("Relationship validation failed: %s", exc)
+
+    async def _apply_relationship_verdicts(
+        self,
+        verdicts: list[RelationshipVerdict],
+        triples: list[dict],
+        source_text: str,
+    ) -> None:
+        """Persist relationship validation verdicts.
+
+        - Valid verdicts: insert into proposed_edges with status='approved'.
+        - Reclassified verdicts (corrected_type set): insert with the corrected type.
+        - Invalid verdicts: log the rejection.
+        """
+        if not verdicts or not self._pg_pool:
+            return
+
+        stored = 0
+        async with self._pg_pool.acquire() as conn:
+            for verdict in verdicts:
+                idx = verdict.triple_index
+                if idx < 0 or idx >= len(triples):
+                    logger.warning(
+                        "Relationship verdict triple_index %d out of range", idx,
+                    )
+                    continue
+
+                triple = triples[idx]
+                subject = triple.get("subject", "")
+                obj = triple.get("object", "")
+                rel_type = triple.get("predicate", triple.get("relationship_type", ""))
+
+                if not subject or not obj:
+                    continue
+
+                if not verdict.valid and not verdict.corrected_type:
+                    # Invalid and no reclassification — just log
+                    logger.info(
+                        "Relationship rejected: %s -[%s]-> %s — %s",
+                        subject, rel_type, obj, verdict.reasoning,
+                    )
+                    continue
+
+                # Use corrected type if the SLM reclassified the relationship
+                effective_type = verdict.corrected_type or rel_type
+                if verdict.corrected_type:
+                    logger.info(
+                        "Relationship reclassified: %s -[%s -> %s]-> %s — %s",
+                        subject, rel_type, effective_type, obj,
+                        verdict.reasoning,
+                    )
+
+                try:
+                    # Check for duplicate before inserting
+                    existing = await conn.fetchval(
+                        "SELECT id FROM proposed_edges "
+                        "WHERE LOWER(source_entity) = LOWER($1) "
+                        "AND LOWER(target_entity) = LOWER($2) "
+                        "AND relationship_type = $3 "
+                        "AND status IN ('pending', 'approved')",
+                        subject, obj, effective_type,
+                    )
+                    if existing:
+                        logger.debug(
+                            "Relationship already in proposed_edges: %s -[%s]-> %s",
+                            subject, effective_type, obj,
+                        )
+                        continue
+
+                    evidence = source_text[:500] if source_text else ""
+                    await conn.execute(
+                        "INSERT INTO proposed_edges "
+                        "(source_entity, target_entity, relationship_type, "
+                        "confidence, evidence_text, source_cycle, status) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                        subject,
+                        obj,
+                        effective_type,
+                        0.7,  # Default confidence for subconscious-validated edges
+                        evidence,
+                        0,    # source_cycle 0 = subconscious origin
+                        "pending",
+                    )
+                    stored += 1
+                    logger.info(
+                        "Relationship stored as proposed_edge: %s -[%s]-> %s",
+                        subject, effective_type, obj,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to store relationship %s -[%s]-> %s: %s",
+                        subject, effective_type, obj, exc,
+                    )
+
+        if stored:
+            logger.info(
+                "Relationship verdicts: %d stored as proposed_edges", stored,
+            )
 
     # ------------------------------------------------------------------
     # Loop 2: Timer loop — periodic tasks on modulo schedule
@@ -352,6 +447,10 @@ class SubconsciousService:
                 # Fact refresh
                 if tick % self.config.fact_refresh_interval == 0:
                     await self._periodic_fact_refresh()
+
+                # Situation detection
+                if tick % self.config.situation_detect_interval == 0:
+                    await self._periodic_situation_detection()
 
                 # Graph consistency check — daily
                 if tick % self.config.graph_consistency_interval == 0:
@@ -516,6 +615,21 @@ class SubconsciousService:
 
         except Exception as exc:
             logger.warning("Periodic fact refresh failed: %s", exc)
+
+    async def _periodic_situation_detection(self) -> None:
+        """Periodic: SLM-based situation detection from event clusters."""
+        logger.info("Periodic situation detection starting")
+        try:
+            proposed = await detect_situations(
+                self._pg_pool, self._provider, self.config,
+            )
+            if proposed:
+                logger.info(
+                    "Situation detection: %d proposals created", proposed,
+                )
+            self._tasks_completed += 1
+        except Exception as exc:
+            logger.warning("Periodic situation detection failed: %s", exc)
 
     async def _periodic_graph_consistency(self) -> None:
         """Periodic: check graph consistency constraints."""

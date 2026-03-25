@@ -33,7 +33,6 @@ Usage example (inside an async context with access to the graph store)::
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -442,7 +441,8 @@ async def link_entity_to_event(
 ) -> bool:
     """Create an INVOLVED_IN edge from an entity to an event.
 
-    Uses MERGE to avoid duplicate edges.
+    Uses MERGE to avoid duplicate edges.  On reinforcement (edge already
+    exists), increments evidence_count and updates last_evidenced.
 
     Args:
         pool: asyncpg connection pool.
@@ -465,20 +465,75 @@ async def link_entity_to_event(
     try:
         ent_esc = _escape(entity_name)
         evt_esc = _escape(event_title)
+        now = datetime.now(timezone.utc).isoformat()
+        new_weight = 0.5
+        new_confidence = confidence if confidence is not None else 0.5
         props: dict[str, Any] = {}
         if role:
             props["role"] = role
-        if confidence is not None:
-            props["confidence"] = confidence
-        props_map = _dict_to_cypher_map(props) if props else "{}"
 
         async with pool.acquire() as conn:
-            await _cypher(conn, graph_name, f"""
-                MATCH (entity {{name: '{ent_esc}'}}), (event:Event {{name: '{evt_esc}'}})
-                MERGE (entity)-[r:INVOLVED_IN]->(event)
-                SET r += {props_map}
+            # Check for existing edge (reinforcement)
+            existing = await _cypher(conn, graph_name, f"""
+                MATCH (entity {{name: '{ent_esc}'}})-[r:INVOLVED_IN]->(event:Event {{name: '{evt_esc}'}})
                 RETURN r
             """, cols="r agtype")
+
+            if existing:
+                old_edge = existing[0]["r"]
+                old_props = old_edge.get("properties", {}) if isinstance(old_edge, dict) else {}
+                old_count = old_props.get("evidence_count", 1)
+                old_volatility = old_props.get("volatility", 0.0)
+                old_weight = old_props.get("weight", 0.5)
+                new_count = (int(old_count) if old_count else 1) + 1
+                try:
+                    vol = float(old_volatility) if old_volatility else 0.0
+                    ow = float(old_weight) if old_weight else 0.5
+                except (TypeError, ValueError):
+                    vol = 0.0
+                    ow = 0.5
+                if abs(new_weight - ow) > 0.01:
+                    vol = min(1.0, vol + 0.1)
+                props_map = _dict_to_cypher_map(props) if props else "{}"
+                await _cypher(conn, graph_name, f"""
+                    MATCH (entity {{name: '{ent_esc}'}})-[r:INVOLVED_IN]->(event:Event {{name: '{evt_esc}'}})
+                    SET r += {props_map}
+                    SET r.weight = {new_weight}
+                    SET r.confidence = {new_confidence}
+                    SET r.evidence_count = {new_count}
+                    SET r.last_evidenced = '{_escape(now)}'
+                    SET r.volatility = {vol}
+                    RETURN r
+                """, cols="r agtype")
+                action = "update"
+            else:
+                props["weight"] = new_weight
+                props["confidence"] = new_confidence
+                props["evidence_count"] = 1
+                props["last_evidenced"] = now
+                props["volatility"] = 0.0
+                props_map = _dict_to_cypher_map(props)
+                await _cypher(conn, graph_name, f"""
+                    MATCH (entity {{name: '{ent_esc}'}}), (event:Event {{name: '{evt_esc}'}})
+                    MERGE (entity)-[r:INVOLVED_IN]->(event)
+                    SET r += {props_map}
+                    RETURN r
+                """, cols="r agtype")
+                action = "create"
+
+        # Record to TimescaleDB
+        try:
+            from .relationship_history import record_edge_change
+            await record_edge_change(
+                source_entity=entity_name,
+                target_entity=event_title,
+                rel_type="INVOLVED_IN",
+                action=action,
+                weight=new_weight,
+                confidence=new_confidence,
+            )
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -492,7 +547,8 @@ async def link_event_hierarchy(
 ) -> bool:
     """Create a PART_OF edge from a child event to a parent event.
 
-    Uses MERGE to avoid duplicate edges.
+    Uses MERGE to avoid duplicate edges.  On reinforcement, increments
+    evidence_count and updates last_evidenced.
 
     Args:
         pool: asyncpg connection pool.
@@ -512,14 +568,52 @@ async def link_event_hierarchy(
     try:
         child_esc = _escape(child_title)
         parent_esc = _escape(parent_title)
+        now = datetime.now(timezone.utc).isoformat()
 
         async with pool.acquire() as conn:
-            await _cypher(conn, graph_name, f"""
-                MATCH (child:Event {{name: '{child_esc}'}}),
-                      (parent:Event {{name: '{parent_esc}'}})
-                MERGE (child)-[r:PART_OF]->(parent)
+            existing = await _cypher(conn, graph_name, f"""
+                MATCH (child:Event {{name: '{child_esc}'}})-[r:PART_OF]->(parent:Event {{name: '{parent_esc}'}})
                 RETURN r
             """, cols="r agtype")
+
+            if existing:
+                old_edge = existing[0]["r"]
+                old_props = old_edge.get("properties", {}) if isinstance(old_edge, dict) else {}
+                old_count = old_props.get("evidence_count", 1)
+                new_count = (int(old_count) if old_count else 1) + 1
+                await _cypher(conn, graph_name, f"""
+                    MATCH (child:Event {{name: '{child_esc}'}})-[r:PART_OF]->(parent:Event {{name: '{parent_esc}'}})
+                    SET r.evidence_count = {new_count}
+                    SET r.last_evidenced = '{_escape(now)}'
+                    RETURN r
+                """, cols="r agtype")
+                action = "update"
+            else:
+                await _cypher(conn, graph_name, f"""
+                    MATCH (child:Event {{name: '{child_esc}'}}),
+                          (parent:Event {{name: '{parent_esc}'}})
+                    MERGE (child)-[r:PART_OF]->(parent)
+                    SET r.weight = 0.5
+                    SET r.confidence = 0.5
+                    SET r.evidence_count = 1
+                    SET r.last_evidenced = '{_escape(now)}'
+                    SET r.volatility = 0.0
+                    RETURN r
+                """, cols="r agtype")
+                action = "create"
+
+        try:
+            from .relationship_history import record_edge_change
+            await record_edge_change(
+                source_entity=child_title,
+                target_entity=parent_title,
+                rel_type="PART_OF",
+                action=action,
+                weight=0.5,
+                confidence=0.5,
+            )
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -535,15 +629,16 @@ async def link_event_causal(
 ) -> bool:
     """Create a CAUSED_BY edge from an effect event to its cause event.
 
-    Direction: effect ←[CAUSED_BY]— cause  (the effect points back to its cause).
-    Uses MERGE to avoid duplicate edges.
+    Direction: effect <-[CAUSED_BY]- cause  (the effect points back to its cause).
+    Uses MERGE to avoid duplicate edges.  On reinforcement, increments
+    evidence_count and updates last_evidenced.
 
     Args:
         pool: asyncpg connection pool.
         graph_name: AGE graph name.
         effect_title: Name of the effect event vertex.
         cause_title: Name of the cause event vertex.
-        confidence: Confidence in the causal link (0.0–1.0).
+        confidence: Confidence in the causal link (0.0-1.0).
         evidence_source: Description of the evidence supporting the link.
 
     Returns:
@@ -560,21 +655,74 @@ async def link_event_causal(
     try:
         effect_esc = _escape(effect_title)
         cause_esc = _escape(cause_title)
+        now = datetime.now(timezone.utc).isoformat()
+        new_weight = 0.5
+        new_confidence = confidence if confidence is not None else 0.5
         props: dict[str, Any] = {}
-        if confidence is not None:
-            props["confidence"] = confidence
         if evidence_source:
             props["evidence_source"] = evidence_source
-        props_map = _dict_to_cypher_map(props) if props else "{}"
 
         async with pool.acquire() as conn:
-            await _cypher(conn, graph_name, f"""
-                MATCH (effect:Event {{name: '{effect_esc}'}}),
-                      (cause:Event {{name: '{cause_esc}'}})
-                MERGE (effect)<-[r:CAUSED_BY]-(cause)
-                SET r += {props_map}
+            existing = await _cypher(conn, graph_name, f"""
+                MATCH (effect:Event {{name: '{effect_esc}'}})<-[r:CAUSED_BY]-(cause:Event {{name: '{cause_esc}'}})
                 RETURN r
             """, cols="r agtype")
+
+            if existing:
+                old_edge = existing[0]["r"]
+                old_props = old_edge.get("properties", {}) if isinstance(old_edge, dict) else {}
+                old_count = old_props.get("evidence_count", 1)
+                old_volatility = old_props.get("volatility", 0.0)
+                old_weight = old_props.get("weight", 0.5)
+                new_count = (int(old_count) if old_count else 1) + 1
+                try:
+                    vol = float(old_volatility) if old_volatility else 0.0
+                    ow = float(old_weight) if old_weight else 0.5
+                except (TypeError, ValueError):
+                    vol = 0.0
+                    ow = 0.5
+                if abs(new_weight - ow) > 0.01:
+                    vol = min(1.0, vol + 0.1)
+                props_map = _dict_to_cypher_map(props) if props else "{}"
+                await _cypher(conn, graph_name, f"""
+                    MATCH (effect:Event {{name: '{effect_esc}'}})<-[r:CAUSED_BY]-(cause:Event {{name: '{cause_esc}'}})
+                    SET r += {props_map}
+                    SET r.weight = {new_weight}
+                    SET r.confidence = {new_confidence}
+                    SET r.evidence_count = {new_count}
+                    SET r.last_evidenced = '{_escape(now)}'
+                    SET r.volatility = {vol}
+                    RETURN r
+                """, cols="r agtype")
+                action = "update"
+            else:
+                props["weight"] = new_weight
+                props["confidence"] = new_confidence
+                props["evidence_count"] = 1
+                props["last_evidenced"] = now
+                props["volatility"] = 0.0
+                props_map = _dict_to_cypher_map(props)
+                await _cypher(conn, graph_name, f"""
+                    MATCH (effect:Event {{name: '{effect_esc}'}}),
+                          (cause:Event {{name: '{cause_esc}'}})
+                    MERGE (effect)<-[r:CAUSED_BY]-(cause)
+                    SET r += {props_map}
+                    RETURN r
+                """, cols="r agtype")
+                action = "create"
+
+        try:
+            from .relationship_history import record_edge_change
+            await record_edge_change(
+                source_entity=cause_title,
+                target_entity=effect_title,
+                rel_type="CAUSED_BY",
+                action=action,
+                weight=new_weight,
+                confidence=new_confidence,
+            )
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -589,14 +737,15 @@ async def link_event_situation(
 ) -> bool:
     """Create a TRACKED_BY edge from an event to a situation.
 
-    Uses MERGE to avoid duplicate edges.
+    Uses MERGE to avoid duplicate edges.  On reinforcement, increments
+    evidence_count and updates last_evidenced.
 
     Args:
         pool: asyncpg connection pool.
         graph_name: AGE graph name.
         event_title: Name of the event vertex.
         situation_name: Name of the situation vertex.
-        relevance: Relevance score 0.0–1.0.
+        relevance: Relevance score 0.0-1.0.
 
     Returns:
         True on success, False on error.
@@ -612,19 +761,77 @@ async def link_event_situation(
     try:
         evt_esc = _escape(event_title)
         sit_esc = _escape(situation_name)
-        props: dict[str, Any] = {}
-        if relevance is not None:
-            props["relevance"] = relevance
-        props_map = _dict_to_cypher_map(props) if props else "{}"
+        now = datetime.now(timezone.utc).isoformat()
+        new_weight = relevance if relevance is not None else 0.5
+        new_confidence = 0.5
 
         async with pool.acquire() as conn:
-            await _cypher(conn, graph_name, f"""
-                MATCH (event:Event {{name: '{evt_esc}'}}),
-                      (sit:Situation {{name: '{sit_esc}'}})
-                MERGE (event)-[r:TRACKED_BY]->(sit)
-                SET r += {props_map}
+            existing = await _cypher(conn, graph_name, f"""
+                MATCH (event:Event {{name: '{evt_esc}'}})-[r:TRACKED_BY]->(sit:Situation {{name: '{sit_esc}'}})
                 RETURN r
             """, cols="r agtype")
+
+            if existing:
+                old_edge = existing[0]["r"]
+                old_props = old_edge.get("properties", {}) if isinstance(old_edge, dict) else {}
+                old_count = old_props.get("evidence_count", 1)
+                old_volatility = old_props.get("volatility", 0.0)
+                old_weight = old_props.get("weight", 0.5)
+                new_count = (int(old_count) if old_count else 1) + 1
+                try:
+                    vol = float(old_volatility) if old_volatility else 0.0
+                    ow = float(old_weight) if old_weight else 0.5
+                except (TypeError, ValueError):
+                    vol = 0.0
+                    ow = 0.5
+                if abs(new_weight - ow) > 0.01:
+                    vol = min(1.0, vol + 0.1)
+                props: dict[str, Any] = {}
+                if relevance is not None:
+                    props["relevance"] = relevance
+                props_map = _dict_to_cypher_map(props) if props else "{}"
+                await _cypher(conn, graph_name, f"""
+                    MATCH (event:Event {{name: '{evt_esc}'}})-[r:TRACKED_BY]->(sit:Situation {{name: '{sit_esc}'}})
+                    SET r += {props_map}
+                    SET r.weight = {new_weight}
+                    SET r.confidence = {new_confidence}
+                    SET r.evidence_count = {new_count}
+                    SET r.last_evidenced = '{_escape(now)}'
+                    SET r.volatility = {vol}
+                    RETURN r
+                """, cols="r agtype")
+                action = "update"
+            else:
+                props = {}
+                if relevance is not None:
+                    props["relevance"] = relevance
+                props["weight"] = new_weight
+                props["confidence"] = new_confidence
+                props["evidence_count"] = 1
+                props["last_evidenced"] = now
+                props["volatility"] = 0.0
+                props_map = _dict_to_cypher_map(props)
+                await _cypher(conn, graph_name, f"""
+                    MATCH (event:Event {{name: '{evt_esc}'}}),
+                          (sit:Situation {{name: '{sit_esc}'}})
+                    MERGE (event)-[r:TRACKED_BY]->(sit)
+                    SET r += {props_map}
+                    RETURN r
+                """, cols="r agtype")
+                action = "create"
+
+        try:
+            from .relationship_history import record_edge_change
+            await record_edge_change(
+                source_entity=event_title,
+                target_entity=situation_name,
+                rel_type="TRACKED_BY",
+                action=action,
+                weight=new_weight,
+                confidence=new_confidence,
+            )
+        except Exception:
+            pass
         return True
     except Exception:
         return False

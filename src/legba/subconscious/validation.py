@@ -1,5 +1,7 @@
 """Signal batch validation using the SLM.
 
+JDL Level 0: SLM signal quality assessment.
+
 Queries uncertain signals from Postgres, batches them, sends to the SLM
 for quality assessment, and parses the structured verdicts.
 """

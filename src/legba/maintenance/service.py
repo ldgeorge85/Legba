@@ -12,9 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import signal
-import sys
 import traceback
 from datetime import datetime, timezone
 
@@ -84,6 +82,21 @@ class MaintenanceService:
 
         # Connect to backing stores
         await self._connect()
+
+        # Check schema extensions (non-fatal)
+        try:
+            from ..shared.schema_extensions import check_extensions
+            ext_status = await check_extensions(self._pg_pool)
+            missing = [k for k, v in ext_status.items() if not v]
+            if missing:
+                logger.warning(
+                    "Missing schema extensions: %s — run apply_extensions() to fix",
+                    ", ".join(missing),
+                )
+            else:
+                logger.info("All %d schema extensions verified", len(ext_status))
+        except Exception as e:
+            logger.warning("Schema extension check failed (non-fatal): %s", e)
 
         logger.info("Maintenance daemon initialized, entering main loop")
 
@@ -331,7 +344,7 @@ class MaintenanceService:
 
     async def _metric_collection(self) -> None:
         """Extended metric collection."""
-        collector = MetricCollector(self._pg_pool, self._metrics)
+        collector = MetricCollector(self._pg_pool, self._metrics, self._redis)
         await collector.metric_collection()
 
     async def _situation_detection(self) -> None:
@@ -348,7 +361,7 @@ class MaintenanceService:
         propagator = StatePropagator(self._pg_pool, self._redis, backlog)
         propagated = await propagator.propagate()
         # Also expire stale tasks
-        expired = await backlog.expire_stale(max_age_hours=72.0)
+        expired = await backlog.expire_stale(max_age_hours=24.0)
         if propagated or expired:
             logger.info(
                 "State propagation: %d propagations applied, %d stale tasks expired",

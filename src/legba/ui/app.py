@@ -1,6 +1,8 @@
 """
 Legba Operator Console — FastAPI application.
 
+JDL Level 5: Operator interface and API.
+
 Server-rendered UI using Jinja2 + htmx + Tailwind CSS.
 Single entry point: python -m uvicorn legba.ui.app:app --host 0.0.0.0 --port 8501
 """
@@ -44,6 +46,14 @@ async def lifespan(app: FastAPI):
     )
     await stores.connect()
     app.state.stores = stores
+
+    # Bootstrap config store schema + seed defaults
+    try:
+        from legba.shared.config_store import ensure_config_schema, seed_defaults, get_default_configs
+        await ensure_config_schema(stores.structured._pool)
+        await seed_defaults(stores.structured._pool, get_default_configs())
+    except Exception as exc:
+        logger.warning("Config store bootstrap failed (non-fatal): %s", exc)
 
     # Messages: NATS client + message store
     ui_nats = UINatsClient(url=NatsConfig.from_env().url)

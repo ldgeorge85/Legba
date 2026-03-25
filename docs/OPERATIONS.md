@@ -20,13 +20,21 @@
 |-----------|-------|---------|-------|
 | supervisor | legba-supervisor | Agent lifecycle, heartbeat, audit | — |
 | agent | legba-agent | Ephemeral, one per cycle | — |
-| ui | legba-ui | Operator console (FastAPI+htmx) | 8501 |
+| ingestion | legba-ingestion | Deterministic feed fetching, spaCy NER, dedup | — |
+| maintenance | legba-maintenance | Event lifecycle, entity GC, data hygiene | — |
+| subconscious | legba-subconscious | SLM validation and enrichment | — |
+| ui | legba-ui | Operator console v1 (FastAPI+htmx) | 8501 |
+| ui-v2 | legba-ui-v2 | Operator console v2 (React+Dockview) | 8503 |
 | redis | redis:7-alpine | Transient state, journal, reports | 6379 |
-| postgres | apache/age:latest | Structured data, entity graph | 5432 |
+| postgres | apache/age:latest | Structured data, entity graph (AGE) | 5432 |
 | qdrant | qdrant/qdrant:latest | Episodic/semantic memory | 6333-6334 |
 | nats | nats:2-alpine | Event bus, messaging | 4222, 8222 |
 | opensearch | opensearchproject/opensearch:2 | Events, documents | 9200, 9600 |
 | opensearch-audit | opensearchproject/opensearch:2 | Audit logs (agent-inaccessible) | 9201 |
+| timescaledb | timescale/timescaledb:latest-pg16 | Cycle metrics, time-series data | 5433 |
+| grafana | grafana/grafana-oss:latest | Dashboards and metrics visualization | 3000 |
+| airflow | legba-airflow | Scheduled DAGs | 8080 |
+| caddy | caddy:2-alpine | Reverse proxy for SLM endpoint | — |
 
 ---
 
@@ -102,6 +110,13 @@ docker run --rm -v legba_agent_code:/agent alpine rm -rf /agent/src /agent/pypro
 docker compose -p legba up -d supervisor
 ```
 
+### Cognitive Services Deploy (maintenance, subconscious)
+```bash
+docker compose -p legba build maintenance subconscious
+docker compose -p legba up -d maintenance subconscious
+```
+No agent disruption. These run independently of the cycle loop.
+
 ### UI-only Deploy (no cycle disruption)
 ```bash
 docker compose -p legba build ui
@@ -127,6 +142,10 @@ docker run --rm \
   -v legba_workspace_data:/data/workspace:ro \
   -v legba_shared_data:/data/shared:ro \
   -v legba_airflow_dags:/data/airflow:ro \
+  -v legba_timescale_data:/data/timescale:ro \
+  -v legba_grafana_data:/data/grafana:ro \
+  -v legba_caddy_data:/data/caddy:ro \
+  -v legba_caddy_config:/data/caddy_config:ro \
   -v "$(pwd)/backups":/backup \
   alpine tar czf /backup/legba_volumes_$(date +%Y-%m-%d)_LABEL.tar.gz -C /data .
 docker compose -p legba up -d supervisor  # Resume
@@ -157,6 +176,10 @@ docker exec legba-postgres-1 psql -U legba -d legba -c \
    SELECT 'goals_active', COUNT(*) FROM goals WHERE status='active';"
 # Qdrant episode count
 curl -s http://localhost:6333/collections/legba_short_term | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['points_count'])"
+# Maintenance daemon running?
+docker compose -p legba ps maintenance  # should show "running"
+# TimescaleDB healthy?
+docker exec legba-timescaledb-1 pg_isready -U legba -d legba_metrics
 ```
 
 ### Data Store Access
@@ -232,7 +255,7 @@ docker compose -p legba exec supervisor python -m legba.supervisor.cli --shared 
 
 All UI is behind SSH tunnel:
 ```bash
-ssh -L 8501:localhost:8501 -L 8503:localhost:8503 -L 5601:localhost:5601 -L 8080:localhost:8080 user@<your-host>
+ssh -L 8501:localhost:8501 -L 8503:localhost:8503 -L 5601:localhost:5601 -L 8080:localhost:8080 -L 3000:localhost:3000 user@<your-host>
 ```
 
 | UI | URL | Purpose |
@@ -240,6 +263,7 @@ ssh -L 8501:localhost:8501 -L 8503:localhost:8503 -L 5601:localhost:5601 -L 8080
 | Operator Console v2 | http://localhost:8503 | **Recommended.** Multi-panel workstation (React + Dockview). Graph, map, timeline, analytics, consult. |
 | Operator Console v1 | http://localhost:8501 | Legacy (FastAPI + htmx). Feature-frozen — no new development. |
 | OpenSearch Dashboards | http://localhost:5601 | Ad-hoc data exploration |
+| Grafana | http://localhost:3000 | Metrics dashboards (cycle performance, data growth) |
 | Airflow | http://localhost:8080 | DAG management |
 
 ---
@@ -259,6 +283,10 @@ What happens when each service is unavailable:
 | **Airflow** | No scheduled pipeline execution | `docker compose -p legba restart airflow` | Agent unaffected (Airflow is optional). DAGs don't run until restored. |
 | **Ingestion service** | No automated feed fetching. Agent falls back to manual ACQUIRE. | `docker compose -p legba restart ingestion` | Agent detects missing heartbeat in ORIENT. ACQUIRE cycles do their own feed_parse calls. |
 | **LLM API** | No reasoning capability. Cycle fails. | Check API endpoint health | Supervisor detects heartbeat failure after timeout. Retries next cycle. No data loss. |
+| **Maintenance** | Event lifecycle and entity GC stops. Stale data accumulates. | `docker compose -p legba restart maintenance` | Agent unaffected. Resume cleans up backlog. |
+| **Subconscious** | SLM validation stops. No subconscious enrichment. | `docker compose -p legba restart subconscious` | Agent continues without subconscious enrichment. |
+| **TimescaleDB** | Metrics stop recording. Grafana dashboards stale. | `docker compose -p legba restart timescaledb` | Agent unaffected. Metrics resume on recovery. |
+| **Grafana** | Dashboards unavailable. No metrics visibility. | `docker compose -p legba restart grafana` | Agent unaffected. Metrics still recorded in TimescaleDB. |
 | **UI v1/v2** | No operator console. Agent unaffected. | `docker compose -p legba restart ui` / `ui-v2` | Zero impact on agent. Data continues accumulating. |
 
 **Multi-service failure**: If Postgres AND Redis are both down, the agent cannot start at all. Supervisor will retry indefinitely. All other combinations degrade gracefully.
@@ -277,7 +305,8 @@ What happens when each service is unavailable:
 - Taking backups (`scripts/backup.sh` is live-safe)
 - Viewing logs
 - Restarting UI containers (`ui`, `ui-v2`)
-- Restarting Airflow
+- Restarting Airflow, Grafana, TimescaleDB
+- Restarting maintenance, subconscious, caddy
 
 ### Safe with brief interruption
 - Restarting OpenSearch (agent degrades for ~30s during restart)
@@ -306,6 +335,15 @@ docker compose -p legba up -d ui-v2
 ```
 
 No agent disruption. The v2 UI runs independently.
+
+### Cognitive Containers (maintenance, subconscious, caddy)
+
+The maintenance daemon, subconscious SLM service, and caddy reverse proxy form the cognitive support layer. They run alongside the agent but independently — the agent does not depend on them for core cycle execution. Caddy proxies requests to the SLM endpoint used by the subconscious service. All three can be restarted without affecting the agent cycle loop.
+
+```bash
+docker compose -p legba build maintenance subconscious
+docker compose -p legba up -d maintenance subconscious caddy
+```
 
 ---
 

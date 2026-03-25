@@ -16,12 +16,18 @@ from typing import Any
 
 from ..llm.format import Message
 from . import templates
-from ...shared.schemas.comms import InboxMessage, MessagePriority, QueueSummary
+from ...shared.schemas.comms import InboxMessage, QueueSummary
 
 
 # Rough token estimation: ~4 chars per token for English text
 def _estimate_tokens(text: str) -> int:
     return len(text) // 4
+
+
+def _estimate_tokens_messages(messages: list) -> int:
+    """Rough token estimate for a list of messages (~4 chars per token)."""
+    total_chars = sum(len(m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")) for m in messages)
+    return total_chars // 4
 
 
 def _truncate_to_tokens(text: str, max_tokens: int) -> str:
@@ -50,7 +56,7 @@ class PromptAssembler:
         self,
         tool_data: list[dict],
         tool_summary: str,
-        bootstrap_threshold: int = 5,
+        bootstrap_threshold: int = 15,
         max_context_tokens: int = 120000,
         report_interval: int = 5,
         world_briefing: str = "",
@@ -65,6 +71,46 @@ class PromptAssembler:
         self._report_interval = report_interval
         self._truncated = False
         self._airflow_available = airflow_available
+        self._differential_briefing = ""     # set by orient phase after reading subconscious diff
+        self._last_token_estimate: int = 0
+        self._last_prompt_name: str = ""
+        # Config store overrides: loaded once per cycle from DB
+        self._config_overrides: dict[str, str] = {}
+        self._config_versions: dict[str, int] = {}  # key -> version for audit trail
+
+    async def load_from_config_store(self, pool) -> None:
+        """Load prompt templates from config store, falling back to Python constants.
+
+        Called once during WAKE.  Results are cached in _config_overrides so
+        every assemble_* call in the same cycle uses the DB-loaded version
+        without additional queries.
+        """
+        from legba.shared.config_store import get_active_with_version, _KEY_TO_TEMPLATE
+
+        self._config_overrides = {}
+        self._config_versions = {}
+
+        for config_key in _KEY_TO_TEMPLATE:
+            try:
+                db_value, db_version = await get_active_with_version(pool, config_key)
+                if db_value is not None and db_version is not None:
+                    self._config_overrides[config_key] = db_value
+                    self._config_versions[config_key] = db_version
+            except Exception:
+                pass  # Fall back to Python constant
+
+        # Also try world_briefing from config store
+        try:
+            wb_value, wb_version = await get_active_with_version(pool, "world_briefing")
+            if wb_value is not None and wb_version is not None:
+                self._config_overrides["world_briefing"] = wb_value
+                self._config_versions["world_briefing"] = wb_version
+        except Exception:
+            pass
+
+    def _t(self, config_key: str, fallback):
+        """Return DB-loaded template if available, otherwise the Python constant."""
+        return self._config_overrides.get(config_key, fallback)
 
     def assemble_plan_prompt(
         self,
@@ -97,10 +143,14 @@ class PromptAssembler:
 
         # Goal context
         goals_text = self._format_goals(seed_goal, active_goals, goal_work_tracker, cycle_number)
-        user_parts.append(templates.GOAL_CONTEXT_TEMPLATE.format(
+        user_parts.append(self._t("goal_context_template", templates.GOAL_CONTEXT_TEMPLATE).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
         ))
+
+        # Subconscious differential briefing (what changed since last cycle)
+        if self._differential_briefing:
+            user_parts.append(self._differential_briefing)
 
         # Memory context
         memory_text = self._format_memories(memory_context)
@@ -128,12 +178,14 @@ class PromptAssembler:
             user_parts.append(reflection_forward)
 
         # Plan request (last thing model reads)
-        user_parts.append(templates.PLAN_PROMPT)
+        user_parts.append(self._t("plan_prompt", templates.PLAN_PROMPT))
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content="\n\n".join(user_parts)),
         ]
+        self._track_context_budget("plan", messages)
+        return messages
 
     def assemble_mission_review_prompt(
         self,
@@ -156,7 +208,7 @@ class PromptAssembler:
         else:
             deferred_text = "(No deferred goals ready for re-evaluation)"
 
-        review_text = templates.MISSION_REVIEW_PROMPT.format(
+        review_text = self._t("introspection_prompt", templates.MISSION_REVIEW_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             deferred_goals=deferred_text,
@@ -172,10 +224,12 @@ class PromptAssembler:
             f"Primary Mission: {seed_goal[:300]}"
         )
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=review_text),
         ]
+        self._track_context_budget("mission_review", messages)
+        return messages
 
     def assemble_introspection_prompt(
         self,
@@ -207,15 +261,15 @@ class PromptAssembler:
         # Build system: identity + introspection tool definitions + calling instructions
         from ..llm.format import format_tool_definitions
         introspection_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="introspection",
         )
         system_text += "\n\n" + format_tool_definitions(introspection_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
         # Build user: the introspection task with context data
-        user_text = templates.MISSION_REVIEW_PROMPT.format(
+        user_text = self._t("introspection_prompt", templates.MISSION_REVIEW_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             deferred_goals=deferred_text,
@@ -223,14 +277,20 @@ class PromptAssembler:
             recent_work_pattern=recent_work_pattern or "unknown",
         )
 
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
+
         # Inject operator messages if present
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("introspection", messages)
+        return messages
 
     def assemble_research_prompt(
         self,
@@ -251,28 +311,34 @@ class PromptAssembler:
         # Build system: identity + research tool definitions + calling instructions
         from ..llm.format import format_tool_definitions
         research_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="research",
         )
         system_text += "\n\n" + format_tool_definitions(research_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
         # Build user: the research task with entity health data
-        user_text = templates.RESEARCH_PROMPT.format(
+        user_text = self._t("research_prompt", templates.RESEARCH_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             entity_health=entity_health,
         )
 
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
+
         # Inject operator messages if present
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("research", messages)
+        return messages
 
     def assemble_acquire_prompt(
         self,
@@ -288,26 +354,32 @@ class PromptAssembler:
 
         from ..llm.format import format_tool_definitions
         acquire_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="acquire",
         )
         system_text += "\n\n" + format_tool_definitions(acquire_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
-        user_text = templates.ACQUIRE_PROMPT.format(
+        user_text = self._t("acquire_prompt", templates.ACQUIRE_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             source_status=source_status,
         )
 
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
+
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("acquire", messages)
+        return messages
 
     def assemble_source_discovery_prompt(
         self,
@@ -324,27 +396,33 @@ class PromptAssembler:
 
         from ..llm.format import format_tool_definitions
         discovery_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="source_discovery",
         )
         system_text += "\n\n" + format_tool_definitions(discovery_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
-        user_text = templates.SOURCE_DISCOVERY_PROMPT.format(
+        user_text = self._t("source_discovery_prompt", templates.SOURCE_DISCOVERY_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             source_status=source_status,
             ingestion_status=ingestion_status,
         )
 
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
+
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("source_discovery", messages)
+        return messages
 
     def assemble_curate_prompt(
         self,
@@ -354,33 +432,43 @@ class PromptAssembler:
         curate_context: str,
         allowed_tools: frozenset[str],
         inbox_messages: list[InboxMessage] | None = None,
+        priority_context: str = "",
     ) -> list[Message]:
         """Build the message list for the curate/signal-triage cycle."""
         goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
 
         from ..llm.format import format_tool_definitions
         curate_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="curate",
         )
         system_text += "\n\n" + format_tool_definitions(curate_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
-        user_text = templates.CURATE_PROMPT.format(
+        user_text = self._t("curate_prompt", templates.CURATE_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             curate_context=curate_context,
         )
-        user_text += "\n\n" + templates.SITUATION_GUIDANCE
+        user_text += "\n\n" + self._t("situation_guidance", templates.SITUATION_GUIDANCE)
+
+        if priority_context:
+            user_text += "\n\n" + priority_context
+
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
 
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("curate", messages)
+        return messages
 
     def assemble_analysis_cycle_prompt(
         self,
@@ -390,24 +478,32 @@ class PromptAssembler:
         analysis_context: str,
         allowed_tools: frozenset[str],
         inbox_messages: list[InboxMessage] | None = None,
+        priority_context: str = "",
     ) -> list[Message]:
         """Build the message list for the analysis cycle."""
         goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
 
         from ..llm.format import format_tool_definitions
         analysis_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="analysis",
         )
         system_text += "\n\n" + format_tool_definitions(analysis_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
-        user_text = templates.ANALYSIS_PROMPT.format(
+        user_text = self._t("analysis_prompt", templates.ANALYSIS_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             analysis_context=analysis_context,
         )
+
+        if priority_context:
+            user_text += "\n\n" + priority_context
+
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
 
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
@@ -425,7 +521,7 @@ class PromptAssembler:
             if len(goals_text) > 3000:
                 goals_text_truncated += "\n(... goals truncated to fit budget)"
             # Rebuild user_text with truncated data
-            user_text = templates.ANALYSIS_PROMPT.format(
+            user_text = self._t("analysis_prompt", templates.ANALYSIS_PROMPT).format(
                 seed_goal=seed_goal,
                 active_goals=goals_text_truncated,
                 analysis_context=analysis_context_truncated,
@@ -435,10 +531,12 @@ class PromptAssembler:
             user_text += "\n\n(Note: context was truncated to fit budget)"
             self._truncated = True
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("analysis", messages)
+        return messages
 
     def assemble_evolve_prompt(
         self,
@@ -454,26 +552,32 @@ class PromptAssembler:
 
         from ..llm.format import format_tool_definitions
         evolve_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="evolve",
         )
         system_text += "\n\n" + format_tool_definitions(evolve_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
-        user_text = templates.EVOLVE_PROMPT.format(
+        user_text = self._t("evolve_prompt", templates.EVOLVE_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             evolve_context=evolve_context,
         )
 
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
+
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("evolve", messages)
+        return messages
 
     def assemble_survey_prompt(
         self,
@@ -483,33 +587,43 @@ class PromptAssembler:
         survey_context: str,
         allowed_tools: frozenset[str],
         inbox_messages: list[InboxMessage] | None = None,
+        priority_context: str = "",
     ) -> list[Message]:
         """Build the message list for the survey/analytical desk work cycle."""
         goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
 
         from ..llm.format import format_tool_definitions
         survey_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="survey",
         )
         system_text += "\n\n" + format_tool_definitions(survey_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
-        user_text = templates.SURVEY_PROMPT.format(
+        user_text = self._t("survey_prompt", templates.SURVEY_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             survey_context=survey_context,
         )
-        user_text += "\n\n" + templates.SITUATION_GUIDANCE
+        user_text += "\n\n" + self._t("situation_guidance", templates.SITUATION_GUIDANCE)
+
+        if priority_context:
+            user_text += "\n\n" + priority_context
+
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
 
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("survey", messages)
+        return messages
 
     def assemble_synthesize_prompt(
         self,
@@ -519,32 +633,42 @@ class PromptAssembler:
         synthesize_context: str,
         allowed_tools: frozenset[str],
         inbox_messages: list[InboxMessage] | None = None,
+        priority_context: str = "",
     ) -> list[Message]:
         """Build the message list for the synthesize/deep-dive cycle."""
         goals_text = self._format_goals(seed_goal, active_goals) if active_goals else "(No active goals)"
 
         from ..llm.format import format_tool_definitions
         synth_tool_data = [t for t in self._tool_data if t["name"] in allowed_tools]
-        system_text = templates.SYSTEM_PROMPT.format(
+        system_text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens="synthesize",
         )
         system_text += "\n\n" + format_tool_definitions(synth_tool_data)
-        system_text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+        system_text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
 
-        user_text = templates.SYNTHESIZE_PROMPT.format(
+        user_text = self._t("synthesize_prompt", templates.SYNTHESIZE_PROMPT).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
             synthesize_context=synthesize_context,
         )
 
+        # Subconscious differential briefing
+        if self._differential_briefing:
+            user_text = self._differential_briefing + "\n\n" + user_text
+
+        if priority_context:
+            user_text += "\n\n" + priority_context
+
         if inbox_messages:
             user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("synthesize", messages)
+        return messages
 
     def assemble_reason_prompt(
         self,
@@ -578,7 +702,7 @@ class PromptAssembler:
         # --- User message data sections ---
         # Goal context
         goals_text = self._format_goals(seed_goal, active_goals, goal_work_tracker, cycle_number)
-        goal_section = templates.GOAL_CONTEXT_TEMPLATE.format(
+        goal_section = self._t("goal_context_template", templates.GOAL_CONTEXT_TEMPLATE).format(
             seed_goal=seed_goal,
             active_goals=goals_text,
         )
@@ -611,7 +735,7 @@ class PromptAssembler:
         # Task request (plan + working memory + short act instruction)
         reporting_reminder = ""
         if cycle_number > 0 and cycle_number % self._report_interval == 0:
-            reporting_reminder = templates.REPORTING_REMINDER.format(
+            reporting_reminder = self._t("reporting_reminder", templates.REPORTING_REMINDER).format(
                 cycle_number=cycle_number,
                 report_interval=self._report_interval,
             )
@@ -665,6 +789,9 @@ class PromptAssembler:
             user_parts.append(self._world_briefing)
 
         user_parts.append(goal_section)
+        # Subconscious differential briefing (what changed since last cycle)
+        if self._differential_briefing:
+            user_parts.append(self._differential_briefing)
         if memory_section:
             user_parts.append(memory_section)
         if graph_section:
@@ -702,10 +829,12 @@ class PromptAssembler:
             cycle_number, str(self._total_tokens), include_tools=True, planned_tools=planned_tools,
         ) + budget_note
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=user_text),
         ]
+        self._track_context_budget("reason", messages)
+        return messages
 
     def assemble_reflect_prompt(
         self,
@@ -721,7 +850,7 @@ class PromptAssembler:
         if _estimate_tokens(results_summary) > max_results:
             results_summary = _truncate_to_tokens(results_summary, max_results)
 
-        reflect_text = templates.REFLECT_PROMPT.format(
+        reflect_text = self._t("reflect_prompt", templates.REFLECT_PROMPT).format(
             cycle_plan=cycle_plan or "(no explicit plan)",
             working_memory=working_memory or "(no observations recorded)",
             results_summary=results_summary,
@@ -747,10 +876,12 @@ class PromptAssembler:
             f"Primary Mission: {seed_goal[:300]}"
         )
 
-        return [
+        messages = [
             Message(role="system", content=system_text),
             Message(role="user", content=reflect_text),
         ]
+        self._track_context_budget("reflect", messages)
+        return messages
 
     def assemble_narrate_prompt(
         self,
@@ -759,7 +890,7 @@ class PromptAssembler:
         inbox_messages: list[InboxMessage] | None = None,
     ) -> list[Message]:
         """Build the message list for the NARRATE phase (journal entry)."""
-        narrate_text = templates.NARRATE_PROMPT.format(
+        narrate_text = self._t("narrate_prompt", templates.NARRATE_PROMPT).format(
             cycle_summary=cycle_summary[:1000],
             journal_context=journal_context or "(no prior journal entries)",
         )
@@ -768,10 +899,12 @@ class PromptAssembler:
         if inbox_messages:
             narrate_text = self._format_inbox(inbox_messages) + "\n\n" + narrate_text
 
-        return [
+        messages = [
             Message(role="system", content="reasoning: high\n\nYou are Legba. Write your journal entries. Output ONLY a JSON array of strings."),
             Message(role="user", content=narrate_text),
         ]
+        self._track_context_budget("narrate", messages)
+        return messages
 
     def assemble_journal_consolidation_prompt(
         self,
@@ -779,11 +912,11 @@ class PromptAssembler:
         previous_consolidation: str,
     ) -> list[Message]:
         """Build the message list for journal consolidation during introspection."""
-        consolidation_text = templates.JOURNAL_CONSOLIDATION_PROMPT.format(
+        consolidation_text = self._t("journal_consolidation_prompt", templates.JOURNAL_CONSOLIDATION_PROMPT).format(
             entries=entries or "(no entries since last consolidation)",
             previous_consolidation=previous_consolidation or "(first consolidation — no prior narrative)",
         )
-        return [
+        messages = [
             Message(role="system", content=(
                 "reasoning: high\n\n"
                 "You are Legba. This is your journal consolidation — your inner voice, your "
@@ -792,6 +925,8 @@ class PromptAssembler:
             )),
             Message(role="user", content=consolidation_text),
         ]
+        self._track_context_budget("journal_consolidation", messages)
+        return messages
 
     def assemble_analysis_report_prompt(
         self,
@@ -808,7 +943,7 @@ class PromptAssembler:
         watchlist_summary: str = "",
     ) -> list[Message]:
         """Build the message list for the full analysis report during introspection."""
-        report_text = templates.ANALYSIS_REPORT_PROMPT.format(
+        report_text = self._t("analysis_report_prompt", templates.ANALYSIS_REPORT_PROMPT).format(
             cycle_number=cycle_number,
             graph_summary=graph_summary or "(no graph data available)",
             key_relationships=key_relationships or "(no relationships queried)",
@@ -821,7 +956,7 @@ class PromptAssembler:
             narrative=narrative or "(no narrative perspective yet)",
             watchlist_summary=watchlist_summary or "(no active watches with recent triggers)",
         )
-        return [
+        messages = [
             Message(role="system", content=(
                 "reasoning: high\n\n"
                 "You are Legba — autonomous intelligence analyst. Produce a differential "
@@ -832,6 +967,8 @@ class PromptAssembler:
             )),
             Message(role="user", content=report_text),
         ]
+        self._track_context_budget("analysis_report", messages)
+        return messages
 
     @property
     def estimated_tokens(self) -> int:
@@ -841,16 +978,42 @@ class PromptAssembler:
     def was_truncated(self) -> bool:
         return self._truncated
 
+    def _track_context_budget(self, prompt_name: str, messages: list) -> None:
+        """Record token estimate and prompt name for context budget tracking."""
+        import logging
+        self._last_token_estimate = _estimate_tokens_messages(messages)
+        self._last_prompt_name = prompt_name
+        utilization_pct = round(self._last_token_estimate / self._max_context_tokens * 100, 1) if self._max_context_tokens > 0 else 0.0
+        if utilization_pct > 80:
+            logger = logging.getLogger("legba.assembler")
+            logger.warning(
+                "Context budget alert: %s prompt uses %.1f%% of budget "
+                "(%d / %d tokens)",
+                prompt_name, utilization_pct,
+                self._last_token_estimate, self._max_context_tokens,
+            )
+
+    def get_context_utilization(self) -> dict:
+        """Return context budget utilization from the last assembled prompt."""
+        budget = self._max_context_tokens if self._max_context_tokens > 0 else 120000
+        return {
+            "prompt_name": self._last_prompt_name,
+            "estimated_tokens": self._last_token_estimate,
+            "budget": budget,
+            "utilization_pct": round(self._last_token_estimate / budget * 100, 1),
+        }
+
     def assemble_liveness_prompt(
         self,
         cycle_number: int,
         nonce: str,
     ) -> list[Message]:
         """Build the message list for the liveness check in PERSIST phase."""
-        liveness_text = templates.LIVENESS_PROMPT.format(
+        liveness_text = self._t("liveness_prompt", templates.LIVENESS_PROMPT).format(
             nonce=nonce,
             cycle_number=cycle_number,
         )
+        # Liveness is a tiny echo prompt — no budget tracking needed
         return [
             Message(role="system", content="reasoning: low\n\nYou are a simple echo service. Output ONLY what is asked, nothing else."),
             Message(role="user", content=liveness_text),
@@ -864,27 +1027,27 @@ class PromptAssembler:
         include_tools: bool = False,
         planned_tools: set[str] | None = None,
     ) -> str:
-        text = templates.SYSTEM_PROMPT.format(
+        text = self._t("system_prompt", templates.SYSTEM_PROMPT).format(
             cycle_number=cycle_number,
             context_tokens=context_tokens,
         )
         if cycle_number <= self._bootstrap_threshold:
-            text += "\n" + templates.BOOTSTRAP_PROMPT_ADDON.format(
+            text += "\n" + self._t("bootstrap_addon", templates.BOOTSTRAP_PROMPT_ADDON).format(
                 cycle_number=cycle_number
             )
-        text += "\n" + templates.MEMORY_MANAGEMENT_GUIDANCE
-        text += "\n" + templates.EFFICIENCY_GUIDANCE
-        text += "\n" + templates.ANALYTICS_GUIDANCE
+        text += "\n" + self._t("memory_management_guidance", templates.MEMORY_MANAGEMENT_GUIDANCE)
+        text += "\n" + self._t("efficiency_guidance", templates.EFFICIENCY_GUIDANCE)
+        text += "\n" + self._t("analytics_guidance", templates.ANALYTICS_GUIDANCE)
         if self._airflow_available:
-            text += "\n" + templates.ORCHESTRATION_GUIDANCE
-        text += "\n" + templates.SA_GUIDANCE
-        text += "\n" + templates.ENTITY_GUIDANCE
+            text += "\n" + self._t("orchestration_guidance", templates.ORCHESTRATION_GUIDANCE)
+        text += "\n" + self._t("sa_guidance", templates.SA_GUIDANCE)
+        text += "\n" + self._t("entity_guidance", templates.ENTITY_GUIDANCE)
         # Tool definitions + calling format in system (instructions-first pattern).
         # Placed last in system so the model reads: identity → rules → tools → format.
         if include_tools:
             from ..llm.format import format_tool_definitions
             text += "\n\n" + format_tool_definitions(self._tool_data, only=planned_tools)
-            text += "\n\n" + templates.TOOL_CALLING_INSTRUCTIONS
+            text += "\n\n" + self._t("tool_calling_instructions", templates.TOOL_CALLING_INSTRUCTIONS)
         return text
 
     def _format_goals(
@@ -954,7 +1117,7 @@ class PromptAssembler:
         if not parts:
             return ""
 
-        return templates.MEMORY_CONTEXT_TEMPLATE.format(
+        return self._t("memory_context_template", templates.MEMORY_CONTEXT_TEMPLATE).format(
             memories="\n".join(parts[:len(parts)//2 + 1]) if episodes else "(no episodes)",
             facts="\n".join(parts[len(parts)//2 + 1:]) if facts else "(no facts)",
         )
@@ -978,7 +1141,7 @@ class PromptAssembler:
             response_tag = " [REQUIRES RESPONSE]" if msg.requires_response else ""
             lines.append(f"{priority_tag}{response_tag} {msg.content}")
 
-        return templates.INBOX_TEMPLATE.format(
+        return self._t("inbox_template", templates.INBOX_TEMPLATE).format(
             messages="\n".join(lines),
             count=len(messages),
         )

@@ -11,10 +11,8 @@ Git auto-commits every change to /agent for full history.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 from ...shared.schemas.modifications import (
