@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
+import { useSelectionStore } from '@/stores/selection'
 import {
   DockviewReact,
   type DockviewReadyEvent,
@@ -168,6 +169,14 @@ export function Workspace() {
         event.api.fromJSON(layout)
         // Save on every layout change (tab moves, closes, etc.)
         event.api.onDidLayoutChange(() => saveLayout(event.api))
+        // Clear selection when detail panels close
+        event.api.onDidRemovePanel((e) => {
+          const panelType = e.params?.type as string
+          if (panelType === 'entity-detail' || panelType === 'event-detail') {
+            const { deselect } = useSelectionStore.getState()
+            deselect()
+          }
+        })
         return
       }
     } catch { /* fall through to default */ }
@@ -182,6 +191,14 @@ export function Workspace() {
 
     // Save on every layout change
     event.api.onDidLayoutChange(() => saveLayout(event.api))
+    // Clear selection when detail panels close
+    event.api.onDidRemovePanel((e) => {
+      const panelType = e.params?.type as string
+      if (panelType === 'entity-detail' || panelType === 'event-detail') {
+        const { deselect } = useSelectionStore.getState()
+        deselect()
+      }
+    })
   }, [setDockviewApiRef])
 
   // Handle panel open requests from sidebar

@@ -216,6 +216,10 @@ class PromptAssembler:
             recent_work_pattern=recent_work_pattern or "unknown",
         )
 
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            review_text = self._world_briefing + "\n\n" + review_text
+
         system_text = (
             "reasoning: high\n\n"
             "You are Legba, conducting a periodic strategic review. "
@@ -277,6 +281,10 @@ class PromptAssembler:
             recent_work_pattern=recent_work_pattern or "unknown",
         )
 
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
+
         # Subconscious differential briefing
         if self._differential_briefing:
             user_text = self._differential_briefing + "\n\n" + user_text
@@ -325,6 +333,10 @@ class PromptAssembler:
             entity_health=entity_health,
         )
 
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
+
         # Subconscious differential briefing
         if self._differential_briefing:
             user_text = self._differential_briefing + "\n\n" + user_text
@@ -366,6 +378,10 @@ class PromptAssembler:
             active_goals=goals_text,
             source_status=source_status,
         )
+
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
 
         # Subconscious differential briefing
         if self._differential_briefing:
@@ -409,6 +425,10 @@ class PromptAssembler:
             source_status=source_status,
             ingestion_status=ingestion_status,
         )
+
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
 
         # Subconscious differential briefing
         if self._differential_briefing:
@@ -456,6 +476,10 @@ class PromptAssembler:
         if priority_context:
             user_text += "\n\n" + priority_context
 
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
+
         # Subconscious differential briefing
         if self._differential_briefing:
             user_text = self._differential_briefing + "\n\n" + user_text
@@ -501,6 +525,10 @@ class PromptAssembler:
         if priority_context:
             user_text += "\n\n" + priority_context
 
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
+
         # Subconscious differential briefing
         if self._differential_briefing:
             user_text = self._differential_briefing + "\n\n" + user_text
@@ -526,6 +554,8 @@ class PromptAssembler:
                 active_goals=goals_text_truncated,
                 analysis_context=analysis_context_truncated,
             )
+            if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+                user_text = self._world_briefing + "\n\n" + user_text
             if inbox_messages:
                 user_text = self._format_inbox(inbox_messages) + "\n\n" + user_text
             user_text += "\n\n(Note: context was truncated to fit budget)"
@@ -564,6 +594,10 @@ class PromptAssembler:
             active_goals=goals_text,
             evolve_context=evolve_context,
         )
+
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
 
         # Subconscious differential briefing
         if self._differential_briefing:
@@ -611,6 +645,10 @@ class PromptAssembler:
         if priority_context:
             user_text += "\n\n" + priority_context
 
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
+
         # Subconscious differential briefing
         if self._differential_briefing:
             user_text = self._differential_briefing + "\n\n" + user_text
@@ -652,6 +690,10 @@ class PromptAssembler:
             active_goals=goals_text,
             synthesize_context=synthesize_context,
         )
+
+        # World briefing (bootstrap cycles only)
+        if cycle_number <= self._bootstrap_threshold and self._world_briefing:
+            user_text = self._world_briefing + "\n\n" + user_text
 
         # Subconscious differential briefing
         if self._differential_briefing:
@@ -1122,7 +1164,20 @@ class PromptAssembler:
                 subject = f.get("subject", "?")
                 predicate = f.get("predicate", "?")
                 value = f.get("value", "?")
-                parts.append(f"- {subject} {predicate} {value}")
+                line = f"- {subject} {predicate} {value}"
+                # Show temporal bounds when present
+                vf = f.get("valid_from")
+                vu = f.get("valid_until")
+                if vf or vu:
+                    temporal_parts = []
+                    if vf:
+                        vf_str = vf if isinstance(vf, str) else vf.isoformat() if hasattr(vf, 'isoformat') else str(vf)
+                        temporal_parts.append(f"from {vf_str[:10]}")
+                    if vu:
+                        vu_str = vu if isinstance(vu, str) else vu.isoformat() if hasattr(vu, 'isoformat') else str(vu)
+                        temporal_parts.append(f"until {vu_str[:10]}")
+                    line += f" [{', '.join(temporal_parts)}]"
+                parts.append(line)
 
         if not parts:
             return ""

@@ -53,7 +53,7 @@ Legba is a continuously operating autonomous intelligence analyst. It ingests si
  └─────────────────────────────────────────────────────┘
 ```
 
-**Key numbers:** 176 source files, 200+ tests, 66 built-in tools, 17 containers, 3 cognitive layers (10+11+7), 7 cycle types, JDL L0-L5, 30 canonical relationship types, 6 memory layers, 25 UI panels, 8 Grafana dashboards.
+**Key numbers:** 176 source files, 200+ tests, 67 built-in tools, 17 containers, 3 cognitive layers (10+11+7), 7 cycle types, JDL L0-L5, 30 canonical relationship types, 6 memory layers, 25 UI panels, 8 Grafana dashboards.
 
 ---
 
@@ -230,6 +230,24 @@ Every edge carries **confidence**, **evidence_count**, and **volatility** attrib
 - **Evidence provenance**: Each edge's evidence_count tracks how many independent signals/events support it. Edges with high confidence but low evidence_count are flagged as potentially fragile.
 
 Events connect to entities via INVOLVED_IN (with roles), to other events via CAUSED_BY and PART_OF, and to situations via TRACKED_BY. Graph traversals answer questions that would require complex multi-table JOINs in relational queries.
+
+#### Nexus Nodes — Reified Relationships
+
+Not all relationships are simple edges. When a relationship involves a proxy, intermediary, covert channel, or non-obvious intent, it is stored as a **Nexus node** — a reified relationship that captures the full structure of the interaction rather than flattening it into a single edge.
+
+A Nexus node connects to the graph via three edge types:
+
+- **PARTY_TO** — the actor initiating the relationship (actor -> Nexus)
+- **TARGETS** — the entity being acted upon (Nexus -> target)
+- **CONDUCTED_VIA** — an optional intermediary or proxy (Nexus -> via entity)
+
+Each Nexus carries `channel` (proxy, covert, diplomatic, financial, etc.) and `intent` (hostile, supportive, neutral) properties. For example, "Iran supplies weapons to Hezbollah targeting Israel" becomes a Nexus with channel=proxy and intent=hostile, with Iran as PARTY_TO, Israel as TARGETS, and Hezbollah as CONDUCTED_VIA.
+
+Structural balance analysis uses the `intent` property for edge signing — hostile Nexus nodes contribute negative weight to triadic balance calculations, just as HostileTo edges do for flat relationships. This means proxy warfare and covert operations factor into the stability analysis of the relationship graph.
+
+#### Temporal Fact Enforcement
+
+Facts carry explicit temporal bounds (`valid_from`, `valid_until`). For single-value predicates like LeaderOf, HeadOfState, and CapitalOf, storing a new value automatically supersedes the previous one — the old fact gets a `valid_until` timestamp and a `superseded_by` reference. This keeps the fact base current without manual cleanup while preserving the full historical record.
 
 ---
 

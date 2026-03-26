@@ -777,9 +777,26 @@ async def list_entities(
                 try:
                     ep = EntityProfile.model_validate_json(row["data"])
                     items.append(_serialize_entity(ep))
-                except Exception as e:
-                    logger.debug("Entity profile parse failed: %s", e)
-                    total -= 1
+                except Exception:
+                    # Fallback: serialize directly from raw JSON data
+                    try:
+                        raw = row["data"] if isinstance(row["data"], dict) else json.loads(row["data"])
+                        items.append({
+                            "entity_id": raw.get("id", ""),
+                            "name": raw.get("canonical_name") or raw.get("name", ""),
+                            "entity_type": raw.get("entity_type", "other"),
+                            "aliases": raw.get("aliases", []),
+                            "summary": raw.get("summary", ""),
+                            "completeness": raw.get("completeness_score", 0),
+                            "event_count": raw.get("event_link_count", 0),
+                            "first_seen": raw.get("created_at"),
+                            "last_seen": raw.get("last_event_link_at"),
+                            "assertions": [],
+                            "relationships": [],
+                        })
+                    except Exception as e2:
+                        logger.debug("Entity fallback serialize failed: %s", e2)
+                        total -= 1
             return _json({"items": items, "total": total, "offset": offset, "limit": limit})
     except Exception as exc:
         logger.warning("Entities query failed: %s", exc)
@@ -811,6 +828,54 @@ async def get_entity(request: Request, entity_id: str):
             logger.debug("Entity name lookup failed for %r: %s", entity_id, e)
 
     if not ep:
+        # Final fallback: raw data lookup by UUID (handles seed data with old field names)
+        if stores.structured._available:
+            try:
+                entity_uuid = UUID(entity_id)
+                row = await stores.structured._pool.fetchrow(
+                    "SELECT data FROM entity_profiles WHERE id = $1", entity_uuid
+                )
+                if row:
+                    raw = row["data"] if isinstance(row["data"], dict) else json.loads(row["data"])
+                    data = {
+                        "entity_id": raw.get("id", str(entity_uuid)),
+                        "name": raw.get("canonical_name") or raw.get("name", ""),
+                        "entity_type": raw.get("entity_type", "other"),
+                        "aliases": raw.get("aliases", []),
+                        "summary": raw.get("summary", ""),
+                        "completeness": raw.get("completeness_score", 0),
+                        "event_count": raw.get("event_link_count", 0),
+                        "first_seen": raw.get("created_at"),
+                        "last_seen": raw.get("last_event_link_at"),
+                        "assertions": [],
+                        "relationships": [],
+                        "tags": raw.get("tags", []),
+                    }
+                    # Fetch relationships from graph
+                    try:
+                        name = data["name"]
+                        rel_rows = await stores.structured._pool.fetch(f"""
+                            LOAD 'age'; SET search_path = ag_catalog, public;
+                            SELECT * FROM cypher('legba_graph', $$
+                                MATCH (a:Entity {{name: "{name}"}})-[r]->(b:Entity)
+                                RETURN a.name, type(r), b.name
+                                UNION ALL
+                                MATCH (a:Entity)-[r]->(b:Entity {{name: "{name}"}})
+                                RETURN a.name, type(r), b.name
+                            $$) AS (src agtype, rel agtype, tgt agtype)
+                        """)
+                        for rr in rel_rows:
+                            data["relationships"].append({
+                                "source": str(rr["src"]).strip('"'),
+                                "rel_type": str(rr["rel"]).strip('"'),
+                                "target": str(rr["tgt"]).strip('"'),
+                            })
+                    except Exception:
+                        pass
+                    return _json(data)
+            except (ValueError, Exception):
+                pass
+
         return api_error(404, "Entity not found", f"No entity with id {entity_id}")
 
     data = _serialize_entity(ep)
@@ -1531,6 +1596,7 @@ async def list_facts(
     predicate: str | None = None,
     min_confidence: float | None = None,
     subject: str | None = None,
+    current_only: bool = True,
 ):
     stores = get_stores(request)
 
@@ -1554,6 +1620,9 @@ async def list_facts(
         conditions.append(f"LOWER(subject) LIKE LOWER(${idx})")
         params.append(f"%{subject}%")
         idx += 1
+    if current_only:
+        conditions.append("(valid_until IS NULL OR valid_until > NOW())")
+        conditions.append("superseded_by IS NULL")
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -1561,13 +1630,15 @@ async def list_facts(
         async with stores.structured._pool.acquire() as conn:
             total = await conn.fetchval(f"SELECT count(*) FROM facts {where}", *params)
             rows = await conn.fetch(
-                f"SELECT id, subject, predicate, value, confidence, source_cycle, created_at "
+                f"SELECT id, subject, predicate, value, confidence, source_cycle, "
+                f"created_at, valid_from, valid_until, superseded_by "
                 f"FROM facts {where} ORDER BY created_at DESC "
                 f"LIMIT ${idx} OFFSET ${idx + 1}",
                 *params, limit, offset,
             )
-            items = [
-                {
+            items = []
+            for r in rows:
+                item = {
                     "fact_id": str(r["id"]),
                     "subject": r["subject"],
                     "predicate": r["predicate"],
@@ -1576,8 +1647,25 @@ async def list_facts(
                     "source": f"cycle {r['source_cycle']}" if r["source_cycle"] else "",
                     "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
                 }
-                for r in rows
-            ]
+                # Include temporal fields
+                if r["valid_from"] is not None:
+                    item["valid_from"] = r["valid_from"].isoformat()
+                if r["valid_until"] is not None:
+                    item["valid_until"] = r["valid_until"].isoformat()
+                    try:
+                        from datetime import timezone as _tz
+                        _tz_info = r["valid_until"].tzinfo or _tz.utc
+                        item["temporal_status"] = "expired" if r["valid_until"] < datetime.now(
+                            _tz_info
+                        ) else "active"
+                    except Exception:
+                        item["temporal_status"] = "active"
+                else:
+                    item["temporal_status"] = "active"
+                if r["superseded_by"] is not None:
+                    item["temporal_status"] = "superseded"
+                    item["superseded_by"] = str(r["superseded_by"])
+                items.append(item)
             return _json({"items": items, "total": total, "offset": offset, "limit": limit})
     except Exception as exc:
         logger.warning("Facts query failed: %s", exc)
@@ -2472,6 +2560,147 @@ async def send_message_v2(request: Request, body: MessageSend):
         "nats_available": nats_client.available,
         "sent_id": msg.id,
     }, 201)
+
+
+@router.get("/nexuses")
+async def list_nexuses(
+    request: Request,
+    actor: str = Query(None, description="Filter by actor entity name"),
+    target: str = Query(None, description="Filter by target entity name"),
+    type: str = Query(None, description="Filter by nexus_type"),
+    channel: str = Query(None, description="Filter by channel (direct/proxy/covert/institutional)"),
+    intent: str = Query(None, description="Filter by intent (supportive/hostile/dual-use/neutral)"),
+    limit: int = Query(50, ge=1, le=500),
+):
+    """Query reified relationship nexuses with optional filters."""
+    try:
+        stores = get_stores(request)
+        if not stores.structured._available:
+            return _json({"nexuses": [], "total": 0})
+
+        conditions = []
+        params = []
+        idx = 1
+
+        if actor:
+            conditions.append(f"actor_entity = ${idx}")
+            params.append(actor)
+            idx += 1
+        if target:
+            conditions.append(f"target_entity = ${idx}")
+            params.append(target)
+            idx += 1
+        if type:
+            conditions.append(f"nexus_type = ${idx}")
+            params.append(type)
+            idx += 1
+        if channel:
+            conditions.append(f"channel = ${idx}")
+            params.append(channel)
+            idx += 1
+        if intent:
+            conditions.append(f"intent = ${idx}")
+            params.append(intent)
+            idx += 1
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        query = f"""
+            SELECT id, nexus_type, channel, intent, description,
+                   actor_entity, target_entity, via_entity,
+                   confidence, evidence_count, valid_from, valid_until,
+                   source_cycle, created_at
+            FROM nexuses
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ${idx}
+        """
+        params.append(limit)
+
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        nexuses = []
+        for row in rows:
+            nexuses.append({
+                "id": str(row["id"]),
+                "nexus_type": row["nexus_type"],
+                "channel": row["channel"],
+                "intent": row["intent"],
+                "description": row["description"] or "",
+                "actor_entity": row["actor_entity"],
+                "target_entity": row["target_entity"],
+                "via_entity": row["via_entity"],
+                "confidence": row["confidence"],
+                "evidence_count": row["evidence_count"],
+                "valid_from": row["valid_from"].isoformat() if row["valid_from"] else None,
+                "valid_until": row["valid_until"].isoformat() if row["valid_until"] else None,
+                "source_cycle": row["source_cycle"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            })
+
+        return _json({"nexuses": nexuses, "total": len(nexuses)})
+    except Exception as exc:
+        logger.exception("list_nexuses failed")
+        return api_error(str(exc), 500)
+
+
+@router.get("/nexuses/{nexus_id}")
+async def get_nexus(request: Request, nexus_id: str):
+    """Get a single nexus with its full chain (actor, target, via)."""
+    try:
+        from uuid import UUID as _UUID
+        try:
+            op_uuid = _UUID(nexus_id)
+        except ValueError:
+            return api_error("Invalid nexus ID format", 400)
+
+        stores = get_stores(request)
+        if not stores.structured._available:
+            return api_error("Database not available", 503)
+
+        async with stores.structured._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, nexus_type, channel, intent, description,
+                       actor_entity, target_entity, via_entity,
+                       confidence, evidence_count, valid_from, valid_until,
+                       source_cycle, created_at
+                FROM nexuses WHERE id = $1
+                """,
+                op_uuid,
+            )
+
+        if not row:
+            return api_error(f"Nexus {nexus_id} not found", 404)
+
+        result = {
+            "id": str(row["id"]),
+            "nexus_type": row["nexus_type"],
+            "channel": row["channel"],
+            "intent": row["intent"],
+            "description": row["description"] or "",
+            "actor_entity": row["actor_entity"],
+            "target_entity": row["target_entity"],
+            "via_entity": row["via_entity"],
+            "confidence": row["confidence"],
+            "evidence_count": row["evidence_count"],
+            "valid_from": row["valid_from"].isoformat() if row["valid_from"] else None,
+            "valid_until": row["valid_until"].isoformat() if row["valid_until"] else None,
+            "source_cycle": row["source_cycle"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "chain": {
+                "actor": row["actor_entity"],
+                "nexus_type": row["nexus_type"],
+                "via": row["via_entity"],
+                "target": row["target_entity"],
+                "channel": row["channel"],
+                "intent": row["intent"],
+            },
+        }
+        return _json(result)
+    except Exception as exc:
+        logger.exception("get_nexus failed")
+        return api_error(str(exc), 500)
 
 
 @router.get("/graph/balance")

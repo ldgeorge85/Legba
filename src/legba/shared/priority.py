@@ -3,16 +3,22 @@
 JDL Level 3: Priority stack with adaptive staleness.
 
 Provides an advisory ranking of the most important situations to focus on.
-The priority stack is computed from four components plus an optional
-structural instability boost:
+The priority stack is computed from four components plus optional boosts:
 
   score = (event_velocity * 0.3) + (goal_overlap * 0.25)
         + (watchlist_trigger_density * 0.25) + (recency_penalty * 0.2)
+        + structural_instability (capped 0.10)
+        + covert_ops_boost (capped 0.15)
 
 If structural balance results are provided, situations whose linked entities
 appear in unbalanced triads receive a scoring boost (capped at 0.10).
 Unbalanced triads represent structurally unstable relationships that may
 realign — analytically interesting.
+
+Covert/dual-use nexuses boost: Nexuses with channel='covert' or
+intent='dual-use' whose actors/targets overlap with a situation's
+key_entities get a boost of 0.05 per match (capped at 0.15). These
+nexuses are inherently analytically interesting.
 
 Adaptive staleness thresholds vary by severity:
   - critical: staleness starts at 5 cycles
@@ -144,9 +150,28 @@ async def _compute_stack(
         """)
         active_goals = _parse_goals(goal_rows)
 
-        # --- 6. For each situation, compute the 4 components ---
+        # --- 5b. Load covert/dual-use nexuses (last 48h) ---
+        #     These are inherently analytically interesting.
         now = datetime.now(timezone.utc)
         cutoff_48h = now - timedelta(hours=48)
+        covert_ops = await conn.fetch("""
+            SELECT actor_entity, target_entity
+            FROM nexuses
+            WHERE (channel = 'covert' OR intent = 'dual-use')
+              AND created_at > $1
+              AND (valid_until IS NULL OR valid_until > NOW())
+        """, cutoff_48h)
+
+        # Build set of entity names involved in covert/dual-use ops
+        # (lowercased for matching against situation key_entities)
+        covert_op_entities: set[str] = set()
+        for op in covert_ops:
+            if op["actor_entity"]:
+                covert_op_entities.add(op["actor_entity"].lower())
+            if op["target_entity"]:
+                covert_op_entities.add(op["target_entity"].lower())
+
+        # --- 6. For each situation, compute the 4 components ---
 
         results: list[dict] = []
 
@@ -214,7 +239,18 @@ async def _compute_stack(
                     # Cap at 0.10 — up to 3 matching entities contribute
                     structural_instability = min(len(overlap) * 0.033, 0.10)
 
-            # --- 6h. Normalize velocity and trigger density ---
+            # --- 6h. Covert/dual-use nexuses boost ---
+            covert_ops_boost = 0.0
+            if covert_op_entities:
+                sit_entities_lower = {
+                    e.lower() for e in (sit_data.get("key_entities") or [])
+                }
+                if sit_entities_lower:
+                    covert_overlap = sit_entities_lower & covert_op_entities
+                    # 0.05 per matching entity, capped at 0.15
+                    covert_ops_boost = min(len(covert_overlap) * 0.05, 0.15)
+
+            # --- 6i. Normalize velocity and trigger density ---
             # Will normalize across all situations after the loop
             results.append({
                 "situation_id": str(sit_id),
@@ -227,6 +263,7 @@ async def _compute_stack(
                 "recency": recency,
                 "cycles_since_analysis": cycles_since,
                 "structural_instability": structural_instability,
+                "covert_ops_boost": covert_ops_boost,
             })
 
     # --- 7. Normalize event_velocity and trigger_density across all situations ---
@@ -240,6 +277,7 @@ async def _compute_stack(
         goal_overlap = r["goal_overlap"]
         recency = r["recency"]
         structural_instability = r.get("structural_instability", 0.0)
+        covert_ops_boost = r.get("covert_ops_boost", 0.0)
 
         score = (
             event_velocity * 0.30
@@ -247,6 +285,7 @@ async def _compute_stack(
             + trigger_density * 0.25
             + recency * 0.20
             + structural_instability  # additive boost, capped at 0.10
+            + covert_ops_boost        # additive boost, capped at 0.15
         )
 
         components: dict[str, Any] = {
@@ -257,6 +296,8 @@ async def _compute_stack(
         }
         if structural_instability > 0:
             components["structural_instability"] = round(structural_instability, 3)
+        if covert_ops_boost > 0:
+            components["covert_ops_boost"] = round(covert_ops_boost, 3)
 
         scored.append({
             "situation_id": r["situation_id"],
@@ -451,6 +492,9 @@ def format_priority_stack(stack: list[dict]) -> str:
         instability = comp.get("structural_instability", 0)
         if instability > 0:
             detail += f" | instability={instability:.2f}"
+        covert_boost = comp.get("covert_ops_boost", 0)
+        if covert_boost > 0:
+            detail += f" | covert_ops={covert_boost:.2f}"
         lines.append(detail)
 
     return "\n".join(lines)

@@ -128,6 +128,35 @@ class MemoryManager:
                 query_vector=query_embedding,
                 limit=facts_limit,
             )
+
+        # Filter semantic facts against Postgres to exclude expired/superseded
+        # facts that still have Qdrant embeddings.
+        if semantic_facts and self.structured._available:
+            try:
+                from uuid import UUID as _UUID
+                sem_ids = []
+                for sf in semantic_facts:
+                    try:
+                        sem_ids.append(_UUID(sf.get("fact_id", "")))
+                    except (ValueError, TypeError):
+                        pass
+                if sem_ids:
+                    async with self.structured._pool.acquire() as conn:
+                        active_rows = await conn.fetch(
+                            "SELECT id FROM facts "
+                            "WHERE id = ANY($1) "
+                            "  AND superseded_by IS NULL "
+                            "  AND (valid_until IS NULL OR valid_until > NOW())",
+                            sem_ids,
+                        )
+                        active_ids = {str(r["id"]) for r in active_rows}
+                        semantic_facts = [
+                            sf for sf in semantic_facts
+                            if sf.get("fact_id", "") in active_ids
+                        ]
+            except Exception:
+                pass  # If check fails, proceed with unfiltered semantic facts
+
         structured_facts = await self.structured.query_facts(limit=facts_limit)
 
         # Merge: semantic results first (most relevant), then structured (recent/confident)

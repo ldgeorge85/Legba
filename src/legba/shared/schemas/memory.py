@@ -67,6 +67,10 @@ class Fact(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     superseded_by: UUID | None = None  # If a newer fact replaces this one
 
+    # Temporal bounds — when is this fact true?
+    valid_from: datetime | None = None   # When the fact became true (default: NOW() in DB)
+    valid_until: datetime | None = None  # When the fact stops being true (NULL = open-ended)
+
 
 class Entity(BaseModel):
     """An entity in the knowledge graph (Postgres + AGE)."""

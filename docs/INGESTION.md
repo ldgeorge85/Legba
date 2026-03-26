@@ -173,6 +173,8 @@ Redis is used for metrics counters and heartbeat tracking (not signal data).
 
 7. **Situation linking**: new and reinforced events are auto-linked to active situations via entity substring matching.
 
+8. **Proxy candidate flagging**: when an event involves 3+ actors in conflict or political categories, the clusterer flags it as a proxy relationship candidate to a Redis queue (`legba:proxy_candidates`). The conscious agent reads these candidates during ORIENT and can investigate them during SURVEY/ANALYSIS cycles.
+
 ## Telegram Integration
 
 Telegram channels are configured as sources with `source_type = "telegram"` and URL format `telegram://@channelhandle`.

@@ -243,7 +243,7 @@ class StructuredStore:
                 CREATE TABLE IF NOT EXISTS watch_triggers (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     watch_id UUID NOT NULL REFERENCES watchlist(id) ON DELETE CASCADE,
-                    signal_id UUID NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+                    signal_id UUID REFERENCES signals(id) ON DELETE CASCADE,
                     event_id UUID REFERENCES events(id) ON DELETE SET NULL,
                     watch_name TEXT NOT NULL DEFAULT '',
                     event_title TEXT NOT NULL DEFAULT '',
@@ -470,6 +470,30 @@ class StructuredStore:
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     last_login TIMESTAMPTZ
                 );
+
+                -- Reified relationships: Nexuses table
+                -- Nexuses are first-class nodes in the AGE graph, but we
+                -- keep a Postgres table as the queryable store because AGE's
+                -- Cypher property filtering is limited.
+                CREATE TABLE IF NOT EXISTS nexuses (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    nexus_type TEXT NOT NULL,
+                    channel TEXT NOT NULL DEFAULT 'direct',
+                    intent TEXT NOT NULL DEFAULT 'neutral',
+                    description TEXT DEFAULT '',
+                    actor_entity TEXT NOT NULL,
+                    target_entity TEXT NOT NULL,
+                    via_entity TEXT,
+                    confidence REAL DEFAULT 0.5,
+                    evidence_count INT DEFAULT 1,
+                    valid_from TIMESTAMPTZ,
+                    valid_until TIMESTAMPTZ,
+                    source_cycle INT DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_nexuses_actor ON nexuses (actor_entity);
+                CREATE INDEX IF NOT EXISTS idx_nexuses_target ON nexuses (target_entity);
+                CREATE INDEX IF NOT EXISTS idx_nexuses_type ON nexuses (nexus_type);
             """)
 
             # --- Cognitive architecture schema extensions ---
@@ -570,6 +594,15 @@ class StructuredStore:
     _VOLATILE_PREDICATES = frozenset({
         "LeaderOf", "HeadOfState", "HeadOfGovernment", "President",
         "PrimeMinister", "SupremeLeader", "Monarch",
+    })
+
+    # Broader set: predicates where storing a new value for the same subject
+    # should auto-supersede the old value (even if not leadership-specific).
+    _SINGLE_VALUE_PREDICATES = frozenset({
+        "LeaderOf", "HeadOfState", "HeadOfGovernment", "President",
+        "PrimeMinister", "SupremeLeader", "Monarch",
+        "Capital", "Population", "GDP", "Area", "Currency",
+        "GovernmentType", "OfficialLanguage", "SignatoryTo",
     })
 
     async def store_fact(self, fact: Fact, evidence: list[dict] | None = None, embedding=None) -> bool:
@@ -732,6 +765,42 @@ class StructuredStore:
                             except Exception:
                                 pass  # Best-effort graph cleanup
 
+                # Auto-supersede for single-value predicates (same subject+predicate,
+                # different value). E.g., "France Capital Paris" supersedes
+                # "France Capital Vichy" if one already exists.
+                # _VOLATILE_PREDICATES are a subset handled above with cross-subject
+                # logic; this covers the broader set.
+                if (fact.predicate in self._SINGLE_VALUE_PREDICATES
+                        and fact.predicate not in self._VOLATILE_PREDICATES):
+                    sv_superseded = await conn.fetch(
+                        """
+                        SELECT id, subject, predicate, value FROM facts
+                        WHERE LOWER(subject) = LOWER($1)
+                          AND LOWER(predicate) = LOWER($2)
+                          AND LOWER(value) != LOWER($3)
+                          AND superseded_by IS NULL
+                          AND (valid_until IS NULL OR valid_until > NOW())
+                        """,
+                        fact.subject, fact.predicate, fact.value,
+                    )
+                    if sv_superseded:
+                        await conn.execute(
+                            """
+                            UPDATE facts SET superseded_by = $1, valid_until = NOW(), updated_at = NOW()
+                            WHERE LOWER(subject) = LOWER($2)
+                              AND LOWER(predicate) = LOWER($3)
+                              AND LOWER(value) != LOWER($4)
+                              AND superseded_by IS NULL
+                              AND (valid_until IS NULL OR valid_until > NOW())
+                            """,
+                            fact.id, fact.subject, fact.predicate, fact.value,
+                        )
+                        logger.info(
+                            "Auto-superseded %d facts for %s %s (new value: %s)",
+                            len(sv_superseded), fact.subject, fact.predicate,
+                            fact.value[:60],
+                        )
+
                 # Resolve geo from subject/value
                 geo_lat, geo_lon = None, None
                 try:
@@ -747,19 +816,24 @@ class StructuredStore:
                 # Evidence set JSON
                 evidence_json = json.dumps(evidence or [])
 
+                # Resolve temporal bounds from Fact model (agent-provided or defaults)
+                _valid_from = fact.valid_from  # None means DB default NOW()
+                _valid_until = fact.valid_until  # None means open-ended
+
                 # Build INSERT with optional new columns (evidence_set, contradiction_of)
                 # Use try/except to gracefully handle missing columns on older schemas
                 try:
                     await conn.execute(
                         """
                         INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle,
-                                          data, created_at, valid_from, geo_lat, geo_lon,
+                                          data, created_at, valid_from, valid_until, geo_lat, geo_lon,
                                           evidence_set, contradiction_of)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11::jsonb, $12)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()), $10, $11, $12, $13::jsonb, $14)
                         ON CONFLICT (lower(subject), lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'::timestamptz)) DO UPDATE SET
                             confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
                             source_cycle = EXCLUDED.source_cycle,
                             data = EXCLUDED.data,
+                            valid_until = COALESCE(EXCLUDED.valid_until, facts.valid_until),
                             geo_lat = COALESCE(EXCLUDED.geo_lat, facts.geo_lat),
                             geo_lon = COALESCE(EXCLUDED.geo_lon, facts.geo_lon),
                             evidence_set = EXCLUDED.evidence_set,
@@ -768,26 +842,29 @@ class StructuredStore:
                         """,
                         fact.id, fact.subject, fact.predicate, fact.value,
                         fact.confidence, fact.source_cycle, fact.model_dump_json(),
-                        fact.created_at, geo_lat, geo_lon,
+                        fact.created_at, _valid_from, _valid_until,
+                        geo_lat, geo_lon,
                         evidence_json, contradiction_id,
                     )
                 except Exception:
                     # Fallback: columns may not exist yet on older schema
                     await conn.execute(
                         """
-                        INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at, valid_from, geo_lat, geo_lon)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10)
+                        INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at, valid_from, valid_until, geo_lat, geo_lon)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()), $10, $11, $12)
                         ON CONFLICT (lower(subject), lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'::timestamptz)) DO UPDATE SET
                             confidence = GREATEST(facts.confidence, EXCLUDED.confidence),
                             source_cycle = EXCLUDED.source_cycle,
                             data = EXCLUDED.data,
+                            valid_until = COALESCE(EXCLUDED.valid_until, facts.valid_until),
                             geo_lat = COALESCE(EXCLUDED.geo_lat, facts.geo_lat),
                             geo_lon = COALESCE(EXCLUDED.geo_lon, facts.geo_lon),
                             updated_at = NOW()
                         """,
                         fact.id, fact.subject, fact.predicate, fact.value,
                         fact.confidence, fact.source_cycle, fact.model_dump_json(),
-                        fact.created_at, geo_lat, geo_lon,
+                        fact.created_at, _valid_from, _valid_until,
+                        geo_lat, geo_lon,
                     )
             return True
         except Exception:
@@ -798,6 +875,7 @@ class StructuredStore:
         subject: str | None = None,
         predicate: str | None = None,
         limit: int = 20,
+        include_expired: bool = False,
     ) -> list[Fact]:
         if not self._available:
             return []
@@ -815,7 +893,9 @@ class StructuredStore:
                 params.append(f"%{predicate}%")
                 idx += 1
 
-            conditions.append("valid_until IS NULL")
+            if not include_expired:
+                # Only current facts: valid_until is NULL (open-ended) or still in the future
+                conditions.append("(valid_until IS NULL OR valid_until > NOW())")
             where = " AND ".join(conditions)
             params.append(limit)
 
@@ -834,10 +914,11 @@ class StructuredStore:
         lookback: int = 5,
         limit: int = 10,
     ) -> list[Fact]:
-        """Get non-superseded facts from the last N cycles.
+        """Get non-superseded, temporally current facts from the last N cycles.
 
         Guarantees the agent sees its own recent work regardless of
-        confidence ranking or semantic similarity.
+        confidence ranking or semantic similarity.  Excludes facts whose
+        valid_until is in the past.
         """
         if not self._available:
             return []
@@ -846,7 +927,9 @@ class StructuredStore:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(
                     "SELECT data FROM facts "
-                    "WHERE superseded_by IS NULL AND valid_until IS NULL AND source_cycle >= $1 "
+                    "WHERE superseded_by IS NULL "
+                    "  AND (valid_until IS NULL OR valid_until > NOW()) "
+                    "  AND source_cycle >= $1 "
                     "ORDER BY source_cycle DESC, created_at DESC LIMIT $2",
                     min_cycle, limit,
                 )

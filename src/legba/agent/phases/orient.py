@@ -670,6 +670,40 @@ class OrientMixin:
         except Exception:
             pass
 
+        # --- Proxy relationship candidates (from ingestion pipeline) ---
+        self._proxy_candidates = ""
+        try:
+            if self.memory and self.memory.registers:
+                redis = self.memory.registers._redis
+                proxy_raw = await redis.lrange('legba:proxy_candidates', 0, 9)
+                if proxy_raw:
+                    import json as _json_proxy
+                    candidates = []
+                    for p in proxy_raw:
+                        try:
+                            candidates.append(_json_proxy.loads(p))
+                        except Exception:
+                            continue
+                    if candidates:
+                        proxy_lines = [
+                            "## Proxy Relationship Candidates",
+                            "The ingestion pipeline flagged these events as potentially "
+                            "involving proxy relationships (3+ actors in conflict/political/military events):",
+                        ]
+                        for c in candidates:
+                            actors_str = ', '.join(c.get('actors', [])[:5])
+                            proxy_lines.append(
+                                f"- {c.get('event_title', '?')} "
+                                f"(actors: {actors_str})"
+                            )
+                        self._proxy_candidates = "\n".join(proxy_lines)
+                        if self._graph_inventory:
+                            self._graph_inventory += "\n" + self._proxy_candidates
+                        else:
+                            self._graph_inventory = self._proxy_candidates
+        except Exception:
+            pass
+
         # --- Cache task backlog counts for Tier 3 scoring ---
         # _select_cycle_type() is sync, so we pre-fetch counts here.
         self._backlog_survey_count = 0
@@ -716,4 +750,5 @@ class OrientMixin:
                         uncurated=self._uncurated_count,
                         stale_entities=self._stale_entity_count,
                         last_analysis=self._last_analysis_cycle,
-                        has_priority_stack=bool(self._priority_context))
+                        has_priority_stack=bool(self._priority_context),
+                        has_proxy_candidates=bool(self._proxy_candidates))

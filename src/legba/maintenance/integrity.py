@@ -184,6 +184,19 @@ class IntegrityVerifier:
                 """)
                 logger.info("Fixed %d situations with event_count mismatch", count)
 
+            # 8. Orphaned nexuses (actor or target entity no longer exists)
+            orphaned = await conn.fetchval("""
+                SELECT count(*) FROM nexuses o
+                WHERE NOT EXISTS (SELECT 1 FROM entity_profiles ep WHERE ep.canonical_name = o.actor_entity)
+                   OR NOT EXISTS (SELECT 1 FROM entity_profiles ep WHERE ep.canonical_name = o.target_entity)
+            """)
+            issues["orphaned_nexuses"] = orphaned or 0
+            if orphaned:
+                logger.warning(
+                    "Nexuses integrity: %d nexuses reference non-existent entities",
+                    orphaned,
+                )
+
         total = sum(issues.values())
         if total > 0:
             logger.info("Integrity verification: %d total issues found — %s", total, issues)

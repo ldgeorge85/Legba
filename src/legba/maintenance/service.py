@@ -24,6 +24,7 @@ from .config import MaintenanceConfig
 from .lifecycle import LifecycleManager
 from .entity_gc import EntityGarbageCollector
 from .fact_decay import FactDecayManager
+from .nexus_decay import NexusDecayManager
 from .corroboration import CorroborationScorer
 from .integrity import IntegrityVerifier
 from .metrics import MetricCollector
@@ -104,12 +105,14 @@ class MaintenanceService:
         try:
             from .backfill import BackfillManager
             backfill = BackfillManager(self._pg_pool)
+            ent_count = await backfill.backfill_entity_vertices()
             ev_count = await backfill.backfill_event_graph_vertices()
             sit_count = await backfill.backfill_situation_graph()
+            fact_edges = await backfill.backfill_graph_from_facts()
             edge_count = await backfill.backfill_edge_properties()
             logger.info(
-                "Startup backfill: %d event vertices, %d situation edges, %d edge properties",
-                ev_count, sit_count, edge_count,
+                "Startup backfill: %d entity vertices, %d event vertices, %d situation edges, %d fact edges, %d edge properties",
+                ent_count, ev_count, sit_count, fact_edges, edge_count,
             )
         except Exception as e:
             logger.warning("Startup backfill failed (non-fatal): %s", e)
@@ -223,6 +226,7 @@ class MaintenanceService:
         # Fact decay — every fact_decay_interval ticks
         if tick % self.config.fact_decay_interval == 0:
             await self._run_task("fact_decay", self._fact_decay)
+            await self._run_task("nexus_decay", self._nexus_decay)
 
         # Integrity verification — every integrity_interval ticks
         if tick % self.config.integrity_interval == 0:
@@ -326,6 +330,13 @@ class MaintenanceService:
         expired = await mgr.fact_decay()
         decayed = await mgr.confidence_decay()
         logger.info("Fact decay: %d expired, %d confidence-decayed", expired, decayed)
+
+    async def _nexus_decay(self) -> None:
+        """Nexus confidence decay for stale nexuses."""
+        mgr = NexusDecayManager(self._pg_pool)
+        decayed = await mgr.confidence_decay()
+        if decayed:
+            logger.info("Nexus decay: %d confidence-decayed", decayed)
 
     async def _corroboration_scoring(self) -> None:
         """Signal corroboration scoring."""

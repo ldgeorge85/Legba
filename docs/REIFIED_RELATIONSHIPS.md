@@ -22,7 +22,7 @@ The relationship itself becomes a first-class node in the AGE graph.
 ### Schema
 
 ```
-Operation Node:
+Nexus Node:
   type: str            — the canonical predicate (SuppliesWeaponsTo, AlliedWith, etc.)
   channel: str         — direct | proxy | covert | institutional
   intent: str          — supportive | hostile | dual-use | neutral
@@ -34,16 +34,16 @@ Operation Node:
   source_cycle: int    — cycle that created this
 
 Connecting Edges:
-  PARTY_TO         — actor entity → Operation (who initiates/conducts)
-  CONDUCTED_VIA    — Operation → intermediary entity (the proxy)
-  TARGETS          — Operation → target entity (who is affected)
-  EVIDENCED_BY     — Operation → signal/event (provenance)
+  PARTY_TO         — actor entity → Nexus (who initiates/conducts)
+  CONDUCTED_VIA    — Nexus → intermediary entity (the proxy)
+  TARGETS          — Nexus → target entity (who is affected)
+  EVIDENCED_BY     — Nexus → signal/event (provenance)
 ```
 
 ### Example: Iran → Hamas → Israel
 
 ```cypher
-CREATE (op:Operation {
+CREATE (op:Nexus {
   type: 'SuppliesWeaponsTo',
   channel: 'proxy',
   intent: 'hostile',
@@ -62,7 +62,7 @@ CREATE (op)-[:TARGETS]->(israel)
 
 **Proxy chain queries:**
 ```cypher
-MATCH (a:Entity)-[:PARTY_TO]->(op:Operation)-[:CONDUCTED_VIA]->(proxy)-[:TARGETS]->(target)
+MATCH (a:Entity)-[:PARTY_TO]->(op:Nexus)-[:CONDUCTED_VIA]->(proxy)-[:TARGETS]->(target)
 WHERE op.channel = 'proxy' AND op.intent = 'hostile'
 RETURN a.name, proxy.name, target.name, op.type
 ```
@@ -72,48 +72,48 @@ RETURN a.name, proxy.name, target.name, op.type
 The structural balance analysis uses `op.intent` to determine edge sign — a hostile SuppliesWeaponsTo counts as negative even though the predicate sounds positive. No more false alliance detection.
 
 **Temporal reconstruction:**
-Operations have `valid_from`/`valid_until`. Timeline scrubbing shows which proxy relationships were active when.
+Nexuses have `valid_from`/`valid_until`. Timeline scrubbing shows which proxy relationships were active when.
 
 **Evidence provenance:**
-Every Operation links to the signals/events that support it. Click the relationship → see the evidence chain.
+Every Nexus links to the signals/events that support it. Click the relationship → see the evidence chain.
 
 ### Coexistence with Flat Edges
 
-Existing flat edges (AlliedWith, HostileTo, etc.) remain for simple queries and backward compatibility. Reified Operations are the "deep view" for analytical work. The graph has two levels:
+Existing flat edges (AlliedWith, HostileTo, etc.) remain for simple queries and backward compatibility. Reified Nexuses are the "deep view" for analytical work. The graph has two levels:
 - **Simple**: `(Iran)-[:HostileTo]->(Israel)` — fast, glanceable
-- **Deep**: `(Iran)-[:PARTY_TO]->(op:Operation {type: 'SuppliesWeaponsTo', channel: 'proxy'})-[:CONDUCTED_VIA]->(Hamas)-[:TARGETS]->(Israel)` — full nuance
+- **Deep**: `(Iran)-[:PARTY_TO]->(op:Nexus {type: 'SuppliesWeaponsTo', channel: 'proxy'})-[:CONDUCTED_VIA]->(Hamas)-[:TARGETS]->(Israel)` — full nuance
 
 The agent can query either level. The UI can toggle between simple and deep views.
 
 ### Implementation Plan
 
 **1. Schema extension (~2h)**
-- New node label `Operation` in AGE
+- New node label `Nexus` in AGE
 - Three new edge types: PARTY_TO, CONDUCTED_VIA, TARGETS, EVIDENCED_BY
 - Schema bootstrap in structured.py
 
 **2. Agent tooling (~4h)**
-- New tool: `graph_store_operation(type, channel, intent, description, actor, target, via, evidence_id)`
-- Or extend existing `graph_store` with an `operation` mode
-- Named query operations for Operation nodes in graph_query
+- New tool: `graph_store_nexus(type, channel, intent, description, actor, target, via, evidence_id)`
+- Or extend existing `graph_store` with a `nexus` mode
+- Named query modes for Nexus nodes in graph_query
 
 **3. Prompt updates (~2h)**
 - Entity guidance: when storing relationships, assess channel/intent/intermediary
-- SURVEY/ANALYSIS prompts: use operations for complex relationships, flat edges for simple ones
-- Criteria: if a relationship involves a proxy or covert channel, use an Operation node
+- SURVEY/ANALYSIS prompts: use nexuses for complex relationships, flat edges for simple ones
+- Criteria: if a relationship involves a proxy or covert channel, use a Nexus node
 
 **4. Subconscious validation (~2h)**
 - Relationship validation checks for implausible combinations (hostile SuppliesWeaponsTo between allies)
 - Auto-detect proxy chains from existing flat edges that should be reified
 
 **5. UI integration (~1d)**
-- Graph viewer: Operation nodes rendered as diamonds or hexagons (distinct from entity circles)
-- Operation detail modal: shows full chain with evidence
+- Graph viewer: Nexus nodes rendered as diamonds or hexagons (distinct from entity circles)
+- Nexus detail modal: shows full chain with evidence
 - Toggle between simple/deep graph view
 
 **6. Structural balance update (~2h)**
 - Use intent property for edge signing instead of just predicate type
-- Hostile operations count as negative edges regardless of predicate
+- Hostile nexuses count as negative edges regardless of predicate
 
 ### Estimated Effort
 ~3 days total. No infrastructure changes — AGE, TimescaleDB, and the existing graph tooling handle it.

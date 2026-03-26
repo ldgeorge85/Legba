@@ -296,7 +296,7 @@ class IngestionService:
                 from .cluster import SignalClusterer
                 from .notifications import NotificationDispatcher
                 notifier = NotificationDispatcher()
-                clusterer = SignalClusterer(self._pg_pool, qdrant_client=self._qdrant, notifier=notifier)
+                clusterer = SignalClusterer(self._pg_pool, qdrant_client=self._qdrant, notifier=notifier, redis_client=self._redis)
                 events_affected = await clusterer.cluster(window_hours=12, max_signals=1500)
                 if events_affected:
                     logger.info("Signal clusterer: %d events created/updated", events_affected)

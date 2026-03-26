@@ -1,5 +1,6 @@
 import { useDashboard, useEventTimeseries, useEvents } from '@/api/hooks'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useSelectionStore } from '@/stores/selection'
 import { cn, categoryColor } from '@/lib/utils'
 import { TimeAgo } from '@/components/common/TimeAgo'
 import { Badge } from '@/components/common/Badge'
@@ -52,6 +53,7 @@ export function DashboardPanel() {
   const { data: timeseries } = useEventTimeseries(7)
   const { data: recentEvents } = useEvents({ limit: 5 })
   const openPanel = useWorkspaceStore((s) => s.openPanel)
+  const select = useSelectionStore((s) => s.select)
 
   if (isLoading) {
     return (
@@ -164,7 +166,7 @@ export function DashboardPanel() {
             <div
               key={event.event_id}
               className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-secondary cursor-pointer text-sm"
-              onClick={() => openPanel('event-detail', { id: event.event_id })}
+              onClick={() => select({ type: 'signal', id: event.event_id, name: event.title })}
             >
               <Badge className={cn('text-[10px]', categoryColor(event.category))}>
                 {event.category}

@@ -251,6 +251,10 @@ docker compose -p legba exec supervisor python -m legba.supervisor.cli --shared 
 docker compose -p legba exec supervisor python -m legba.supervisor.cli --shared /shared status
 ```
 
+### Operator Corrections
+
+UI edits and deletions are logged to an `operator_corrections` table (entity_type, action, old/new values, timestamp). Recent corrections are injected into the agent's ORIENT context so it learns from operator feedback.
+
 ---
 
 ## 7. Web UI Access

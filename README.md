@@ -5,7 +5,7 @@
 <h1 align="center">Legba</h1>
 <p align="center"><em>Autonomous intelligence analysis platform.</em></p>
 
-Legba is a continuously operating AI analyst implementing multi-level data fusion (JDL L0-L5) for situational awareness. An automated ingestion pipeline collects and clusters raw signals from 112+ active sources. Three cognitive layers — deterministic maintenance, SLM validation, and full LLM analysis — run concurrently to refine raw signals into actionable intelligence. The AI runs structured analytical cycles building a temporal knowledge graph, tracking situations, stress-testing competing hypotheses (ACH), and producing named intelligence products (world assessments, situation briefs, predictions). An operator interacts through a 25-panel intelligence workstation with JWT authentication and a consultation engine.
+Legba is a continuously operating AI analyst implementing multi-level data fusion (JDL L0-L5) for situational awareness. An automated ingestion pipeline collects and clusters raw signals from 112+ active sources. Three cognitive layers — deterministic maintenance, SLM validation, and full LLM analysis — run concurrently to refine raw signals into actionable intelligence. The AI runs structured analytical cycles building a temporal knowledge graph where relationships can be simple edges or reified Nexus nodes that capture proxy chains, intent, and intermediaries. Facts carry temporal bounds with automatic supersession. The agent tracks situations, stress-tests competing hypotheses (ACH), and produces named intelligence products (world assessments, situation briefs, predictions). An operator interacts through a 25-panel intelligence workstation with JWT authentication and a consultation engine.
 
 It is not a chatbot, not a task runner, not an AutoGPT-style goal chaser. It is a disciplined analytical system: collection is deterministic, analysis is LLM-driven, and every cycle type has a specific purpose and restricted tool set.
 
@@ -25,7 +25,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 │   ├── Operator UI v1    — Web console with CRUD + consultation (FastAPI + htmx, :8501)
 │   ├── Operator UI v2    — 25-panel intelligence workstation (React + Dockview, :8503)
 │   ├── Redis             — Transient state, journal, reports
-│   ├── Postgres + AGE    — Signals, events, entities, temporal graph (Cypher)
+│   ├── Postgres + AGE    — Signals, events, entities, temporal graph (Cypher), Nexus nodes
 │   ├── Qdrant            — Semantic search (episodic memory)
 │   ├── NATS              — Event bus, messaging
 │   ├── OpenSearch x2     — Full-text search + isolated audit logs
@@ -42,7 +42,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 
 Processing is organized into three layers that run concurrently:
 
-- **Unconscious** (maintenance daemon, 10 modules) — Deterministic, no LLM. Lifecycle decay, entity garbage collection, corroboration scoring, adversarial detection, calibration tracking, integrity verification, structural balance analysis, graph entropy tracking. Tick-based scheduler with reactive state propagation.
+- **Unconscious** (maintenance daemon, 10 modules) — Deterministic, no LLM. Lifecycle decay, entity garbage collection, corroboration scoring, adversarial detection, calibration tracking, integrity verification, structural balance analysis (with intent-signed edges from Nexus nodes), graph entropy tracking. Tick-based scheduler with reactive state propagation.
 - **Subconscious** (subconscious service, 11 modules) — SLM-powered (Llama 3.1 8B). Signal quality validation, entity resolution, classification refinement, fact corroboration, graph consistency, situation detection. Three concurrent async loops.
 - **Conscious** (agent cycle) — Full primary LLM via hybrid PromptRouter. Planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation (ACH). Discrete cycles with full context assembly.
 
@@ -69,7 +69,7 @@ Tier 3 — Dynamic fill (state-scored):
   CURATE or SURVEY — scored by uncurated signal backlog vs default analytical desk work
 ```
 
-- **WAKE**: Load config, connect services, register 66 tools, drain inbox
+- **WAKE**: Load config, connect services, register 67 tools, drain inbox
 - **ORIENT**: Retrieve memories, goals, live infrastructure health check, graph inventory, source health, ingestion gap tracking, journal leads
 - **PLAN** (normal cycles): LLM selects focus and approach, outputs expected tool list
 - **REASON+ACT**: Tool loop (up to 20 steps) — LLM reasons, calls tools, feeds results back
@@ -127,11 +127,11 @@ docker compose -p legba exec supervisor \
 |--------|-------|
 | Python source files | 176 |
 | Tests | 200+ |
-| Built-in tools | 66 across 19 modules |
+| Built-in tools | 67 across 19 modules |
 | Containers | 17 (supervisor, agent, ingestion, maintenance, subconscious, Caddy, UI x2, infra x9) |
 | Cognitive layers | 3 (unconscious/10 modules, subconscious/11 modules, conscious/7 cycle types) |
 | Fusion levels | JDL L0-L5 mapped across all three layers |
-| Canonical relationship types | 30 |
+| Canonical relationship types | 30 (flat edges or reified Nexus nodes for proxy chains) |
 | LLM context window | 128k tokens (120k budget) |
 | Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |
 | UI panels | 25 (React + Dockview workstation) |
@@ -209,7 +209,7 @@ docker compose -p legba --profile test run --rm --no-deps test python -m pytest 
 
 ## Technology Stack
 
-Python 3.12 (async) | Docker Compose | GPT-OSS 120B via vLLM | Llama 3.1 8B via vLLM (SLM) | PostgreSQL 18 + Apache AGE | Qdrant | OpenSearch 2.x | NATS + JetStream | Apache Airflow | Caddy | FastAPI + htmx | React 18 + Vite + TypeScript | Sigma.js + Graphology | MapLibre GL JS | Dockview | TanStack Query | Zustand | Pydantic v2 | PyOD | spaCy | NetworkX | feedparser | pycountry
+Python 3.12 (async) | Docker Compose | GPT-OSS 120B via vLLM | Llama 3.1 8B via vLLM (SLM) | PostgreSQL 18 + Apache AGE (event-sourced relationship history with structural balance analysis) | TimescaleDB | Qdrant | OpenSearch 2.x | NATS + JetStream | Apache Airflow | Caddy | FastAPI + htmx | React 18 + Vite + TypeScript | Sigma.js + Graphology | MapLibre GL JS | Dockview | TanStack Query | Zustand | Pydantic v2 | PyOD | spaCy | NetworkX | feedparser | pycountry
 
 ## Contact
 

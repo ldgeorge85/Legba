@@ -59,6 +59,14 @@ The workspace is a three-part layout:
 | Tracking | Situations, Watchlist |
 | System | Analytics, Cycles, Journal, Reports |
 
+### Command Palette
+
+Ctrl+K opens a command palette for quick navigation to any panel, layout preset, or action.
+
+### Layout Presets
+
+5 named layout presets (Monitoring, Investigation, Analysis, Production, Operations) plus custom save/load. Accessible from the sidebar layout selector.
+
 ## Panels
 
 ### Dashboard

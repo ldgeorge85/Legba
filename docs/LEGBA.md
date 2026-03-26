@@ -19,7 +19,7 @@ Legba is a continuously operating AI intelligence analyst. It does not collect d
 
 **Two-tier data model:** Raw **signals** (RSS items, API responses, alerts) are ingested and deterministically clustered into derived **events** (real-world occurrences). Signals are evidence; events are the analytical unit. Reports, situations, hypotheses, and graph analysis operate on events.
 
-**Key numbers:** 176 Python source files, 200+ tests, **66 built-in tools** across 19 builtin modules + 2 config tools, 17 Docker containers, 8 Grafana dashboards, JDL fusion levels L0-L5.
+**Key numbers:** 176 Python source files, 200+ tests, **67 built-in tools** across 19 builtin modules + 2 config tools, 17 Docker containers, 8 Grafana dashboards, JDL fusion levels L0-L5.
 
 ---
 
@@ -43,7 +43,7 @@ Host VM (Debian 12, 8 vCPU, 16GB RAM)
 |   |   - PYTHONPATH=/agent/src (self-modifiable)
 |   |   - Cycle: WAKE > ORIENT > [cycle type routing] > REFLECT > NARRATE > PERSIST
 |   |   - cycle.py orchestrator + 13 phase mixins (phases/ directory)
-|   |   - 66 built-in tools (incl. cycle_complete pseudo-tool)
+|   |   - 67 built-in tools (incl. cycle_complete pseudo-tool)
 |   |
 |   +-- Ingestion Service Container
 |   |   - Background signal fetching, normalization, deterministic clustering
@@ -175,7 +175,7 @@ Parsed by `tool_parser.py` — supports `{"actions": [...]}` (primary) and bare 
 The cycle is implemented as a mixin-based architecture: `cycle.py` (~435 lines) is a thin orchestrator that inherits from 13 phase mixins in the `phases/` directory. Each mixin owns one phase and its helper methods.
 
 ```
-1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 66+ tools, drain inbox
+1. WAKE      -- Read challenge, load seed goal + world briefing, connect services, register 67+ tools, drain inbox
 2. ORIENT    -- Retrieve memories (episodic + semantic), load goals, graph summary, source health, ingestion gap tracking, journal leads
 3. Route to cycle type (3-tier):
    Tier 1 — Scheduled outputs (fixed intervals):
@@ -510,6 +510,8 @@ Apache AGE on Postgres. **30 canonical relationship types** with 70+ aliases nor
 
 **Temporal edges:** Relationships support `since` and `until` properties. Weighted edges carry a composite weight derived from evidence count, recency, and confidence. Structural balance analysis (AlliedWith = positive, HostileTo = negative) detects unbalanced triads that predict relationship realignment. Graph entropy tracks the diversity of the relationship landscape — spikes indicate relationship reorganization.
 
+**Nexus nodes:** Relationships involving proxies, intermediaries, or covert channels are stored as reified Nexus nodes rather than flat edges. A Nexus connects to the actor (PARTY_TO), target (TARGETS), and optional intermediary (CONDUCTED_VIA), with `channel` and `intent` properties. The `intent` property feeds into structural balance as edge signing (hostile = negative). Use `graph_store_nexus` for these; `graph_store` for simple direct relationships.
+
 ### Config Store
 
 Versioned Postgres-backed store for prompt templates, guidance text, world briefing, and mission configuration. Each update creates a new version; only one version per key is active. Supports rollback to any previous version.
@@ -525,6 +527,8 @@ The knowledge graph supports temporal analysis beyond simple `since`/`until` pro
 - **Structural balance:** Signed-network analysis on AlliedWith (+) / HostileTo (-) triads. Unbalanced triads (friend-of-friend-is-enemy) are analytically interesting — they predict realignment.
 - **Graph entropy:** Information-theoretic entropy of the relationship type distribution. Higher entropy = more diverse relationship landscape. Entropy spikes indicate structural reorganization.
 - **Relationship history:** Immutable transition records for every edge create/update/delete, stored in TimescaleDB for temporal reconstruction.
+
+**Temporal fact enforcement:** Facts carry `valid_from` and `valid_until` bounds. Single-value predicates (LeaderOf, HeadOfState, CapitalOf, etc.) auto-supersede when a new value is stored for the same subject — the old fact receives a `valid_until` timestamp and `superseded_by` reference. Expired facts are excluded from default queries but preserved for historical analysis.
 
 ### Authentication
 
@@ -567,16 +571,16 @@ The platform implements the Joint Directors of Laboratories (JDL) data fusion mo
 
 ---
 
-## 5. Tool System (66 Tools)
+## 5. Tool System (67 Tools)
 
-### Core (17 tools)
+### Core (19 tools)
 | Tool | Category |
 |------|----------|
 | `fs_read`, `fs_write`, `fs_list` | Filesystem |
 | `exec` | Shell execution |
 | `http_request` | HTTP (Legba-SA User-Agent, auto-retries 403/405 with browser UA) |
-| `memory_store`, `memory_query`, `memory_promote`, `memory_supersede` | Memory (episodic + long-term) |
-| `graph_store`, `graph_query` | Graph (AGE/Cypher, temporal edges) |
+| `memory_store`, `memory_query`, `memory_promote`, `memory_supersede`, `store_fact` | Memory (episodic + long-term + structured facts with temporal bounds) |
+| `graph_store`, `graph_query`, `graph_store_nexus` | Graph (AGE/Cypher, temporal edges, reified Nexus nodes) |
 | `goal_create`, `goal_list`, `goal_update`, `goal_decompose` | Goals |
 | `code_test` | Self-modification (syntax validation) |
 | `spawn_subagent` | Delegation (own 128k context) |
@@ -1105,7 +1109,7 @@ legba/
 |   |   +-- main.py                  -- Entry point
 |   |   +-- cycle.py                 -- Orchestrator (~435 lines), inherits 13 phase mixins, plan/act logic inline
 |   |   +-- phases/                  -- Phase mixin modules
-|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (66+ tools)
+|   |   |   +-- wake.py             -- WakeMixin: service init, tool registration (67+ tools)
 |   |   |   +-- orient.py           -- OrientMixin: memory/context + infra health + priority stack + differential briefing
 |   |   |   +-- reflect.py          -- ReflectMixin: significance, facts, graph
 |   |   |   +-- narrate.py          -- NarrateMixin: journal + consolidation + lead extraction
@@ -1124,7 +1128,7 @@ legba/
 |   |   +-- tools/
 |   |   |   +-- registry.py
 |   |   |   +-- executor.py
-|   |   |   +-- builtins/            -- 19 modules (66 tools) + config_tools.py + geo.py utility
+|   |   |   +-- builtins/            -- 19 modules (67 tools) + config_tools.py + geo.py utility
 |   |   +-- selfmod/                 -- Self-modification engine + rollback
 |   |   +-- comms/                   -- NATS client, Airflow client
 |   |   +-- prompt/

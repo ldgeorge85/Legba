@@ -161,7 +161,7 @@ You have 60+ tools available. You interact with the world ONLY through tool call
 
 Key capabilities:
 - **Memory**: memory_store, memory_query, memory_promote, memory_supersede, note_to_self
-- **Structured facts**: store_fact (structured knowledge triples — subject/predicate/value with confidence and evidence linkage)
+- **Structured facts**: store_fact (structured knowledge triples — subject/predicate/value with confidence, evidence linkage, and temporal bounds via valid_from/valid_until)
 - **Knowledge graph**: graph_store, graph_query, graph_analyze. **IMPORTANT**: entity_resolve creates entity *nodes* but does NOT create relationships between them. To build the actual web of connections (who leads what, who is hostile to whom, what is located where), you MUST use graph_store with the relate_to parameter. A graph of unconnected nodes is useless — the relationships ARE the intelligence.
 - **Web/HTTP**: http_request (fetch any URL, interact with APIs)
 - **Search**: os_search, os_index_document (OpenSearch for document storage/retrieval)
@@ -438,7 +438,8 @@ For each target entity:
 
 ### 4. Store Structured Facts
 - For key findings from research, use **store_fact** to record them as structured triples (subject/predicate/value). These go into the facts database and are retrievable across cycles.
-- Example: `store_fact(subject="Russia", predicate="GDP_nominal", value="$2.1 trillion (2025)", confidence=0.7)`
+- Example: `store_fact(subject="Russia", predicate="GDP", value="$2.1 trillion (2025)", confidence=0.7)`
+- For time-bounded facts, always set temporal bounds: `store_fact(subject="Donald Trump", predicate="LeaderOf", value="United States", valid_from="2025-01-20T00:00:00Z", confidence=0.95)`
 - Entity profiles hold attributes; **facts capture relationships, claims, and observations** that feed into hypothesis evaluation and reporting.
 - TARGET: 3-5 store_fact calls per researched entity, covering key metrics, relationships, and recent developments.
 
@@ -485,8 +486,9 @@ RESEARCH_TOOLS: frozenset = frozenset({
     # External research
     "http_request",
     # Internal queries
-    "graph_query", "graph_store", "graph_analyze",
+    "graph_query", "graph_store", "graph_store_nexus", "graph_analyze",
     "memory_query", "memory_store", "memory_promote", "memory_supersede",
+    "store_fact",
     "entity_inspect", "entity_profile", "entity_resolve",
     "os_search",
     "event_search", "event_query",
@@ -655,8 +657,8 @@ CURATE_TOOLS: frozenset = frozenset({
     # Situations
     "situation_create", "situation_link_event", "situation_list",
     # Graph and memory
-    "graph_store", "graph_query",
-    "memory_store", "memory_query",
+    "graph_store", "graph_store_nexus", "graph_query",
+    "memory_store", "memory_query", "store_fact",
     # OpenSearch direct search
     "os_search",
     # Utilities
@@ -724,9 +726,10 @@ Your final action before cycle_complete should be a note_to_self summarizing: si
 
 SURVEY_TOOLS: frozenset = frozenset({
     # Graph and relationships
-    "graph_query", "graph_store", "graph_analyze",
+    "graph_query", "graph_store", "graph_store_nexus", "graph_analyze",
     # Memory
     "memory_query", "memory_store", "memory_promote", "memory_supersede",
+    "store_fact",
     # Entity
     "entity_inspect", "entity_profile", "entity_resolve",
     # Events (read + opportunistic curate)
@@ -774,6 +777,7 @@ Review the data above. What has changed? What does it mean? What should you do a
 3. **Hypothesis evaluation (MANDATORY)**: Call hypothesis_list. For EVERY active hypothesis, search for recent signals or events that support or refute the thesis. Use event_search or os_search with keywords from the thesis. When you find relevant signals, call hypothesis_evaluate with the specific signal_id. Do NOT call hypothesis_evaluate without a signal_id — that produces no evidence linkage. Do NOT create new hypotheses unless you have first evaluated ALL existing ones. The system tracks evidence_balance; hypotheses with 0 evidence after 10+ cycles are a failure.
 4. **Investigation leads**: Identify threads worth deep-diving in a SYNTHESIZE cycle. Record via note_to_self.
 5. **Opportunistic curation**: If you encounter low-quality auto-events (bad titles, wrong severity, missing type), fix them with event_update.
+6. **Complex relationships**: When analyzing complex relationships, check if they should be stored as Nexuses (graph_store_nexus) to capture proxy chains and intent. Use graph_query mode=proxy_chains or entity_nexuses to review existing nexuses.
 
 ### CRITICAL RULES
 - **Do NOT create duplicate situations.** Before calling situation_create, ALWAYS call situation_list and check if an existing situation covers this topic. "Iran oil price impact" belongs in "Oil Market Volatility", not a new situation. If in doubt, link to the existing one.
@@ -785,6 +789,11 @@ Review the data above. What has changed? What does it mean? What should you do a
 - When you store a fact with store_fact, you MUST include evidence (signal_id or event_id that supports the claim). Facts without evidence are unverifiable.
 - When linking events to situations, verify the event actually relates to the situation's theme. Linking unrelated events pollutes the situation narrative.
 - Confidence scores are calibrated: 0.3-0.4 = single source, unverified. 0.5-0.6 = multiple sources agree. 0.7-0.8 = strong corroboration. 0.9+ = verified by independent high-reliability sources. Do not inflate.
+
+### Temporal Fact Discipline
+- When storing facts about leadership positions, treaty status, economic figures, or other time-bounded assertions, ALWAYS set valid_from and valid_until. Example: `store_fact(subject="Joe Biden", predicate="LeaderOf", value="United States", valid_from="2021-01-20T00:00:00Z", valid_until="2025-01-20T00:00:00Z")`. Without temporal bounds, superseded facts persist as current truth.
+- Facts with valid_until in the past are automatically excluded from context injection. Set it correctly and the system handles the rest.
+- For single-value predicates (Capital, Population, GDP, LeaderOf, etc.), storing a new value auto-supersedes the old one. You do not need to manually call memory_supersede.
 
 ### Goal Discipline
 You should have 5-10 active goals at most. Before calling goal_create, ALWAYS call goal_list first. If ANY existing goal covers the same topic or entity, use goal_update to adjust it instead of creating a new one. If you have 10+ active goals, your FIRST action should be closing or deferring redundant ones. Structure your goals hierarchically. Use goal_decompose to break broad goals into specific sub-tasks. 'Investigate Iran-Israel Conflict' is a parent goal; 'Profile IRGC Navy capabilities' is a sub-task under it.
@@ -810,9 +819,10 @@ Do NOT just describe what you see. Act on it.
 
 SYNTHESIZE_TOOLS: frozenset = frozenset({
     # Graph (deep exploration)
-    "graph_query", "graph_store", "graph_analyze",
+    "graph_query", "graph_store", "graph_store_nexus", "graph_analyze",
     # Memory
     "memory_query", "memory_store", "memory_promote", "memory_supersede",
+    "store_fact",
     # Entity
     "entity_inspect", "entity_profile", "entity_resolve",
     # Events
@@ -914,9 +924,10 @@ This brief is stored as a named document alongside your reports. It must be grou
 # Analysis cycle — tools allowed (analytical, no data ingestion)
 ANALYSIS_TOOLS: frozenset = frozenset({
     # Graph analysis
-    "graph_query", "graph_store", "graph_analyze",
+    "graph_query", "graph_store", "graph_store_nexus", "graph_analyze",
     # Memory and search
     "memory_query", "memory_store", "memory_promote", "memory_supersede",
+    "store_fact",
     "entity_inspect", "entity_profile", "entity_resolve",
     "os_search",
     "event_search", "event_query",
@@ -958,6 +969,7 @@ This is a focused analysis cycle. Your job is to find patterns, anomalies, and i
   - `paths` — find the shortest path between two entities. How is Iran connected to China? Through what intermediaries?
 - **graph_query** — explore specific relationship patterns. Example: "MATCH (a)-[r:ALLY_OF]->(b)-[r2:HOSTILE_TO]->(c) RETURN a, b, c" to find triangles of tension.
 - Look for unexpected connections — entities linked through intermediaries that suggest hidden dynamics.
+- **Nexuses**: When analyzing complex relationships, check if they should be stored as Nexuses (graph_store_nexus) to capture proxy chains and intent. Use graph_query with mode=proxy_chains to find existing proxy nexuses, mode=hostile_nexuses for hostile-intent nexuses, or mode=entity_nexuses to find all nexuses involving a specific entity.
 
 ### 2. Event Pattern Analysis — Find What Manual Review Misses
 - **anomaly_detect** — run this on signal and event data. It flags unusual spikes, gaps, and outliers that human scanning misses. Works best with 30+ data points. Example: a sudden cluster of economic signals in a region that usually shows political activity. This is one of your most valuable tools — use it.
@@ -1465,6 +1477,20 @@ Entities are persistent things in the world: people, countries, organizations, l
 | SignatoryTo | Treaties, agreements |
 | ProducesResource | Commodity production |
 | ImportsFrom / ExportsTo | Trade flows |
+
+### Reified Relationships (Nexuses)
+When a relationship involves a proxy, intermediary, or non-obvious channel, use `graph_store_nexus` instead of `graph_store`. This preserves the full chain:
+- Iran supplies weapons to Hamas (proxy) targeting Israel → graph_store_nexus(type="SuppliesWeaponsTo", channel="proxy", intent="hostile", actor="Iran", target="Israel", via="Hamas")
+- US funds Kurdish separatists (covert) in Iran → graph_store_nexus(type="FundedBy", channel="covert", intent="hostile", actor="United States", target="Iran", via="Kurdish separatists")
+
+Use graph_store_nexus when:
+- The relationship goes through an intermediary (via parameter)
+- The channel is not direct (proxy, covert, institutional)
+- The intent differs from what the predicate implies (hostile SuppliesWeaponsTo vs supportive)
+
+Use regular graph_store for simple, direct relationships (US AlliedWith UK, France MemberOf NATO).
+
+Use graph_query with mode `proxy_chains`, `hostile_nexuses`, or `entity_nexuses` to query stored nexuses.
 """
 
 # ---------------------------------------------------------------------------

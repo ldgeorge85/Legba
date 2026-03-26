@@ -374,6 +374,58 @@ class SubconsciousService:
                         verdict.reasoning,
                     )
 
+                # Reification heuristic: if this triple involves entities
+                # with an existing HostileTo relationship and the new edge
+                # is SuppliesWeaponsTo or FundedBy, flag for reification
+                # as a potential proxy/hostile supply Nexus.
+                if effective_type in ("SuppliesWeaponsTo", "FundedBy"):
+                    try:
+                        hostile_exists = await conn.fetchval(
+                            """
+                            SELECT EXISTS (
+                                SELECT 1 FROM proposed_edges
+                                WHERE relationship_type = 'HostileTo'
+                                  AND status IN ('pending', 'approved')
+                                  AND (
+                                      (LOWER(source_entity) = LOWER($1) AND LOWER(target_entity) = LOWER($2))
+                                      OR (LOWER(source_entity) = LOWER($2) AND LOWER(target_entity) = LOWER($1))
+                                  )
+                            )
+                            """,
+                            subject, obj,
+                        )
+                        if not hostile_exists:
+                            # Also check the AGE graph for committed HostileTo edges
+                            try:
+                                hostile_exists = await conn.fetchval(
+                                    """
+                                    SELECT EXISTS (
+                                        SELECT 1 FROM nexuses
+                                        WHERE nexus_type = 'HostileTo'
+                                          AND (
+                                              (LOWER(actor_entity) = LOWER($1) AND LOWER(target_entity) = LOWER($2))
+                                              OR (LOWER(actor_entity) = LOWER($2) AND LOWER(target_entity) = LOWER($1))
+                                          )
+                                    )
+                                    """,
+                                    subject, obj,
+                                )
+                            except Exception:
+                                pass
+
+                        if hostile_exists:
+                            logger.warning(
+                                "REIFICATION RECOMMENDED: %s -[%s]-> %s — "
+                                "entities have HostileTo relationship, "
+                                "potentially needs reification as a proxy/hostile supply Nexus",
+                                subject, effective_type, obj,
+                            )
+                    except Exception as exc:
+                        logger.debug(
+                            "Reification heuristic check failed for %s -[%s]-> %s: %s",
+                            subject, effective_type, obj, exc,
+                        )
+
                 try:
                     # Check for duplicate before inserting
                     existing = await conn.fetchval(

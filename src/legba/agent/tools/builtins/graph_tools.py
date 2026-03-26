@@ -202,6 +202,131 @@ def register(
 ) -> None:
     """Register graph tools wired to the live AGE graph store."""
 
+    # ------------------------------------------------------------------
+    # graph_store_nexus handler — reified relationships (Nexuses)
+    # ------------------------------------------------------------------
+
+    async def graph_store_nexus_handler(args: dict) -> str:
+        """Store a reified relationship as a Nexus node in the graph.
+
+        Creates: Postgres row + AGE Nexus node + PARTY_TO / TARGETS /
+        CONDUCTED_VIA edges.
+        """
+        import json as _json
+        from uuid import uuid4 as _uuid4
+        from datetime import datetime as _dt, timezone as _tz
+
+        op_type = args.get("nexus_type", "")
+        if not op_type:
+            return "Error: nexus_type is required."
+        channel = args.get("channel", "direct")
+        if channel not in ("direct", "proxy", "covert", "institutional"):
+            return f"Error: channel must be one of: direct, proxy, covert, institutional. Got '{channel}'."
+        intent = args.get("intent", "neutral")
+        if intent not in ("supportive", "hostile", "dual-use", "neutral"):
+            return f"Error: intent must be one of: supportive, hostile, dual-use, neutral. Got '{intent}'."
+        description = args.get("description", "")
+        actor = args.get("actor", "")
+        target = args.get("target", "")
+        if not actor or not target:
+            return "Error: both actor and target are required."
+        via = args.get("via", "")
+        confidence = float(args.get("confidence", 0.5))
+        confidence = max(0.0, min(1.0, confidence))
+        evidence_id = args.get("evidence_id", "")
+
+        op_id = _uuid4()
+        now = _dt.now(_tz.utc)
+
+        # --- 1. Insert into Postgres nexuses table ---
+        try:
+            if not graph._pool:
+                return "Error: graph store not available (no pool)."
+            async with graph._pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO nexuses
+                        (id, nexus_type, channel, intent, description,
+                         actor_entity, target_entity, via_entity,
+                         confidence, evidence_count, source_cycle, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11)
+                """,
+                    op_id, op_type, channel, intent, description,
+                    actor, target, via or None,
+                    confidence, 0, now,
+                )
+        except Exception as exc:
+            return f"Error inserting nexus into Postgres: {exc}"
+
+        # --- 2. Create Nexus node in AGE graph ---
+        desc_esc = graph._escape(description)
+        type_esc = graph._escape(op_type)
+        channel_esc = graph._escape(channel)
+        intent_esc = graph._escape(intent)
+        op_id_str = str(op_id)
+
+        try:
+            async with graph._pool.acquire() as conn:
+                await graph._prepare(conn)
+
+                # Create the Nexus node
+                await graph._cypher(conn, f"""
+                    CREATE (op:Nexus {{
+                        op_id: '{op_id_str}',
+                        type: '{type_esc}',
+                        channel: '{channel_esc}',
+                        intent: '{intent_esc}',
+                        description: '{desc_esc}',
+                        confidence: {confidence}
+                    }})
+                    RETURN op
+                """, cols="op agtype")
+
+                # Create PARTY_TO edge: actor -> Nexus
+                actor_esc = graph._escape(actor)
+                await graph._cypher(conn, f"""
+                    MATCH (a {{name: '{actor_esc}'}}), (op:Nexus {{op_id: '{op_id_str}'}})
+                    CREATE (a)-[:PartyTo {{role: 'actor'}}]->(op)
+                    RETURN a
+                """, cols="a agtype")
+
+                # Create TARGETS edge: Nexus -> target
+                target_esc = graph._escape(target)
+                await graph._cypher(conn, f"""
+                    MATCH (op:Nexus {{op_id: '{op_id_str}'}}), (t {{name: '{target_esc}'}})
+                    CREATE (op)-[:Targets]->(t)
+                    RETURN t
+                """, cols="t agtype")
+
+                # Create CONDUCTED_VIA edge if via is provided: Nexus -> via entity
+                if via:
+                    via_esc = graph._escape(via)
+                    await graph._cypher(conn, f"""
+                        MATCH (op:Nexus {{op_id: '{op_id_str}'}}), (v {{name: '{via_esc}'}})
+                        CREATE (op)-[:ConductedVia]->(v)
+                        RETURN v
+                    """, cols="v agtype")
+
+        except Exception as exc:
+            # Postgres row already written; graph edges are best-effort
+            return (
+                f"Nexus {op_id_str} saved to Postgres but AGE graph "
+                f"creation partially failed: {exc}. "
+                f"Ensure actor '{actor}', target '{target}'"
+                + (f", and via '{via}'" if via else "")
+                + " exist as graph entities (use graph_store first)."
+            )
+
+        # Build result message
+        parts = [f"Nexus stored: {op_id_str}"]
+        parts.append(f"  type={op_type}, channel={channel}, intent={intent}")
+        parts.append(f"  actor={actor} -> target={target}")
+        if via:
+            parts.append(f"  via={via}")
+        parts.append(f"  confidence={confidence}")
+        if evidence_id:
+            parts.append(f"  evidence_id={evidence_id}")
+        return "\n".join(parts)
+
     async def graph_store_handler(args: dict) -> str:
         import json as _json
         from ....shared.schemas.memory import Entity
@@ -724,6 +849,105 @@ def register(
             except Exception as exc:
                 return f"Error in cross_situation: {exc}"
 
+        # ------ reified relationship (Nexus) queries ------
+
+        elif mode == "proxy_chains":
+            # Find all nexuses with channel='proxy' — actor, via, target chains
+            try:
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    rows = await graph._cypher(conn, """
+                        MATCH (a)-[:PartyTo]->(op:Nexus)-[:ConductedVia]->(via),
+                              (op)-[:Targets]->(t)
+                        WHERE op.channel = 'proxy'
+                        RETURN a.name AS actor, via.name AS via_entity,
+                               t.name AS target, op.type AS op_type,
+                               op.intent AS intent, op.confidence AS conf
+                        LIMIT 50
+                    """, cols="actor agtype, via_entity agtype, target agtype, op_type agtype, intent agtype, conf agtype")
+                if not rows:
+                    return "No proxy chain nexuses found."
+                lines = [f"Proxy chain nexuses ({len(rows)} found):"]
+                for r in rows:
+                    conf_str = f" (conf={r['conf']:.2f})" if r.get('conf') is not None else ""
+                    lines.append(
+                        f"  {r['actor']} --[{r['op_type']}]--> {r['via_entity']} --> {r['target']}"
+                        f"  intent={r.get('intent', '?')}{conf_str}"
+                    )
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in proxy_chains: {exc}"
+
+        elif mode == "hostile_nexuses":
+            # Find all nexuses with intent='hostile'
+            try:
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    rows = await graph._cypher(conn, """
+                        MATCH (a)-[:PartyTo]->(op:Nexus)-[:Targets]->(t)
+                        WHERE op.intent = 'hostile'
+                        RETURN a.name AS actor, t.name AS target,
+                               op.type AS op_type, op.channel AS channel,
+                               op.confidence AS conf
+                        LIMIT 50
+                    """, cols="actor agtype, target agtype, op_type agtype, channel agtype, conf agtype")
+                if not rows:
+                    return "No hostile nexuses found."
+                lines = [f"Hostile nexuses ({len(rows)} found):"]
+                for r in rows:
+                    conf_str = f" (conf={r['conf']:.2f})" if r.get('conf') is not None else ""
+                    lines.append(
+                        f"  {r['actor']} --[{r['op_type']}]--> {r['target']}"
+                        f"  channel={r.get('channel', '?')}{conf_str}"
+                    )
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in hostile_nexuses: {exc}"
+
+        elif mode == "entity_nexuses":
+            # Find all nexuses involving a specific entity (as actor, target, or via)
+            if not query:
+                return "Error: provide the entity name in 'query'."
+            try:
+                name_esc = graph._escape(query)
+                async with graph._pool.acquire() as conn:
+                    await graph._prepare(conn)
+                    # Actor role
+                    actor_rows = await graph._cypher(conn, f"""
+                        MATCH (a {{name: '{name_esc}'}})-[:PartyTo]->(op:Nexus)-[:Targets]->(t)
+                        RETURN 'actor' AS role, op.type AS op_type, op.channel AS channel,
+                               op.intent AS intent, t.name AS other, op.confidence AS conf
+                        LIMIT 25
+                    """, cols="role agtype, op_type agtype, channel agtype, intent agtype, other agtype, conf agtype")
+                    # Target role
+                    target_rows = await graph._cypher(conn, f"""
+                        MATCH (a)-[:PartyTo]->(op:Nexus)-[:Targets]->(t {{name: '{name_esc}'}})
+                        RETURN 'target' AS role, op.type AS op_type, op.channel AS channel,
+                               op.intent AS intent, a.name AS other, op.confidence AS conf
+                        LIMIT 25
+                    """, cols="role agtype, op_type agtype, channel agtype, intent agtype, other agtype, conf agtype")
+                    # Via role
+                    via_rows = await graph._cypher(conn, f"""
+                        MATCH (a)-[:PartyTo]->(op:Nexus)-[:ConductedVia]->(v {{name: '{name_esc}'}})
+                        RETURN 'via' AS role, op.type AS op_type, op.channel AS channel,
+                               op.intent AS intent, a.name AS other, op.confidence AS conf
+                        LIMIT 25
+                    """, cols="role agtype, op_type agtype, channel agtype, intent agtype, other agtype, conf agtype")
+
+                all_rows = actor_rows + target_rows + via_rows
+                if not all_rows:
+                    return f"No nexuses found involving '{query}'."
+                lines = [f"Nexuses involving '{query}' ({len(all_rows)} found):"]
+                for r in all_rows:
+                    conf_str = f" (conf={r['conf']:.2f})" if r.get('conf') is not None else ""
+                    lines.append(
+                        f"  [{r['role']}] {r['op_type']} — {r['other']}"
+                        f"  channel={r.get('channel', '?')}, intent={r.get('intent', '?')}{conf_str}"
+                    )
+                return "\n".join(lines)
+            except Exception as exc:
+                return f"Error in entity_nexuses: {exc}"
+
         # Reject raw Cypher and unknown modes with helpful guidance
         elif mode == "cypher":
             return (
@@ -742,7 +966,10 @@ def register(
                 "  event_children — sub-events (PART_OF edges)\n"
                 "  event_situation — events tracked by a situation\n"
                 "  entity_events — events an entity participates in\n"
-                "  cross_situation — events bridging two situations (set entity_b)"
+                "  cross_situation — events bridging two situations (set entity_b)\n"
+                "  proxy_chains — nexuses with proxy intermediaries\n"
+                "  hostile_nexuses — all hostile-intent nexuses\n"
+                "  entity_nexuses — all nexuses involving a specific entity"
             )
 
         return (
@@ -763,11 +990,15 @@ def register(
             "  event_children — sub-events of a parent event\n"
             "  event_situation — events tracked by a situation\n"
             "  entity_events — events an entity participates in\n"
-            "  cross_situation — events bridging two situations (set entity_b)"
+            "  cross_situation — events bridging two situations (set entity_b)\n"
+            "  proxy_chains — nexuses with proxy intermediaries\n"
+            "  hostile_nexuses — all hostile-intent nexuses\n"
+            "  entity_nexuses — all nexuses involving a specific entity"
         )
 
     registry.register(GRAPH_STORE_DEF, graph_store_handler)
     registry.register(GRAPH_QUERY_DEF, graph_query_handler)
+    registry.register(GRAPH_STORE_NEXUS_DEF, graph_store_nexus_handler)
 
 
 GRAPH_STORE_DEF = ToolDefinition(
@@ -843,7 +1074,10 @@ GRAPH_QUERY_DEF = ToolDefinition(
         "event_actors (entities involved in an event), event_chain (causal chain for an event), "
         "event_children (sub-events), event_situation (events tracked by a situation), "
         "entity_events (events an entity participates in), "
-        "cross_situation (events bridging two situations)."
+        "cross_situation (events bridging two situations), "
+        "proxy_chains (nexuses with proxy intermediaries), "
+        "hostile_nexuses (all hostile-intent nexuses), "
+        "entity_nexuses (all nexuses involving a specific entity)."
     ),
     parameters=[
         ToolParameter(name="query", type="string",
@@ -854,11 +1088,12 @@ GRAPH_QUERY_DEF = ToolDefinition(
                                   "For entity_events: the entity name. "
                                   "For cross_situation: situation A name (set entity_b for situation B)."),
         ToolParameter(name="mode", type="string",
-                      description="Operation: 'search', 'relationships', 'subgraph', 'top_connected', "
+                      description="Mode: 'search', 'relationships', 'subgraph', 'top_connected', "
                                   "'shared_connections', 'path', 'triangles', 'by_type', "
                                   "'edge_types', 'isolated', 'recent_edges', "
                                   "'event_actors', 'event_chain', 'event_children', "
-                                  "'event_situation', 'entity_events', 'cross_situation'. Default: search"),
+                                  "'event_situation', 'entity_events', 'cross_situation', "
+                                  "'proxy_chains', 'hostile_nexuses', 'entity_nexuses'. Default: search"),
         ToolParameter(name="entity_type", type="string",
                       description="Filter by entity type (for search and by_type modes)", required=False),
         ToolParameter(name="entity_b", type="string",
@@ -869,6 +1104,46 @@ GRAPH_QUERY_DEF = ToolDefinition(
                       description="Depth for subgraph (default 2) or max hops for path (default 2, max 5)", required=False),
         ToolParameter(name="limit", type="number",
                       description="Max results (default 20)", required=False),
+    ],
+)
+
+
+GRAPH_STORE_NEXUS_DEF = ToolDefinition(
+    name="graph_store_nexus",
+    description=(
+        "Store a reified relationship (Nexus) in the knowledge graph. "
+        "Use this instead of graph_store when a relationship involves a proxy, "
+        "intermediary, covert channel, or non-obvious intent. "
+        "Creates a Nexus node connected to actor (PARTY_TO), target (TARGETS), "
+        "and optionally an intermediary (CONDUCTED_VIA). "
+        "Examples: Iran supplies weapons via Hamas targeting Israel (channel=proxy, intent=hostile). "
+        "US funds Kurdish separatists covertly in Iran (channel=covert, intent=hostile). "
+        "For simple direct relationships (US AlliedWith UK), use graph_store instead."
+    ),
+    parameters=[
+        ToolParameter(name="nexus_type", type="string",
+                      description="The canonical predicate: SuppliesWeaponsTo, AlliedWith, "
+                                  "HostileTo, FundedBy, SanctionedBy, TradesWith, etc."),
+        ToolParameter(name="channel", type="string",
+                      description="How the relationship operates: direct, proxy, covert, institutional"),
+        ToolParameter(name="intent", type="string",
+                      description="The intent: supportive, hostile, dual-use, neutral"),
+        ToolParameter(name="description", type="string",
+                      description="Human-readable summary of the nexus"),
+        ToolParameter(name="actor", type="string",
+                      description="Entity name who initiates/conducts the nexus"),
+        ToolParameter(name="target", type="string",
+                      description="Entity name who is affected by the nexus"),
+        ToolParameter(name="via", type="string",
+                      description="Intermediary entity name (proxy, cutout, channel). "
+                                  "Required when channel is 'proxy'.",
+                      required=False),
+        ToolParameter(name="confidence", type="number",
+                      description="Confidence 0-1 (default 0.5)",
+                      required=False),
+        ToolParameter(name="evidence_id", type="string",
+                      description="Signal or event UUID for provenance linkage",
+                      required=False),
     ],
 )
 

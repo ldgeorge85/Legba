@@ -180,10 +180,12 @@ def _single_linkage_cluster(
 class SignalClusterer:
     """Clusters unclustered signals into derived events."""
 
-    def __init__(self, pool: asyncpg.Pool, qdrant_client=None, notifier=None):
+    def __init__(self, pool: asyncpg.Pool, qdrant_client=None, notifier=None,
+                 redis_client=None):
         self._pool = pool
         self._qdrant = qdrant_client
         self._notifier = notifier
+        self._redis = redis_client
 
     async def cluster(
         self,
@@ -613,6 +615,12 @@ class SignalClusterer:
                 new_actors, new_locations,
             )
 
+            # Flag potential proxy relationships for agent investigation
+            await self._flag_proxy_candidates(
+                event_id, old_data.get("title", ""),
+                new_actors, category,
+            )
+
             # Notify on threshold crossings
             if self._notifier and crossed:
                 for t in crossed:
@@ -783,6 +791,9 @@ class SignalClusterer:
 
             # Check watchlist triggers for new events
             await self._check_watchlist_triggers(event_id, title, category, all_actors, all_locations)
+
+            # Flag potential proxy relationships for agent investigation
+            await self._flag_proxy_candidates(event_id, title, all_actors, category)
 
             # Notify on event creation
             if self._notifier:
@@ -1006,6 +1017,11 @@ class SignalClusterer:
                 set(actors), set(locations),
             )
 
+            # Flag potential proxy relationships for agent investigation
+            await self._flag_proxy_candidates(
+                event_id, feat["title"], set(actors), feat["category"],
+            )
+
             return 1
         except Exception as e:
             logger.warning("create_singleton_event failed: %s", e)
@@ -1175,3 +1191,42 @@ class SignalClusterer:
                         )
         except Exception as e:
             logger.debug("Watchlist trigger check failed (non-fatal): %s", e)
+
+    async def _flag_proxy_candidates(
+        self,
+        event_id: UUID,
+        title: str,
+        actors: set[str] | list[str],
+        category: str,
+    ) -> None:
+        """Flag potential proxy relationship candidates for the conscious agent.
+
+        When an event in a conflict/political/military category involves 3+
+        actors, there may be indirect (proxy) relationships worth investigating.
+        Writes to a Redis list that the agent reads during SURVEY/ANALYSIS orient.
+        """
+        if not self._redis:
+            return
+        if category not in ('conflict', 'political', 'military'):
+            return
+
+        actor_list = list(actors) if not isinstance(actors, list) else actors
+        if len(actor_list) < 3:
+            return
+
+        try:
+            await self._redis.lpush('legba:proxy_candidates', json.dumps({
+                'event_id': str(event_id),
+                'event_title': title,
+                'actors': actor_list[:10],
+                'category': category,
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+            }))
+            # Keep last 100 candidates to bound memory
+            await self._redis.ltrim('legba:proxy_candidates', 0, 99)
+            logger.debug(
+                "Flagged proxy candidate: event %s with %d actors (%s)",
+                str(event_id)[:8], len(actor_list), category,
+            )
+        except Exception as e:
+            logger.debug("Proxy candidate flagging failed (non-fatal): %s", e)

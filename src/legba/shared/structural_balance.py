@@ -2,8 +2,14 @@
 
 JDL Level 2: Structural balance analysis.
 
-Computes balance score from AlliedWith (+) and HostileTo (-) triads.
-Unbalanced triads are analytically interesting — they predict realignment.
+Computes balance score from AlliedWith (+) and HostileTo (-) triads,
+augmented by reified Nexus nodes.  Nexuses carry an `intent`
+property that maps to edge sign:
+
+  supportive → +1   hostile → -1   dual-use/neutral → excluded (0)
+
+This means a hostile SuppliesWeaponsTo through a proxy correctly counts
+as a negative edge in the balance computation.
 
 Structural Balance Theory on signed networks: AlliedWith = positive edge,
 HostileTo = negative edge. Balanced triads are stable (friend-friend-friend,
@@ -100,7 +106,17 @@ async def _compute_balance(pool: asyncpg.Pool) -> dict:
             cols="src agtype, dst agtype",
         )
 
-    # 2. Build a signed adjacency dict (entity -> {entity: +1 or -1})
+    # 2. Query reified Nexuses from the nexuses table.
+    #    Faster than AGE queries and captures relationship intent.
+    async with pool.acquire() as conn2:
+        operation_rows = await conn2.fetch("""
+            SELECT actor_entity, target_entity, intent
+            FROM nexuses
+            WHERE (valid_until IS NULL OR valid_until > NOW())
+              AND intent IN ('supportive', 'hostile')
+        """)
+
+    # 3. Build a signed adjacency dict (entity -> {entity: +1 or -1})
     #    Treat edges as undirected for triad analysis (A allied-with B
     #    means B is also allied-with A for balance theory purposes).
     signed_edges: dict[tuple[str, str], int] = {}
@@ -119,6 +135,18 @@ async def _compute_balance(pool: asyncpg.Pool) -> dict:
             pair = tuple(sorted([src, dst]))
             signed_edges[pair] = -1
 
+    # Overlay signed edges from Nexuses (intent-based).
+    # Nexuses override AGE edges when both exist — the reified
+    # relationship carries richer analyst-assigned intent.
+    for op in operation_rows:
+        src, dst = op["actor_entity"], op["target_entity"]
+        if src and dst and src != dst:
+            pair = tuple(sorted([src, dst]))
+            if op["intent"] == "supportive":
+                signed_edges[pair] = +1
+            elif op["intent"] == "hostile":
+                signed_edges[pair] = -1
+
     total_signed = len(signed_edges)
 
     if total_signed < 3:
@@ -129,7 +157,7 @@ async def _compute_balance(pool: asyncpg.Pool) -> dict:
             "total_signed_edges": total_signed,
         }
 
-    # 3. Build adjacency for efficient triad enumeration.
+    # 4. Build adjacency for efficient triad enumeration.
     #    Only consider entities that have BOTH positive and negative edges
     #    for efficiency — entities with only one sign can't form unbalanced triads.
     neighbors: dict[str, set[str]] = {}
@@ -137,7 +165,7 @@ async def _compute_balance(pool: asyncpg.Pool) -> dict:
         neighbors.setdefault(a, set()).add(b)
         neighbors.setdefault(b, set()).add(a)
 
-    # 4. Find all triads (3-node subgraphs where all 3 pairs have signed edges)
+    # 5. Find all triads (3-node subgraphs where all 3 pairs have signed edges)
     #    Enumerate triads by iterating entities and checking neighbor intersections
     balanced_count = 0
     unbalanced_triads: list[dict] = []
@@ -163,7 +191,7 @@ async def _compute_balance(pool: asyncpg.Pool) -> dict:
                     continue
                 seen_triads.add(triad_key)
 
-                # 5. Classify: product of all three edge signs
+                # 6. Classify: product of all three edge signs
                 pair_e_n1 = tuple(sorted([entity, n1]))
                 pair_e_n2 = tuple(sorted([entity, n2]))
                 s1 = signed_edges[pair_e_n1]

@@ -114,6 +114,27 @@ This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "
 
 30 canonical relationship types with 70+ aliases normalized at the storage layer. The agent can say `"PresidentOf"` and it becomes `LeaderOf`. Unrecognized types fuzzy-match or fall back to `RelatedTo`. This keeps the graph schema consistent without constraining the LLM's natural language.
 
+### Nexus Nodes (Reified Relationships)
+
+Simple edges work for direct relationships (US AlliedWith UK), but proxy chains, covert channels, and intermediary-mediated interactions need richer structure. A **Nexus node** is a reified relationship — an AGE vertex of label `Nexus` that sits between the actor and target, connected by three typed edges:
+
+- **PARTY_TO** (actor -> Nexus) — who initiates
+- **TARGETS** (Nexus -> target) — who is acted upon
+- **CONDUCTED_VIA** (Nexus -> intermediary) — optional proxy or channel entity
+
+Each Nexus carries `channel` (proxy, covert, diplomatic, financial, military, etc.), `intent` (hostile, supportive, neutral), and a free-text `description`. A corresponding row in the `nexus_operations` Postgres table holds the full metadata and links to evidence.
+
+Nexus nodes coexist with flat edges in the same graph. The `graph_store_nexus` tool creates them; `graph_store` continues to handle direct relationships. Structural balance analysis reads `intent` from Nexus nodes for edge signing, so proxy warfare and covert operations factor into triadic stability calculations alongside explicit AlliedWith/HostileTo edges.
+
+### Temporal Fact Enforcement
+
+Facts carry `valid_from` and `valid_until` timestamps. Two auto-supersession mechanisms keep the fact base current:
+
+1. **Volatile predicates** (LeaderOf, HeadOfState, HeadOfGovernment, etc.) — a new value for a different subject auto-supersedes the old one across subjects (e.g., storing "Country X LeaderOf PersonB" supersedes "Country X LeaderOf PersonA").
+2. **Single-value predicates** (broader set including CapitalOf, President, PrimeMinister, etc.) — a new value for the same subject auto-supersedes the old one (e.g., "France CapitalOf Paris" is protected; "France CapitalOf Lyon" would supersede it).
+
+Superseded facts receive a `valid_until = NOW()` and a `superseded_by` foreign key. Default queries exclude expired and superseded facts, but the full history remains available for temporal analysis.
+
 ---
 
 ## 4. Cycle Flow
@@ -150,7 +171,7 @@ main.py:main()
         ├── _wake()                     [phases/wake.py]
         │     ├── Load challenge.json, seed goal, world briefing
         │     ├── Connect: Redis, Postgres/AGE, Qdrant, OpenSearch, NATS, Airflow
-        │     ├── _register_builtin_tools() → 66 tools from 19 modules + 2 config tools
+        │     ├── _register_builtin_tools() → 67 tools from 19 modules + 2 config tools
         │     └── Drain NATS inbox
         │
         ├── _orient()                   [phases/orient.py]
@@ -343,6 +364,10 @@ Source → Fetch → Normalize → Dedup → Signal (Postgres + OpenSearch)
             ├── Normalize relationship type (70+ aliases → 30 canonical)
             ├── Fuzzy entity matching (prevent duplicates)
             └── Upsert vertex + MERGE edge in AGE
+
+      graph_store_nexus(type, channel, intent, actor, target, via)
+            ├── Create Nexus node + PARTY_TO/TARGETS/CONDUCTED_VIA edges
+            └── For proxy chains, covert channels, intermediary relationships
 ```
 
 ### Composite Confidence Scoring
@@ -377,6 +402,10 @@ Every signal carries a `provenance` JSONB column recording its full processing t
 - **clusterer** — event assignment (event_id, method: new_cluster / reinforced / singleton_promoted / unclustered)
 
 Provenance is immutable after creation. It provides an end-to-end audit trail answering "how did this signal get here and why does it have this confidence?"
+
+### URL Discovery
+
+The ingestion pipeline extracts URLs from signal content and stores unique base domains in a `discovered_urls` table, deduplicating against existing active sources. High-frequency domains surface to EVOLVE cycles for operator/agent review as potential new data sources.
 
 ### 4-Tier Signal Dedup
 
@@ -646,9 +675,9 @@ The `graph_query` tool does **not** expose raw Cypher. Instead it provides named
 
 ### Graph Schema
 
-Vertices: labeled by entity type (CamelCase). Properties: `name`, `entity_id`, `created_at`, `updated_at`, plus arbitrary key-value pairs.
+Vertices: labeled by entity type (CamelCase), or `Nexus` for reified relationships. Entity vertices carry `name`, `entity_id`, `created_at`, `updated_at`, plus arbitrary key-value pairs. Nexus vertices carry `op_id`, `type`, `channel`, `intent`, `description`.
 
-Edges: labeled by relationship type (30 canonical, CamelCase). Properties: `since`, `until` (temporal), plus arbitrary key-value pairs.
+Edges: labeled by relationship type (30 canonical, CamelCase) for flat edges. Nexus-specific edge types: `PARTY_TO`, `TARGETS`, `CONDUCTED_VIA`. All edges support `since`, `until` (temporal) properties plus arbitrary key-value pairs.
 
 Entity deduplication: `upsert_entity` first checks for any existing vertex with the same name (regardless of label) before creating. This prevents duplicates when the entity type changes between calls.
 

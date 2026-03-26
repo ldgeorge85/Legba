@@ -272,6 +272,10 @@ Three backfill tasks that populate new data structures from existing data:
 - **Situation graph edges:** Creates TRACKED_BY edges from events to situations based on the `situation_events` junction table.
 - **Edge properties:** Sets default temporal properties (`weight=0.5`, `confidence=0.5`, `evidence_count=1`, `volatility=0.0`) on any graph edge where `evidence_count IS NULL`. Handles edges from the seed CSV import that predate the temporal edge model.
 
+### 12. Nexus Confidence Decay
+
+Nexus operations not evidenced in 30 days get confidence decremented by 0.05 (floor 0.1), matching the fact decay pattern. This prevents stale proxy/covert channel assessments from persisting at high confidence indefinitely.
+
 ---
 
 ## JDL Fusion Level Coverage

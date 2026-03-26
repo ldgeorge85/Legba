@@ -20,7 +20,7 @@ Legba is not a chatbot or task runner. Collection is deterministic (no LLM), val
 
 A planning layer ties goals, situations, watchlists, and hypotheses into a detect-escalate-plan-execute loop. Standing goals weight analytical priority; investigative goals decompose into typed tasks that feed the cycle router. Reactive propagation ensures state changes cascade across the portfolio.
 
-**Storage:** Postgres/AGE (structured + temporal graph with weighted edges: confidence, evidence_count, volatility, event-sourced to TimescaleDB), Qdrant (semantic/episodic vector search), OpenSearch x2 (full-text + audit), Redis (transient state), TimescaleDB (time-series metrics + graph history). **Orchestration:** NATS (event bus), Airflow (4 DAGs: metrics rollup, source health, decision surfacing, eval rubrics), Grafana (8 dashboards incl. fusion levels and temporal graph). **Config:** Versioned DB-backed config store (prompts, mission, guidance -- UI-editable, rollback-capable). **Auth:** JWT with 3 roles (admin/analyst/viewer). **Proxy:** Caddy (HTTPS termination).
+**Storage:** Postgres/AGE (structured + temporal graph with weighted edges: confidence, evidence_count, volatility, event-sourced to TimescaleDB; relationships can be flat edges or reified Nexus nodes for proxy chain modeling), Qdrant (semantic/episodic vector search), OpenSearch x2 (full-text + audit), Redis (transient state), TimescaleDB (time-series metrics + graph history). Facts carry temporal bounds with automatic supersession for single-value predicates. **Orchestration:** NATS (event bus), Airflow (4 DAGs: metrics rollup, source health, decision surfacing, eval rubrics), Grafana (8 dashboards incl. fusion levels and temporal graph). **Config:** Versioned DB-backed config store (prompts, mission, guidance -- UI-editable, rollback-capable). **Auth:** JWT with 3 roles (admin/analyst/viewer). **Proxy:** Caddy (HTTPS termination).
 
 ## Fusion Architecture
 
@@ -60,7 +60,7 @@ Each cycle follows a fixed phase sequence: WAKE (connect, register tools, drain 
 | Containers | 17 |
 | Cognitive layers | 3 (unconscious/10 modules, subconscious/11 modules, conscious/7 cycle types) |
 | Fusion levels | JDL L0-L5 mapped across all layers |
-| Built-in tools | 66 across 19 modules |
+| Built-in tools | 67 across 19 modules |
 | Active sources | 112+ (all categorized) |
 | Canonical relationship types | 30 |
 | Memory layers | 6 (registers, short-term episodic, long-term episodic, structured, graph, bulk) |

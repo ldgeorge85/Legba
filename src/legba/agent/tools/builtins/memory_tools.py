@@ -20,7 +20,11 @@ if TYPE_CHECKING:
 
 
 def get_definitions() -> list[tuple[ToolDefinition, Any]]:
-    return [(MEMORY_STORE_DEF, memory_store), (MEMORY_QUERY_DEF, memory_query)]
+    return [
+        (MEMORY_STORE_DEF, memory_store),
+        (MEMORY_QUERY_DEF, memory_query),
+        (STORE_FACT_DEF, store_fact),
+    ]
 
 
 def register(
@@ -184,10 +188,91 @@ def register(
             return f"Fact {old_id_str} superseded by {new_fact.id}."
         return "Error: supersede failed (old fact not found or DB error)."
 
+    async def store_fact_handler(args: dict) -> str:
+        """Store a structured fact triple (subject/predicate/value) with optional
+        temporal bounds. Normalizes predicates, auto-supersedes volatile facts,
+        and stores an embedding for semantic retrieval."""
+        from datetime import datetime as _dt, timezone as _tz
+        from ....shared.schemas.memory import Fact
+
+        subject = (args.get("subject") or "").strip()
+        predicate = (args.get("predicate") or "").strip()
+        value = (args.get("value") or "").strip()
+        if not all([subject, predicate, value]):
+            return "Error: subject, predicate, and value are all required."
+
+        confidence = float(args.get("confidence", 0.7))
+        evidence_id = (args.get("evidence_id") or "").strip()
+
+        # Parse optional temporal bounds
+        valid_from = None
+        valid_until = None
+        vf_str = (args.get("valid_from") or "").strip()
+        vu_str = (args.get("valid_until") or "").strip()
+        if vf_str:
+            try:
+                valid_from = _dt.fromisoformat(vf_str.replace("Z", "+00:00"))
+            except ValueError:
+                return f"Error: invalid valid_from format '{vf_str}'. Use ISO 8601 (e.g. '2025-01-20T00:00:00Z')."
+        if vu_str:
+            try:
+                valid_until = _dt.fromisoformat(vu_str.replace("Z", "+00:00"))
+            except ValueError:
+                return f"Error: invalid valid_until format '{vu_str}'. Use ISO 8601 (e.g. '2025-01-20T00:00:00Z')."
+
+        evidence = []
+        if evidence_id:
+            evidence = [{"id": evidence_id}]
+
+        fact = Fact(
+            subject=subject,
+            predicate=predicate,
+            value=value,
+            confidence=confidence,
+            source_cycle=state.cycle_number,
+            valid_from=valid_from,
+            valid_until=valid_until,
+        )
+
+        success = await memory.structured.store_fact(fact, evidence=evidence)
+        if not success:
+            return f"Error: Failed to store fact (predicate may not be canonical, check logs)."
+
+        # Store embedding for semantic retrieval
+        try:
+            fact_text = f"{subject} {predicate} {value}"
+            emb = await llm.generate_embedding(fact_text[:500])
+            await memory.episodic.store_fact_embedding(
+                fact_id=str(fact.id), text=fact_text, embedding=emb,
+                subject=subject, predicate=predicate,
+                value=value, confidence=confidence,
+            )
+        except Exception:
+            pass  # Embedding is best-effort
+
+        logger.log("fact_stored", fact_id=str(fact.id),
+                    subject=subject, predicate=predicate, value=value[:60])
+
+        result = {
+            "status": "stored",
+            "fact_id": str(fact.id),
+            "subject": subject,
+            "predicate": predicate,
+            "value": value,
+            "confidence": confidence,
+        }
+        if valid_from:
+            result["valid_from"] = valid_from.isoformat()
+        if valid_until:
+            result["valid_until"] = valid_until.isoformat()
+        import json as _json
+        return _json.dumps(result, indent=2)
+
     registry.register(MEMORY_STORE_DEF, memory_store_handler)
     registry.register(MEMORY_QUERY_DEF, memory_query_handler)
     registry.register(MEMORY_PROMOTE_DEF, memory_promote_handler)
     registry.register(MEMORY_SUPERSEDE_DEF, memory_supersede_handler)
+    registry.register(STORE_FACT_DEF, store_fact_handler)
 
 
 MEMORY_STORE_DEF = ToolDefinition(
@@ -249,6 +334,46 @@ MEMORY_SUPERSEDE_DEF = ToolDefinition(
     ],
 )
 
+STORE_FACT_DEF = ToolDefinition(
+    name="store_fact",
+    description=(
+        "Store a structured knowledge triple (subject/predicate/value) in the facts database. "
+        "Facts persist across cycles and are used for context injection, hypothesis evaluation, "
+        "and situation briefs. For time-bounded assertions (leadership, treaty status, GDP figures), "
+        "set valid_from and valid_until to enforce temporal boundaries. Facts with the same "
+        "subject+predicate but a different value auto-supersede the old fact for single-value "
+        "predicates (Capital, Population, GDP, LeaderOf, etc.)."
+    ),
+    parameters=[
+        ToolParameter(name="subject", type="string",
+                      description="Entity the fact is about (e.g. 'Russia', 'Vladimir Putin')"),
+        ToolParameter(name="predicate", type="string",
+                      description="Relationship or property. Must be a canonical predicate: "
+                                  "LeaderOf, AlliedWith, HostileTo, MemberOf, OperatesIn, "
+                                  "LocatedIn, Capital, Population, GDP, etc."),
+        ToolParameter(name="value", type="string",
+                      description="The value or target of the relationship"),
+        ToolParameter(name="confidence", type="number",
+                      description="Confidence 0.0-1.0 (default 0.7). Calibration: "
+                                  "0.3-0.4 single source, 0.5-0.6 multiple sources, "
+                                  "0.7-0.8 strong corroboration, 0.9+ independently verified.",
+                      required=False),
+        ToolParameter(name="evidence_id", type="string",
+                      description="UUID of signal or event that supports this fact (REQUIRED for verifiability)",
+                      required=False),
+        ToolParameter(name="valid_from", type="string",
+                      description="ISO 8601 timestamp when this fact became true "
+                                  "(e.g. '2025-01-20T00:00:00Z'). Defaults to now.",
+                      required=False),
+        ToolParameter(name="valid_until", type="string",
+                      description="ISO 8601 timestamp when this fact stops being true "
+                                  "(e.g. '2029-01-20T00:00:00Z'). NULL = open-ended. "
+                                  "ALWAYS set this for leadership positions, treaty terms, "
+                                  "or any assertion with a known end date.",
+                      required=False),
+    ],
+)
+
 
 # Stubs — only used if register() is not called (e.g. testing tool definitions in isolation)
 
@@ -266,3 +391,7 @@ async def memory_promote(args: dict) -> str:
 
 async def memory_supersede(args: dict) -> str:
     return "Error: Memory supersede not initialized."
+
+
+async def store_fact(args: dict) -> str:
+    return "Error: store_fact not initialized. This tool requires the memory manager to be connected."

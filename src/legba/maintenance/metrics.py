@@ -200,7 +200,27 @@ class MetricCollector:
             for row in rows:
                 points.append(("source_count", row["status"], float(row["count"])))
 
-        # 8. Structural balance and graph entropy (AGE graph metrics)
+        # 8. Nexuses metrics
+        try:
+            async with self._pool.acquire() as conn:
+                op_count = await conn.fetchval("SELECT count(*) FROM nexuses")
+                points.append(("nexuses_total", "all", float(op_count or 0)))
+
+                op_by_channel = await conn.fetch(
+                    "SELECT channel, count(*) as cnt FROM nexuses GROUP BY channel"
+                )
+                for r in op_by_channel:
+                    points.append(("nexuses_by_channel", r['channel'], float(r['cnt'])))
+
+                op_by_intent = await conn.fetch(
+                    "SELECT intent, count(*) as cnt FROM nexuses GROUP BY intent"
+                )
+                for r in op_by_intent:
+                    points.append(("nexuses_by_intent", r['intent'], float(r['cnt'])))
+        except Exception as e:
+            logger.debug("Nexuses metrics failed: %s", e)
+
+        # 9. Structural balance and graph entropy (AGE graph metrics)
         try:
             from ..shared.structural_balance import compute_structural_balance
             balance_result = await compute_structural_balance(self._pool)

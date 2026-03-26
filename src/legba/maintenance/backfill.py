@@ -108,6 +108,52 @@ class BackfillManager:
                      backfilled, len(existing))
         return backfilled
 
+    async def backfill_entity_vertices(self) -> int:
+        """Create Entity vertices in AGE for all entity_profiles that don't have a graph node yet.
+
+        This ensures the fact-to-graph materializer can find entities to link.
+        Returns count of entities backfilled.
+        """
+        # Get existing graph entity names
+        try:
+            existing_rows = await self.pool.fetch(f"""
+                LOAD 'age'; SET search_path = ag_catalog, public;
+                SELECT * FROM cypher('{GRAPH_NAME}', $$
+                    MATCH (n:Entity) RETURN n.name
+                $$) AS (name agtype);
+            """)
+            existing_names = {str(r["name"]).strip('"') for r in existing_rows}
+        except Exception:
+            existing_names = set()
+
+        # Get all entity profiles
+        profiles = await self.pool.fetch(
+            "SELECT canonical_name, entity_type FROM entity_profiles"
+        )
+
+        created = 0
+        for p in profiles:
+            name = p["canonical_name"]
+            if name in existing_names:
+                continue
+            etype = p["entity_type"] or "Unknown"
+            try:
+                safe_name = name.replace('"', '\\"').replace("'", "\\'")
+                safe_type = etype.replace('"', '\\"')
+                await self.pool.execute(f"""
+                    LOAD 'age'; SET search_path = ag_catalog, public;
+                    SELECT * FROM cypher('{GRAPH_NAME}', $$
+                        CREATE (n:Entity {{name: "{safe_name}", entity_type: "{safe_type}"}})
+                    $$) AS (v agtype);
+                """)
+                created += 1
+            except Exception:
+                pass  # Skip duplicates or encoding issues
+
+        logger.info("Entity vertex backfill: %d entities added (%d already existed)",
+                     created, len(existing_names))
+        return created
+
     async def backfill_situation_graph(self) -> int:
         """Create TRACKED_BY edges from events to situations in the graph.
 
@@ -182,3 +228,101 @@ class BackfillManager:
         except Exception as e:
             logger.warning("Edge property backfill failed: %s", e)
             return 0
+
+    # Predicates that map directly to graph edge types
+    GRAPH_PREDICATES = {
+        "HostileTo", "AlliedWith", "MemberOf", "LeaderOf", "OperatesIn",
+        "LocatedIn", "BordersWith", "TradesWith", "SanctionedBy",
+        "SuppliesWeaponsTo", "AffiliatedWith", "PartOf", "FundedBy",
+        "AtWarWith", "ConductsMilitaryOperationsIn", "SponsorOf",
+    }
+
+    async def backfill_graph_from_facts(self) -> int:
+        """Create graph edges from structured facts.
+
+        Reads facts with graph-relevant predicates and creates corresponding
+        AGE edges if they don't already exist. Carries valid_from/valid_until
+        as since/until edge properties.
+        """
+        facts = await self.pool.fetch("""
+            SELECT subject, predicate, value, confidence, valid_from, valid_until
+            FROM facts
+            WHERE superseded_by IS NULL
+              AND predicate = ANY($1)
+        """, list(self.GRAPH_PREDICATES))
+
+        created = 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Get existing edges to avoid duplicates (AGE doesn't support MERGE ON CREATE SET)
+        existing_edges = set()
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("LOAD 'age'")
+                await conn.execute("SET search_path = ag_catalog, public")
+                rows = await conn.fetch(f"""
+                    SELECT * FROM cypher('{GRAPH_NAME}', $$
+                        MATCH (a:Entity)-[r]->(b:Entity)
+                        RETURN a.name, type(r), b.name
+                    $$) AS (a agtype, r agtype, b agtype)
+                """)
+                for r in rows:
+                    a = str(r['a']).strip('"')
+                    rel = str(r['r']).strip('"')
+                    b = str(r['b']).strip('"')
+                    existing_edges.add((a, rel, b))
+        except Exception:
+            pass  # If we can't check, we'll create and let dupes happen
+
+        for fact in facts:
+            # Skip if edge already exists
+            if (fact['subject'], fact['predicate'], fact['value']) in existing_edges:
+                continue
+            try:
+                subj = fact['subject'].replace('"', '\\"')
+                val = fact['value'].replace('"', '\\"')
+                pred = fact['predicate']
+                conf = fact['confidence'] or 0.5
+                since = fact['valid_from'].isoformat() if fact['valid_from'] else None
+                until = fact['valid_until'].isoformat() if fact['valid_until'] else None
+
+                # Build optional temporal SET clauses
+                extra_set = ""
+                if since:
+                    extra_set += f', r.since = "{since}"'
+                if until:
+                    extra_set += f', r.until = "{until}"'
+
+                # AGE doesn't support MERGE ON CREATE SET — use CREATE directly
+                # Duplicates are handled by the try/except (AGE may error on duplicate edges)
+                props = (
+                    f'{{weight: {conf}, confidence: {conf}, '
+                    f'evidence_count: 1, last_evidenced: "{now_iso}", '
+                    f'volatility: 0.0'
+                )
+                if since:
+                    props += f', since: "{since}"'
+                if until:
+                    props += f', until: "{until}"'
+                props += '}'
+
+                cypher = (
+                    f'MATCH (a:Entity {{name: "{subj}"}}), '
+                    f'(b:Entity {{name: "{val}"}}) '
+                    f'CREATE (a)-[r:{pred} {props}]->(b) '
+                    f'RETURN r'
+                )
+
+                async with self.pool.acquire() as conn:
+                    await conn.execute("LOAD 'age'")
+                    await conn.execute("SET search_path = ag_catalog, public")
+                    await conn.execute(
+                        f"SELECT * FROM cypher('{GRAPH_NAME}', $${cypher}$$) AS (r agtype)"
+                    )
+                created += 1
+            except Exception:
+                pass  # Skip edges where entities don't exist as graph nodes
+
+        logger.info("Fact-to-graph backfill: %d edges created from %d eligible facts",
+                     created, len(facts))
+        return created
