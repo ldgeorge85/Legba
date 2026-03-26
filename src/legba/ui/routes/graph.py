@@ -15,11 +15,19 @@ router = APIRouter()
 
 # Color map for entity types (matches Tailwind palette)
 NODE_COLORS = {
-    "Country": "#38bdf8",    # sky-400
-    "Person": "#a78bfa",     # violet-400
-    "Organization": "#fb923c",  # orange-400
-    "Location": "#4ade80",   # green-400
+    "country": "#38bdf8",    # sky-400
+    "Country": "#38bdf8",
+    "person": "#a78bfa",     # violet-400
+    "Person": "#a78bfa",
+    "organization": "#fb923c",  # orange-400
+    "Organization": "#fb923c",
+    "armed_group": "#f97316", # orange-500
+    "location": "#4ade80",   # green-400
+    "Location": "#4ade80",
+    "international_org": "#818cf8", # indigo-400
+    "military_unit": "#f43f5e", # rose-500
     "Unknown": "#94a3b8",    # slate-400
+    "Entity": "#94a3b8",     # AGE label fallback
 }
 
 # Color map for relationship types
@@ -64,16 +72,19 @@ def _build_cytoscape_data(node_rows, edge_rows) -> dict:
         if not name or name in seen_nodes:
             continue
         seen_nodes.add(name)
-        ntype = v.get("label", "Unknown")
+        ntype = props.get("entity_type", v.get("label", "Unknown"))
         node_types.add(ntype)
         entity_id = props.get("entity_id", "")
+        # Lookup entity_type from DB if not in graph properties
+        degree = props.get("degree", 0)
         nodes.append({
             "data": {
                 "id": name,
                 "name": name,
                 "type": ntype,
-                "color": NODE_COLORS.get(ntype, DEFAULT_NODE_COLOR),
+                "color": NODE_COLORS.get(ntype, NODE_COLORS.get(ntype.capitalize(), DEFAULT_NODE_COLOR)),
                 "entity_id": entity_id,
+                "degree": degree,
             }
         })
 

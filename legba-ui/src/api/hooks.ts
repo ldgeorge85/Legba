@@ -433,7 +433,7 @@ export function useGraph(enabled = true) {
   return useQuery({
     queryKey: ['graph'],
     queryFn: async () => {
-      const raw = await api.get<any>('/api/graph')
+      const raw = await api.get<any>('/api/v2/graph')
       return transformGraphResponse(raw)
     },
     staleTime: 60_000,

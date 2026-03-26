@@ -81,6 +81,10 @@ async def consult_send(request: Request):
         log.exception("Consultation exchange failed")
         return JSONResponse({"error": f"LLM error: {e}"}, status_code=500)
 
+    # Safety net: clean any JSON wrapper that leaked through the tool parser
+    from ..consult import _clean_response
+    response_text = _clean_response(response_text)
+
     return JSONResponse({
         "response": response_text,
         "session_id": session_id,
