@@ -577,7 +577,7 @@ async def list_events(
         async with stores.structured._pool.acquire() as conn:
             total = await conn.fetchval(f"SELECT count(*) FROM events {where}", *params)
             rows = await conn.fetch(
-                f"SELECT data FROM events {where} "
+                f"SELECT data, lifecycle_status FROM events {where} "
                 f"ORDER BY time_start DESC NULLS LAST, created_at DESC "
                 f"LIMIT ${idx} OFFSET ${idx + 1}",
                 *params, limit, offset,
@@ -595,6 +595,7 @@ async def list_events(
                         "signal_count": d.get("signal_count", 0),
                         "confidence": d.get("confidence", 0.5),
                         "source_method": d.get("source_method", "auto"),
+                        "lifecycle_status": row["lifecycle_status"] or d.get("lifecycle_status", "active"),
                         "time_start": d.get("time_start"),
                         "time_end": d.get("time_end"),
                         "actors": (d.get("actors") or [])[:5],
@@ -693,7 +694,28 @@ async def get_event(request: Request, event_id: UUID):
                 for r in signal_rows
             ]
 
+            # Get linked entities
+            entity_rows = await conn.fetch(
+                """
+                SELECT eel.entity_id, ep.canonical_name, ep.entity_type, eel.role
+                FROM event_entity_links eel
+                JOIN entity_profiles ep ON eel.entity_id = ep.id
+                WHERE eel.event_id = $1
+                """,
+                event_id,
+            )
+            linked_entities = [
+                {
+                    "entity_id": str(r["entity_id"]),
+                    "name": r["canonical_name"],
+                    "entity_type": r["entity_type"],
+                    "role": r["role"],
+                }
+                for r in entity_rows
+            ]
+
         d["linked_signals"] = linked_signals
+        d["entities"] = linked_entities
         return _json(d)
     except Exception as exc:
         logger.warning("Event detail query failed: %s", exc)
@@ -851,20 +873,46 @@ async def get_entity(request: Request, entity_id: str):
                         "relationships": [],
                         "tags": raw.get("tags", []),
                     }
-                    # Fetch relationships from graph
+                    # Parse assertions from raw data
+                    raw_assertions = []
+                    sections = raw.get("sections", {})
+                    if sections:
+                        for section_name, section_list in sections.items():
+                            for a in section_list:
+                                if isinstance(a, dict) and not a.get("superseded"):
+                                    raw_assertions.append({
+                                        "key": a.get("key", ""),
+                                        "value": str(a.get("value", "")),
+                                        "confidence": a.get("confidence", 0),
+                                    })
+                    elif raw.get("assertions"):
+                        for a in raw["assertions"]:
+                            if isinstance(a, dict) and not a.get("superseded"):
+                                raw_assertions.append({
+                                    "key": a.get("key", ""),
+                                    "value": str(a.get("value", "")),
+                                    "confidence": a.get("confidence", 0),
+                                })
+                    data["assertions"] = raw_assertions
+                    # Fetch relationships from graph (separate connection for AGE)
                     try:
                         name = data["name"]
-                        rel_rows = await stores.structured._pool.fetch(f"""
-                            LOAD 'age'; SET search_path = ag_catalog, public;
-                            SELECT * FROM cypher('legba_graph', $$
-                                MATCH (a:Entity {{name: "{name}"}})-[r]->(b:Entity)
-                                RETURN a.name, type(r), b.name
-                                UNION ALL
-                                MATCH (a:Entity)-[r]->(b:Entity {{name: "{name}"}})
-                                RETURN a.name, type(r), b.name
-                            $$) AS (src agtype, rel agtype, tgt agtype)
-                        """)
-                        for rr in rel_rows:
+                        async with stores.structured._pool.acquire() as gconn:
+                            await gconn.execute("LOAD 'age'")
+                            await gconn.execute("SET search_path = ag_catalog, public")
+                            rel_rows = await gconn.fetch(f"""
+                                SELECT * FROM cypher('legba_graph', $$
+                                    MATCH (a:Entity {{name: "{name}"}})-[r]->(b:Entity)
+                                    RETURN a.name, type(r), b.name
+                                $$) AS (src agtype, rel agtype, tgt agtype)
+                            """)
+                            rev_rows = await gconn.fetch(f"""
+                                SELECT * FROM cypher('legba_graph', $$
+                                    MATCH (a:Entity)-[r]->(b:Entity {{name: "{name}"}})
+                                    RETURN a.name, type(r), b.name
+                                $$) AS (src agtype, rel agtype, tgt agtype)
+                            """)
+                        for rr in rel_rows + rev_rows:
                             data["relationships"].append({
                                 "source": str(rr["src"]).strip('"'),
                                 "rel_type": str(rr["rel"]).strip('"'),
@@ -1247,29 +1295,27 @@ async def list_situations(request: Request, status: str | None = None):
     if not stores.structured._available:
         return _json([])
 
-    conditions, params, idx = [], [], 1
-    if status:
-        conditions.append(f"status = ${idx}")
-        params.append(status)
-        idx += 1
-
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    status_filter = status or ''
 
     try:
         async with stores.structured._pool.acquire() as conn:
-            rows = await conn.fetch(
-                f"SELECT id, name, status, category, intensity_score, created_at, updated_at "
-                f"FROM situations {where} "
-                f"ORDER BY intensity_score DESC NULLS LAST, updated_at DESC",
-                *params,
-            )
+            rows = await conn.fetch("""
+                SELECT s.id, s.name, s.status, s.category, s.intensity_score,
+                       s.created_at, s.updated_at, COUNT(se.event_id) as event_count
+                FROM situations s
+                LEFT JOIN situation_events se ON s.id = se.situation_id
+                WHERE ($1 = '' OR s.status = $1)
+                GROUP BY s.id, s.name, s.status, s.category, s.intensity_score,
+                         s.created_at, s.updated_at
+                ORDER BY s.intensity_score DESC NULLS LAST, s.updated_at DESC
+            """, status_filter)
             items = [
                 {
                     "situation_id": str(r["id"]),
                     "title": r["name"],
                     "status": r["status"],
                     "severity": r["category"] or "medium",
-                    "event_count": 0,
+                    "event_count": r["event_count"],
                     "created_at": r["created_at"].isoformat() if r["created_at"] else None,
                     "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
                 }
@@ -2731,3 +2777,77 @@ async def graph_balance(request: Request):
             "total_signed_edges": 0,
             "error": str(exc),
         }, 500)
+
+
+@router.get("/graph")
+async def graph_full(request: Request):
+    """Return full knowledge graph nodes and edges via AGE."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"nodes": [], "edges": []})
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            await conn.execute("LOAD 'age'")
+            await conn.execute("SET search_path = ag_catalog, public")
+            node_rows = await conn.fetch(
+                "SELECT * FROM cypher('legba_graph', $$"
+                "MATCH (n:Entity) RETURN n.name, n.entity_type"
+                "$$) AS (name agtype, etype agtype)"
+            )
+            edge_rows = await conn.fetch(
+                "SELECT * FROM cypher('legba_graph', $$"
+                "MATCH (a:Entity)-[r]->(b:Entity) RETURN a.name, type(r), b.name"
+                "$$) AS (src agtype, rel agtype, tgt agtype)"
+            )
+        nodes = []
+        for r in node_rows:
+            nodes.append({
+                "id": str(r["name"]).strip('"'),
+                "name": str(r["name"]).strip('"'),
+                "type": str(r["etype"]).strip('"') if r["etype"] else "Unknown",
+            })
+        edges = []
+        for r in edge_rows:
+            edges.append({
+                "source": str(r["src"]).strip('"'),
+                "rel_type": str(r["rel"]).strip('"'),
+                "target": str(r["tgt"]).strip('"'),
+            })
+        return _json({"nodes": nodes, "edges": edges})
+    except Exception as exc:
+        logger.warning("graph_full failed: %s", exc)
+        return _json({"nodes": [], "edges": []})
+
+
+@router.get("/graph/geo")
+async def graph_geo(request: Request):
+    """Return entities with geo coordinates for map visualization."""
+    stores = get_stores(request)
+    if not stores.structured._available:
+        return _json({"nodes": []})
+
+    try:
+        async with stores.structured._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, canonical_name, entity_type,
+                       (data->>'geo_lat')::float as lat,
+                       (data->>'geo_lon')::float as lon
+                FROM entity_profiles
+                WHERE data->>'geo_lat' IS NOT NULL
+            """)
+        return _json({
+            "nodes": [
+                {
+                    "id": str(r["id"]),
+                    "name": r["canonical_name"],
+                    "type": r["entity_type"],
+                    "lat": r["lat"],
+                    "lon": r["lon"],
+                }
+                for r in rows
+            ]
+        })
+    except Exception as exc:
+        logger.warning("graph_geo failed: %s", exc)
+        return _json({"nodes": []})
