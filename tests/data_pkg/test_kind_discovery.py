@@ -31,6 +31,8 @@ _EXPECTED_ANALYST_KINDS = {
     "consult_on_demand",
     "predictor",
     "deterministic",
+    # The 11th OutputKind's producer — Legba's first-person reflective voice.
+    "journal_assessor",
 }
 
 
@@ -63,6 +65,20 @@ def test_inline_target_carries_finding_output_kind():
 def test_predictor_declares_prediction_output_kind():
     handler = discover_analyst_kinds()["predictor"]
     assert handler.output_kind == OutputKind.PREDICTION
+
+
+def test_journal_assessor_declares_journal_output_kind():
+    """The 11th OutputKind's producer registers with OutputKind.JOURNAL and the
+    Wave-0 default META reader (READ_SLICE=None)."""
+    from legba.data.provenance.kinds import KIND_REGISTRY
+
+    handler = discover_analyst_kinds()["journal_assessor"]
+    assert handler.output_kind == OutputKind.JOURNAL
+    assert handler.read_slice is None
+    assert callable(handler.build_prompt_module)
+    # the 11th kind is in the output-kind registry against the rebuilt set
+    assert OutputKind.JOURNAL in KIND_REGISTRY
+    assert KIND_REGISTRY[OutputKind.JOURNAL].table == "journal_entries"
 
 
 def test_cross_target_raw_exposes_dedicated_reader():
