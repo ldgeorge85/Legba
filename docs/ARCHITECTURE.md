@@ -1031,8 +1031,10 @@ follows:
 
 ## 10. Self-improvement — closing the loop
 
-The analysis graph closes on itself. A **critic** analyst (a *different* model
-than the one it grades — heterogeneity is the point, not multi-agent debate)
+The analysis graph closes on itself. A **critic** analyst — by design a model
+*different* from the one it grades (heterogeneity, not multi-agent debate), though
+the live critic currently runs same-model on the core plane via
+`allow_self_correlated` (the Anthropic plane is reserved for consult/deep) —
 scores analyst outputs against a rubric grounded in substrate facts; the critic
 reads `analyst_outputs` by id via its kind-specific read slice
 (`_critic_ungraded_targets`, `dapr_actors.py:1394`). Those critiques feed the

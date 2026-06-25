@@ -472,9 +472,14 @@ climatology on "which countries are seismic" is static geography, not anticipati
 the future.
 
 **critic** — An analyst that grades other analysts' outputs against a rubric.
-A meta analyst using an LLM judge (deliberately a *different* model) to score
-another analyst's output per-dimension against an operator-authored rubric — feeding
-the optimizer. A heterogeneity guard blocks a model from grading its own output.
+A meta analyst using an LLM judge to score another analyst's output per-dimension
+against an operator-authored rubric — feeding the optimizer. A **heterogeneity
+guard** (`_assert_heterogeneous`) *can* require the judge to be a different model
+than the one it grades, but that is a configurable policy the analyzed analyst opts
+into via `eval.allow_self_correlated`. Today the live critic runs on the **same core
+plane** as the analysts it grades (the Anthropic plane is reserved for consult /
+deep-consult), so it is currently a same-model judge — a deliberate, reversible
+choice, not a fixed property.
 *Note: the critic **actuates** — `effective_confidence = min(self-confidence,
 critic_score)` — so a poor grade can only auditably reduce surfaced confidence,
 never inflate it.*
