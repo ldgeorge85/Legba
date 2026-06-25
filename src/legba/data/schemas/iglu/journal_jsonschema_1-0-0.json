@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "self": {
+    "vendor": "legba",
+    "name": "journal",
+    "format": "jsonschema",
+    "version": "1-0-0"
+  },
+  "description": "JournalPayload — the 11th OutputKind (Journal Assessor, plan §3.2). The journal's one output: an entry or a consolidation, landing in the dedicated journal_entries table, OFF the fact/finding/nexus chain. This is the authored contract artifact matching legba.data.provenance.models.JournalPayload (the pydantic model is the live enforcement; this file is the documented Iglu schema for the journal_entries.schema_uri 'iglu:legba/journal/jsonschema/1-0-0').",
+  "type": "object",
+  "properties": {
+    "entry_kind": {
+      "enum": ["entry", "consolidation"],
+      "description": "The discriminator. Entries are pure append; only consolidations supersede."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "body": {
+      "type": "string",
+      "maxLength": 65536,
+      "description": "The narrative (markdown, with inline [[ref:<uuid>]] citation markers)."
+    },
+    "claims": {
+      "type": "array",
+      "description": "Per-claim citation binding (§3.6) — the chip-to-span source of truth.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "text_span": { "type": "string", "minLength": 1, "maxLength": 8192 },
+          "refs": {
+            "type": "array",
+            "items": { "type": "string", "format": "uuid" }
+          },
+          "kind": { "enum": ["fact", "perspective"] }
+        },
+        "required": ["text_span"],
+        "additionalProperties": false
+      }
+    },
+    "cited_substrate_refs": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "description": "Flat union of every ref cited anywhere in the body (query convenience). The binding lives in `claims`."
+    },
+    "period_start": { "type": "string", "format": "date-time" },
+    "period_end": { "type": "string", "format": "date-time" },
+    "supersedes": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "consolidation → prior consolidation; NULL for entries AND for the first-ever consolidation."
+    },
+    "honesty_flags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Forced DETERMINISTICALLY by a non-LLM post-step (§10) — never trusted as agent-self-reported."
+    },
+    "kind_marker": { "enum": ["journal"] }
+  },
+  "required": ["entry_kind", "title", "period_start", "period_end"],
+  "additionalProperties": false
+}

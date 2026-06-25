@@ -74,6 +74,8 @@ from .models import (
     CritiquePayload,
     ConsultResponsePayload,
     PromptModuleCandidatePayload,
+    JournalPayload,
+    JournalClaim,
 )
 from .writes import (
     SignalRow,
@@ -88,6 +90,8 @@ from .writes import (
     write_critique,
     write_fact,
     write_nexus,
+    write_journal,
+    supersede_prior_consolidation,
 )
 from .budget import BudgetLedgerRow, compute_cost_usd, record_budget
 from .dlq import OutputDeadLetterEntry, route_to_output_dead_letter
@@ -142,6 +146,8 @@ __all__ = [
     "CritiquePayload",
     "ConsultResponsePayload",
     "PromptModuleCandidatePayload",
+    "JournalPayload",
+    "JournalClaim",
     # L-114 — write wrappers
     "SignalRow",
     "OutputRow",
@@ -155,6 +161,8 @@ __all__ = [
     "write_critique",
     "write_fact",
     "write_nexus",
+    "write_journal",
+    "supersede_prior_consolidation",
     # L-114 — DLQ
     "OutputDeadLetterEntry",
     "route_to_output_dead_letter",
