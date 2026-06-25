@@ -75,7 +75,8 @@ ANALYST_FILES = [
     "analyst_nexus_decay.yaml",               # NEW — PIECE A (nexuses-table temporal-lifecycle maintenance)
     "analyst_proposed_edge_governance.yaml",  # NEW — Phase D (promote/reject the proposed_edges queue; P3-1)
     "analyst_thematic_proposal.yaml",        # NEW — Phase 5b (propose thematic frames for uncovered hot situations)
-    "analyst_journal_assessor.yaml",         # NEW — Journal Assessor Wave 0 (the 11th OutputKind producer)
+    "analyst_journal_assessor.yaml",         # NEW — Journal Assessor Wave 0 (the 11th OutputKind producer; entry tier)
+    "analyst_journal_consolidator.yaml",     # NEW — Journal Wave 2 (consolidation tier: SAME kind, distinct id, daily beat)
 ]
 
 # Journal Assessor (plan §4.8 leg 2): `journal_assessor` is a NEW analyst kind,
@@ -84,6 +85,13 @@ ANALYST_FILES = [
 # in-process ANALYST_KIND_REGISTRY so the descriptor's `model_validate` accepts
 # the kind during this bring-up, and (b) upsert the persistent vocabulary row so
 # a freshly-booted registry recognizes it too (idempotent).
+#
+# NOTE (Wave 2): the consolidation tier (`journal_consolidator`,
+# analyst_journal_consolidator.yaml above) is the SAME kind — `identity.kind:
+# journal_assessor` (§4.7, "the tier is the descriptor, not a mode flag"). It is a
+# distinct DESCRIPTOR id, NOT a new analyst kind, so it needs NO new vocabulary
+# row here — only its descriptor file in ANALYST_FILES. The single kind below
+# covers both tiers' `model_validate`.
 _NEW_ANALYST_KINDS: list[str] = ["journal_assessor"]
 
 
