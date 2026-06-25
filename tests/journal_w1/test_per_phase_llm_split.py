@@ -156,7 +156,7 @@ async def test_deps_build_resolves_two_distinct_handlers():
     )
     assert kind_deps.llm.component_id == "llm.primary.openai_compat"   # InnoGPT gather
     assert kind_deps.llm_narrate is not None
-    assert kind_deps.narrate_llm().component_id == "llm.deep_consult"  # Opus voice
+    assert kind_deps.narrate_llm().component_id == "llm.anthropic.opus_4_7"  # Opus voice
     # DIFFERENT handlers.
     assert kind_deps.llm is not kind_deps.narrate_llm()
     assert kind_deps.llm.component_id != kind_deps.narrate_llm().component_id
@@ -179,7 +179,7 @@ async def test_deps_build_consolidator_resolves_two_distinct_handlers():
         llm_handler_factory=factory,
     )
     assert kind_deps.llm.component_id == "llm.primary.openai_compat"
-    assert kind_deps.narrate_llm().component_id == "llm.deep_consult"
+    assert kind_deps.narrate_llm().component_id == "llm.anthropic.opus_4_7"
     assert kind_deps.gather_reasoning_high is True
     assert kind_deps.narrate_tokens() == 24576
 

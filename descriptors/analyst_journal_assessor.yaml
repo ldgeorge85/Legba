@@ -71,7 +71,7 @@ method:
       expected_family: llm_provider
     narrate:
       factory_kind: stack_ref
-      raw: llm.deep_consult           # Anthropic plane (Opus 4.8) — the deep meta VOICE
+      raw: llm.anthropic.opus_4_7     # Anthropic plane (Opus 4.8) — the deep meta VOICE
       expected_family: llm_provider
     # Opus 4.8 deprecates temperature → the handler drops it for the
     # claude-opus-4-8 prefix; we still declare a default for non-Opus stacks.

@@ -108,7 +108,7 @@ def _journal_descriptor() -> AnalystDescriptor:
             prompt_module="legba.prompts.journal_assessor:JOURNAL_SYSTEM",
             llm={
                 "primary": Property.StackRef(
-                    raw="llm.deep_consult", expected_family="llm_provider"
+                    raw="llm.anthropic.opus_4_7", expected_family="llm_provider"
                 ).model_dump(),
                 "max_tokens": 4096,
             },
