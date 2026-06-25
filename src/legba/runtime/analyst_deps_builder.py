@@ -202,14 +202,10 @@ async def build_analyst_run_method(
             f"discover_analyst_kinds() (known kinds: {sorted(registry)!r})"
         )
 
-    # Build a closure the per-kind branches call when they need an LLM.
-    async def _resolve_primary_llm() -> LLMProviderHandler:
-        component_id = _primary_llm_component_id(descriptor)
-        if not component_id:
-            raise AnalystDepsBuildError(
-                f"analyst {descriptor.identity.id!r} (kind={kind!r}) requires "
-                "an LLM but method.llm.primary is unset / malformed"
-            )
+    # Build a closure the per-kind branches call when they need an LLM. The
+    # by-id form lets a kind resolve a SECOND handler (the per-phase LLM split —
+    # journal §4.1: an Opus narrate handler alongside the InnoGPT primary).
+    async def _resolve_llm_component(component_id: str) -> LLMProviderHandler:
         if llm_handler_factory is not None:
             return await llm_handler_factory(component_id)
         if deps.secrets_resolve is None:
@@ -222,6 +218,15 @@ async def build_analyst_run_method(
             registry_client=registry_client,
             secrets_resolve=deps.secrets_resolve,
         )
+
+    async def _resolve_primary_llm() -> LLMProviderHandler:
+        component_id = _primary_llm_component_id(descriptor)
+        if not component_id:
+            raise AnalystDepsBuildError(
+                f"analyst {descriptor.identity.id!r} (kind={kind!r}) requires "
+                "an LLM but method.llm.primary is unset / malformed"
+            )
+        return await _resolve_llm_component(component_id)
 
     # Per-kind branches.  Each returns the trio; the receipt chain is
     # tacked on at the top level so the per-kind branches stay focused
@@ -280,6 +285,7 @@ async def build_analyst_run_method(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool,
             agency_binding=inline_target_agency_binding,
             budget_precheck=inline_target_budget_precheck,
+            resolve_llm_component=_resolve_llm_component,
         )
     else:
         # Defensive — discover_analyst_kinds returned a kind we didn't
@@ -434,6 +440,9 @@ async def _build_journal_assessor(
     pg_pool: "asyncpg.Pool | None" = None,
     agency_binding: Any | None = None,
     budget_precheck: Callable[[], Awaitable[bool]] | None = None,
+    resolve_llm_component: (
+        Callable[[str], Awaitable[LLMProviderHandler]] | None
+    ) = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """journal_assessor — Legba's first-person reflective voice (plan §4.8).
 
@@ -449,12 +458,47 @@ async def _build_journal_assessor(
     (the JSON-only / BLUF / estimative anti-voice). That wrapping is what would
     quietly kill the voice; we author the journal-specific narrate contract
     inside JOURNAL_SYSTEM instead.
+
+    PER-PHASE LLM SPLIT (§4.1): the heavy GATHER loop runs on the PRIMARY handler
+    (``method.llm.primary`` → InnoGPT / vLLM, ``Reasoning: high``) while the VOICE
+    (the field-notes seam + NARRATE) runs on the SECOND handler resolved from the
+    OPTIONAL ``method.llm.narrate`` ref (→ Opus). When ``method.llm.narrate`` is
+    absent (or no ``resolve_llm_component`` is supplied), ``llm_narrate`` stays
+    None and the voice falls back to the primary handler — the prior behavior,
+    byte-for-byte. ``method.max_tokens`` now governs ONLY the Opus narrate output
+    (the InnoGPT gather plane never receives max_tokens — vLLM serves its own
+    budget, vllm.py:119), so it is threaded as the narrate cap; it is inert on the
+    primary handler's gather calls.
     """
     from ..data.analysts.inline_target import InlineTargetDeps
 
     llm = await resolve_llm()
     max_tokens = _read_method_llm_option(descriptor, "max_tokens", default=4096)
     temperature = _read_method_llm_option(descriptor, "temperature", default=0.2)
+    # PER-PHASE LLM SPLIT — resolve the OPTIONAL second (narrate) handler. Present
+    # only when the descriptor sets ``method.llm.narrate.raw`` AND a by-id resolver
+    # was threaded. Absent → None → the voice falls back to the primary handler
+    # (zero-regression). ``gather_reasoning_high`` is set IFF the split is active
+    # (the journal's heavy gather plane is InnoGPT, which honors the directive);
+    # without a split there is no separate gather plane, so leave it off.
+    narrate_component_id = _narrate_llm_component_id(descriptor)
+    llm_narrate: LLMProviderHandler | None = None
+    narrate_max_tokens: int | None = None
+    gather_reasoning_high = False
+    if narrate_component_id and resolve_llm_component is not None:
+        llm_narrate = await resolve_llm_component(narrate_component_id)
+        # method.max_tokens now caps ONLY the Opus narrate output (the gather plane
+        # serves its own vLLM budget); thread it as the narrate cap.
+        narrate_max_tokens = int(max_tokens)
+        gather_reasoning_high = True
+        logger.info(
+            "analyst_deps_builder.journal_assessor.per_phase_split analyst=%r "
+            "gather_plane=%r voice_plane=%r — GATHER on InnoGPT (Reasoning:high), "
+            "voice on the narrate handler",
+            descriptor.identity.id,
+            _primary_llm_component_id(descriptor),
+            narrate_component_id,
+        )
     gather = getattr(descriptor.method, "gather", None)
     max_rounds = int(getattr(gather, "max_rounds", 1) or 1) if gather is not None else 1
     invoke_timeout_seconds = float(
@@ -490,11 +534,14 @@ async def _build_journal_assessor(
         max_tokens=int(max_tokens),
         temperature=float(temperature),
         system_prompt=system_prompt,
+        llm_narrate=llm_narrate,
+        narrate_max_tokens=narrate_max_tokens,
         grounding_hook=grounding_hook,
         agency_binding=agency_binding,
         max_rounds=max_rounds,
         invoke_timeout_seconds=invoke_timeout_seconds,
         budget_precheck=budget_precheck,
+        gather_reasoning_high=gather_reasoning_high,
     )
     # handler.run_method is the journal's 3-arg run_method (inputs, options, deps).
     return handler.run_method, kind_deps, handler.output_kind
@@ -1129,6 +1176,33 @@ def _primary_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
         return raw
     if isinstance(primary, str) and primary:
         return primary
+    return None
+
+
+def _narrate_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
+    """Extract the StackRef ``raw`` from ``descriptor.method.llm.narrate`` (or None).
+
+    The OPTIONAL second LLM ref for the per-phase split (journal §4.1): the voice
+    (field-notes + NARRATE) plane. ``method.llm`` is an open ``dict[str, Any]``
+    (schemas/analyst.py), so the ``narrate`` key needs NO schema change. Absent /
+    malformed → None, and the caller leaves the voice on the primary handler
+    (zero-regression). Handles the same shape variants as
+    :func:`_primary_llm_component_id` (registry model_dump vs live StackRef).
+    """
+    llm = getattr(descriptor.method, "llm", None) or {}
+    if not isinstance(llm, Mapping):
+        return None
+    narrate = llm.get("narrate")
+    if narrate is None:
+        return None
+    if isinstance(narrate, Mapping):
+        raw = narrate.get("raw")
+        return str(raw) if isinstance(raw, str) and raw else None
+    raw = getattr(narrate, "raw", None)
+    if isinstance(raw, str) and raw:
+        return raw
+    if isinstance(narrate, str) and narrate:
+        return narrate
     return None
 
 
