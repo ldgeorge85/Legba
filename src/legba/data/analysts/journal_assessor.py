@@ -52,6 +52,7 @@ from uuid import UUID
 
 from ..provenance.kinds import OutputKind
 from ..provenance.models import JournalClaim, JournalPayload
+from .agency.journal_propose import JOURNAL_PROPOSE_TOOLS
 from .agency.journal_read import JOURNAL_READ_TOOLS
 from .inline_target import (
     AnalystMethodResult,
@@ -584,11 +585,27 @@ async def run_method(
 
     # --- GATHER (deep ReAct over the journal_read pack — §5 the whole animal) ---
     active_binding = options.get("agency_binding") or deps.agency_binding
-    # The journal_read pack is read-only (no write/web tools), so the read suffix
-    # only. The journal's OWN instrument tool names are NOT in inline_target's
+    # The journal's OWN instrument tool names are NOT in inline_target's
     # _GATHER_READ_TOOLS, so we pass them via ``extra_read_tools`` — they are then
     # recognized AND routed through the journal_read binding (§4.9).
-    gather_system = _gather_system_suffix(web_fragments=None, write_fragments=None)
+    #
+    # Wave 4 (§7): the journal ALSO grants the journal_propose pack — its
+    # PROPOSE-AND-GATE write tools. Those names ride ``extra_write_tools`` (NOT
+    # extra_read_tools) so they are recognized but route through their per-tool
+    # binding in ``gather_tool_bindings`` (carrying the per-run WritebackContext),
+    # exactly like the generic propose_facts write tools. The host builds that
+    # binding iff the journal_propose pack is EFFECTIVE (granted); when it is
+    # bound, the actor passes the pack's operator-authored guidance through
+    # ``gather_write_prompt_fragments`` so the in-run instruction tracks the
+    # descriptor. Absent (e.g. unit tests with no write binding) → propose tools
+    # are recognized but report a clean unbound no-op, never an ungoverned write.
+    write_fragments = options.get("gather_write_prompt_fragments")
+    gather_system = _gather_system_suffix(
+        web_fragments=None,
+        write_fragments=(
+            list(write_fragments) if write_fragments is not None else None
+        ),
+    )
     if active_binding is not None:
         gathered_context, gather_usage, _gather_refs, _ = await _gather(
             deps,
@@ -600,6 +617,7 @@ async def run_method(
             tool_bindings=options.get("gather_tool_bindings") or {},
             gather_system=gather_system,
             extra_read_tools=JOURNAL_READ_TOOLS,
+            extra_write_tools=JOURNAL_PROPOSE_TOOLS,
         )
         _fold(gather_usage)
         if gathered_context:

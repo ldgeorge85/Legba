@@ -390,6 +390,7 @@ def default_tool_registry() -> ToolRegistry:
     # Local import — substrate_read / web_tools / write_tools import
     # ToolResult/ToolContext from this module, so a module-level import here
     # would be a cycle.
+    from .journal_propose import register_journal_propose_tools
     from .journal_read import register_journal_read_tools
     from .substrate_read import register_substrate_read_tools
     from .web_tools import register_web_access_tools
@@ -404,6 +405,12 @@ def default_tool_registry() -> ToolRegistry:
     # re-register of the same callable) so the journal_read pack's tool surface
     # is self-contained even if substrate_read is ever disabled (plan §5).
     register_journal_read_tools(r)
+    # journal_propose (plan §7 / Wave 4) — the journal's PROPOSE-AND-GATE write
+    # surface: each handler writes ONLY a pending journal_proposals row (asserted
+    # by the gating test, tests/journal_w4). Registered here so the agency
+    # dispatch resolves the name; it RUNS only when the journal grants the
+    # journal_propose pack AND a per-run ctx.writeback is wired.
+    register_journal_propose_tools(r)
     register_web_access_tools(r)
     register_write_tools(r)
     return r

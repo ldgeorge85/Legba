@@ -361,6 +361,7 @@ async def _gather_write_bindings_for_target(
     "web_fragments": [...]|None, "write_fragments": [...]|None}``.
     """
     from ..data.analysts.agency.binding import GLOBAL_SCOPE
+    from ..data.analysts.agency.journal_propose import JOURNAL_PROPOSE_PACK_ID
     from ..data.analysts.agency.resolution import scope_view_from_target
     from ..data.analysts.agency.tools import ToolContext, WritebackContext
     from ..data.analysts.agency.write_tools import WRITE_PACK_ID
@@ -386,7 +387,13 @@ async def _gather_write_bindings_for_target(
         scope = GLOBAL_SCOPE
 
     base_bindings: dict[str, Any] = base.get("bindings") or {}
-    write_pack_id = WRITE_PACK_ID
+    # The pack ids whose tools NEED the per-run WritebackContext (a connection
+    # source + the run identity). propose_facts writes live facts/hypotheses;
+    # journal_propose (plan §7 / Wave 4) writes a pending journal_proposals row.
+    # Both reach ctx.writeback; web_access does not. NOTE: journal_propose's
+    # writeback carries pg_pool + AnalystContext ONLY — it reaches NO provenance
+    # writer (its handlers run a single INSERT into journal_proposals).
+    writeback_pack_ids = frozenset({WRITE_PACK_ID, JOURNAL_PROPOSE_PACK_ID})
 
     # One per-run WritebackContext + AnalystContext shared by the write pack's
     # tools (they all stamp the same run identity). Built once per run, not per
@@ -412,7 +419,7 @@ async def _gather_write_bindings_for_target(
             bound = base_binding.for_target(
                 scope=scope, target_allows=target_allows
             )
-            if base_binding.pack.identity.id == write_pack_id:
+            if base_binding.pack.identity.id in writeback_pack_ids:
                 # Copy-on-write the ToolContext WITH the per-run writeback. The
                 # base ToolContext is shared across runs — clone its fields.
                 src_ctx = bound.tool_context

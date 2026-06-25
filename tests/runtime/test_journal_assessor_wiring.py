@@ -149,8 +149,9 @@ def test_consolidator_descriptor_is_same_kind_distinct_id_daily_cadence():
     assert int(d.method.llm["max_tokens"]) > 4096
     # META: no targets block (global single run per tick).
     assert not getattr(d.subscription, "targets", None)
-    # Grant invariant: ONLY the journal_read pack (§7.6).
-    assert [p.pack_id for p in d.action_packs] == ["journal_read"]
+    # Grant invariant (§7.6): ONLY the journal_read + journal_propose packs (both
+    # non-write-fact). Wave 4 adds journal_propose (the PROPOSE-AND-GATE surface).
+    assert {p.pack_id for p in d.action_packs} == {"journal_read", "journal_propose"}
 
 
 @pytest.mark.asyncio
@@ -405,3 +406,140 @@ def test_journal_known_tools_subset_in_pack():
     }
     # And every shared tool is, by construction, in the pack tuple.
     assert shared <= set(JOURNAL_READ_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# Wave 4 (plan §7) — the journal_propose PROPOSE-AND-GATE pack: its OWN drift
+# test (tuple == descriptor == handlers), the GATHER write-tool recognition, and
+# the §7.6 grant invariant (the journal stays NOT effective for any write-fact
+# pack). NOTE the propose tools are deliberately a SEPARATE pack from journal_read
+# (the §7.6 grant invariant — do NOT widen journal_read).
+# ---------------------------------------------------------------------------
+
+
+def test_journal_propose_tuple_descriptor_handlers_agree():
+    """The journal_propose pack's OWN four-surface drift guard: the in-code tuple
+    == the descriptor YAML `tools` == the registered handlers. A drift here blocks
+    a propose tool as unknown_tool on the governed path (the consult-tools memory),
+    silently disarming the journal's agency."""
+    from legba.data.analysts.agency.journal_propose import (
+        JOURNAL_PROPOSE_TOOLS,
+        register_journal_propose_tools,
+    )
+    from legba.data.analysts.agency.tools import ToolRegistry
+
+    tuple_names = set(JOURNAL_PROPOSE_TOOLS)
+    # The §7.5 build order is asserted: correction + change FIRST, self_revision
+    # LAST (the highest-scrutiny class ships last within Wave 4).
+    assert JOURNAL_PROPOSE_TOOLS == (
+        "propose_correction", "propose_change", "propose_self_revision",
+    )
+
+    body = yaml.safe_load(
+        (_DESCRIPTORS / "action_pack_journal_propose.yaml").read_text()
+    )
+    descriptor_names = {t["name"] for t in body["tools"]}
+    assert descriptor_names == tuple_names, (
+        "descriptor action_pack_journal_propose.yaml tools != JOURNAL_PROPOSE_TOOLS "
+        f"(only in descriptor: {descriptor_names - tuple_names}; "
+        f"only in tuple: {tuple_names - descriptor_names})"
+    )
+
+    reg = ToolRegistry()
+    register_journal_propose_tools(reg)
+    registered = set(reg.names)
+    assert registered == tuple_names, (
+        "register_journal_propose_tools handlers != JOURNAL_PROPOSE_TOOLS "
+        f"(only registered: {registered - tuple_names}; "
+        f"only in tuple: {tuple_names - registered})"
+    )
+
+
+def test_journal_propose_tool_has_a_global_handler():
+    """Every journal_propose tool resolves to a registered handler in the GLOBAL
+    registry — a tool absent from default_tool_registry would block as
+    unknown_tool on the governed path (the memory's drift guard)."""
+    from legba.data.analysts.agency.journal_propose import JOURNAL_PROPOSE_TOOLS
+    from legba.data.analysts.agency.tools import default_tool_registry
+
+    reg = default_tool_registry()
+    for name in JOURNAL_PROPOSE_TOOLS:
+        assert reg.handler_for(name) is not None, (
+            f"journal_propose tool {name!r} has no global handler — it would block "
+            "as unknown_tool on the governed path"
+        )
+
+
+def test_journal_gather_recognizes_every_propose_tool_as_a_write_tool():
+    """The journal's GATHER loop must RECOGNIZE every JOURNAL_PROPOSE_TOOLS entry —
+    the run_method passes the tuple as ``extra_write_tools`` so each is a valid
+    name AND routes through its per-tool binding (the journal_propose binding,
+    carrying the per-run writeback), NOT the read binding. A propose tool that fell
+    into the READ set would be routed to the read-only journal_read binding and
+    block (§7 — propose tools are write tools)."""
+    from legba.data.analysts.agency.journal_propose import JOURNAL_PROPOSE_TOOLS
+    from legba.data.analysts.inline_target import _GATHER_READ_TOOLS, _GATHER_TOOLS
+
+    # With extra_write_tools=JOURNAL_PROPOSE_TOOLS, the recognized set is
+    # _GATHER_TOOLS ∪ JOURNAL_PROPOSE_TOOLS; the read-routing set is unchanged
+    # (_GATHER_READ_TOOLS only — propose tools route via tool_bindings).
+    recognized = set(_GATHER_TOOLS) | set(JOURNAL_PROPOSE_TOOLS)
+    read_routed = set(_GATHER_READ_TOOLS)
+    for name in JOURNAL_PROPOSE_TOOLS:
+        assert name in recognized, f"{name} not recognized by the journal GATHER loop"
+        assert name not in read_routed, (
+            f"{name} must NOT be read-routed — it is a write tool routed through "
+            "the journal_propose binding (carrying the per-run writeback)"
+        )
+
+
+def test_journal_propose_handlers_call_no_provenance_writer():
+    """§7.6 + §3.1 enforced at the SOURCE: the journal_propose module imports NO
+    provenance writer (write_fact / write_nexus / write_hypothesis) and binds no
+    such name — its handlers write ONLY a journal_proposals row. (The DB-level
+    proof is the gating test tests/journal_w4; this is the static guard that the
+    module cannot even REACH a fact/nexus/hypothesis writer — checked on the
+    module namespace, not the prose, so the docstring may still NAME them to
+    explain what the pack deliberately does NOT do.)"""
+    from legba.data.analysts.agency import journal_propose
+
+    for forbidden in ("write_fact", "write_nexus", "write_hypothesis"):
+        assert not hasattr(journal_propose, forbidden), (
+            f"journal_propose binds {forbidden} — the journal PROPOSES, it never "
+            "writes the knowledge layer (§3.1 / §7.6)"
+        )
+    # Also: nothing the module imported is one of the provenance writers (catch a
+    # rename-import like `from ...provenance import write_fact as wf`).
+    import legba.data.provenance as _prov
+
+    forbidden_callables = [
+        getattr(_prov, n) for n in ("write_fact", "write_nexus", "write_hypothesis")
+        if hasattr(_prov, n)
+    ]
+    module_callables = [v for v in vars(journal_propose).values() if callable(v)]
+    assert not any(v in forbidden_callables for v in module_callables), (
+        "journal_propose imported a provenance writer (write_fact/write_nexus/"
+        "write_hypothesis) — forbidden (§3.1 / §7.6)"
+    )
+
+
+def test_journal_grant_invariant_only_nonwrite_packs():
+    """§7.6 grant invariant: BOTH journal descriptors grant ONLY journal_read +
+    journal_propose — and journal_propose is a NON-write-fact pack (its tools call
+    no write_fact/write_nexus/write_hypothesis). Neither tier grants propose_facts
+    or any pack whose tools mutate the knowledge layer, so the journal is
+    structurally NOT effective for any such pack."""
+    from legba.data.analysts.agency.write_tools import WRITE_PACK_ID
+
+    for fname in ("analyst_journal_assessor.yaml", "analyst_journal_consolidator.yaml"):
+        body = yaml.safe_load((_DESCRIPTORS / fname).read_text())
+        granted = {p["pack_id"] for p in body["action_packs"]}
+        assert granted == {"journal_read", "journal_propose"}, (
+            f"{fname} grants {granted} — the journal must grant ONLY journal_read "
+            "+ journal_propose (§7.6)"
+        )
+        # The journal NEVER grants the live write-fact pack.
+        assert WRITE_PACK_ID not in granted, (
+            f"{fname} grants the live write-fact pack {WRITE_PACK_ID!r} — forbidden "
+            "(§7.6: the journal proposes, it never writes facts)"
+        )

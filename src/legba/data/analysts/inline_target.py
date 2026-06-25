@@ -838,6 +838,7 @@ async def _gather(
     tool_bindings: Mapping[str, Any] | None = None,
     gather_system: str | None = None,
     extra_read_tools: tuple[str, ...] = (),
+    extra_write_tools: tuple[str, ...] = (),
 ) -> tuple[str, dict[str, int], list[UUID], list[dict[str, Any]]]:
     """Run the bounded GATHER tool-call loop, returning the enrichment.
 
@@ -894,8 +895,17 @@ async def _gather(
     # recognized as valid tool names AND routed through the read ``binding``
     # (the journal_read binding, which Agency.run_pack_tool governs against the
     # journal_read pack). Empty for inline_target → byte-for-byte unchanged.
+    #
+    # ``extra_write_tools`` (plan §7 / Wave 4 — the journal_propose pack) carries
+    # the journal's OWN write/propose tool names. They are recognized as valid
+    # tool names but — unlike read tools — are NOT added to ``read_tools``, so
+    # they route through their per-tool binding in ``tool_bindings`` (the
+    # journal_propose binding, carrying the per-run WritebackContext) exactly like
+    # the generic propose_facts write tools, NEVER through the read binding.
     read_tools = set(_GATHER_READ_TOOLS) | set(extra_read_tools)
-    recognized_tools = set(_GATHER_TOOLS) | set(extra_read_tools)
+    recognized_tools = (
+        set(_GATHER_TOOLS) | set(extra_read_tools) | set(extra_write_tools)
+    )
     max_rounds = max(1, min(_GATHER_ROUNDS_CEILING, deps.max_rounds))
     deadline = (
         time.monotonic()

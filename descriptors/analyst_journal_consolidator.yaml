@@ -82,13 +82,18 @@ grounding:
   static_candidates: [Iran, United States, Israel, Russia, Ukraine, China, Gaza]
   max_facts: 30
 
-# The journal must be granted ONLY the journal_read pack (§7.6 grant invariant) —
-# the grant-layer backstop for the never-write-a-fact invariant: with only a read
-# pack granted, the analyst is structurally NOT effective for any pack whose tools
-# call write_fact / write_nexus / write_hypothesis. get_journal_delta in this pack
-# returns the prior consolidation + recent entries (the build-on-don't-repeat read).
+# The journal is granted ONLY the journal_read pack + the journal_propose pack
+# (§7.6 grant invariant) — the grant-layer backstop for the never-write-a-fact
+# invariant: BOTH packs are non-write-fact (read tools, and propose tools that
+# write ONLY a pending journal_proposals row), so the analyst stays structurally
+# NOT effective for any pack whose tools call write_fact / write_nexus /
+# write_hypothesis. get_journal_delta in journal_read returns the prior
+# consolidation + recent entries (the build-on-don't-repeat read); journal_propose
+# (Wave 4) is the PROPOSE-AND-GATE write surface — the consolidator SUGGESTS a
+# correction/change/self-revision into the human-gated queue (§7.1 / §7.5).
 action_packs:
   - pack_id: journal_read
+  - pack_id: journal_propose
 
 outputs: []                          # JournalPayload lands in journal_entries via
                                      # OUTPUT_KIND.JOURNAL; no a2a/webhook binding in v1

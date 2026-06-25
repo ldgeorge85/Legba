@@ -1448,6 +1448,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 WEB_ACCESS_PACK_ID,
                 WEB_ACCESS_TOOLS,
             )
+            from ..data.analysts.agency.journal_propose import (
+                JOURNAL_PROPOSE_PACK_ID,
+                JOURNAL_PROPOSE_TOOLS,
+            )
             from ..data.analysts.agency.write_tools import (
                 WRITE_PACK_ID,
                 WRITE_TOOLS,
@@ -1459,9 +1463,16 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             _bindings: dict[str, Any] = {}
             _web_fragments: list[str] | None = None
             _write_fragments: list[str] | None = None
+            # Each write/web pack the GATHER kind grants. journal_propose (plan §7
+            # / Wave 4) is a WRITE pack like propose_facts — each tool writes ONLY
+            # a pending journal_proposals row, so it needs the per-run
+            # WritebackContext injection (_is_write=True) exactly like propose_facts
+            # (the connection source + run identity; NO provenance writer). A pack
+            # the analyst does not grant is skipped (`_grants_include` below).
             for _pack_id, _tool_names, _is_write in (
                 (WEB_ACCESS_PACK_ID, WEB_ACCESS_TOOLS, False),
                 (WRITE_PACK_ID, WRITE_TOOLS, True),
+                (JOURNAL_PROPOSE_PACK_ID, JOURNAL_PROPOSE_TOOLS, True),
             ):
                 if not _grants_include(_inline_grant_dicts, _pack_id):
                     continue
