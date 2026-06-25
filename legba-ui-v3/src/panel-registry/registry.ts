@@ -93,6 +93,9 @@ const SystemTenantView = lazy(() => import('@/panels/system/TenantView'))
 // The Inspector — unified detail surface (redesign Move 1, the keystone).
 const SystemInspector = lazy(() => import('@/components/inspector/InspectorPanel'))
 
+// The Journal — Legba's reflective voice + navigable index (Wave 3).
+const SystemJournal = lazy(() => import('@/panels/system/Journal'))
+
 // v4 visual workspace panels (selection-linked singletons).
 const V4Map = lazy(() => import('@/panels/v4/MapPanel'))
 const V4Flow = lazy(() => import('@/panels/v4/FlowPanel'))
@@ -347,6 +350,12 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'system.inspector': {
     definition: def('system.inspector', 'system_inspector', 'system', null, 'Inspector', false, ['personal', 'cis'], 'PanelRight'),
     Component: SystemInspector,
+  },
+
+  // --- The Journal — reflective voice + navigable product index (Wave 3) ---
+  'system.journal': {
+    definition: def('system.journal', 'system_journal', 'system', null, 'Journal', false, ['personal', 'cis'], 'BookOpen'),
+    Component: SystemJournal,
   },
 
   // --- v4 visual workspace panels (singletons; selection-linked) ---

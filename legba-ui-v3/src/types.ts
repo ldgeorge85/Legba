@@ -81,6 +81,9 @@ export type PanelKind =
   | 'system.tenant_view'
   // The Inspector — the unified detail surface (redesign Move 1, the keystone)
   | 'system.inspector'
+  // The Journal — Legba's reflective voice + navigable index over the product
+  // (JOURNAL_ASSESSOR_PLAN §9, Wave 3)
+  | 'system.journal'
   // v4 visual workspace panels (geotemporal / flow / provenance / casework)
   | 'v4.map'
   | 'v4.flow'
