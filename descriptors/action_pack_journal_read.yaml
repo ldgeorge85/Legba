@@ -1,0 +1,58 @@
+# journal_read action pack (Journal Assessor, plan §5 / §12 Wave 0).
+#
+# The journal_assessor's GOVERNED read surface. Wave 0 is deliberately MINIMAL:
+# ONE reused existing tool — `list_findings` — enough for the journal to narrate
+# truthfully over the platform's OWN finished intelligence (recent findings +
+# meta-findings; the cross_analyst_correlator contradiction/agreement/blind-spot
+# outputs are the richest fuel). The ~9 net-new self-instrument tools
+# (assessments, graph_mining, structural_balance, critic_scores, calibration,
+# run_health, source_health, budget_status, get_journal_delta) are Wave 1.
+#
+# WHY a SEPARATE pack (not just granting substrate_read): the §7.6 grant
+# invariant. The journal must be granted ONLY this read pack (and later the
+# journal_proposals pack) so it is structurally NOT effective for any pack whose
+# tools call write_fact / write_nexus / write_hypothesis — the grant-layer
+# backstop for the never-write-a-fact invariant (§3.1).
+#
+# Universally applicable BY DESIGN (no applies_to_tags, no predicate): the
+# journal is a META analyst with target_filter=None, so the runtime binds it
+# with a synthetic global scope. The grant leg stays real: an analyst without
+# `action_packs: [{pack_id: journal_read}]` is denied at resolution.
+#
+# Read-only: the governor caps bound runaway ReAct loops, not spend (the tools
+# cost no tokens themselves — the GATHER rounds around them are bounded by the
+# descriptor's gather.max_rounds + token budget).
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: journal_read
+  name: Journal Read Tools
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: journal_revival
+  created: "2026-06-25T00:00:00Z"
+
+tools:
+  # Wave 0: the platform's OWN finished intelligence (recent findings +
+  # meta-findings, effective_confidence folds in the critic). Read-only.
+  - name: list_findings
+    config: {}
+
+prompt_fragments:
+  - >-
+    Read the platform's own finished intelligence before narrating:
+    list_findings surfaces recent findings + meta-findings (the
+    cross-analyst contradiction/agreement/blind-spot outputs are the
+    richest fuel). Cite the UUIDs the tools return — never fabricate a ref.
+
+rules:
+  - "Never fabricate substrate refs — cite only UUIDs the tools returned."
+  - "You write a journal, never a fact/nexus/finding — this pack is read-only."
+
+governor:
+  budget_account: journal_read
+  max_invocations_per_hour: 600
+  api_rate_per_minute: 60

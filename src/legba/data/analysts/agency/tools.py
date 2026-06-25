@@ -390,6 +390,7 @@ def default_tool_registry() -> ToolRegistry:
     # Local import — substrate_read / web_tools / write_tools import
     # ToolResult/ToolContext from this module, so a module-level import here
     # would be a cycle.
+    from .journal_read import register_journal_read_tools
     from .substrate_read import register_substrate_read_tools
     from .web_tools import register_web_access_tools
     from .write_tools import register_write_tools
@@ -399,6 +400,10 @@ def default_tool_registry() -> ToolRegistry:
     r.register("escalate", escalate_tool)
     r.register("create_incident", create_incident_tool)
     register_substrate_read_tools(r)
+    # journal_read reuses the substrate_read list_findings handler (idempotent
+    # re-register of the same callable) so the journal_read pack's tool surface
+    # is self-contained even if substrate_read is ever disabled (plan §5).
+    register_journal_read_tools(r)
     register_web_access_tools(r)
     register_write_tools(r)
     return r

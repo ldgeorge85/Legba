@@ -75,7 +75,16 @@ ANALYST_FILES = [
     "analyst_nexus_decay.yaml",               # NEW — PIECE A (nexuses-table temporal-lifecycle maintenance)
     "analyst_proposed_edge_governance.yaml",  # NEW — Phase D (promote/reject the proposed_edges queue; P3-1)
     "analyst_thematic_proposal.yaml",        # NEW — Phase 5b (propose thematic frames for uncovered hot situations)
+    "analyst_journal_assessor.yaml",         # NEW — Journal Assessor Wave 0 (the 11th OutputKind producer)
 ]
+
+# Journal Assessor (plan §4.8 leg 2): `journal_assessor` is a NEW analyst kind,
+# NOT in the closed AnalystKind enum. The registry recognizes it via a
+# `vocabulary_entries` row (family='analyst_kind'). We (a) register it in the
+# in-process ANALYST_KIND_REGISTRY so the descriptor's `model_validate` accepts
+# the kind during this bring-up, and (b) upsert the persistent vocabulary row so
+# a freshly-booted registry recognizes it too (idempotent).
+_NEW_ANALYST_KINDS: list[str] = ["journal_assessor"]
 
 
 def _load(name: str) -> AnalystDescriptor:
@@ -84,9 +93,33 @@ def _load(name: str) -> AnalystDescriptor:
     return AnalystDescriptor.model_validate(body, strict=False)
 
 
+async def _register_new_analyst_kinds(pg: Any) -> None:
+    """Register the NEW (non-builtin) analyst kinds (plan §4.8 leg 2).
+
+    (a) in-process: so the descriptor `model_validate` below accepts the kind.
+    (b) persistent: idempotently upsert the `vocabulary_entries` row so a
+        freshly-booted registry recognizes the kind too. Without (b) the next
+        cold-start would 500 the kind validation again.
+    """
+    from legba.data.schemas.analyst import register_analyst_kind
+
+    for kind in _NEW_ANALYST_KINDS:
+        register_analyst_kind(kind)
+        async with pg.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO vocabulary_entries (family, value, introduced)
+                VALUES ('analyst_kind', $1, now())
+                ON CONFLICT (family, value) DO NOTHING
+                """,
+                kind,
+            )
+
+
 async def main() -> int:
     pg, reg = await open_registry()
     try:
+        await _register_new_analyst_kinds(pg)
         results: list[RegisterResult] = []
         for fname in ANALYST_FILES:
             desc = _load(fname)
