@@ -656,8 +656,31 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         except Exception as exc:  # noqa: BLE001 — stream absent / transient
             logger.info("v3.consumer_lag.unavailable err=%s", exc)
             return []
+        # Orphan filter (phantom-lag guard). A durable whose ack_floor sits BELOW
+        # the stream's first retained sequence is a superseded/abandoned consumer —
+        # e.g. the per-target durables replaced by the shared `legba-trigger-engine`,
+        # or dead autowire generations. Its `num_pending` is a retention artifact
+        # (the WHOLE retained window counted against a frozen ack floor), NOT real
+        # backlog, so unfiltered it buries the panel under tens of thousands of
+        # phantom lag. Drop those rows; keep every consumer at/above the retained
+        # window (its lag is genuine). Degrade to NO filter if stream_info is
+        # unavailable — never hide a real consumer on a transient error.
+        stream_first_seq = 0
+        try:
+            sinfo = await jsm.stream_info(SIGNAL_STREAM_NAME)
+            stream_first_seq = int(
+                getattr(getattr(sinfo, "state", None), "first_seq", 0) or 0
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade to unfiltered
+            logger.info("v3.consumer_lag.stream_info_unavailable err=%s", exc)
+        dropped = 0
         for ci in consumers or []:
             durable = str(getattr(ci, "name", "") or "")
+            ack_floor = getattr(ci, "ack_floor", None)
+            af_seq = getattr(ack_floor, "stream_seq", None) if ack_floor else None
+            if stream_first_seq and af_seq is not None and af_seq < stream_first_seq:
+                dropped += 1
+                continue
             scope_kind, scope_id = "consumer", durable
             low = durable.lower()
             if "target" in low or low.startswith("tgt"):
@@ -665,7 +688,6 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             elif "source" in low or low.startswith("src"):
                 scope_kind = "source"
             delivered = getattr(ci, "delivered", None)
-            ack_floor = getattr(ci, "ack_floor", None)
             out.append(
                 ConsumerLagRow(
                     stream=SIGNAL_STREAM_NAME,
@@ -677,8 +699,13 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                     num_redelivered=int(getattr(ci, "num_redelivered", 0) or 0),
                     num_waiting=int(getattr(ci, "num_waiting", 0) or 0),
                     delivered_stream_seq=getattr(delivered, "stream_seq", None) if delivered else None,
-                    ack_floor_stream_seq=getattr(ack_floor, "stream_seq", None) if ack_floor else None,
+                    ack_floor_stream_seq=af_seq,
                 )
+            )
+        if dropped:
+            logger.info(
+                "v3.consumer_lag.orphans_filtered dropped=%d kept=%d first_seq=%s",
+                dropped, len(out), stream_first_seq,
             )
         return out
 
