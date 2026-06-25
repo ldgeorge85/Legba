@@ -326,10 +326,13 @@ async def _field_notes(
     """
     prompt = base_prompt + _FIELD_NOTES_INSTRUCTION
     try:
+        # PER-PHASE LLM SPLIT (§4.1): the VOICE seam runs on the narrate handler
+        # (Opus when the descriptor sets method.llm.narrate; falls back to the
+        # primary handler otherwise). max_tokens IS the Anthropic output cap.
         notes, usage = await _reason_via_llm(
-            deps.llm,
+            deps.narrate_llm(),
             user_prompt=prompt,
-            max_tokens=deps.max_tokens,
+            max_tokens=deps.narrate_tokens(),
             temperature=deps.temperature,
             system_prompt=deps.system_prompt,
         )
@@ -379,10 +382,14 @@ async def _narrate_with_tools(
     last_content = ""
     for round_idx in range(_NARRATE_MAX_TOOL_ROUNDS):
         try:
+            # PER-PHASE LLM SPLIT (§4.1): NARRATE runs on the narrate handler
+            # (Opus when split; primary handler otherwise). The mid-entry tool
+            # call still routes through the journal_read GATHER binding below —
+            # only the LLM authoring the prose changes, not the tool plane.
             content, usage = await _reason_via_llm(
-                deps.llm,
+                deps.narrate_llm(),
                 user_prompt="",
-                max_tokens=deps.max_tokens,
+                max_tokens=deps.narrate_tokens(),
                 temperature=deps.temperature,
                 system_prompt=deps.system_prompt,
                 messages=messages,
