@@ -4,6 +4,12 @@
 
 <h1 align="center">Legba</h1>
 <p align="center"><em>A source-first platform for automated analysis &amp; knowledge fusion over whatever sources you can reach.</em></p>
+<p align="center">
+  <a href="docs/GLOSSARY.md"><b>Glossary</b></a> ·
+  <a href="docs/FAQ.md"><b>FAQ</b></a> ·
+  <a href="docs/DIRECTION.md">Direction</a> ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a>
+</p>
 
 Legba ingests data from any source — pulled on a cadence, or pushed to a webhook — and **fuses** it into a provenance-tracked knowledge substrate — the classic data/knowledge-fusion lineage of **signals → entities/facts → relations/nexuses → situations → per-target assessments**, where every output is fully traceable to its sources via lineage and hash-chained receipt chains. It turns declarative descriptors — **sources**, **targets**, and **analysts** — into running actors over a shared substrate. A Dapr virtual-actor runtime reads each registered descriptor and stands up the corresponding actor; those actors acquire raw observations, route them, reason over them, and write findings back to the substrate. There is no code to write per feed, per target, or per analysis: you declare what to watch and how to reason, register it, and the runtime executes it. Everything is content-hashed, Ed25519-signed, and carries full provenance.
 
@@ -163,6 +169,10 @@ one-page truth-in-labeling summary.
 Live and source-first — **single-operator / single-tenant**, single-node, run-it-yourself. The **proven core** runs end-to-end: real RSS (BBC / Deutsche Welle / Al Jazeera) flows through baseline enrichment, fan-out on `legba.signals.>`, and per-country coalescing into distinct findings with provenance and receipt chains — firing **reactively** on signal accumulation as well as on the cadence floor, with per-country runs executing concurrently. An entity knowledge graph is kept current by an ongoing deterministic analyst, and temporal facts + signed nexuses give the substrate its supersession-aware knowledge-fusion shape. Cold-start from empty volumes through to automated per-country findings is proven end-to-end from a single baseline schema migration.
 
 The **experimental / research layer** (ACH competing hypotheses, calibration / outcome-resolution, the GEPA optimizer, advanced graph analytics) is built and traceable but **carries no validated skill metric**. Specifically: the ACH per-cell consistency matrix is LLM-scored (Heuer CC/C/N/I/II, budget-gated, with the deterministic lexical scorer as the budget-exhausted fallback), and the calibration Brier reads an exogenous `resolved_outcome` whose `subsequent_facts` / operator-label resolvers are built and preferred — but as of 2026-06 those exogenous resolvers have **not yet fired live**: every resolved outcome to date is the self-consistency (`status_transition`) tier, which the row flags as `self_consistency_only`. The goal is a real Brier against resolved real-world outcomes once they fire (see the release-boundary table and [docs/ANALYSIS.md](docs/ANALYSIS.md) §7.4–§7.5). What is not yet built is declared in [docs/SEAMS.md](docs/SEAMS.md) rather than implied — and laid out plainly in the release-boundary table above. **No enterprise, multi-tenant, RBAC, or forecast-accuracy / Brier-skill claim is made.**
+
+## Contact
+
+Want to talk shop? Reach out at legba@civislux.us.
 
 ## License
 

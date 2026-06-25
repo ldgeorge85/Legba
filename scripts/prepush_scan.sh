@@ -50,8 +50,17 @@ fi
 
 # 2. Operator domain in tracked content.
 section "2. operator domain (civislux) in tracked content"
+# Allowlist: legba@civislux.us is the operator's INTENTIONAL public contact
+# address (the README "Contact" section) — permitted. Every OTHER civislux
+# usage (e.g. skynet.civislux.us infra hostnames) is still reported, even on
+# the same line: the contact address is stripped first, then the residual is
+# re-checked for any remaining civislux occurrence.
 if git grep -nI -i 'civislux' -- . ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' >/tmp/_ps_domain 2>/dev/null; then
-  while IFS= read -r line; do report domain "${line}"; done < /tmp/_ps_domain
+  while IFS= read -r line; do
+    if printf '%s' "${line}" | sed -E 's/legba@civislux\.us//Ig' | grep -qi 'civislux'; then
+      report domain "${line}"
+    fi
+  done < /tmp/_ps_domain
 fi
 
 # 3. Tracked .env / secrets files.
