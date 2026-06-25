@@ -240,3 +240,64 @@ def test_journal_read_tool_has_a_global_handler():
             f"journal_read tool {name!r} has no global handler — it would block "
             "as unknown_tool on the governed path"
         )
+
+
+def test_journal_wave1_instrument_tools_all_present():
+    """Wave 1 adds the ~9 net-new self-instrument tools + wires the shared reads
+    (§5). Assert the full set is in the tuple so a dropped tool fails loud."""
+    from legba.data.analysts.agency.journal_read import JOURNAL_READ_TOOLS
+
+    expected = {
+        # reused finished-intelligence + ground-truth reads
+        "list_findings", "query_facts", "query_nexuses", "list_situations",
+        "get_timeline",
+        # net-new self-instruments
+        "get_assessments", "get_graph_structure", "get_structural_balance",
+        "get_critic_scores", "get_calibration", "get_run_health",
+        "get_source_health", "get_budget_status", "get_journal_delta",
+    }
+    assert set(JOURNAL_READ_TOOLS) == expected, (
+        "JOURNAL_READ_TOOLS drifted from the Wave 1 §5 read surface "
+        f"(missing: {expected - set(JOURNAL_READ_TOOLS)}; "
+        f"extra: {set(JOURNAL_READ_TOOLS) - expected})"
+    )
+
+
+def test_journal_gather_recognizes_every_pack_tool():
+    """The journal's GATHER loop must RECOGNIZE every JOURNAL_READ_TOOLS entry —
+    the run_method passes the tuple as ``extra_read_tools`` so each tool is a
+    valid name AND routes through the journal_read binding (§4.9). A tool the loop
+    can't dispatch is an unreachable pack tool (the four-surface drift guard's
+    'every dispatchable tool ∈ pack' leg, read in reverse)."""
+    from legba.data.analysts.agency.journal_read import JOURNAL_READ_TOOLS
+    from legba.data.analysts.inline_target import _GATHER_READ_TOOLS, _GATHER_TOOLS
+
+    # With extra_read_tools=JOURNAL_READ_TOOLS, the recognized set the loop checks
+    # is _GATHER_TOOLS ∪ JOURNAL_READ_TOOLS, and the read-routing set is
+    # _GATHER_READ_TOOLS ∪ JOURNAL_READ_TOOLS. Every journal tool must therefore
+    # be recognized + read-routed.
+    recognized = set(_GATHER_TOOLS) | set(JOURNAL_READ_TOOLS)
+    read_routed = set(_GATHER_READ_TOOLS) | set(JOURNAL_READ_TOOLS)
+    for name in JOURNAL_READ_TOOLS:
+        assert name in recognized, f"{name} not recognized by the journal GATHER loop"
+        assert name in read_routed, f"{name} not read-routed through journal_read"
+
+
+def test_journal_known_tools_subset_in_pack():
+    """The §-memory drift guard 'every _KNOWN_TOOLS entry ∈ pack' applied to the
+    journal: the journal's instrument tools are deliberately NOT in consult's
+    _KNOWN_TOOLS (the journal does not run on consult). But every journal tool
+    that IS a consult _KNOWN_TOOL (the shared substrate_read reads) must be in the
+    pack — a consult-reachable tool absent from the journal pack would be a
+    silent gap if the journal pack were ever granted on the consult surface."""
+    from legba.data.analysts.agency.journal_read import JOURNAL_READ_TOOLS
+    from legba.data.analysts.consult_on_demand import _KNOWN_TOOLS
+
+    shared = set(JOURNAL_READ_TOOLS) & set(_KNOWN_TOOLS)
+    # The five reused reads are the shared set; the 9 instruments are journal-only.
+    assert shared == {
+        "list_findings", "query_facts", "query_nexuses", "list_situations",
+        "get_timeline",
+    }
+    # And every shared tool is, by construction, in the pack tuple.
+    assert shared <= set(JOURNAL_READ_TOOLS)
