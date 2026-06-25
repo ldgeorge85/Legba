@@ -1,0 +1,175 @@
+# L-200 — L2 template descriptor for a single-country geopolitical focus.
+#
+# This is the parameterised template the L-181 country_list_discovery
+# kind materialises N instances against. It carries the *default* shape
+# every country target inherits from: sources, pipeline, inline-analyst
+# block, scope vocabulary. The discovery descriptor
+# (descriptors/discovery_geopolitical_countries.yaml) provides the
+# relabel chain that fills in per-country bindings (iso2, iso3, region,
+# languages, scope.geo, id) at materialisation time.
+#
+# Per legba_descriptor_schemas.md §3 + topology_redesign §5.2:
+#   * abstraction_level=L2 — curated template, not a directly-runnable target.
+#   * inherits=[]           — template descends from nothing.
+#   * state=configured     — template is registered but not running. The
+#                             materialised L1 instances flip to active.
+#   * discovery=None       — the discovery block lives on the *sibling*
+#                             discovery descriptor, not on the template.
+#
+# Operators clone this file + narrow the body (e.g. add per-country
+# overrides via Property.Text raw values) to fork country surveillance
+# patterns. L-205 will eventually delete configs/domains/geopolitical.yaml
+# once this template + sibling discovery descriptor are operational.
+#
+# Vocabulary note: the carried entity_classes and relationship_types
+# include values NOT in migration 0010's seed (military_unit,
+# political_party, armed_group, international_org, media_outlet,
+# event_series, commodity, infrastructure for entity_classes;
+# TradesWith, BordersWith, SignatoryTo, SanctionsAgainst, OccupiedBy,
+# SubsidiaryOf, PartnersWith, CompetesWith, DiplomaticRelationsWith,
+# MilitaryPresenceIn for relationship_types). These must be registered
+# via VocabularyRegistry / the /vocabulary/<family> REST endpoint before
+# this descriptor will pass DescriptorRegistry vocabulary validation.
+# See test_geopolitical_decomposition.py for the registration fixture.
+
+identity:
+  id: template_country_active
+  name: "Country Geopolitical Surveillance Template"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"      # placeholder — registry stamps real hash
+  abstraction_level: L2
+  inherits: []
+  state: configured
+  owner: legba_geopolitical
+  created: "2026-05-21T00:00:00Z"
+
+scope:
+  # Placeholders — the discovery descriptor's relabel chain rewrites
+  # scope.geo[0] and scope.languages per country at materialisation time.
+  # These template defaults are visible at registry-list time and act as
+  # the "schema example" for operators inspecting the template directly.
+  geo: ["XX"]
+  languages: ["en"]
+  entity_classes:
+    - country
+    - organization
+    - person
+    - location
+    - military_unit
+    - political_party
+    - armed_group
+    - international_org
+    - corporation
+    - media_outlet
+    - event_series
+    - concept
+    - commodity
+    - infrastructure
+  relationship_types:
+    - AlliedWith
+    - HostileTo
+    - MemberOf
+    - LeaderOf
+    - SuppliesWeaponsTo
+    - TradesWith
+    - BordersWith
+    - SignatoryTo
+    - SanctionsAgainst
+    - OccupiedBy
+    - SubsidiaryOf
+    - PartnersWith
+    - CompetesWith
+    - DiplomaticRelationsWith
+    - MilitaryPresenceIn
+  time_horizon_days: 90
+  predicate: null
+
+# Default sources every materialised country target inherits. Per-country
+# overrides are applied by adding/replacing entries in the materialised
+# body — see discovery_geopolitical_countries.yaml for the merge pattern.
+#
+# Source URLs use Property.Text so the discovery's relabel chain (or an
+# operator-edited per-country clone) can substitute country-specific
+# endpoints without rewriting the entire source block.
+sources:
+  - id: gdelt_country
+    kind: gdelt_query
+    config:
+      # Placeholder — relabel rewrites cameo_country.raw to country_iso2.
+      cameo_country:
+        factory_kind: text
+        raw: "XX"
+      bq_credentials_secret:
+        factory_kind: text
+        raw: "gcp.bigquery.legba_497003.service_account"
+    schedule:
+      factory_kind: cron
+      raw: "0 */2 * * *"
+    enabled: false        # Disabled by default — GDELT BQ costs add up.
+
+  - id: mediacloud_country
+    kind: mediacloud
+    config:
+      # MediaCloud per-country collection; relabel sets collection_iso2.
+      collection_iso2:
+        factory_kind: text
+        raw: "XX"
+      api_key_secret:
+        factory_kind: text
+        raw: "mediacloud.api_key"
+    schedule:
+      factory_kind: cron
+      raw: "*/30 * * * *"
+    enabled: true
+
+  - id: country_rss
+    kind: rss
+    config:
+      # Country-specific RSS feed URL; per-country forks of this template
+      # override the raw value. The Property.Text factory makes the
+      # default placeholder visible in the UI editor.
+      url:
+        factory_kind: text
+        raw: "https://example.invalid/country-feed.xml"
+    schedule:
+      factory_kind: cron
+      raw: "*/15 * * * *"
+    enabled: true
+
+pipeline:
+  ingestion_filters:
+    - kind: language_detect
+      config: {}
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+    - kind: source_credibility
+      config: {}
+    - kind: geocode
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: classify
+      config: {}
+
+# Default inline analyst — the country-focused situational-awareness
+# assessment. Materialised L1 instances inherit this block; operators
+# can override per-country via the analyst.method.prompt_module key.
+analyst:
+  use: inline_target
+  cadence:
+    fallback_schedule: "*/10 * * * *"
+  method:
+    kind: llm_planner
+    prompt_module: legba.runtime.analyst_method:_DEFAULT_SYSTEM
+    llm:
+      primary:
+        factory_kind: stack_ref
+        raw: llm.primary.openai_compat
+        expected_family: llm_provider
+
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: intelligence.country_situational_awareness

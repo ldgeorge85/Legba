@@ -1,0 +1,58 @@
+# S6 — web_access action pack (external evidence).
+#
+# Grants `web_fetch` (GET one URL) + `web_search` (query an operator-pinned
+# JSON search endpoint). Both egress EXCLUSIVELY through the SSRF-guarded
+# transport (`src/legba/data/sources/_egress.py` — SsrfGuardedTransport), the
+# SAME guard every ingress fetcher uses: a tool pointed at 127.0.0.1 /
+# 169.254.169.254 / RFC-1918 is refused before connect, and on every redirect
+# hop. An EgressBlockedError is a CLEAN tool failure, not a crash.
+#
+# Read-only: these tools fetch external text the assessor can cite; they do NOT
+# write the substrate (that is the `propose_facts` pack). They are universally
+# applicable BY DESIGN (no applies_to_tags / predicate) — the real gate is the
+# THREE-WAY agency gate: an analyst must grant `web_access` via `action_packs`
+# AND the running target must allow it via `allowed_action_packs`. Effective
+# capability is that intersection; the governor bounds rate/cost.
+#
+# web_search endpoint: operator-authored here (config.endpoint), falling back to
+# the LEGBA_WEB_SEARCH_ENDPOINT env. NEVER planner-supplied — the planner only
+# supplies the query string. Left blank below: until an operator pins a SearXNG
+# (`/search?format=json`) or compatible JSON search endpoint, web_search returns
+# a clean failure naming the gap (no silent empty result). web_fetch needs no
+# endpoint config.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: web_access
+  name: Web Access Tools
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: s6_agency
+  created: "2026-06-19T00:00:00Z"
+
+tools:
+  - name: web_fetch
+    config:
+      timeout_seconds: 15
+  - name: web_search
+    config:
+      # endpoint: "https://searx.example.invalid/search"   # operator-pinned
+      timeout_seconds: 15
+
+prompt_fragments:
+  - >-
+    When the substrate lacks the evidence you need, call web_search(query) to
+    find candidate sources and web_fetch(url) to read one. Cite the URL you
+    fetched in the finding; never invent a URL or a quote.
+
+rules:
+  - "Fetch only URLs returned by web_search or supplied in the brief — never guess internal hosts."
+  - "Treat fetched web text as UNVERIFIED — corroborate against the substrate before relying on it."
+
+governor:
+  budget_account: web_access
+  max_invocations_per_hour: 120
+  api_rate_per_minute: 20

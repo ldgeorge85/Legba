@@ -1,0 +1,39 @@
+# NOTE (2026-05-23): This unit is retained as an ALTERNATIVE bring-up
+# path. The canonical bring-up is now container-mode via
+# `docker compose --profile runtime up -d` (see docs/RUNBOOK.md §2 +
+# §13). Use this systemd unit only when docker daemon access for the
+# legba app images is unavailable on the host.
+
+[Unit]
+Description=Legba Registry API (host-mode fallback; canonical bring-up is `docker compose --profile runtime up -d`)
+Documentation=file:///usr/local/deployments/active/legba/docs/RUNBOOK.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/deployments/active/legba
+EnvironmentFile=/usr/local/deployments/active/legba/.env
+# Substrate is on docker default-bridge mapped to localhost.
+Environment=LEGBA_DATA_PG_HOST=127.0.0.1
+Environment=LEGBA_DATA_PG_PORT=5432
+Environment=LEGBA_DATA_PG_USER=legba
+Environment=LEGBA_DATA_PG_PASSWORD=legba
+Environment=LEGBA_DATA_PG_DB=legba
+Environment=LEGBA_DATA_NATS_URL=nats://127.0.0.1:4222
+Environment=LEGBA_DATA_REDIS_HOST=127.0.0.1
+Environment=LEGBA_DATA_QDRANT_HOST=127.0.0.1
+Environment=LEGBA_REGISTRY_API_HOST=0.0.0.0
+Environment=LEGBA_REGISTRY_API_PORT=8090
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m legba.data.registry.server
+StandardOutput=append:/usr/local/deployments/active/legba/logs/registry.log
+StandardError=append:/usr/local/deployments/active/legba/logs/registry.log
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

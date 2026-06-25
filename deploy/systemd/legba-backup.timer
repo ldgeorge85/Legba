@@ -1,0 +1,22 @@
+# Legba scheduled-backup timer (resilience-observability W-1b §5).
+#
+# Triggers legba-backup.service nightly at 03:30 (plus a small randomized
+# delay so co-located stacks don't all dump at once). Persistent=true catches
+# up a missed run after downtime. See legba-backup.service for install steps.
+#
+# Cron equivalent (if you prefer crontab over systemd):
+#   30 3 * * *  cd /usr/local/deployments/active/legba && \
+#               /usr/bin/env bash scripts/backup_scheduled.sh >> logs/backup.log 2>&1
+
+[Unit]
+Description=Run the Legba scheduled backup nightly
+Documentation=file:///usr/local/deployments/active/legba/docs/RUNBOOK.md
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=legba-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,56 @@
+# graph_mining — community / centrality / proxy-chain mining over the reified
+# typed Nexus graph.
+#
+# A `deterministic`-kind META analyst (the fact_decay / hypothesis_lifecycle
+# precedent). The handler is fully built at
+# legba.data.analysts.deterministic_handlers.graph_mining and wired into
+# SUB_HANDLERS, but NO descriptor bound it, so the proxy-chain sign-product
+# refinement NEVER fired (the dormant-handler gap, DEEP_REVIEW §1.3 / Rank 4).
+#
+# PIECE A light-up: the handler now pulls OPEN signed nexus rows
+# (_augment_from_nexuses) written by the relationship_reifier — adding each
+# proxy relationship as the two-hop chain subject -> intermediary -> object so
+# the proxy-chain sign products (hostile-via-ally / laundering detection) run
+# over REAL signed typed edges instead of the untyped co-occurrence graph.
+#
+# The per-run FindingPayload (communities / centrality / proxy_chains) is the
+# cadence receipt. No LLM, no token budget — pure networkx.
+
+identity:
+  id: graph_mining
+  name: Graph Mining + Proxy Chains (over reified nexuses)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: piece_a_refinement_activation
+
+subscription:
+  # META analyst: one global sweep per tick. The handler reads the signed
+  # nexuses (+ AGE) directly via deps.pg_pool (the situation_clustering
+  # precedent); it does not consume a per-target signal slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: graph_mining
+  # No LLM block, no token budget — pure Python over the signed nexus/AGE graph.
+
+cadence:
+  # OFFSET after relationship_reifier ("45 */12") so the signed nexuses it mines
+  # are freshly written this cycle. Runs at :52, twice daily (after balance).
+  fallback_schedule: "52 */12 * * *"
+  cooldown_seconds: 39600        # 11h
+
+outputs: []

@@ -1,14 +1,51 @@
+# Legba — unified compose
+#
+# One file, multiple profiles. Substrate services have NO profile and come up
+# with a plain `docker compose up -d`. App services live behind explicit
+# profiles so the substrate can boot independently.
+#
+# Legacy `--profile legacy` / `--profile cognitive` / `--profile claude` blocks
+# were deleted in L-205 along with the source they referenced
+# (`subconscious/`, `maintenance/`, `agent/`, `supervisor/`, `ingestion/`,
+# `airflow/`, the legacy `legba-ui/`). Git history preserves them.
+#
+# Run modes:
+#   docker compose up -d                                       # substrate only (default)
+#   docker compose --profile dapr up -d                        # + dapr sidecar
+#   docker compose --profile runtime up -d                     # canonical bring-up:
+#       brings substrate + dapr + the app images (legba-registry,
+#       legba-runtime-dapr, the legba-ui-build one-shot + legba-caddy). The
+#       `runtime` profile activates `dapr` + `ui` transitively via
+#       service-level `profiles:` declarations. (Temporal removed, L-205/P-16 —
+#       the optimizer runs as a Dapr Workflow on the daprd sidecar; scale-out
+#       worker available under `--profile dapr-workflow`.)
+#   docker compose --profile mcp up -d                         # one-off MCP stdio
+#       image; rarely invoked via `up` — Claude Code's MCP host
+#       launches `docker run -i --rm legba/legba-mcp` itself.
+#
+# Volume + network names match the running substrate exactly — don't change them.
+
 services:
-  # --- Memory Services (long-lived) ---
+  # ============================================================
+  # SUBSTRATE — always on (no profile)
+  # ============================================================
 
   redis:
     image: redis:7-alpine
+    # B-1: optional password auth. When LEGBA_REDIS_PASSWORD is set in .env
+    # (cutover), redis requires AUTH; empty/unset keeps the open dev
+    # behaviour — redis treats `--requirepass ""` as "no password set".
+    command: ["redis-server", "--requirepass", "${LEGBA_REDIS_PASSWORD:-}"]
+    environment:
+      LEGBA_REDIS_PASSWORD: ${LEGBA_REDIS_PASSWORD:-}
     ports:
-      - "6379:6379"
+      # B-1: loopback-only — published substrate ports bypassed the Caddy
+      # perimeter on a public-TLS host. Host tooling keeps using 127.0.0.1.
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$$LEGBA_REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$LEGBA_REDIS_PASSWORD\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -21,7 +58,7 @@ services:
       POSTGRES_PASSWORD: legba
       POSTGRES_DB: legba
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"  # B-1: loopback-only
     volumes:
       - postgres_data:/var/lib/postgresql  # PG18+ uses subdirectory layout
     healthcheck:
@@ -34,8 +71,8 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"  # B-1: loopback-only
+      - "127.0.0.1:6334:6334"  # B-1: loopback-only
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -47,10 +84,25 @@ services:
 
   nats:
     image: nats:2-alpine
-    command: ["--jetstream", "--store_dir", "/data", "-m", "8222"]
+    # B-1: optional token authorization. When LEGBA_NATS_TOKEN is set in .env
+    # (cutover), every client connection must present the token
+    # (`nats-server --auth`); empty/unset keeps the open dev behaviour. The
+    # 8222 monitoring/healthz surface never requires the token. The sh -c
+    # wrapper exists because `--auth ""` is not a reliable "no auth" spelling;
+    # `$$` defers expansion to the container shell.
+    environment:
+      LEGBA_NATS_TOKEN: ${LEGBA_NATS_TOKEN:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        if [ -n "$$LEGBA_NATS_TOKEN" ]; then
+        exec nats-server --jetstream --store_dir /data -m 8222 --auth "$$LEGBA_NATS_TOKEN";
+        else
+        exec nats-server --jetstream --store_dir /data -m 8222;
+        fi
     ports:
-      - "4222:4222"
-      - "8222:8222"   # HTTP monitoring
+      - "127.0.0.1:4222:4222"  # B-1: loopback-only
+      - "127.0.0.1:8222:8222"  # B-1: loopback-only — HTTP monitoring
     volumes:
       - nats_data:/data
     healthcheck:
@@ -60,445 +112,467 @@ services:
       retries: 5
     restart: unless-stopped
 
-  opensearch:
-    image: opensearchproject/opensearch:2
-    environment:
-      discovery.type: single-node
-      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
-      DISABLE_INSTALL_DEMO_CONFIG: "true"
-      plugins.security.disabled: "true"
-      cluster.routing.allocation.disk.threshold_enabled: "false"
+  # ============================================================
+  # DAPR — gated by `--profile dapr`
+  # L-002a Phase 5a runtime substrate. Placement service + daprd sidecar
+  # both run as Dapr-image containers. The `legba-runtime` process talks
+  # to the sidecar over gRPC/HTTP (component YAMLs at dapr/components/).
+  # When the spike doesn't need real Dapr (in-process tests), leave the
+  # profile off; the runtime is engineered to work without a sidecar.
+  # ============================================================
+
+  dapr-placement:
+    # Pinned for reproducibility (P-14). `latest` resolved to 1.17.9 on the
+    # dev rig at pin time (identical digest); keep all three Dapr containers
+    # — placement, scheduler, sidecar — on the same pinned tag.
+    image: daprio/dapr:1.17.9
+    profiles: ["dapr", "runtime"]
+    entrypoint: ["/placement"]
+    command: ["-port", "50005"]
     ports:
-      - "9200:9200"
-      - "9600:9600"   # Performance analyzer
-    volumes:
-      - opensearch_data:/usr/share/opensearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      - "127.0.0.1:50005:50005"  # B-1: loopback-only
     restart: unless-stopped
 
-  # --- Audit OpenSearch (supervisor-only, agent cannot access) ---
-  # Dedicated instance for immutable cycle log indexing.
-  # Isolated on a separate network — agent containers cannot reach it.
-
-  opensearch-audit:
-    image: opensearchproject/opensearch:2
-    environment:
-      discovery.type: single-node
-      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
-      DISABLE_INSTALL_DEMO_CONFIG: "true"
-      plugins.security.disabled: "true"
-      cluster.routing.allocation.disk.threshold_enabled: "false"
-    ports:
-      - "9201:9200"
+  # As of Dapr 1.15 the actor-reminder backend moved out of the placement
+  # service into a dedicated `scheduler` service (etcd-backed). Without it
+  # daprd returns `ERR_ACTOR_REMINDER_CREATE: scheduler clients are disabled`
+  # on any `register_reminder` call. Spike acceptance gate 4 (reminders fire
+  # across restart) requires this service to be up.
+  #
+  # Phase 5 hardening item 3 — persistent etcd data dir.
+  # The daprio/dapr image runs as 65532:65532 (nonroot). The pre-hardening
+  # config used a tmpfs mount, which meant reminders died on container
+  # restart. The persistent path is a host bind dir under
+  # ./deploy/dapr-scheduler-data/, chowned to 65532:65532 by the
+  # dapr-scheduler-init service below before the scheduler boots.
+  dapr-scheduler-init:
+    image: busybox:latest
+    profiles: ["dapr", "runtime"]
+    # Ensure the host bind dir exists and is owned by daprio/dapr's
+    # nonroot UID (65532). Idempotent — re-runs are no-ops on a healthy
+    # substrate. Exits 0 on success; the dapr-scheduler service depends
+    # on completion via depends_on.condition=service_completed_successfully.
+    command:
+      - "sh"
+      - "-c"
+      - "mkdir -p /scheduler-data && chown -R 65532:65532 /scheduler-data && chmod 700 /scheduler-data"
     volumes:
-      - opensearch_audit_data:/usr/share/opensearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - default
-      - audit
+      - ./deploy/dapr-scheduler-data:/scheduler-data
+    restart: "no"
 
-  # --- Orchestration (Airflow) ---
-  # Persistent DAG-based pipelines. Agent writes DAG files to shared volume,
-  # Airflow picks them up and executes on schedule/trigger.
-
-  airflow:
-    build:
-      context: .
-      dockerfile: docker/airflow.Dockerfile
-    environment:
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
-      AIRFLOW__WEBSERVER__WARN_DEPLOYMENT_EXPOSURE: "false"
-      AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
-      NATS_URL: nats://nats:4222
-      OPENSEARCH_HOST: opensearch
-      REDIS_HOST: redis
-      POSTGRES_HOST: postgres
-    ports:
-      - "8080:8080"
-    volumes:
-      - airflow_dags:/opt/airflow/dags
+  dapr-scheduler:
+    image: daprio/dapr:1.17.9  # pinned (P-14) — see dapr-placement note
+    profiles: ["dapr", "runtime"]
+    # Graceful etcd flush window: docker's default 10s SIGTERM->SIGKILL can
+    # corrupt the embedded etcd mid-write (root cause of the 2026-06 reminder-
+    # recurrence stall). Give etcd time to checkpoint. NEVER partial-clear the
+    # data dir — full-wipe only (RUNBOOK §0).
+    stop_grace_period: 45s
     depends_on:
-      nats:
-        condition: service_healthy
-      opensearch:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      dapr-scheduler-init:
+        condition: service_completed_successfully
+    entrypoint: ["/scheduler"]
+    command:
+      - "--port"
+      - "50006"
+      - "--etcd-data-dir"
+      - "/var/lib/dapr-scheduler-data"
+      - "--etcd-client-port"
+      - "2379"
+    ports:
+      - "127.0.0.1:50006:50006"  # B-1: loopback-only
+    volumes:
+      - ./deploy/dapr-scheduler-data:/var/lib/dapr-scheduler-data
     restart: unless-stopped
 
-  opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:2
-    environment:
-      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
-      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
-    ports:
-      - "5601:5601"
+  # One-shot: create the dedicated `dapr` database on the shared Postgres
+  # cluster (P-14). Mirrors the temporal-init-db pattern. Dapr's actor state
+  # store previously shared dbname=legba with the substrate, so actor-state
+  # churn (the `dapr_state` table + cleanup sweeps) contended with substrate
+  # writes. Isolating it to its own database removes that contention while
+  # keeping a single Postgres cluster. Re-runnable (CREATE is guarded by a
+  # SELECT 1 FROM pg_database probe).
+  dapr-init-db:
+    image: postgres:16-alpine
+    profiles: ["dapr", "runtime"]
     depends_on:
-      opensearch:
-        condition: service_healthy
-    profiles:
-      - dashboards
-
-  # --- Ingestion Service ---
-  # Deterministic source fetcher. No LLM. Runs continuously,
-  # fetching sources on their configured intervals.
-
-  ingestion:
-    build:
-      context: .
-      dockerfile: docker/ingestion.Dockerfile
-    env_file: .env
-    environment:
-      REDIS_HOST: redis
-      POSTGRES_HOST: postgres
-      POSTGRES_USER: legba
-      POSTGRES_PASSWORD: legba
-      POSTGRES_DB: legba
-      OPENSEARCH_HOST: opensearch
-      OPENSEARCH_PORT: "9200"
-      NATS_URL: nats://nats:4222
-      INGESTION_CHECK_INTERVAL: "30"
-      INGESTION_MAX_WORKERS: "4"
-      INGESTION_LOG_LEVEL: "INFO"
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: "6333"
-      MODELS_API_URL: "${MODELS_API_URL:-}"
-      MODELS_API_USER: "${MODELS_API_USER:-}"
-      MODELS_API_PASS: "${MODELS_API_PASS:-}"
-      TELEGRAM_ENABLED: "${TELEGRAM_ENABLED:-false}"
-      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
-      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
-      TELEGRAM_SESSION_PATH: "/shared/telegram.session"
-    volumes:
-      - shared_data:/shared
-    ports:
-      - "8600:8600"
-    depends_on:
-      redis:
-        condition: service_healthy
       postgres:
         condition: service_healthy
-      opensearch:
+    environment:
+      PGPASSWORD: legba
+    command: >
+      sh -c "
+      psql -h postgres -U legba -tc \"SELECT 1 FROM pg_database WHERE datname='dapr'\" | grep -q 1 ||
+        psql -h postgres -U legba -c 'CREATE DATABASE dapr';
+      "
+    restart: "no"
+
+  dapr-sidecar:
+    image: daprio/dapr:1.17.9  # pinned (P-14) — see dapr-placement note
+    profiles: ["dapr", "runtime"]
+    # P-14: the sidecar reads .env so the local.env secret store
+    # (dapr/components/secretstore.yaml) can resolve LEGBA_DAPR_PG_CONNSTRING
+    # — the actor state store's Postgres DSN — without any plaintext
+    # credential committed in the component YAML.
+    env_file: .env
+    # B-1: guarantee LEGBA_NATS_TOKEN EXISTS in the sidecar env (possibly
+    # empty) so pubsub.yaml's secretKeyRef always resolves through the
+    # local.env secret store, even before the token is added to .env.
+    environment:
+      LEGBA_NATS_TOKEN: ${LEGBA_NATS_TOKEN:-}
+    depends_on:
+      dapr-placement:
+        condition: service_started
+      dapr-scheduler:
+        condition: service_started
+      dapr-init-db:
+        condition: service_completed_successfully
+      postgres:
         condition: service_healthy
       nats:
+        condition: service_healthy
+    entrypoint: ["/daprd"]
+    command:
+      - "-app-id"
+      - "legba-runtime"
+      # When `legba-runtime-dapr` runs as a compose service (the
+      # canonical 2026-05-23 containerized path) it's reachable by
+      # service name on the default network. The previous
+      # host.docker.internal hop was the host-mode systemd fallback —
+      # left documented in deploy/systemd/ but no longer the canonical
+      # path. To run the runtime on the host (alternative mode), set
+      # `LEGBA_DAPR_APP_CHANNEL=host.docker.internal` in the env
+      # consumed by your local docker compose override file.
+      - "-app-channel-address"
+      - "${LEGBA_DAPR_APP_CHANNEL:-legba-runtime-dapr}"
+      - "-app-port"
+      - "6090"
+      - "-dapr-http-port"
+      - "3500"
+      - "-dapr-grpc-port"
+      - "50001"
+      - "-placement-host-address"
+      - "dapr-placement:50005"
+      - "-scheduler-host-address"
+      - "dapr-scheduler:50006"
+      # `-components-path` is deprecated as of Dapr 1.14 → `-resources-path`.
+      # Same semantics; daprd still loads the Component YAMLs from the dir.
+      - "-resources-path"
+      - "/dapr/components"
+      - "-config"
+      - "/dapr/components/configuration.yaml"
+      - "-log-level"
+      - "info"
+    ports:
+      # B-1: loopback-only — an exposed unauthenticated daprd :3500 permits
+      # direct actor invocation from the network.
+      - "127.0.0.1:3500:3500"   # daprd HTTP (legba-runtime resolves this for sidecar API)
+      - "127.0.0.1:50001:50001" # daprd gRPC
+    volumes:
+      - ./dapr/components:/dapr/components:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # TEMPORAL REMOVED (L-205 / P-16): the optimizer kind now runs its durable
+  # GEPA loop as a Dapr Workflow (dapr-ext-workflow) on the existing daprd
+  # sidecar. Embedded in-process in legba-runtime-dapr (build_workflow_runtime),
+  # or scaled out via legba-dapr-workflow-worker (profile: dapr-workflow). No
+  # Temporal cluster, no temporalio dep, no temporal_persistence/visibility DBs.
+
+  # ============================================================
+  # APP IMAGES — gated by `--profile runtime`
+  # 2026-05-23 multi-image containerization.
+  #
+  # Each Python image is multi-stage (python:3.11-slim builder +
+  # runtime), built from /docker/Dockerfile.<service>. The legba src
+  # tree installs under --no-deps so each image carries only the deps
+  # it actually exercises — registry stays small (~400 MB target),
+  # runtime adds dapr + langdetect + numeric stack (~600 MB target),
+  # temporal-worker adds dspy + temporalio + stix2 (~750 MB target).
+  #
+  # Secrets (LEGBA_DATA_MASTER_KEY, MODELS_API_PASS, vendor API keys)
+  # flow in via env_file: .env — kept out of the image layers.
+  # ============================================================
+
+  legba-registry:
+    image: legba/legba-registry:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.registry
+    profiles: ["runtime"]
+    env_file: .env
+    environment:
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_REDIS_HOST: redis
+      LEGBA_DATA_QDRANT_HOST: qdrant
+      LEGBA_DATA_NATS_URL: nats://nats:4222
+      LEGBA_REGISTRY_API_HOST: 0.0.0.0
+      LEGBA_REGISTRY_API_PORT: "8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8600/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    restart: unless-stopped
-
-  # --- Operator Console UI ---
-  # Read-only web interface for inspecting system state.
-  # Access via SSH tunnel: ssh -L 8501:localhost:8501
-
-  ui:
-    build:
-      context: .
-      dockerfile: docker/ui.Dockerfile
-    env_file: .env
-    environment:
-      REDIS_HOST: redis
-      POSTGRES_HOST: postgres
-      POSTGRES_USER: legba
-      POSTGRES_PASSWORD: legba
-      POSTGRES_DB: legba
-      OPENSEARCH_HOST: opensearch
-      OPENSEARCH_PORT: "9200"
-      AUDIT_OPENSEARCH_HOST: opensearch-audit
-      AUDIT_OPENSEARCH_PORT: "9200"
-      LEGBA_SHARED: /shared
-      LEGBA_LOGS: /logs
-      NATS_URL: nats://nats:4222
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: "6333"
-      # Consultation engine — uses Anthropic by default (override in .env)
-      CONSULT_LLM_PROVIDER: ${CONSULT_LLM_PROVIDER:-anthropic}
-      CONSULT_API_KEY: ${CONSULT_API_KEY:-}
-      CONSULT_MODEL: ${CONSULT_MODEL:-claude-sonnet-4-20250514}
-      CONSULT_TEMPERATURE: ${CONSULT_TEMPERATURE:-0.7}
-      CONSULT_TIMEOUT: ${CONSULT_TIMEOUT:-300}
     ports:
-      - "8501:8501"
-    volumes:
-      - shared_data:/shared:ro
-      - log_data:/logs:ro
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      opensearch:
-        condition: service_healthy
-      opensearch-audit:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8501/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      # B-1: loopback-only — Caddy reaches the registry over the compose
+      # network (legba-registry:8090); host tooling uses 127.0.0.1.
+      - "127.0.0.1:8090:8090"
     restart: unless-stopped
-    networks:
-      - default
-      - audit
 
-  # --- Supervisor ---
-  # Manages agent lifecycle: launches one agent container per cycle,
-  # validates heartbeat, provides human comms interface.
-
-  supervisor:
+  # legba-runtime-dapr — Dapr-actor host. Activates the `dapr` profile
+  # transitively because daprd is its sidecar.
+  legba-runtime-dapr:
+    image: legba/legba-runtime-dapr:latest
     build:
       context: .
-      dockerfile: docker/supervisor.Dockerfile
+      dockerfile: docker/Dockerfile.runtime
+    profiles: ["runtime"]
     env_file: .env
     environment:
-      LEGBA_SHARED: /shared
-      LEGBA_LOGS: /logs
-      LEGBA_SEED_GOAL: /seed_goal/goal.txt
-      LEGBA_SEED_GOAL_HOST_DIR: ${PWD}/seed_goal
-      REDIS_HOST: redis
-      POSTGRES_HOST: postgres
-      QDRANT_HOST: qdrant
-      NATS_URL: nats://nats:4222
-      OPENSEARCH_HOST: opensearch
-      AUDIT_OPENSEARCH_HOST: opensearch-audit
-      AIRFLOW_URL: http://airflow:8080
-      AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
-    volumes:
-      - shared_data:/shared
-      - log_data:/logs
-      - agent_code:/agent
-      - airflow_dags:/airflow/dags
-      - ./seed_goal:/seed_goal:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_REDIS_HOST: redis
+      LEGBA_DATA_QDRANT_HOST: qdrant
+      LEGBA_DATA_NATS_URL: nats://nats:4222
+      LEGBA_RUNTIME_HTTP_HOST: 0.0.0.0
+      LEGBA_RUNTIME_HTTP_PORT: "6090"
+      # Sidecar lives in the same compose network; resolve by service name.
+      # Without DAPR_RUNTIME_HOST the SDK defaults to localhost — which only
+      # works in pod-style co-location, not separate containers. Set host
+      # + the per-port env vars + the full-endpoint env vars to cover both
+      # the older (DAPR_RUNTIME_HOST + DAPR_HTTP_PORT) and newer
+      # (DAPR_HTTP_ENDPOINT / DAPR_GRPC_ENDPOINT) SDK lookup paths.
+      DAPR_RUNTIME_HOST: dapr-sidecar
+      DAPR_HTTP_PORT: "3500"
+      DAPR_GRPC_PORT: "50001"
+      DAPR_HTTP_ENDPOINT: http://dapr-sidecar:3500
+      DAPR_GRPC_ENDPOINT: dapr-sidecar:50001
+      # Both env names: LEGBA_REGISTRY_URL is the older name some helpers
+      # still read; LEGBA_REGISTRY_API_URL is what RegistryHTTPClient +
+      # the production bootstrap in dapr_host.bring_up_production_runtime
+      # read (registry_client.py:DEFAULT_BASE_URL fallback).
+      LEGBA_REGISTRY_URL: http://legba-registry:8090
+      LEGBA_REGISTRY_API_URL: http://legba-registry:8090
+      # GEPA execution location. Default "1" = run the optimizer's GEPA
+      # compile in-process (this image is dspy-free, so it uses the naive
+      # candidate search). Set to "0" in .env AND run the dspy worker
+      # (compose --profile dapr-workflow up legba-dapr-workflow-worker) to
+      # dispatch the compile to that off-box worker for REAL dspy.GEPA.
+      LEGBA_EMBED_WORKFLOW_WORKER: "${LEGBA_EMBED_WORKFLOW_WORKER:-1}"
+      # Hosted media-extraction endpoint (process_media loop; SEAMS #1). Leave
+      # `.env`'s LEGBA_MEDIA_API_URL UNSET to keep the declared seam (the
+      # runtime refuses process_media loudly). To deploy + TEST the loop in the
+      # stack, bring up the `media` profile and set LEGBA_MEDIA_API_URL in `.env`
+      # to the co-located service:
+      #     LEGBA_MEDIA_API_URL=http://legba-media:8800
+      # (the media service still 503s on each extraction kind until a real model
+      # backend is wired — D2 PREP-not-PROVISION). `env_file: .env` above is the
+      # single source for this value; not re-declared here so an unset shell var
+      # can't shadow the `.env` setting with empty.
     depends_on:
-      redis:
-        condition: service_healthy
+      legba-registry:
+        condition: service_started
       postgres:
-        condition: service_healthy
-      qdrant:
         condition: service_healthy
       nats:
         condition: service_healthy
-      opensearch:
+    ports:
+      - "127.0.0.1:6090:6090"  # B-1: loopback-only
+    restart: unless-stopped
+
+  # legba-dapr-workflow-worker — P-16 Dapr-Workflow worker for the
+  # optimizer kind's DSPy+GEPA loop. The source-first-pivot replacement
+  # for legba-temporal-worker: instead of attaching to a Temporal cluster
+  # it registers the optimizer workflow + activities against the SAME
+  # daprd sidecar the rest of the runtime already uses (placement +
+  # scheduler + actor-state). No Temporal cluster, no second Postgres DB
+  # pair.
+  #
+  # Deployment NOTE: the PREFERRED shape is embedding the worker IN the
+  # legba-runtime-dapr process via
+  # `legba.runtime.dapr_workflow.worker.build_workflow_runtime()` (P-CUT
+  # wires this into the host lifespan) — that needs NO container at all.
+  # This standalone service exists for the scale-out option (run the
+  # optimizer worker on its own so GEPA's LLM-bound work scales
+  # independently of the actor-host's substrate-write QPS), exactly the
+  # rationale the temporal worker had.
+  #
+  # It needs its own daprd sidecar (app-id legba-dapr-workflow) to reach
+  # the workflow engine's gRPC channel — added under the `dapr-workflow`
+  # profile so the canonical `up -d` doesn't pull it until P-CUT cuts over.
+  legba-dapr-workflow-worker:
+    # Dedicated image = runtime image + dspy 3.0 (docker/Dockerfile.worker).
+    # dspy/litellm live ONLY here, never in the base runtime image / the
+    # analyst inference hot path (operator hard rule). Build with:
+    #   docker compose --profile dapr-workflow build legba-dapr-workflow-worker
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    image: legba/legba-dapr-workflow-worker:latest
+    profiles: ["dapr-workflow"]
+    # The worker is a durabletask gRPC WorkflowRuntime, not an HTTP app — the
+    # runtime image's HEALTHCHECK (curl :6090/healthz) would always fail here.
+    healthcheck:
+      disable: true
+    env_file: .env
+    environment:
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_REDIS_HOST: redis
+      LEGBA_DATA_QDRANT_HOST: qdrant
+      LEGBA_DATA_NATS_URL: nats://nats:4222
+      # The worker registers its GEPA WorkflowRuntime against the SAME daprd
+      # sidecar the runtime uses (app-id legba-runtime), so a workflow the
+      # runtime's optimizer schedules there is serviced HERE (this image has
+      # dspy; the runtime image doesn't). Pair with LEGBA_EMBED_WORKFLOW_WORKER=0
+      # on the runtime so the runtime dispatches but does NOT also execute it.
+      DAPR_RUNTIME_HOST: dapr-sidecar
+      DAPR_GRPC_PORT: "50001"
+      DAPR_GRPC_ENDPOINT: dapr-sidecar:50001
+      # configure_gepa_lm resolves the analyst's LLM component from the
+      # registry + decodes its vault secret (LEGBA_DATA_MASTER_KEY via .env).
+      LEGBA_REGISTRY_URL: http://legba-registry:8090
+      LEGBA_REGISTRY_API_URL: http://legba-registry:8090
+      LEGBA_OPTIMIZER_DAPR_WORKFLOW: "1"
+    entrypoint: ["legba-dapr-workflow-worker"]
+    depends_on:
+      postgres:
         condition: service_healthy
-      opensearch-audit:
-        condition: service_healthy
+      legba-registry:
+        condition: service_started
+      dapr-sidecar:
+        condition: service_started
+      dapr-placement:
+        condition: service_started
+      dapr-scheduler:
+        condition: service_started
+    restart: unless-stopped
+
+  # legba-mcp — MCP stdio server (Claude Code integration). Profile
+  # gated to keep it out of the canonical `up -d`; intended to be
+  # launched per-conversation by the MCP client with `docker run -i`.
+  # Including it under compose lets `--profile mcp build` produce the
+  # tagged image without manual docker build invocation.
+  legba-mcp:
+    image: legba/legba-mcp:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    profiles: ["mcp"]
+    env_file: .env
+    environment:
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_QDRANT_HOST: qdrant
     stdin_open: true
-    tty: true
-    restart: unless-stopped
+    tty: false
+    restart: "no"
+
+  # legba-media — hosted media-extraction service (Whisper / VLM / OCR), the
+  # `process_media` job loop's external edge. Profile-gated (`media`) so the
+  # canonical `up -d` doesn't pull it; bring it up to deploy + TEST the loop
+  # locally:
+  #     docker compose --profile runtime --profile media up -d legba-media
+  #     # then set LEGBA_MEDIA_API_URL=http://legba-media:8800 in .env + recreate
+  #     # legba-runtime-dapr so the runtime resolves the endpoint.
+  # D2 PREP-not-PROVISION: the SHIPPED service is CPU-only and serves the
+  # declared seam (SEAMS #1) — /health + a loud HTTP 503 on each extraction
+  # kind, NEVER a fabricated transcript/caption. Wiring a real model backend
+  # (legba-media/app/main.load_backends) flips a kind from 503 to live with no
+  # other change. Full notes: legba-media/USAGE.md.
+  legba-media:
+    image: legba/legba-media:latest
+    build:
+      context: ./legba-media
+      dockerfile: Dockerfile
+    profiles: ["media"]
+    environment:
+      # Extraction kinds with a real backend wired (transcribe,caption,ocr,
+      # detect). Empty = serve the seam (503 on every kind).
+      LEGBA_MEDIA_BACKENDS: "${LEGBA_MEDIA_BACKENDS:-}"
+      # Optional shared secret on the extraction endpoints; the runtime presents
+      # its MODELS_API_PASS as X-Models-Secret. Unset = no in-app auth (the
+      # service is internal to the compose network, never host-published).
+      LEGBA_MEDIA_API_SECRET: "${LEGBA_MEDIA_API_SECRET:-}"
+    volumes:
+      - media_data:/data
     networks:
       - default
-      - audit
+    restart: unless-stopped
 
-  # --- Agent ---
-  # NOT started by compose directly. The supervisor launches agent containers
-  # per cycle via the Docker socket. This definition exists for building
-  # the image and for development/testing.
-
-  agent:
+  # legba-ui-build — one-shot SPA build job. Multi-stage Dockerfile
+  # in legba-ui-v3/. Pattern (b) per the containerization brief:
+  # emits the static `dist/` tree into the shared `legba_ui_dist`
+  # volume; the caddy container mounts the same volume and serves.
+  legba-ui-build:
+    image: legba/legba-ui-build:latest
     build:
-      context: .
-      dockerfile: docker/agent.Dockerfile
-    env_file: .env
-    environment:
-      LEGBA_WORKSPACE: /workspace
-      LEGBA_AGENT_CODE: /agent
-      LEGBA_AGENT_TOOLS: /agent/tools
-      LEGBA_SHARED: /shared
-      LEGBA_LOGS: /logs
-      LEGBA_SEED_GOAL: /seed_goal/goal.txt
-      REDIS_HOST: redis
-      POSTGRES_HOST: postgres
-      QDRANT_HOST: qdrant
-      NATS_URL: nats://nats:4222
-      OPENSEARCH_HOST: opensearch
-      AIRFLOW_URL: http://airflow:8080
-      AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
-      INGESTION_SERVICE_ACTIVE: "true"
+      context: ./legba-ui-v3
+      dockerfile: Dockerfile
+    profiles: ["runtime", "ui"]
     volumes:
-      - workspace_data:/workspace
-      - agent_code:/agent
-      - shared_data:/shared
-      - log_data:/logs
-      - airflow_dags:/airflow/dags
-      - ./seed_goal:/seed_goal:ro
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-      opensearch:
-        condition: service_healthy
-    profiles:
-      - dev  # Only started manually or for development
+      - ui_dist:/out
+    restart: "no"
 
-  # --- Caddy (TLS reverse proxy) ---
-  # Automatic HTTPS for legba.civislux.us → ui-v2.
-
-  caddy:
+  # legba-caddy — TLS edge for the configured public domain
+  # (${LEGBA_PUBLIC_DOMAIN}). Default-on (no profile)
+  # so it stays up across compose lifecycle. Direct host-port binding
+  # (:80 + :443); auto-HTTPS via Let's Encrypt. App-layer auth (bearer
+  # token in the registry + localStorage in the SPA); caddy adds NO
+  # basic_auth. Reverse-proxies /api/* + /ws/* to legba-registry when
+  # the registry is in the activation set; 502s otherwise. SPA from
+  # /srv/legba-ui (populated by the one-shot legba-ui-build job).
+  legba-caddy:
     image: caddy:2-alpine
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"    # HTTP/3
+    # App service: activates under the `runtime` profile (canonical bring-up).
+    profiles:
+      - runtime
+    # Wait for the one-shot UI build to publish dist/ into the shared volume
+    # before serving, so a fresh `up` never serves an empty /srv/legba-ui.
+    depends_on:
+      legba-ui-build:
+        condition: service_completed_successfully
+    # OP-1 — Caddy reads LEGBA_REGISTRY_API_TOKEN at startup so the
+    # Caddyfile's `{$LEGBA_REGISTRY_API_TOKEN}` placeholder expands
+    # for the upstream `header_up Authorization "Bearer ..."` line.
+    # Without this the placeholder resolves empty and the registry
+    # returns 401 on every API call.
+    env_file: .env
     volumes:
+      - ui_dist:/srv/legba-ui:ro
+      # UI v4 self-hosted PMTiles basemap. Operator drops basemap.pmtiles here;
+      # absent → the SPA falls back to demotiles. Range-served at /tiles/*.
+      - ${LEGBA_BASEMAP_DIR:-./deploy/tiles}:/srv/tiles:ro
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on:
-      ui-v2:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:80/health || exit 0"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    restart: unless-stopped
-    profiles:
-      - v2
-
-  # --- Operator Console UI v2 (React SPA) ---
-  # Palantir Gotham-style multi-panel workspace.
-  # Access via SSH tunnel: ssh -L 8503:localhost:8503
-
-  ui-v2:
-    build:
-      context: .
-      dockerfile: docker/ui-v2.Dockerfile
     ports:
-      - "8503:8503"
-    depends_on:
-      ui:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8503/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      # B-1: caddy is the ONLY service allowed to publish on all interfaces —
+      # every other host port binds 127.0.0.1.
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    networks:
+      - default
     restart: unless-stopped
-    profiles:
-      - v2
-
-  # Dev mode for UI v2 — Vite HMR with bind-mount (no node on host)
-  ui-v2-dev:
-    image: node:20-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./legba-ui:/app
-    environment:
-      VITE_API_BASE: http://ui:8501
-    depends_on:
-      ui:
-        condition: service_healthy
-    profiles:
-      - v2-dev
-
-  # --- Dev / Test runner ---
-  # Runs tests inside the agent container environment.
-
-  test:
-    build:
-      context: .
-      dockerfile: docker/agent.Dockerfile
-    env_file: .env
-    entrypoint: []  # Override agent entrypoint for test runner
-    environment:
-      PYTHONPATH: /app/src
-      REDIS_HOST: redis
-      POSTGRES_HOST: postgres
-      QDRANT_HOST: qdrant
-      NATS_URL: nats://nats:4222
-      OPENSEARCH_HOST: opensearch
-      AIRFLOW_URL: http://airflow:8080
-      AIRFLOW_ADMIN_USER: airflow
-      AIRFLOW_ADMIN_PASSWORD: airflow
-    volumes:
-      - ./src:/app/src
-      - ./tests:/app/tests
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-      opensearch:
-        condition: service_healthy
-    command: ["python", "-m", "pytest", "tests/", "-v"]
-    profiles:
-      - test
-
-  timescaledb:
-    image: timescale/timescaledb:latest-pg16
-    environment:
-      POSTGRES_USER: legba_metrics
-      POSTGRES_PASSWORD: legba_metrics
-      POSTGRES_DB: legba_metrics
-    ports:
-      - "5433:5432"
-    volumes:
-      - timescaledb_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U legba_metrics"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: legba
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    restart: unless-stopped
-
-networks:
-  audit:
-    name: legba_audit
 
 volumes:
   redis_data:
@@ -509,25 +583,13 @@ volumes:
     name: legba_qdrant_data
   nats_data:
     name: legba_nats_data
-  opensearch_data:
-    name: legba_opensearch_data
-  opensearch_audit_data:
-    name: legba_opensearch_audit_data
-  workspace_data:
-    name: legba_workspace_data
-  agent_code:
-    name: legba_agent_code
-  shared_data:
-    name: legba_shared_data
-  log_data:
-    name: legba_log_data
-  airflow_dags:
-    name: legba_airflow_dags
-  timescaledb_data:
-    name: legba_timescaledb_data
+  ui_dist:
+    name: legba_ui_dist
   caddy_data:
     name: legba_caddy_data
   caddy_config:
     name: legba_caddy_config
-  grafana_data:
-    name: legba_grafana_data
+  # legba-media venv + HF model cache (kept off the image so a rebuild never
+  # re-downloads weights — same split as the legba-models /data volume).
+  media_data:
+    name: legba_media_data

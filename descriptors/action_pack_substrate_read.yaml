@@ -1,0 +1,95 @@
+# A-3a — substrate_read action pack (review G2 close).
+#
+# The consult kind's four read tools used to dispatch straight at the
+# SubstrateQueryPort, bypassing the agency plane entirely. This pack puts
+# them under governance: every consult tool call now runs the full
+# resolve ∩ allow ∩ applicability → governor → dispatch → settle pipeline
+# and lands in `action_pack_invocations`.
+#
+# Universally applicable BY DESIGN (no applies_to_tags, no predicate): the
+# global consult surface has no target in context, so the runtime binds it
+# with a synthetic global scope and a self-allow for THIS pack only (see
+# runtime/dapr_host.py — the consult deps resolver). The grant leg stays
+# real: an analyst without `action_packs: [{pack_id: substrate_read}]`
+# is denied at resolution.
+#
+# Read-only: the governor caps exist to bound runaway ReAct loops, not
+# spend (the tools cost no tokens themselves — the LLM rounds around them
+# are bounded separately by the consult round cap + token budget).
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: substrate_read
+  name: Substrate Read Tools
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: a3_agency
+  created: "2026-06-09T00:00:00Z"
+
+tools:
+  - name: search_signals
+    config: {}
+  - name: query_facts
+    config: {}
+  - name: inspect_entity
+    config: {}
+  - name: vector_search
+    config: {}
+  # S4 (Phase 1) richer readers — the agentic assessors investigate rather than
+  # one-shot: open signed/typed nexuses, ACH hypothesis rows, a facts∪signals
+  # timeline, and a per-target substrate rollup.
+  - name: query_nexuses
+    config: {}
+  - name: query_hypotheses
+    config: {}
+  - name: get_timeline
+    config: {}
+  - name: compare_targets
+    config: {}
+  # P5 / #99 — DB-side recursive-CTE graph traversal over the OPEN nexus graph
+  # (cyclic; visited-set guard, max_hops<=3, row caps): ranked signed paths
+  # A->...->B, the INDIRECT proxy chains (cut-outs), and the brokers that sit on
+  # paths between two camps — so an analyst can pull "the proxy path from A to B"
+  # / "the broker between two camps" on demand.
+  - name: query_paths
+    config: {}
+  - name: find_proxy_chains
+    config: {}
+  - name: query_brokers
+    config: {}
+  # Palette expansion — the platform's OWN finished intelligence, so an agentic
+  # assessor builds on (and reconciles against) prior products instead of
+  # re-deriving from the raw signal firehose: recent findings/assessments
+  # (effective_confidence folds in the critic), clustered situation frames, and
+  # event-volume predictions. Read-only; reuses this pack's kind.
+  - name: list_findings
+    config: {}
+  - name: list_situations
+    config: {}
+  - name: query_predictions
+    config: {}
+  # Navigation readers — consult-surface only (the GATHER assessors don't offer
+  # these; an assessor already has its target). They MUST be pack tools anyway:
+  # the production consult loop is GOVERNED through this pack, so a tool absent
+  # here is blocked as unknown_tool even on the consult path.
+  - name: list_targets
+    config: {}
+  - name: list_sources
+    config: {}
+
+prompt_fragments:
+  - >-
+    Query the substrate before answering: search_signals for full-text,
+    query_facts for the fact store, inspect_entity for entity profiles,
+    vector_search for semantic similarity. Cite returned UUIDs.
+
+rules:
+  - "Never fabricate substrate refs — cite only UUIDs the tools returned."
+
+governor:
+  budget_account: substrate_read
+  max_invocations_per_hour: 600
+  api_rate_per_minute: 60

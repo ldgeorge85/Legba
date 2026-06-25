@@ -1,0 +1,72 @@
+# P-09 — Cross-Source Dedup analyst descriptor (PIVOT §4.3 / decision P-02).
+#
+# A first-class `deterministic`-kind analyst over the SHARED raw signal pool.
+# It is target-agnostic: dedup is an observation-level property (same content
+# via source A and B), not a per-target interpretation, so the subscription has
+# no per-target predicate — it sees the whole `signal` stream.
+#
+# Method:
+#   * kind = deterministic — pure code, NO LLM, token usage always zero.
+#   * impl = the deterministic kind dispatcher module:run_method. The
+#     deterministic kind routes by `options.sub_handler`; the runtime supplies
+#     `sub_handler: cross_source_dedup` at trigger time (per the deterministic
+#     kind contract — analyst_deps_builder._build_deterministic: "sub-handler
+#     selection happens at run time via options['sub_handler']").
+#
+# Behaviour (legba.data.analysts.deterministic_handlers.cross_source_dedup):
+#   * Exact content_hash matches across distinct source_ids -> link aliases to
+#     one deterministic canonical (earliest fetched_at). MANDATORY path.
+#   * Semantic near-dup via Qdrant when deps.extras['qdrant'] is injected AND
+#     signals carry embedding_ref. BEST-EFFORT — degrades to content_hash-only.
+#   * NEVER destructive: writes signal_aliases links + sets
+#     signals.canonical_signal_id; every raw row is preserved. A subscription's
+#     `canonical_only` flag controls whether it receives aliases or canonicals.
+#
+# Cadence:
+#   * fallback_schedule = "*/15 * * * *" — sweep the raw pool every 15 min.
+#   * cooldown_seconds = 300 — 5-min floor between runs (the sweep is idempotent).
+#
+# Registered via scripts/bringup_register_cross_source_dedup.py or the registry
+# REST API — NOT inline through a test fixture.
+
+identity:
+  id: cross_source_dedup
+  name: Cross-Source Dedup
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p09_cross_source_dedup
+
+subscription:
+  # Target-agnostic: dedup runs over the whole shared raw signal pool. No
+  # per-target predicate — interpretation is target-owned, observation (and its
+  # dedup) is shared.
+  targets:
+    data_types: [signal]
+    time_window: 24h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  # Deterministic kinds carry no LLM block and no per-day token budget — the
+  # whole run is pure Python over the signals/signal_aliases substrate.
+
+cadence:
+  fallback_schedule: "*/15 * * * *"
+  cooldown_seconds: 300
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND
+# (FindingPayload -> findings table) is the substrate write. The dedup work
+# itself lands directly in signal_aliases + signals.canonical_signal_id; the
+# emitted finding is a run summary. A `nats_stream` sink could be added later
+# so subscribers learn when canonical links change.
+outputs: []

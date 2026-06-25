@@ -1,0 +1,115 @@
+# Shared SourceDescriptor: source.reliefweb.reports — the json_api kind's
+# keyless reference example (S-3).
+#
+# ReliefWeb (OCHA) Reports API v2 — humanitarian situation reports, appeals,
+# and updates. Keyless (no credential/vault ref), but ReliefWeb's usage
+# convention requires an `appname` query parameter identifying the caller; we
+# follow it with `appname=legba`.
+#   Docs: https://apidoc.reliefweb.int/
+#
+# NOTE (probed live 2026-06-09): API v1 is decommissioned (HTTP 410) and v2
+# requires the appname to be APPROVED by ReliefWeb (HTTP 403 otherwise —
+# https://apidoc.reliefweb.int/parameters#appname). Until `legba` is approved
+# out-of-band, polls fail loud: the handler records `unhealthy` with the HTTP
+# status and emits nothing (no fabricated output). Same posture as a vault
+# credential that hasn't been provisioned yet.
+#
+# The url_template exercises the json_api cursor window: `filter[value][from]`
+# is substituted with {window_start_iso} (URL-quoted by the handler), so each
+# poll requests only reports created after the last successful pull. Field
+# paths exercise NESTED extraction (`fields.title`, `fields.date.created`).
+#
+# Example descriptor — NOT registered by any bringup script. Register
+# explicitly via the registry API / DescriptorRegistry when wanted.
+#
+# subscription_policy: open  → targets auto-wire by selector (PIVOT §4.4.1).
+# owner_tenant: shared       → any tenant may subscribe (PIVOT §8 shared source).
+
+identity:
+  id: source.reliefweb.reports
+  name: ReliefWeb — Reports API (humanitarian updates)
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active
+  owner: source_bringup
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # geo intentionally OMITTED — global humanitarian coverage. A consuming
+  # target's geo lives in its Subscription.geo (signal-level narrowing).
+  geo: []
+  languages: [en]
+  tags: [humanitarian, crisis, disaster, global, news]
+
+acquisition: poll
+
+cadence:
+  # */30 — one poll per 30 min for the whole platform. ReliefWeb publishes
+  # tens of reports/day; 30 min is a courteous cadence for a free API.
+  schedule:
+    factory_kind: cron
+    raw: "*/30 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  # GET; sorted newest-first; only fields we map; date window driven by the
+  # poll cursor via {window_start_iso}. appname=legba per ReliefWeb convention.
+  url_template:
+    factory_kind: text
+    raw: "https://api.reliefweb.int/v2/reports?appname=legba&limit=50&sort[]=date.created:desc&fields[include][]=title&fields[include][]=url&fields[include][]=date.created&fields[include][]=body&filter[field]=date.created&filter[value][from]={window_start_iso}"
+  items_path:
+    factory_kind: text
+    raw: "data"
+  id_path:
+    factory_kind: text
+    raw: "id"
+  title_path:
+    factory_kind: text
+    raw: "fields.title"
+  url_path:
+    factory_kind: text
+    raw: "fields.url"
+  timestamp_path:
+    factory_kind: text
+    raw: "fields.date.created"
+  body_path:
+    factory_kind: text
+    raw: "fields.body"
+  modality:
+    factory_kind: text
+    raw: "text"
+  max_items_per_pull:
+    factory_kind: number
+    raw: 50
+  language:
+    factory_kind: text
+    raw: "en"
+
+pipeline:
+  # Baseline enrichment runs ONCE per signal at the source, not per target.
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800            # 7 days — situation reports stay relevant
+  delivery: lossy
+
+subscription_policy: open

@@ -1,0 +1,52 @@
+# nexus_decay — the nexuses-table temporal-lifecycle decay sweep (PIECE A).
+#
+# A `deterministic`-kind META analyst (the fact_decay precedent). The handler is
+# fully built at legba.data.analysts.deterministic_handlers.nexus_decay and
+# wired into SUB_HANDLERS, but it UPDATEs a `nexuses` table that — until
+# migration 0033 — DID NOT EXIST (it was dead code that would fail loud the
+# moment it fired; DEEP_REVIEW §0). PIECE A lands the real table, so this
+# descriptor re-points the decay sweep against the now-real nexuses:
+#
+#   Stale OPEN nexuses (created_at older than 30 days, still temporally active)
+#   get confidence decremented by 0.05 per run toward the 0.1 floor — the same
+#   decay discipline fact_decay applies to facts. The per-run FindingPayload
+#   (decayed_count) is the cadence receipt. No LLM, no token budget — pure SQL.
+
+identity:
+  id: nexus_decay
+  name: Nexus Temporal-Lifecycle Decay Sweep
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: piece_a_nexus_activation
+
+subscription:
+  # META analyst: one global sweep per tick directly over the `nexuses` table
+  # via deps.pg_pool (the fact_decay precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: nexus_decay
+  # No LLM block, no token budget — pure Python UPDATE over the `nexuses` table.
+
+cadence:
+  # Every 8h at :33 — nexus decay is a slow temporal-maintenance sweep (30-day
+  # stale window). OFFSET from fact_decay ("23 */8") so the two decay sweeps do
+  # not fire on the same tick.
+  fallback_schedule: "33 */8 * * *"
+  cooldown_seconds: 600
+
+outputs: []

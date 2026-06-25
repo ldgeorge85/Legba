@@ -1,0 +1,145 @@
+/* CSS @import MUST come before any other rule — PostCSS silently drops
+   imports that follow @tailwind directives, which is what was happening
+   here: dockview.css was being dropped, leaving the Dockview panels with
+   no `.dv-*` classes and rendering as bare stacked divs (no tabs, no
+   resize handles, no group decorations).  Confirmed empty `.dv-*` class
+   count in the built bundle pre-fix; full set lands after the reorder. */
+@import 'dockview-react/dist/styles/dockview.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===========================================================================
+   Wave 3 — design tokens (redesign Move 5).
+
+   Two orthogonal token axes, both driven by CSS custom properties so the
+   token system is centralized (one place to retune) and the high-traffic
+   surfaces read tokens, not ad-hoc `text-[10px]` / `gap-1` composition:
+
+     1. THEME tokens — `--surf-*` / `--ink-*` / `--line-*`. Default is dark
+        (root `:root`, also `.dark`); `.theme-light` overrides them. Tailwind
+        `darkMode:'class'` stays the engine; the light toggle just adds/removes
+        `.theme-light` on <html> and these vars flip.
+
+     2. DENSITY tokens — `--density-*` spacing + the type scale. The density
+        context sets `.density-tight` / `.density-cozy` / `.density-comfortable`
+        on a wrapper; the spacing utilities below read `--density-pad` /
+        `--density-gap` / `--density-row`. `comfortable` is the daily-driver
+        default; `cozy` is acceptable for ops/runtime panels.
+
+   The WCAG-AA pass lives here too: `--ink-2` (secondary text) is a ≥4.5:1
+   ramp on the surface it sits on, replacing the borderline `slate-600`.
+   =========================================================================== */
+
+:root,
+.dark {
+  /* Surface ramp (darkest → lightest chrome). Mirrors tailwind `surface.*`
+     but as vars so light mode can flip them. Avoids pure black (P-C: dark-mode
+     rule — use #1a1d23..#0a0c10, never #000). */
+  --surf-base: #0a0c10; /* app background  (surface-300) */
+  --surf-1: #0f1115; /* panel body      (surface-200) */
+  --surf-2: #15171c; /* panel chrome    (surface-100) */
+  --surf-3: #1a1d23; /* header / raised (surface-50)  */
+
+  /* Ink ramp. --ink-1 primary, --ink-2 secondary (AA ≥4.5:1 on --surf-2),
+     --ink-3 tertiary/muted (still ≥3:1 — used only for non-essential meta). */
+  --ink-1: #e2e8f0; /* slate-200 — primary text         */
+  --ink-2: #aeb8c6; /* AA ≥4.5:1 secondary (was slate-600/400) */
+  --ink-3: #8b97a8; /* tertiary meta (timestamps, hashes) ~4.5:1 */
+
+  /* Hairlines / borders. */
+  --line-1: rgba(148, 163, 184, 0.18);
+  --line-2: rgba(148, 163, 184, 0.30);
+
+  --accent: #3b82f6; /* info / link / focus */
+}
+
+/* Light theme (accessibility affordance — dark stays the default + design
+   target, per the fixed constraint). Same token names, light values; AA
+   audited: --ink-2 #475569 on #f1f5f9 ≈ 7:1, --ink-3 #64748b ≈ 4.8:1. */
+.theme-light {
+  --surf-base: #e7ebf0;
+  --surf-1: #f1f5f9;
+  --surf-2: #ffffff;
+  --surf-3: #f8fafc;
+
+  --ink-1: #0f172a;
+  --ink-2: #475569;
+  --ink-3: #64748b;
+
+  --line-1: rgba(15, 23, 42, 0.12);
+  --line-2: rgba(15, 23, 42, 0.20);
+
+  --accent: #2563eb;
+}
+
+/* Density tokens. The default (no class / comfortable) targets ~30–40%
+   whitespace on the daily-driver surfaces; cozy is the ops/runtime mode. */
+.density-comfortable {
+  --density-pad: 0.75rem; /* 12px — panel body padding              */
+  --density-gap: 0.625rem; /* 10px — inter-element gap               */
+  --density-row: 0.5rem; /* 8px  — list row vertical padding       */
+  --density-section: 1rem; /* 16px — between major sections          */
+}
+.density-cozy {
+  --density-pad: 0.5rem; /* 8px  */
+  --density-gap: 0.375rem; /* 6px  */
+  --density-row: 0.3125rem; /* 5px  */
+  --density-section: 0.625rem; /* 10px */
+}
+.density-tight {
+  --density-pad: 0.375rem; /* 6px  */
+  --density-gap: 0.25rem; /* 4px  */
+  --density-row: 0.1875rem; /* 3px  */
+  --density-section: 0.5rem; /* 8px  */
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--surf-base);
+  color: var(--ink-1);
+}
+
+/* ---------------------------------------------------------------------------
+   Density spacing utilities. Components opt into the density scale with these
+   instead of hard-coded `p-3` / `gap-1` / `space-y-2`, so changing density
+   retunes every adopter at once. (Theme surface/ink tokens are exposed as
+   Tailwind color aliases — `bg-surf-2`, `text-ink-2`, `border-line` — so they
+   support `hover:`/`dark:` variants; see tailwind.config.ts.)
+   --------------------------------------------------------------------------- */
+.pad-density { padding: var(--density-pad); }
+.px-density { padding-left: var(--density-pad); padding-right: var(--density-pad); }
+.py-density { padding-top: var(--density-pad); padding-bottom: var(--density-pad); }
+.gap-density { gap: var(--density-gap); }
+.gap-row { gap: var(--density-row); }
+.row-density { padding-top: var(--density-row); padding-bottom: var(--density-row); }
+.space-y-density > * + * { margin-top: var(--density-section); }
+.space-y-rows > * + * { margin-top: var(--density-row); }
+
+/* Dockview dark theme tweaks to match Personal-mode palette. */
+.dockview-theme-abyss {
+  --dv-paneview-active-outline-color: #3b82f6;
+  --dv-tabs-and-actions-container-background-color: #15171c;
+  --dv-group-view-background-color: #0f1115;
+}
+
+/* Light-theme Dockview: keep the same engine (theme-abyss) but flip its
+   surface/tab vars so docked tiles match the light token surfaces. */
+.theme-light .dockview-theme-abyss {
+  --dv-paneview-active-outline-color: #2563eb;
+  --dv-tabs-and-actions-container-background-color: #f8fafc;
+  --dv-group-view-background-color: #f1f5f9;
+  --dv-tabs-container-scrollbar-color: #cbd5e1;
+  --dv-activegroup-visiblepanel-tab-background-color: #ffffff;
+  --dv-activegroup-visiblepanel-tab-color: #0f172a;
+  --dv-inactivegroup-visiblepanel-tab-color: #475569;
+  --dv-separator-border: #cbd5e1;
+}

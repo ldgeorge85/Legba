@@ -1,0 +1,97 @@
+# S-2 — IntelMQ bridge SourceDescriptor: source.intelmq.cisa_kev
+# (kind: intelmq_collector_bridge).
+#
+# CISA Known Exploited Vulnerabilities (KEV) catalog via the IntelMQ
+# collector bridge (LB-12: adopt IntelMQ's CERT-grade collectors instead of
+# re-implementing them). Handler: src/legba/data/sources/intelmq.py
+# (IntelMQCollectorBridge, config schema IntelMQBridgeConfig), subprocess
+# mode: the bridge runs the IntelMQ HTTP collector bot one-shot per pull
+# against the public KEV JSON feed (no API key — the FEED is keyless).
+#
+# ⚠ REQUIRED EXTRA — NOT IN THE RUNTIME IMAGE: the `intelmq` package is an
+# opt-in extras group (`legba[intelmq]`, pyproject.toml — ~50 transitive
+# packages) and docker/Dockerfile.runtime does NOT install it. Verified
+# 2026-06-09: `import intelmq` fails in the runtime/test image. Deploying
+# this descriptor therefore needs an image built with
+#     pip install 'legba[intelmq]'
+# Until then the handler's on_configure gate (_require_intelmq) raises
+# IntelMQNotInstalled — a loud configure/activation failure with the exact
+# install command in the message; nothing fabricates output.
+#
+# GATING (S-2 convention): although the KEV feed itself is KEYLESS, the
+# descriptor ships state: draft because the runtime image lacks the
+# required extra — auto-activating on bulk registration would put a
+# permanently-failing actor on a stock rig. Operator flip:
+#   1. Deploy a runtime image with the legba[intelmq] extra installed.
+#   2. Register/refresh this descriptor, then transition:
+#        POST {registry}/api/v1/registry/descriptors/source/source.intelmq.cisa_kev/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+
+identity:
+  id: source.intelmq.cisa_kev
+  name: CISA KEV — Known Exploited Vulnerabilities (IntelMQ bridge)
+  kind: intelmq_collector_bridge
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # KEYLESS feed, but the intelmq extra is not in the image
+  owner: s2_keyed_sources
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [cyber, vulnerability, threat_intel, kev, structured, global]
+
+acquisition: poll
+
+cadence:
+  # CISA updates KEV as-needed (typically a few entries per week); one
+  # daily pull is plenty.
+  schedule:
+    factory_kind: cron
+    raw: "15 5 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 300
+
+config:
+  mode:
+    factory_kind: text
+    raw: "subprocess"
+  bot_module:
+    factory_kind: text
+    raw: "intelmq.bots.collectors.http.collector_http"
+  # Passed straight to the IntelMQ collector bot (IntelMQ validates it).
+  bot_config:
+    factory_kind: dict
+    value_kind: text
+    raw:
+      name: "CISA KEV"
+      provider: "CISA"
+      http_url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+      rate_limit: 86400
+  subprocess_timeout_s:
+    factory_kind: number
+    raw: 120
+  max_events_per_pull:
+    factory_kind: number
+    raw: 10000
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # event uuid / CVE id canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment: []                     # IDF events are structured — no text chain
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

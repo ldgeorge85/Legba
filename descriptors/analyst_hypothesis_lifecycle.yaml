@@ -1,0 +1,59 @@
+# hypothesis_lifecycle — the hypotheses producer + evidence tester (Piece 3, Task D).
+#
+# A `deterministic`-kind META analyst over the shared finding/situation/hypotheses
+# pool — modeled on situation_clustering (the existing meta/maintenance precedent).
+# Two responsibilities in one idempotent forward-progressing sweep:
+#
+#   1. EMIT — for each rising-intensity situation, materialize a forward-claim
+#      hypothesis ("<topic> will escalate over the next horizon") via the LIVE
+#      write_hypothesis path (OutputKind.HYPOTHESIS + the hypotheses table already
+#      exist — REUSED, no new plumbing). Idempotent on (situation_id, analyst_id).
+#   2. TEST — for each standing `active` hypothesis, fetch LATER evidence
+#      (produced_at > hypothesis.produced_at) bearing on its thesis, classify
+#      support vs refute, recompute evidence_balance, and walk
+#      active -> confirmed / refuted past a threshold. Sibling of situation
+#      lifecycle decay; direct UPDATE on public.hypotheses (the fact_decay pattern).
+#
+# The hypothesis rows are the real output; the deterministic kind's per-run
+# summary FindingPayload (hypotheses_created/updated/confirmed/refuted) is the
+# cadence receipt — exactly how situation_clustering keeps a FINDING summary while
+# side-writing situation rows directly.
+
+identity:
+  id: hypothesis_lifecycle
+  name: Hypothesis Producer + Evidence Tester
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: hypothesis_activation
+
+subscription:
+  # META analyst: one global sweep per tick over the shared finding/situation
+  # pool. Reads directly via deps.pg_pool (the situation_clustering precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: hypothesis_lifecycle
+  # No LLM block, no token budget — pure Python over analyst_outputs /
+  # situations / hypotheses.
+
+cadence:
+  # OFFSET after situation_clustering ("5-59/20 * * * *") so the situations it
+  # forms claims about are freshly clustered this cycle.
+  fallback_schedule: "10-59/20 * * * *"
+  cooldown_seconds: 300
+
+outputs: []

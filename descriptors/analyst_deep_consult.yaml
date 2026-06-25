@@ -1,0 +1,56 @@
+# Piece 4 — the deep_consult analyst (actor→Dapr-Workflow bridge).
+#
+# kind: deep_consult. On-demand only. The kind's run_method SCHEDULES the
+# deep_consult_workflow (plan→acquire→analyze→synthesize) DETACHED and returns
+# a task id in <1s — the actor never blocks on the workflow result. The
+# workflow's synthesize stage writes the finding (+ optional facts/hypotheses).
+#
+# method.llm.primary is the StackRef the workflow's plan/analyze stages resolve;
+# budget_tokens_per_day caps the deep run. action_packs grants substrate_read so
+# the acquire stage's substrate tools (search_signals/query_facts/inspect_entity
+# /vector_search) are governed through the agency plane, same as consult.
+
+identity:
+  id: deep_consult
+  name: Legba Deep Consult (staged workflow)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: deep_consult
+  type_signature:
+    input_type: legba.runtime.ConsultQuestion
+    output_type: legba.runtime.Finding
+  state: active
+  owner: p4_deep_consult
+
+subscription:
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: react_loop
+  prompt_module: legba.prompts.consult_on_demand.v1
+  llm:
+    # 2026-06-22: deep_consult runs on the Anthropic plane (operator: consult +
+    # deep_consult are the ONLY Anthropic users). max_tokens IS sent + enforced
+    # here (Anthropic requires it). TO REVERT to the core plane: set raw back
+    # to llm.primary.openai_compat.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.anthropic.opus_4_7
+      expected_family: llm_provider
+    max_tokens: 16384
+  budget_tokens_per_day: 2000000
+
+cadence:
+  # On-demand only — no fallback_schedule. Operator/UI invoked; the daily token
+  # budget caps runaway, so the per-actor cooldown floor is 0.
+  cooldown_seconds: 0
+
+# Agency grant — substrate_read (the acquire stage's tool calls are resolved +
+# governed + ledgered through the agency plane, same as consult).
+action_packs:
+  - pack_id: substrate_read

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Legba live backup — Postgres, Redis, Qdrant, OpenSearch (+ audit)
+# Legba live backup — Postgres, Redis, Qdrant, NATS JetStream
 # Safe to run while the agent is cycling.
 #
 # Usage:
 #   ./scripts/backup.sh                  # all services
 #   ./scripts/backup.sh pg               # just postgres
 #   ./scripts/backup.sh redis qdrant     # specific services
+#   ./scripts/backup.sh nats             # just NATS JetStream
+#
+# For scheduled use (cron/systemd) with retention + offsite, see
+# scripts/backup_scheduled.sh (wraps this) and deploy/systemd/legba-backup.*.
 #
 # Output: /var/backups/legba/<timestamp>/
 
@@ -28,9 +32,6 @@ REDIS_PORT="${REDIS_PORT:-6379}"
 
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
 
-OS_URL="${OS_URL:-http://localhost:9200}"
-OS_AUDIT_URL="${OS_AUDIT_URL:-http://localhost:9201}"
-
 # Compose project (for container exec fallbacks)
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-legba}"
 
@@ -44,8 +45,10 @@ log()  { echo -e "${GREEN}[backup]${NC} $*"; }
 warn() { echo -e "${YELLOW}[backup]${NC} $*"; }
 err()  { echo -e "${RED}[backup]${NC} $*" >&2; }
 
+NATS_URL="${NATS_URL:-nats://localhost:4222}"
+
 # --- Determine which services to back up ---
-ALL_SERVICES="pg redis qdrant opensearch"
+ALL_SERVICES="pg redis qdrant nats"
 if [[ $# -gt 0 ]]; then
     SERVICES="$*"
 else
@@ -167,30 +170,59 @@ backup_qdrant() {
 }
 
 # ============================================================
-# OpenSearch — scroll-dump via Python helper (os_dump.py)
+# NATS JetStream — `nats stream backup` per stream, or store-dir copy fallback
 # ============================================================
-backup_opensearch() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local os_dir="${BACKUP_DIR}/opensearch"
+backup_nats() {
+    log "NATS JetStream: backing up streams..."
+    local nats_dir="${BACKUP_DIR}/nats"
+    mkdir -p "$nats_dir"
 
-    # Main instance
-    log "OpenSearch: dumping legba-* indices..."
-    python3 "${script_dir}/os_dump.py" "$OS_URL" "$os_dir" "legba-"
+    if command -v nats &>/dev/null; then
+        # Preferred: online, per-stream logical backup via the nats CLI.
+        local streams
+        streams=$(nats --server "$NATS_URL" ${LEGBA_NATS_TOKEN:+--creds-none} stream ls -n 2>/dev/null || true)
+        if [[ -z "$streams" ]]; then
+            warn "NATS: no streams reported (or CLI auth failed) — trying store-dir copy"
+        else
+            for s in $streams; do
+                log "  NATS: backing up stream ${s}..."
+                if ! nats --server "$NATS_URL" stream backup "$s" "${nats_dir}/${s}" >/dev/null 2>&1; then
+                    err "  NATS: stream backup failed for ${s}"
+                    ((ERRORS++))
+                fi
+            done
+            tar -czf "${BACKUP_DIR}/nats.tar.gz" -C "$BACKUP_DIR" nats/
+            rm -rf "$nats_dir"
+            local size
+            size=$(du -h "${BACKUP_DIR}/nats.tar.gz" | cut -f1)
+            log "NATS: done — nats.tar.gz (${size})"
+            return
+        fi
+    fi
 
-    # Audit instance
-    log "OpenSearch (audit): dumping audit indices..."
-    local audit_dir="${os_dir}/audit"
-    # Audit indices use legba-audit-* prefix typically; dump everything non-system
-    python3 "${script_dir}/os_dump.py" "$OS_AUDIT_URL" "$audit_dir" "legba"
-
-    # Compress
-    log "OpenSearch: compressing..."
-    tar -czf "${BACKUP_DIR}/opensearch.tar.gz" -C "$BACKUP_DIR" opensearch/
-    rm -rf "$os_dir"
+    # Fallback (no nats CLI): file-level copy of the JetStream store dir out of
+    # the container. JetStream persists streams + consumers under /data; a tar
+    # of it is a crash-consistent snapshot suitable for full-cluster restore.
+    warn "NATS: nats CLI unavailable — copying JetStream store dir from container"
+    local container
+    container=$(docker compose -p "$COMPOSE_PROJECT" ps -q nats 2>/dev/null || true)
+    if [[ -z "$container" ]]; then
+        err "NATS: container not found (project ${COMPOSE_PROJECT}); skipping"
+        ((ERRORS++))
+        rm -rf "$nats_dir"
+        return
+    fi
+    docker cp "${container}:/data/." "$nats_dir" 2>/dev/null || {
+        err "NATS: docker cp of /data failed"
+        ((ERRORS++))
+        rm -rf "$nats_dir"
+        return
+    }
+    tar -czf "${BACKUP_DIR}/nats.tar.gz" -C "$BACKUP_DIR" nats/
+    rm -rf "$nats_dir"
     local size
-    size=$(du -h "${BACKUP_DIR}/opensearch.tar.gz" | cut -f1)
-    log "OpenSearch: done — opensearch.tar.gz (${size})"
+    size=$(du -h "${BACKUP_DIR}/nats.tar.gz" | cut -f1)
+    log "NATS: done (store-dir copy) — nats.tar.gz (${size})"
 }
 
 # ============================================================
@@ -202,8 +234,8 @@ for svc in $SERVICES; do
         pg|postgres)   backup_pg ;;
         redis)         backup_redis ;;
         qdrant)        backup_qdrant ;;
-        opensearch|os) backup_opensearch ;;
-        *)             warn "Unknown service: $svc (valid: pg, redis, qdrant, opensearch)" ;;
+        nats|jetstream) backup_nats ;;
+        *)             warn "Unknown service: $svc (valid: pg, redis, qdrant, nats)" ;;
     esac
     echo ""
 done

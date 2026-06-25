@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Seed high-value data sources into the Legba sources table.
 
 Idempotent — checks for existing sources by URL before inserting.
@@ -510,6 +512,60 @@ TIER_1_SOURCES = [
         geo_origin="SE",
         description="Stockholm International Peace Research Institute — arms, conflict, disarmament",
         tags=["arms", "conflict", "peace", "defense"],
+    ),
+
+    # --- NEW HIGH-VALUE SOURCES (added April 2026 — Phase 2.5 audit) ---
+    SourceDef(
+        name="Reuters World",
+        url="https://www.reutersagency.com/feed/?best-topics=world&post_type=best",
+        source_type="rss",
+        category="political",
+        fetch_interval_minutes=30,
+        reliability=0.9,
+        ownership_type="corporate",
+        geo_origin="GB",
+        coverage_scope="global",
+        description="Reuters wire service — one of the three major global wire services",
+        tags=["news", "wire-service", "global"],
+    ),
+    SourceDef(
+        name="AP News World",
+        url="https://rsshub.app/apnews/topics/world-news",
+        source_type="rss",
+        category="political",
+        fetch_interval_minutes=30,
+        reliability=0.9,
+        ownership_type="nonprofit",
+        geo_origin="US",
+        coverage_scope="global",
+        description="Associated Press world news — gold standard for factual reporting",
+        tags=["news", "wire-service", "global"],
+    ),
+    SourceDef(
+        name="IEA Publications",
+        url="https://www.iea.org/rss/publications.xml",
+        source_type="rss",
+        category="economic",
+        fetch_interval_minutes=360,
+        reliability=0.9,
+        ownership_type="nonprofit",
+        geo_origin="FR",
+        coverage_scope="global",
+        description="International Energy Agency — critical for Hormuz disruption and oil market tracking",
+        tags=["energy", "oil", "economic", "analysis"],
+    ),
+    SourceDef(
+        name="IISS Analysis",
+        url="https://www.iiss.org/rss/",
+        source_type="rss",
+        category="conflict",
+        fetch_interval_minutes=360,
+        reliability=0.85,
+        ownership_type="nonprofit",
+        geo_origin="GB",
+        coverage_scope="global",
+        description="International Institute for Strategic Studies — defense and security analysis",
+        tags=["defense", "analysis", "conflict", "think-tank"],
     ),
 ]
 

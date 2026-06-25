@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Backfill alliance/organization memberships from Wikidata SPARQL.
 
 Fetches membership data for key international organizations with join dates.

@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# legba-media — standalone deploy of the hosted media-extraction service.
+#
+# Two ways to run it:
+#   1. ON the GPU/model host, alongside legba-models (this file). Caddy fronts
+#      it externally and the Legba runtime points LEGBA_MEDIA_API_URL at it.
+#   2. IN the main Legba stack for local deploy+test of the loop, via the
+#      `media` profile in the repo-root docker-compose.yml (no GPU needed for
+#      the seam service).
+#
+# The SHIPPED service is CPU-only (the declared seam, no model wired) and serves
+# /health + a loud 503 on each extraction kind — it deploys + health-checks on
+# any box. When a real Whisper/VLM/OCR backend is wired (app/main.load_backends)
+# add the GPU `deploy.resources` block (see the commented stanza) + swap the
+# Dockerfile base for the CUDA image.
+services:
+  legba-media:
+    build: .
+    container_name: legba-media
+    restart: unless-stopped
+    environment:
+      # Which extraction kinds have a real backend wired (comma-separated:
+      # transcribe,caption,ocr,detect). Empty = serve the seam (503 on every
+      # kind, never fabricated output).
+      - LEGBA_MEDIA_BACKENDS=${LEGBA_MEDIA_BACKENDS:-}
+      # Optional defense-in-depth shared secret. When set, the extraction
+      # endpoints require a matching X-Models-Secret header (the Legba runtime
+      # presents its MODELS_API_PASS). /health stays open. Unset = no in-app
+      # auth (the service is loopback / network-internal only).
+      - LEGBA_MEDIA_API_SECRET=${LEGBA_MEDIA_API_SECRET:-}
+      - HF_HOME=/data/hf-cache
+      - TRANSFORMERS_CACHE=/data/hf-cache
+    volumes:
+      - /mnt/data/media/legba:/data
+    # --- GPU stanza — uncomment when a real model backend is wired ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           device_ids: ['0']
+    #           capabilities: [gpu]
+    networks:
+      - fastchat
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+networks:
+  fastchat:
+    external: true

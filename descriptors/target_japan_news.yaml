@@ -1,0 +1,96 @@
+# Phase 5a multi-target validation — japan_news.
+#
+# One of five additional country target descriptors registered alongside
+# india_energy_infra to exercise the runtime's multi-target ingestion +
+# filter chain at scale. Body shape mirrors the live (post-F-bundle)
+# india_energy_infra descriptor: 7-filter pipeline + inline_target analyst block.
+#
+# RSS feed swap note:
+#   * Original candidate https://www3.nhk.or.jp/nhkworld/en/news/feeds/
+#     returns HTTP 404. Swapped for https://www3.nhk.or.jp/rss/news/cat0.xml
+#     (NHK domestic Japanese news, cat0 = "all categories"). Probed from
+#     inside legba-legba-runtime-dapr-1 — HTTP 200, application/xml,
+#     valid RSS 2.0 body. The scope still declares ja, en because NHK
+#     publishes Japanese-language items.
+
+identity:
+  id: japan_news
+  name: Japan News
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"   # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: active
+  owner: lewis@local
+  created: "2026-05-28T00:00:00Z"
+
+scope:
+  geo: [JP]
+  languages: [ja, en]
+  # 9-class taxonomy — picked from the seeded vocabulary_entries set;
+  # "government" is not seeded so we use "country" as the sovereign-actor
+  # node and rely on the 8 institutional/people/place classes around it.
+  entity_classes:
+    - organization
+    - corporation
+    - country
+    - media_outlet
+    - person
+    - location
+    - political_party
+    - international_org
+    - infrastructure
+  relationship_types: []
+  time_horizon_days: 90
+  predicate: null
+  tags: []
+
+sources:
+  - id: japan_news_rss
+    kind: rss
+    config:
+      url:
+        factory_kind: text
+        raw: "https://www3.nhk.or.jp/rss/news/cat0.xml"
+    schedule:
+      factory_kind: cron
+      raw: "*/15 * * * *"
+    enabled: true
+
+pipeline:
+  ingestion_filters:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config:
+        languages: [ja, en]
+        default_language: ja
+    - kind: classify
+      config:
+        taxonomy_schema: "iglu:legba/event_type/jsonschema/1-0-0"
+        use_server_defaults: true
+    - kind: source_credibility
+      config: {}
+    - kind: geocode
+      config:
+        backend: nominatim
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+
+analyst:
+  use: inline_target
+  cadence:
+    fallback_schedule: "*/10 * * * *"
+  method:
+    kind: llm_planner
+    prompt_module: legba.runtime.analyst_method:_DEFAULT_SYSTEM
+    budget_tokens_per_day: 200000
+    llm:
+      primary: llm.primary.openai_compat
+
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: intelligence.japan_news_assessment

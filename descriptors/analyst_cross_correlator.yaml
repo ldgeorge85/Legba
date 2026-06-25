@@ -1,0 +1,74 @@
+# cross_analyst_correlator — the sibling analysis-of-analysis kind (Piece 3, Task C).
+#
+# Where meta_synthesizer reads ONLY country_assessor + world_assessor FINDINGS and
+# emits a convergent/contradictory second-order narrative, the correlator reads a
+# WIDER set across ALL output kinds (findings + predictions) and reports explicit
+# convergences / contradictions / blind-spots with data.referenced_analyst_ids.
+#
+# Differentiated from meta_synthesizer per the plan's "do not register both
+# pointing at an identical input set with identical cadence":
+#   * INPUT BREADTH — adds country_predictor; data_types include prediction.
+#   * SCHEDULE       — staggered to ":45" so it does not co-fire with the synth.
+#
+# META analyst: no subscription.targets => single global run per tick. Source set
+# resolved by the kind's READ_SLICE from other_analysts[].id (Piece 3, Task A2 —
+# the same id_list->other_analysts[].id fix applied to the synth). Without Task A2
+# the correlator silently degraded to a whole-pool scan ignoring this set.
+
+identity:
+  id: cross_correlator
+  name: Cross-Analyst Correlator (G20 + World + Predictor)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: cross_analyst_correlator
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: release_meta_activation
+
+subscription:
+  # No `targets` block => META analyst (single global run; target_filter=None).
+  # WIDER than the synth: the correlator's value is cross-cutting, so it reads
+  # the predictor too and across output kinds (not just findings).
+  other_analysts:
+    - id: country_assessor
+      data_types: [finding]
+      time_window: 24h
+    - id: world_assessor
+      data_types: [finding]
+      time_window: 24h
+    - id: country_predictor
+      data_types: [prediction]
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # method.kind is a constrained Literal (see meta_synthesizer note). Dispatch
+  # is on identity.kind (cross_analyst_correlator); llm_planner matches the
+  # single-turn chat_complete shape the kind uses.
+  kind: llm_planner
+  prompt_module: "legba.prompts.cross_analyst_correlator.v1"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1024
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Staggered OFF the synth (:30) to avoid co-fire — ":45" twice daily.
+  fallback_schedule: "45 */12 * * *"
+  cooldown_seconds: 39600        # 11h, below the 12h interval
+
+outputs: []

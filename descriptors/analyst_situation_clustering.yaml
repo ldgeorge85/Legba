@@ -1,0 +1,63 @@
+# Situation Clustering analyst descriptor — the producer that materializes the
+# `situations` table (the last dark leg of the analysis plane: the situations
+# read API / lineage walk / STIX incident producer all already consumed it, but
+# NOTHING wrote it, so it sat at 0 rows).
+#
+# A `deterministic`-kind META analyst over the shared analyst-output pool. It is
+# the downstream sibling of finding_supersession: supersession derives + stamps
+# `situation_signature` on every finding in a multi-member cluster; THIS handler
+# reads those stamped findings, groups them by signature, and UPSERTS one
+# `situations` row per signature (keyed by (signature, analyst_id) — a re-run
+# updates event_count / last_event_at / intensity / derived_from rather than
+# duplicating). NEVER deletes.
+#
+# Like supersession it does its OWN substrate writes (the situation rows land
+# directly in the `situations` table) and the deterministic kind's per-run
+# summary FindingPayload records situations_created / situations_updated.
+#
+# Cadence:
+#   * fallback_schedule = "5-59/20 * * * *" — every 20 min, OFFSET 5 min after
+#     finding_supersession ("*/20") so the signatures it clusters on are already
+#     stamped this cycle.
+#   * cooldown_seconds = 300 — the upsert is idempotent + forward-progressing.
+
+identity:
+  id: situation_clustering
+  name: Situation Clustering
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: situation_clustering
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared finding pool. The handler pulls signature-stamped findings
+  # directly via deps.pg_pool (it ignores the materialized input slice).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: situation_clustering
+  # Deterministic kind: no LLM block, no token budget — pure Python over the
+  # analyst_outputs / situations substrate.
+
+cadence:
+  fallback_schedule: "5-59/20 * * * *"
+  cooldown_seconds: 300
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND writes a
+# per-run summary finding; the situation rows themselves land directly in the
+# `situations` table.
+outputs: []

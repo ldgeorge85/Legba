@@ -1,0 +1,53 @@
+# P-11 — media_processing action pack (PIVOT §4.8 seed pack).
+#
+# Grants the on-demand media-extraction tool `process_media`, wired to the W2
+# job plane (legba.runtime.jobs). An analyst that GRANTS this pack — and whose
+# target ALLOWS it, where the pack is APPLICABLE (a `media` scope tag) — may
+# enqueue a process_media job: a worker transcribes/captions/OCRs the referenced
+# media and lands a DERIVED signal with lineage to the raw parent.
+#
+# Governor: caps invocations + spend so a runaway analyst can't drain the media
+# budget. Enforced by legba.data.analysts.agency.PackGovernorEnforcer over the
+# action_pack_invocations ledger (migration 0025) + the global token envelope.
+#
+# Registered via scripts/bringup_register_action_packs.py or the registry REST
+# API. `version` is stamped with the content hash at register time.
+
+identity:
+  id: media_processing
+  name: Media Processing
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: p11_agency
+  created: "2026-06-03T00:00:00Z"
+
+tools:
+  - name: process_media
+    # async_job → the tool enqueues onto the NATS work-queue; the worker pool
+    # runs the extraction. The handler is legba...agency.tools.process_media_tool.
+    async_job: true
+    config:
+      # Per-call cost estimate the governor bills against max_cost_usd_per_day.
+      cost_usd_per_call: 0.02
+
+prompt_fragments:
+  - >-
+    When a signal references media you cannot read directly (audio, video,
+    image, scanned document), call process_media(media_ref, extraction,
+    derived_from) and reason over the DERIVED text signal it produces.
+
+rules:
+  - "Only process media that a subscribed signal already references; never fetch arbitrary URLs."
+
+# Applicability: relevant to targets whose scope carries a `media` tag.
+applies_to_tags:
+  - media
+
+# Per-pack governor — rate + spend caps.
+governor:
+  budget_account: media_processing
+  max_invocations_per_hour: 200
+  api_rate_per_minute: 30
+  max_cost_usd_per_day: 10.0

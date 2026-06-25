@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Seed data for Legba — verified world knowledge as of March 2026.
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Seed data for Legba — verified world knowledge as of April 2026.
 
 Populates a fresh database with entity profiles, facts, situations,
 watchlist items, and goals so the agent starts with a functional world model.
@@ -72,6 +74,121 @@ COUNTRIES = [
     "Luxembourg", "Malta", "Cyprus",
 ]
 
+# Capital city coordinates (lat, lon) for geo-tagging country entities
+COUNTRY_GEO = {
+    # G7
+    "United States": (38.8951, -77.0364),          # Washington DC
+    "United Kingdom": (51.5074, -0.1278),           # London
+    "France": (48.8566, 2.3522),                    # Paris
+    "Germany": (52.5200, 13.4050),                  # Berlin
+    "Italy": (41.9028, 12.4964),                    # Rome
+    "Canada": (45.4215, -75.6972),                  # Ottawa
+    "Japan": (35.6762, 139.6503),                   # Tokyo
+    # BRICS
+    "Brazil": (-15.7975, -47.8919),                 # Brasilia
+    "Russia": (55.7558, 37.6173),                   # Moscow
+    "India": (28.6139, 77.2090),                    # New Delhi
+    "China": (39.9042, 116.4074),                   # Beijing
+    "South Africa": (-25.7479, 28.2293),            # Pretoria
+    "Egypt": (30.0444, 31.2357),                    # Cairo
+    "Ethiopia": (9.0250, 38.7469),                  # Addis Ababa
+    "Iran": (35.6892, 51.3890),                     # Tehran
+    "Saudi Arabia": (24.7136, 46.6753),             # Riyadh
+    "United Arab Emirates": (24.4539, 54.3773),     # Abu Dhabi
+    "Indonesia": (-6.2088, 106.8456),               # Jakarta
+    # Europe
+    "Spain": (40.4168, -3.7038),                    # Madrid
+    "Netherlands": (52.3676, 4.9041),               # Amsterdam
+    "Sweden": (59.3293, 18.0686),                   # Stockholm
+    "Norway": (59.9139, 10.7522),                   # Oslo
+    "Finland": (60.1699, 24.9384),                  # Helsinki
+    "Poland": (52.2297, 21.0122),                   # Warsaw
+    "Switzerland": (46.9480, 7.4474),               # Bern
+    "Austria": (48.2082, 16.3738),                  # Vienna
+    "Belgium": (50.8503, 4.3517),                   # Brussels
+    "Czech Republic": (50.0755, 14.4378),           # Prague
+    "Romania": (44.4268, 26.1025),                  # Bucharest
+    "Hungary": (47.4979, 19.0402),                  # Budapest
+    "Greece": (37.9838, 23.7275),                   # Athens
+    "Portugal": (38.7223, -9.1393),                 # Lisbon
+    "Denmark": (55.6761, 12.5683),                  # Copenhagen
+    "Ireland": (53.3498, -6.2603),                  # Dublin
+    "Ukraine": (50.4501, 30.5234),                  # Kyiv
+    # Asia-Pacific
+    "South Korea": (37.5665, 126.9780),             # Seoul
+    "North Korea": (39.0392, 125.7625),             # Pyongyang
+    "Australia": (-35.2809, 149.1300),              # Canberra
+    "New Zealand": (-41.2865, 174.7762),            # Wellington
+    "Pakistan": (33.6844, 73.0479),                 # Islamabad
+    "Bangladesh": (23.8103, 90.4125),               # Dhaka
+    "Philippines": (14.5995, 120.9842),             # Manila
+    "Thailand": (13.7563, 100.5018),                # Bangkok
+    "Vietnam": (21.0285, 105.8542),                 # Hanoi
+    "Malaysia": (3.1390, 101.6869),                 # Kuala Lumpur
+    "Singapore": (1.3521, 103.8198),                # Singapore
+    "Taiwan": (25.0330, 121.5654),                  # Taipei
+    "Myanmar": (19.7633, 96.0785),                  # Naypyidaw
+    "Afghanistan": (34.5553, 69.2075),              # Kabul
+    # Middle East
+    "Israel": (31.7683, 35.2137),                   # Jerusalem
+    "Turkey": (39.9334, 32.8597),                   # Ankara
+    "Iraq": (33.3152, 44.3661),                     # Baghdad
+    "Syria": (33.5138, 36.2765),                    # Damascus
+    "Lebanon": (33.8938, 35.5018),                  # Beirut
+    "Jordan": (31.9454, 35.9284),                   # Amman
+    "Qatar": (25.2854, 51.5310),                    # Doha
+    "Bahrain": (26.2285, 50.5860),                  # Manama
+    "Kuwait": (29.3759, 47.9774),                   # Kuwait City
+    "Oman": (23.5880, 58.3829),                     # Muscat
+    "Yemen": (15.3694, 44.1910),                    # Sanaa
+    # Africa
+    "Nigeria": (9.0579, 7.4951),                    # Abuja
+    "Kenya": (-1.2921, 36.8219),                    # Nairobi
+    "DR Congo": (-4.4419, 15.2663),                 # Kinshasa
+    "Sudan": (15.5007, 32.5599),                    # Khartoum
+    "Somalia": (2.0469, 45.3182),                   # Mogadishu
+    "Morocco": (33.9716, -6.8498),                  # Rabat
+    "Algeria": (36.7538, 3.0588),                   # Algiers
+    "Libya": (32.8872, 13.1913),                    # Tripoli
+    "Tunisia": (36.8065, 10.1815),                  # Tunis
+    "Uganda": (0.3476, 32.5825),                    # Kampala
+    # Americas
+    "Mexico": (19.4326, -99.1332),                  # Mexico City
+    "Argentina": (-34.6037, -58.3816),              # Buenos Aires
+    "Colombia": (4.7110, -74.0721),                 # Bogota
+    "Venezuela": (10.4806, -66.9036),               # Caracas
+    "Cuba": (23.1136, -82.3666),                    # Havana
+    "Chile": (-33.4489, -70.6693),                  # Santiago
+    "Peru": (-12.0464, -77.0428),                   # Lima
+    # Other
+    "Belarus": (53.9045, 27.5615),                  # Minsk
+    "Georgia": (41.7151, 44.8271),                  # Tbilisi
+    "Azerbaijan": (40.4093, 49.8671),               # Baku
+    "Armenia": (40.1792, 44.4991),                  # Yerevan
+    "Mongolia": (47.8864, 106.9057),                # Ulaanbaatar
+    "Nepal": (27.7172, 85.3240),                    # Kathmandu
+    "Bhutan": (27.4728, 89.6390),                   # Thimphu
+    "Laos": (17.9757, 102.6331),                    # Vientiane
+    "Kazakhstan": (51.1694, 71.4491),               # Astana
+    "Kyrgyzstan": (42.8746, 74.5698),               # Bishkek
+    "Tajikistan": (38.5598, 68.7740),               # Dushanbe
+    "Turkmenistan": (37.9601, 58.3261),             # Ashgabat
+    "Estonia": (59.4370, 24.7536),                  # Tallinn
+    "Latvia": (56.9496, 24.1052),                   # Riga
+    "Lithuania": (54.6872, 25.2797),                # Vilnius
+    "Slovakia": (48.1486, 17.1077),                 # Bratislava
+    "Slovenia": (46.0569, 14.5058),                 # Ljubljana
+    "Croatia": (45.8150, 15.9819),                  # Zagreb
+    "Bulgaria": (42.6977, 23.3219),                 # Sofia
+    "Montenegro": (42.4304, 19.2594),               # Podgorica
+    "North Macedonia": (41.9973, 21.4280),          # Skopje
+    "Albania": (41.3275, 19.8187),                  # Tirana
+    "Iceland": (64.1466, -21.9426),                 # Reykjavik
+    "Luxembourg": (49.6117, 6.1300),                # Luxembourg City
+    "Malta": (35.8989, 14.5146),                    # Valletta
+    "Cyprus": (35.1856, 33.3823),                   # Nicosia
+}
+
 # (name, title, country)
 LEADERS = [
     ("Donald Trump", "President", "United States"),
@@ -104,6 +221,8 @@ LEADERS = [
     ("Ahmed al-Sharaa", "Transitional Leader", "Syria"),
     ("Abdel Fattah al-Burhan", "Head of Sovereignty Council", "Sudan"),
     ("Pope Leo XIV", "Pope", "Vatican"),
+    ("Shahbaz Sharif", "Prime Minister", "Pakistan"),
+    ("Hibatullah Akhundzada", "Supreme Leader", "Afghanistan"),
 ]
 
 ORGANIZATIONS = [
@@ -505,11 +624,16 @@ GEOPOLITICAL_FACTS = [
     ("North Korea", "HostileTo", "South Korea", 0.9),
     ("South Korea", "HostileTo", "North Korea", 0.85),
     ("North Korea", "HostileTo", "United States", 0.85),
-    ("Iran", "HostileTo", "United States", 0.8),
-    ("United States", "HostileTo", "Iran", 0.8),
+    ("Iran", "HostileTo", "United States", 0.95),
+    ("United States", "HostileTo", "Iran", 0.95),
     ("Turkey", "HostileTo", "PKK", 0.95),
     ("PKK", "HostileTo", "Turkey", 0.95),
     ("RSF", "HostileTo", "Sudan", 0.9),  # RSF vs SAF
+    ("Iran", "HostileTo", "Saudi Arabia", 0.7),
+    ("Iran", "HostileTo", "United Arab Emirates", 0.7),
+    ("Iran", "HostileTo", "Bahrain", 0.7),
+    ("Iran", "HostileTo", "Kuwait", 0.65),
+    ("Israel", "ConductsMilitaryOperationsIn", "Lebanon", 0.85),
 
     # Alliances
     ("United States", "AlliedWith", "United Kingdom", 0.9),
@@ -707,13 +831,21 @@ WATERWAY_FACTS = [
     ("Strait of Malacca", "ConnectsWaterways", "Indian Ocean to Pacific Ocean", 0.99),
 ]
 
-# Key ongoing conflicts / status (as of March 2026)
+# Key ongoing conflicts / status (as of April 2026)
 CONFLICT_STATUS_FACTS = [
     ("Russia", "AtWarWith", "Ukraine", 0.95),
     ("Israel", "ConductsMilitaryOperationsIn", "Gaza", 0.95),
     ("Sudan", "InCivilWar", "true", 0.95),
     ("Myanmar", "InCivilWar", "true", 0.9),
     ("DR Congo", "InConflict", "true", 0.85),
+    ("United States", "AtWarWith", "Iran", 0.9),
+    ("Israel", "AtWarWith", "Iran", 0.9),
+    ("Pakistan", "AtWarWith", "Afghanistan", 0.85),
+    ("Strait of Hormuz", "StatusIs", "disrupted", 0.9),
+    ("Venezuela", "RegimeChange", "true", 0.9),
+    ("Israel", "ConductsMilitaryOperationsIn", "Lebanon", 0.85),
+    ("Iran", "InternalCrisis", "true", 0.9),
+    ("Haiti", "InCrisis", "true", 0.85),
 ]
 
 # Population magnitude (order of magnitude, useful for context)
@@ -763,13 +895,13 @@ SITUATIONS = [
         "intensity_score": 0.9,
     },
     {
-        "name": "Iran-Israel Conflict",
-        "description": "Escalating confrontation between Iran and Israel encompassing proxy warfare (Hezbollah, Hamas, Houthis), direct military strikes, nuclear tensions, and the broader Gaza conflict since October 2023. Major Iranian infrastructure strikes by Israel in February 2026.",
+        "name": "Iran-Israel-US War",
+        "description": "Full-scale war involving Iran, Israel, and the United States. Evolved from proxy warfare to direct US military involvement following the assassination of Supreme Leader Khamenei in Operation Epic Fury (Feb 28, 2026). Sustained US-Israeli strikes have hit 24 of 31 Iranian provinces, destroying 82,000+ civilian structures. Iran retaliated with strikes on Gulf states (Saudi Arabia, UAE, Kuwait) and attacks on 27 US bases. Strait of Hormuz disrupted with selective transit policy. Oil at $126/barrel peak. US casualties: 13 KIA, 230+ wounded. Kata'ib Hezbollah offered conditional ceasefire. Congress seeking exit plan.",
         "status": "active",
         "category": "conflict",
         "key_entities": ["Iran", "Israel", "Hamas", "Hezbollah", "Houthis", "United States", "Benjamin Netanyahu", "Mojtaba Khamenei"],
-        "regions": ["Middle East", "Iran", "Israel", "Lebanon", "Gaza", "Yemen"],
-        "tags": ["proxy-war", "nuclear", "strikes", "regional-escalation"],
+        "regions": ["Middle East", "Iran", "Israel", "Lebanon", "Gaza", "Yemen", "Persian Gulf"],
+        "tags": ["proxy-war", "nuclear", "strikes", "regional-escalation", "hormuz", "oil-crisis"],
         "intensity_score": 0.95,
     },
     {
@@ -793,14 +925,104 @@ SITUATIONS = [
         "intensity_score": 0.6,
     },
     {
-        "name": "Pakistan-Afghanistan Border Conflict",
-        "description": "Escalating tensions between Pakistan and the Taliban-governed Afghanistan over border security, TTP safe havens in Afghanistan, and cross-border militant attacks. Pakistan conducting military operations along the Durand Line.",
+        "name": "Pakistan-Afghanistan War",
+        "description": "Open war between Pakistan and Taliban-governed Afghanistan. Pakistan launched airstrikes on Kabul and Kandahar in February 2026, escalating from border skirmishes to full military operations. TTP safe havens, cross-border militant attacks, and Durand Line disputes remain central drivers.",
         "status": "active",
         "category": "conflict",
         "key_entities": ["Pakistan", "Afghanistan", "Taliban", "Balochistan Liberation Army"],
         "regions": ["South Asia", "Pakistan", "Afghanistan"],
-        "tags": ["border-conflict", "terrorism", "militant-groups"],
-        "intensity_score": 0.6,
+        "tags": ["border-conflict", "terrorism", "militant-groups", "airstrikes"],
+        "intensity_score": 0.8,
+    },
+    {
+        "name": "Myanmar Civil War",
+        "description": "Multi-front civil war between the military junta and an array of ethnic armed organizations and resistance forces. Territorial control fragmented across the country with heavy fighting in Shan, Rakhine, and Sagaing regions.",
+        "status": "active",
+        "category": "conflict",
+        "key_entities": ["Myanmar"],
+        "regions": ["Southeast Asia", "Myanmar"],
+        "tags": ["civil-war", "ethnic-conflict", "military-junta"],
+        "intensity_score": 0.8,
+    },
+    {
+        "name": "Iran Internal Crisis",
+        "description": "Severe political instability inside Iran following the assassination of Supreme Leader Khamenei and sustained US-Israeli military strikes. Regime cohesion under extreme stress, succession uncertainty, and growing domestic unrest.",
+        "status": "active",
+        "category": "political",
+        "key_entities": ["Iran", "Mojtaba Khamenei", "Masoud Pezeshkian"],
+        "regions": ["Middle East", "Iran"],
+        "tags": ["regime-stability", "succession", "unrest"],
+        "intensity_score": 0.85,
+    },
+    {
+        "name": "US Global Trade War",
+        "description": "Broad trade war driven by US tariff escalation against China, the EU, and other trading partners. Retaliatory tariffs, supply chain disruption, and economic decoupling accelerating across multiple sectors.",
+        "status": "active",
+        "category": "economic",
+        "key_entities": ["United States", "China", "European Union", "Donald Trump"],
+        "regions": ["Global"],
+        "tags": ["tariffs", "trade-war", "sanctions", "decoupling"],
+        "intensity_score": 0.7,
+    },
+    {
+        "name": "Venezuela Political Transition",
+        "description": "Political transition in Venezuela following regime change. Uncertain governance trajectory, international recognition dynamics, and economic reconstruction challenges.",
+        "status": "active",
+        "category": "political",
+        "key_entities": ["Venezuela"],
+        "regions": ["South America", "Venezuela"],
+        "tags": ["regime-change", "political-transition", "governance"],
+        "intensity_score": 0.7,
+    },
+    {
+        "name": "Strait of Hormuz Crisis",
+        "description": "Disruption of maritime traffic through the Strait of Hormuz linked to the Iran-Israel-US war. Iran announced selective transit policy in March 2026 -- passage allowed for non-belligerent nations (Japan, China, India, Pakistan) but closed to 'enemy' shipping. IEA called it the largest supply disruption in global oil market history (~10M bpd Gulf production cuts). Brent surged to $126/barrel. Ras Laffan (Qatar, world's largest LNG facility) struck by Iranian missiles. Saudi refineries also hit.",
+        "status": "active",
+        "category": "economic",
+        "key_entities": ["Iran", "United States", "Saudi Arabia", "Qatar", "Strait of Hormuz"],
+        "regions": ["Persian Gulf", "Middle East"],
+        "tags": ["maritime", "oil-transit", "disruption", "chokepoint", "energy-crisis"],
+        "intensity_score": 0.9,
+    },
+    {
+        "name": "Ukraine-Russia Ceasefire Stalemate",
+        "description": "Trilateral ceasefire talks (US/Ukraine/Russia) paused due to Iran war as of March 2026. Russian territorial gains at 20-month low. Ukraine recovered 244 sq km in southern Ukraine since January 2026. 500 POWs exchanged. Kremlin confirmed talks 'on pause.' Zelenskyy stated Russia 'does not want to move towards peace.'",
+        "status": "active",
+        "category": "political",
+        "key_entities": ["Russia", "Ukraine", "United States", "Volodymyr Zelenskyy", "Vladimir Putin"],
+        "regions": ["Eastern Europe", "Ukraine", "Russia"],
+        "tags": ["ceasefire", "diplomacy", "stalemate"],
+        "intensity_score": 0.7,
+    },
+    {
+        "name": "Iran Black Rain Environmental Crisis",
+        "description": "Toxic 'black rain' phenomenon across multiple Iranian provinces starting mid-March 2026, likely caused by toxic aerosols from damaged oil/petrochemical facilities from airstrikes. Marine pollution along Gulf coast. Respiratory illness surge. WHO issued respiratory advisory for Iran. Environmental groups describe it as 'environmental disaster of the Iran war.'",
+        "status": "active",
+        "category": "environment",
+        "key_entities": ["Iran"],
+        "regions": ["Middle East", "Iran", "Persian Gulf"],
+        "tags": ["environmental-disaster", "pollution", "health-crisis", "black-rain"],
+        "intensity_score": 0.75,
+    },
+    {
+        "name": "South China Sea Escalation",
+        "description": "China's land reclamation at Antelope Reef (Paracels) condemned by Vietnam. Preliminary airstrip construction and 50+ structures. Chinese forces confronting Filipino fishing boats near Scarborough Shoal with 6 CCG vessels, 20 militia ships, and 1 PLA Navy warship. Floating barrier deployed at Scarborough Shoal in Dec 2025.",
+        "status": "active",
+        "category": "conflict",
+        "key_entities": ["China", "Philippines", "Vietnam", "United States"],
+        "regions": ["Southeast Asia", "South China Sea", "Indo-Pacific"],
+        "tags": ["territorial-dispute", "maritime", "military-buildup", "land-reclamation"],
+        "intensity_score": 0.65,
+    },
+    {
+        "name": "Global Energy Crisis (Iran War Spillover)",
+        "description": "Largest oil supply disruption in history triggered by Iran-Israel-US war. ~10M bpd Gulf production cuts. Brent peaked at $126/barrel. Saudi and Qatari energy infrastructure struck by Iranian missiles. S&P 500 fell ~4.55% in three weeks. India's industry disrupted by gas supply shortages. Russia offering additional oil/gas to Europe. US lifting some Iran oil sanctions under energy pressure.",
+        "status": "active",
+        "category": "economic",
+        "key_entities": ["Iran", "Saudi Arabia", "Qatar", "United States", "OPEC"],
+        "regions": ["Global", "Persian Gulf", "Middle East"],
+        "tags": ["energy-crisis", "oil-price", "supply-disruption", "economic-impact"],
+        "intensity_score": 0.85,
     },
 ]
 
@@ -812,7 +1034,7 @@ SITUATIONS = [
 WATCHLIST_ITEMS = [
     {
         "name": "Strait of Hormuz Closure/Blockade",
-        "description": "Monitor for any closure, blockade, or severe disruption of shipping through the Strait of Hormuz. Would impact ~20% of global oil transit.",
+        "description": "Strait of Hormuz is currently disrupted due to Iran-Israel-US conflict. Monitor for full closure, blockade escalation, mine-clearing operations, and impact on ~20% of global oil transit.",
         "entities": ["Iran", "United States", "Saudi Arabia", "Strait of Hormuz"],
         "keywords": ["Hormuz", "strait closure", "oil blockade", "naval blockade", "shipping disruption", "mine laying"],
         "categories": ["conflict", "economic"],
@@ -882,6 +1104,78 @@ WATCHLIST_ITEMS = [
         "regions": ["Middle East", "Sahel", "Central Asia"],
         "priority": "normal",
     },
+    {
+        "name": "Iran Regime Stability",
+        "description": "Monitor internal stability of the Iranian regime following Khamenei assassination and sustained military strikes. Track succession dynamics, IRGC cohesion, public unrest, and government continuity.",
+        "entities": ["Iran", "Mojtaba Khamenei", "Masoud Pezeshkian"],
+        "keywords": ["Iran regime", "succession", "IRGC", "supreme leader", "unrest", "stability", "Iran collapse"],
+        "categories": ["political", "conflict"],
+        "regions": ["Middle East", "Iran"],
+        "priority": "critical",
+    },
+    {
+        "name": "Pakistan-Afghanistan War Escalation",
+        "description": "Monitor escalation of Pakistan-Afghanistan war including further airstrikes, ground incursions, refugee flows, and nuclear risk from destabilization of a nuclear-armed state.",
+        "entities": ["Pakistan", "Afghanistan", "Taliban", "Balochistan Liberation Army"],
+        "keywords": ["Pakistan airstrikes", "Kabul", "Kandahar", "Durand Line", "TTP", "Pakistan-Afghanistan war", "escalation"],
+        "categories": ["conflict"],
+        "regions": ["South Asia", "Pakistan", "Afghanistan"],
+        "priority": "high",
+    },
+    {
+        "name": "US-China Trade Tensions",
+        "description": "Track escalation or de-escalation of US-China trade tensions including tariff actions, export controls, supply chain shifts, and retaliatory measures.",
+        "entities": ["United States", "China", "Donald Trump", "Xi Jinping"],
+        "keywords": ["tariff", "trade war", "export controls", "decoupling", "semiconductor", "rare earth", "retaliation"],
+        "categories": ["economic", "political"],
+        "regions": ["Global", "East Asia", "North America"],
+        "priority": "high",
+    },
+    {
+        "name": "Venezuela Political Stability",
+        "description": "Monitor political transition in Venezuela following regime change. Track governance formation, international recognition, economic recovery, and potential for counter-revolution or instability.",
+        "entities": ["Venezuela"],
+        "keywords": ["Venezuela", "regime change", "transition", "governance", "recognition", "Maduro", "opposition"],
+        "categories": ["political"],
+        "regions": ["South America", "Venezuela"],
+        "priority": "normal",
+    },
+    {
+        "name": "Iran Black Rain / Environmental Contamination",
+        "description": "Monitor reports of toxic rainfall, atmospheric contamination, and environmental health impacts in Iran linked to damage from airstrikes on petrochemical facilities. Track lab analyses, WHO advisories, and marine pollution reports.",
+        "entities": ["Iran"],
+        "keywords": ["black rain", "toxic rain", "environmental contamination", "petrochemical", "respiratory", "pollution", "marine contamination"],
+        "categories": ["environment", "health"],
+        "regions": ["Middle East", "Iran", "Persian Gulf"],
+        "priority": "high",
+    },
+    {
+        "name": "Iran War Ceasefire/Exit Signals",
+        "description": "Monitor for ceasefire offers, exit plans, congressional actions, or diplomatic back-channels related to ending the Iran-Israel-US war. Track Kata'ib Hezbollah conditional ceasefire and congressional budget debates.",
+        "entities": ["Iran", "United States", "Israel"],
+        "keywords": ["ceasefire", "exit plan", "peace deal", "conditional ceasefire", "congressional", "war powers", "de-escalation"],
+        "categories": ["conflict", "political"],
+        "regions": ["Middle East", "North America"],
+        "priority": "critical",
+    },
+    {
+        "name": "Gulf Energy Infrastructure Attacks",
+        "description": "Monitor attacks on energy infrastructure in the Persian Gulf region, including Saudi refineries, Qatari LNG facilities, and oil shipping. Track operational status of Ras Laffan and major refinery complexes.",
+        "entities": ["Iran", "Saudi Arabia", "Qatar", "United Arab Emirates", "Kuwait"],
+        "keywords": ["refinery attack", "LNG facility", "Ras Laffan", "oil infrastructure", "pipeline", "energy attack", "Aramco"],
+        "categories": ["conflict", "economic"],
+        "regions": ["Persian Gulf", "Middle East"],
+        "priority": "critical",
+    },
+    {
+        "name": "South China Sea Land Reclamation",
+        "description": "Monitor Chinese military construction and land reclamation activities in disputed South China Sea features, particularly Antelope Reef airstrip construction and Scarborough Shoal barrier.",
+        "entities": ["China", "Philippines", "Vietnam"],
+        "keywords": ["land reclamation", "airstrip", "Scarborough Shoal", "Antelope Reef", "Paracels", "Spratlys", "artificial island"],
+        "categories": ["conflict", "political"],
+        "regions": ["Southeast Asia", "South China Sea"],
+        "priority": "high",
+    },
 ]
 
 
@@ -911,7 +1205,7 @@ GOALS = [
         ],
     },
     {
-        "description": "Track and profile key actors in Iran-Israel conflict",
+        "description": "Track and profile key actors in Iran-Israel-US conflict",
         "priority": 2,
         "success_criteria": [
             "Entity profiles for all key state and non-state actors",
@@ -921,7 +1215,7 @@ GOALS = [
         ],
     },
     {
-        "description": "Monitor humanitarian crises (Sudan, Gaza, Yemen)",
+        "description": "Monitor humanitarian crises (Sudan, Gaza, Yemen, Iran)",
         "priority": 3,
         "success_criteria": [
             "Situation tracking active for each crisis",
@@ -954,7 +1248,7 @@ async def seed_entities(conn: asyncpg.Connection) -> int:
     # Countries
     for name in COUNTRIES:
         eid = uuid4()
-        data = json.dumps({
+        country_data = {
             "id": str(eid),
             "name": name,
             "entity_type": "country",
@@ -962,11 +1256,16 @@ async def seed_entities(conn: asyncpg.Connection) -> int:
             "assertions": {},
             "tags": ["seed"],
             "completeness_score": 0.5,
-        })
+        }
+        geo = COUNTRY_GEO.get(name)
+        if geo:
+            country_data["geo_lat"] = geo[0]
+            country_data["geo_lon"] = geo[1]
+        data = json.dumps(country_data)
         result = await conn.execute(
-            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, completeness_score, created_at, updated_at)
-               VALUES ($1, $2::jsonb, $3, 'country', 0.5, $4, $4)
-               ON CONFLICT (LOWER(canonical_name)) DO NOTHING""",
+            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, entity_class, completeness_score, created_at, updated_at)
+               VALUES ($1, $2::jsonb, $3, 'country', 'country', 0.5, $4, $4)
+               ON CONFLICT (LOWER(canonical_name), entity_class) DO NOTHING""",
             eid, data, name, NOW,
         )
         if "INSERT 0 1" in result:
@@ -988,9 +1287,9 @@ async def seed_entities(conn: asyncpg.Connection) -> int:
             "completeness_score": 0.4,
         })
         result = await conn.execute(
-            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, completeness_score, created_at, updated_at)
-               VALUES ($1, $2::jsonb, $3, 'person', 0.4, $4, $4)
-               ON CONFLICT (LOWER(canonical_name)) DO NOTHING""",
+            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, entity_class, completeness_score, created_at, updated_at)
+               VALUES ($1, $2::jsonb, $3, 'person', 'person', 0.4, $4, $4)
+               ON CONFLICT (LOWER(canonical_name), entity_class) DO NOTHING""",
             eid, data, name, NOW,
         )
         if "INSERT 0 1" in result:
@@ -1009,9 +1308,9 @@ async def seed_entities(conn: asyncpg.Connection) -> int:
             "completeness_score": 0.3,
         })
         result = await conn.execute(
-            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, completeness_score, created_at, updated_at)
-               VALUES ($1, $2::jsonb, $3, 'organization', 0.3, $4, $4)
-               ON CONFLICT (LOWER(canonical_name)) DO NOTHING""",
+            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, entity_class, completeness_score, created_at, updated_at)
+               VALUES ($1, $2::jsonb, $3, 'organization', 'organization', 0.3, $4, $4)
+               ON CONFLICT (LOWER(canonical_name), entity_class) DO NOTHING""",
             eid, data, name, NOW,
         )
         if "INSERT 0 1" in result:
@@ -1042,9 +1341,9 @@ async def seed_entities(conn: asyncpg.Connection) -> int:
             "completeness_score": 0.3,
         })
         result = await conn.execute(
-            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, completeness_score, created_at, updated_at)
-               VALUES ($1, $2::jsonb, $3, 'armed_group', 0.3, $4, $4)
-               ON CONFLICT (LOWER(canonical_name)) DO NOTHING""",
+            """INSERT INTO entity_profiles (id, data, canonical_name, entity_type, entity_class, completeness_score, created_at, updated_at)
+               VALUES ($1, $2::jsonb, $3, 'armed_group', 'armed_group', 0.3, $4, $4)
+               ON CONFLICT (LOWER(canonical_name), entity_class) DO NOTHING""",
             eid, data, name, NOW,
         )
         if "INSERT 0 1" in result:
@@ -1084,14 +1383,17 @@ async def seed_facts(conn: asyncpg.Connection) -> int:
             "source_cycle": 0,
             "source": "seed_data",
         })
-        result = await conn.execute(
-            """INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at)
-               VALUES ($1, $2, $3, $4, $5, 0, $6::jsonb, $7)
-               ON CONFLICT (lower(subject), lower(predicate), lower(value)) DO NOTHING""",
-            fid, subject, predicate, str(value), confidence, data, NOW,
-        )
-        if "INSERT 0 1" in result:
-            count += 1
+        try:
+            result = await conn.execute(
+                """INSERT INTO facts (id, subject, predicate, value, confidence, source_cycle, data, created_at)
+                   VALUES ($1, $2, $3, $4, $5, 0, $6::jsonb, $7)
+                   ON CONFLICT (id) DO NOTHING""",
+                fid, subject, predicate, str(value), confidence, data, NOW,
+            )
+            if "INSERT 0 1" in result:
+                count += 1
+        except Exception:
+            pass  # Skip duplicates from existing seed dump
 
     return count
 
@@ -1242,34 +1544,22 @@ async def main():
         n = await seed_facts(conn)
         print(f"  -> {n} facts seeded")
 
-        print("Seeding situations...")
-        n = await seed_situations(conn)
-        print(f"  -> {n} situations seeded")
-
-        print("Seeding watchlist items...")
-        n = await seed_watchlist(conn)
-        print(f"  -> {n} watchlist items seeded")
-
-        print("Seeding goals...")
-        n = await seed_goals(conn)
-        print(f"  -> {n} goals seeded")
+        # NOTE: Situations, watchlist, hypotheses, and goals are NOT seeded.
+        # These are reasoning-derived analytical products that the agent creates
+        # through its own analysis of events and the mission. The seed is a
+        # knowledge package (entities, facts, sources), not operational state.
 
         # Summary counts
         entity_count = await conn.fetchval("SELECT count(*) FROM entity_profiles")
         fact_count = await conn.fetchval("SELECT count(*) FROM facts")
-        situation_count = await conn.fetchval("SELECT count(*) FROM situations")
-        watch_count = await conn.fetchval("SELECT count(*) FROM watchlist")
-        goal_count = await conn.fetchval("SELECT count(*) FROM goals")
 
         print()
         print("=== Database totals ===")
         print(f"  Entity profiles: {entity_count}")
         print(f"  Facts:           {fact_count}")
-        print(f"  Situations:      {situation_count}")
-        print(f"  Watchlist items: {watch_count}")
-        print(f"  Goals:           {goal_count}")
         print()
-        print("Seed data complete.")
+        print("Seed data complete. Agent will derive situations, watchlist,")
+        print("goals, and hypotheses from the mission and incoming data.")
 
     finally:
         await conn.close()

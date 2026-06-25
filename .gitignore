@@ -26,11 +26,24 @@ feedback.md
 curl_*.json
 journal_*.txt
 report_cycle*.md
-
-# Caddy (contains domain/credentials)
-docker/Caddyfile
+mlflow.db
+mlruns/
 
 # IDE / tools
 .claude/
 .vscode/
 .idea/
+
+# Working/planning docs archive
+docs/archive/
+docs/feedback/
+
+# OP-1 + OP-2 secrets (per ops 2026-05-29)
+.legba_signing_key
+.legba_bearer_token
+
+# UI v4 self-hosted basemap (large; operator-provided)
+deploy/tiles/*.pmtiles
+
+# Internal planning / tracking docs — NOT part of the release.
+planning/

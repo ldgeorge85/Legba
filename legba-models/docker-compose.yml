@@ -9,6 +9,9 @@ services:
       - NVIDIA_VISIBLE_DEVICES=0
       - HF_HOME=/data/hf-cache
       - TRANSFORMERS_CACHE=/data/hf-cache
+      # Optional defense-in-depth shared secret (see .env.example). Unset =
+      # no in-app auth (service is already network-internal-only + caddy-fronted).
+      - LEGBA_MODELS_API_SECRET=${LEGBA_MODELS_API_SECRET:-}
     deploy:
       resources:
         reservations:

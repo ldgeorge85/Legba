@@ -1,0 +1,22 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: legba-runtime-config
+spec:
+  # Dapr actor + tracing configuration (per legba_runtime_spec.md §9.2).
+  # `actorReentrancy` disabled — single-activation per descriptor. Idle
+  # eviction at 30 min, scan every 5 min.
+  tracing:
+    samplingRate: "1.0"
+    zipkin:
+      endpointAddress: ""
+  features:
+    - name: Actor.Reentrancy
+      enabled: false
+  metric:
+    enabled: true
+  actor:
+    actorIdleTimeout: "30m"
+    actorScanInterval: "5m"
+    drainOngoingCallTimeout: "60s"
+    drainRebalancedActors: true

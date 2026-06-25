@@ -1,0 +1,74 @@
+# P-17 — new-model consult_on_demand analyst: consult_default.
+#
+# Fresh re-register of the consult analyst on the source-first model.  Distinct
+# from the legacy descriptors/analyst_legba_consult.yaml (which carries the
+# RETIRED `tools_whitelist`) — this one uses `action_packs` for agency.
+#
+# kind: consult_on_demand.  method.kind: react_loop.  On-demand only (no
+# cadence) — invoked via the A2A skill consult.legba_p17 or the MCP tool
+# legba_consult_p17.  The kind handler queries through deps.substrate
+# (search_signals / query_facts / inspect_entity / vector_search) — those are
+# the kind's BUILT-IN read tools, no longer a descriptor-level tools_whitelist
+# (that surface is RETIRED in the pivot).
+
+identity:
+  id: consult_default
+  name: Legba Consult (P-17 source-first)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: consult_on_demand
+  type_signature:
+    input_type: legba.runtime.ConsultQuestion
+    output_type: legba.runtime.ConsultResponse
+  state: active
+  owner: p17_reregister
+
+subscription:
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: react_loop
+  prompt_module: legba.prompts.consult_on_demand.v1
+  llm:
+    # 2026-06-22: consult runs on the Anthropic plane (operator: consult +
+    # deep_consult are the ONLY Anthropic users; everything else, incl. the
+    # critic, is on the core plane). max_tokens IS sent + enforced here
+    # (Anthropic requires it) — unlike the core plane, which serves its own
+    # output budget. TO REVERT to the core plane: set raw back to
+    # llm.primary.openai_compat.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.anthropic.opus_4_7
+      expected_family: llm_provider
+    max_tokens: 16384
+  # Opus 4.7 plane (above). 1M/day throttled the daily driver after ~5 broad
+  # consults (~150-250k tokens each across 10 rounds); raised to 5M for headroom
+  # (the wall-clock loop budget also trims per-consult usage). Tune to taste —
+  # this is a real Opus cost ceiling.
+  budget_tokens_per_day: 5000000
+
+cadence:
+  # On-demand only — no fallback_schedule.  A per-actor cooldown floor serves
+  # cadence-driven runs; an interactive operator consult (chat + deep) is gated
+  # by operator actions + the daily token budget, so the floor is 0 — a non-zero
+  # floor 502s rapid chat turns (Piece 1 live-proof, 2026-06-15).
+  cooldown_seconds: 0
+
+# Agency grant — the substrate_read pack (A-3a): every consult tool call
+# is resolved + governed + ledgered through the agency plane.
+action_packs:
+  - pack_id: substrate_read
+
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: consult.legba_p17
+  - kind: mcp_tool
+    config:
+      tool_name: legba_consult_p17
+      mode: consult_on_demand

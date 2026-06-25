@@ -1,0 +1,74 @@
+# Integrity Sweep analyst descriptor (DIRECTION §9).
+#
+# The events-free successor to the pre-pivot `integrity_verification` handler
+# (deleted in review 2.4 because its first check anchored on the dropped `events`
+# table, aborted the whole sweep, and emitted a zeroed "no issues" finding —
+# fake success). This re-homes ONLY the checks that run against live pivot-era
+# tables (signal_entity_links, proposed_edges, facts, analyst_outputs) and
+# REFUSES LOUD: a missing relation propagates rather than zeroing.
+#
+# A first-class `deterministic`-kind analyst over the SHARED substrate. Read-only
+# audit: it COUNTS referential drift and emits one summary finding per run; it
+# does NO destructive repair.
+#
+# Target-agnostic + META: integrity is an observation-level property of the whole
+# substrate, not a per-target interpretation. The subscription declares NO
+# `targets` selector, so the cadence heartbeat is a SINGLE global run (not a
+# per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets. The
+# handler runs its checks directly via deps.pg_pool (it ignores the materialized
+# input slice / time window).
+#
+# Method:
+#   * kind = deterministic — pure SQL, NO LLM, token usage always zero.
+#   * impl = the deterministic kind dispatcher module:run_method, which routes by
+#     `options.sub_handler`. The runtime injects `sub_handler: integrity_sweep`
+#     at fire time (it reads `descriptor.method.sub_handler`, falling back to
+#     `identity.id`). We set it explicitly AND keep the id equal to the
+#     sub-handler name so either path resolves it.
+#
+# Cadence:
+#   * fallback_schedule = "41 */1 * * *" — hourly at :41 (offset from the other
+#     deterministic sweeps; integrity drift is slow, so hourly is ample).
+#   * cooldown_seconds = 600 — 10-min floor (the sweep is idempotent, read-only).
+#
+# Registered via scripts/bringup_register_integrity_sweep.py or the registry REST
+# API — NOT inline through a test fixture.
+
+identity:
+  id: integrity_sweep
+  name: Integrity Sweep
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: integrity_sweep
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole substrate. The handler runs its checks directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: integrity_sweep
+  # Deterministic kinds carry no LLM block and no per-day token budget — the
+  # whole run is pure SQL over the live substrate.
+
+cadence:
+  fallback_schedule: "41 */1 * * *"
+  cooldown_seconds: 600
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND
+# (FindingPayload -> findings table) writes the per-run integrity summary.
+outputs: []

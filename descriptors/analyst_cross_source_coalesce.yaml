@@ -1,0 +1,80 @@
+# Cross-source semantic/temporal coalesce analyst (review P2 data-integrity:
+# "cross-source semantic/temporal coalescing not built").
+#
+# A `deterministic`-kind META analyst — substrate-wide, deterministic, NO LLM.
+# Distinct from the ingest-time Dedupe4TierHandler (which runs per target / per
+# source) and from `cross_source_dedup` (pool-wide but exact content_hash only):
+# THIS handler embeds recent canonical signals across ALL sources into a SHARED
+# Qdrant collection (`legba_coalesce`) and links near-duplicate signals reporting
+# the SAME real-world event from DIFFERENT sources, reusing the dedupe filter's
+# tier-3 (cosine) + tier-4 (temporal window + title Levenshtein) logic. It LINKS,
+# never collapses — every source observation stays audit-grade (P-02
+# link-never-collapse), tied to a deterministic canonical via `signal_aliases`
+# (reason = 'cross_source_coalesce') + the alias's `canonical_signal_id` pointer.
+#
+# OFF-BY-DEFAULT (mirrors the signals_retention precedent — a registered
+# deterministic analyst whose handler defaults to a no-op until an operator opts
+# in via the per-run trigger options channel). Two gates:
+#   1. NOT in the default bringup set (an operator registers this file to opt in).
+#   2. The handler's `enabled` option defaults False — even registered + firing on
+#      cadence it no-ops until an operator fires it with run options
+#      `{"enabled": true, ...}` (the same `payload.options` pass-through that
+#      `dapr_actors._run` merges into the deterministic run, exactly how
+#      `signals_retention` takes its `ttl_days`). The defaults below (window_hours
+#      24, semantic_threshold 0.92, title_distance_threshold 0.35,
+#      qdrant_collection legba_coalesce, max_signals 2000) are the handler
+#      built-ins; override any via the same run-options channel.
+#
+# Degrade-not-drop: needs BOTH an embedding service AND a Qdrant client (threaded
+# via deps.extras). When either is missing it emits a finding flagged
+# `coalesce_unavailable` naming the missing port and writes NOTHING — never a
+# fabricated link. The unwired-deps path is declared SEAM #19 (docs/SEAMS.md).
+#
+# Cadence: low — every 6h. The embed cost is linear in the unaliased window, so
+# this is a periodic background sweep, not a hot-path analyst.
+
+identity:
+  id: cross_source_coalesce
+  name: Cross-Source Coalesce
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: cross_source_coalesce
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared signal pool. The handler pulls the recent un-aliased window
+  # directly via deps.pg_pool (it ignores the materialized input slice).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: cross_source_coalesce
+  # Deterministic kind: no LLM block, no token budget — pure Python + the shared
+  # embedding service / Qdrant client (threaded via deps.extras). Handler options
+  # (enabled / window_hours / semantic_threshold / title_distance_threshold /
+  # qdrant_collection / max_signals) flow through the per-run trigger options
+  # channel, NOT a descriptor `method.options` block (the AnalystMethod schema
+  # forbids extra fields). `enabled` defaults False — see the header note.
+
+cadence:
+  # Every 6h — a low-frequency background coalesce sweep.
+  fallback_schedule: "17 */6 * * *"
+  cooldown_seconds: 3600
+
+# No extra output sinks: the deterministic kind's per-run summary FindingPayload
+# records coalesced_sets / aliases_linked; the alias links land directly in
+# `signal_aliases` + the `signals.canonical_signal_id` column.
+outputs: []

@@ -1,0 +1,35 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: legba-actor-pubsub
+spec:
+  # Dapr NATS JetStream pubsub component. Actor mailboxes for the runtime
+  # subscribe via JetStream durable consumers so messages survive idle
+  # eviction (per legba_runtime_spec.md §2.3).
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - name: natsURL
+      value: "nats://nats:4222"
+    - name: name
+      value: "legba-runtime"
+    - name: jwt
+      value: ""
+    - name: seedKey
+      value: ""
+    - name: tls_client_cert
+      value: ""
+    - name: tls_client_key
+      value: ""
+    # B-1: NATS token authorization. Resolved from the local.env secret
+    # store (secretstore.yaml) — the daprd sidecar carries LEGBA_NATS_TOKEN
+    # via docker-compose (env_file: .env + an explicit `environment:` default
+    # so the key always exists). Empty token = unauthenticated (pre-cutover).
+    - name: token
+      secretKeyRef:
+        name: LEGBA_NATS_TOKEN
+        key: LEGBA_NATS_TOKEN
+    - name: streamName
+      value: "LEGBA_ACTORS"
+auth:
+  secretStore: legba-env-secrets

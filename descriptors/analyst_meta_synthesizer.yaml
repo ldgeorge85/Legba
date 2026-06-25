@@ -1,0 +1,77 @@
+# meta_findings_synthesizer — second-order synthesis over the first-order analysts.
+#
+# Reads country_assessor + world_assessor FINDINGS (subscription.other_analysts)
+# and emits ONE second-order finding per cadence tick: the convergent claim, the
+# contradiction, or the emergent narrative visible only across both analysts.
+# META analyst: no subscription.targets => single global run per tick (the
+# situation_clustering precedent), target_filter=None.
+#
+# Lights anchor altitude-2 (analysis-of-analysis). Kind is BUILT
+# (meta_findings_synthesizer.py); this descriptor + the Piece-3 Task-A
+# read-slice fix (subscription.other_analysts[].id resolution) are what make it
+# produce rows. Before Task A the READ_SLICE resolved the source-analyst set
+# from subscription.targets.id_list — a field that does not exist — so the synth
+# silently NOOPed; this descriptor would have produced 0 rows on its own.
+
+identity:
+  id: meta_synthesizer
+  name: Cross-Analyst Meta-Synthesizer (G20 + World)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: meta_findings_synthesizer
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: release_meta_activation
+
+subscription:
+  # No `targets` block => META analyst (single global run; _cadence_targets
+  # returns None at dapr_actors.py "meta analyst — global cadence"). The synth
+  # reads the OUTPUTS of these analysts, not raw signals — resolved by the
+  # kind's READ_SLICE from other_analysts[].id (Piece 3, Task A).
+  other_analysts:
+    - id: country_assessor
+      data_types: [finding]
+      time_window: 24h
+    - id: world_assessor
+      data_types: [finding]
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # method.kind is a constrained Literal (NOT free text): one of llm_planner /
+  # llm_single_turn / deterministic / hybrid / react_loop / stat_forecaster /
+  # critic / dspy_compile. Runtime dispatch is on identity.kind
+  # (meta_findings_synthesizer), so method.kind only needs to be a valid enum;
+  # llm_planner matches the single-turn chat_complete shape the kind uses (same
+  # as country_assessor / world_assessor).
+  kind: llm_planner
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Twice daily, OFFSET after the assessors so the latest first-order findings
+  # are present. country_assessor runs "0 */6 * * *"; world_assessor likewise.
+  # Run at :30 so a fresh assessor sweep has landed.
+  fallback_schedule: "30 */12 * * *"
+  # One global run/tick; cooldown below the 12h interval (stamped at completion;
+  # see the dapr_actors cadence-cooldown slack note in analyst_country_assessor.yaml).
+  cooldown_seconds: 39600        # 11h
+
+outputs: []

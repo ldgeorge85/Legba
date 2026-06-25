@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Phase 5c — the first THEMATIC target: a situation FRAME, not a place.
+# Demonstrates "a target predicate CAN be 'iran war'": a non-geo target whose
+# scope.predicate (free-text contains_any) focuses the analyst slice on the
+# US–Iran war signals that no single G20 country target captures. The slice
+# reader (dapr_actors._read_substrate_slice) applies scope.predicate for
+# thematic targets (geo is no longer the only slice discriminator).
+identity:
+  id: situation_iran_war
+  name: "Situation — US–Iran War"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"
+  abstraction_level: L1
+  inherits: []
+  state: active
+  owner: phase5c
+  created: "2026-06-20T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [iran, war, conflict, military]
+  geo: []                       # non-geo frame — the predicate does the matching
+  entity_classes: [country, organization, person, location, event]
+  relationship_types: [HostileTo, AlliedWith, SanctionsAgainst, MilitaryPresenceIn, SuppliesWeaponsTo]
+  time_horizon_days: 90
+  # The frame: signals that mention Iran AND a conflict term. Free-text because
+  # the live NER entity_classes are coarse (person/location/org) and severity is
+  # unpopulated — text is the only reliable thematic lever today.
+  predicate: >-
+    contains_any(["iran", "tehran", "khamenei", "irgc", "revolutionary guard"])
+    and contains_any(["war", "strike", "missile", "attack", "military",
+                      "conflict", "drone", "retaliation", "ceasefire", "nuclear"])
+  tags: [thematic, situation, iran, conflict]
+
+# Broad news selector; the scope.predicate (applied at slice time) does the
+# narrowing, so the subscription predicate is permissive.
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+# ONE inline analyst on this thematic target — same inline_target assessor the
+# G20 country targets carry, now reading the iran-war-focused slice.
+analyst:
+  use: inline_target
+  cadence:
+    fallback_schedule: "*/15 * * * *"
+  method:
+    kind: llm_planner
+    prompt_module: legba.runtime.analyst_method:_DEFAULT_SYSTEM
+    budget_tokens_per_day: 200000
+    llm:
+      primary:
+        factory_kind: stack_ref
+        raw: llm.primary.openai_compat
+        expected_family: llm_provider
+  grounding:
+    enabled: true
+    scope: [target_geo, slice_entities]
+    sources: [substrate, situations]
+    max_facts: 30
+
+allowed_action_packs: []

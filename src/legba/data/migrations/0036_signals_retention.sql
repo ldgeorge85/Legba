@@ -1,0 +1,32 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0036_signals_retention.sql
+--
+-- Signals retention — TTL purge support (graph-and-data Wave-1b, item 3).
+--
+-- DECISION (REVIEW_CONSOLIDATED_2026-06-16 D4): scheduled TTL purge for this
+-- release, NOT a range-partition. Partitioning is a heavy migration (the
+-- table carries 13 indexes plus value-referenced children) and the volume
+-- (~25k rows) does not warrant it yet; partition is the long-term answer when
+-- volume warrants. This migration adds only the support a fast TTL purge needs:
+--
+--   1. A composite index (fetched_at, retention_class) so the purge job's
+--      "oldest rows below the TTL, in a purgeable retention class" scan is an
+--      index range-scan, not a seq-scan over the whole table.
+--
+-- The purge itself is the deterministic `signals_retention` sub-handler
+-- (signals_retention.py), run on the maintenance cadence. It deletes signals
+-- older than a configurable TTL AND co-deletes their value-referenced children
+-- (signal_aliases, signal_entity_links) in the SAME transaction so nothing is
+-- orphaned. Signals in a "keep" retention class (`retain_always`,
+-- `evidence_hold`) are never purged regardless of age.
+--
+-- SAFETY (idempotent, CREATE-only, no data mutation):
+--   CREATE INDEX IF NOT EXISTS only — adds an index, mutates no row, and is a
+--   no-op on re-apply. No DROP. Consistent with the CREATE-only migration
+--   policy (migrations/__init__.py).
+
+-- Purge-scan support: oldest-first within a retention class.
+CREATE INDEX IF NOT EXISTS idx_signals_retention_fetched_at
+    ON public.signals USING btree (retention_class, fetched_at);

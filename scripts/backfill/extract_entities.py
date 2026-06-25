@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Extract entities and relations from unlinked signals using REBEL.
 
 Reads signals that have no entity links, sends titles to /extract,
@@ -7,7 +9,7 @@ and stores the resulting triples as facts.
 Usage:
     docker compose -p legba run --rm -v $(pwd)/scripts:/scripts \
       -e DATABASE_URL=postgresql://legba:legba@postgres:5432/legba \
-      -e MODELS_API_URL=https://models.ai1.infra.innoscale.net \
+      -e MODELS_API_URL=https://nlp.example.internal \
       -e MODELS_API_USER=legba \
       -e MODELS_API_PASS=$MODELS_API_PASS \
       ingestion python3 /scripts/backfill/extract_entities.py

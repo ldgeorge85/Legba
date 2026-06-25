@@ -1,0 +1,111 @@
+# P-17 — new-model critic analyst: country_critic.
+#
+# kind: critic.  method.kind: critic (the L-175 critic kind).  Grades the
+# country_assessor's findings against the rubric below.  Replaces the old
+# india_energy_critic which carried the RETIRED `tools_whitelist`
+# (mnemosyne_trust_query) — that surface is gone; cross-pillar tools come
+# through action_packs now.
+#
+# Heterogeneity guard (L-105 §3): the judge LLM (Claude Opus 4.7 via Anthropic)
+# differs from the analyzed analyst's LLM (gpt-oss-120b).  The guard fires at
+# actor activation, not registration.
+#
+# Pinned analyzed analyst: eval.optimizer.analyzed_analyst_id locks this critic
+# to grade country_assessor (NOT the retired india_energy_inline_critic_test).
+
+identity:
+  id: country_critic
+  name: G20 Country Critic (Claude Opus 4.7)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"
+  kind: critic
+  type_signature:
+    input_type: legba.runtime.AnalystOutputRow
+    output_type: legba.runtime.Critique
+  state: active
+  owner: p17_reregister
+
+subscription:
+  # The critic reads ONE analyst-output row keyed off options['analyzed_output_id']
+  # — it does NOT consume the standard signal slice.
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: critic
+  prompt_module: "legba.prompts.critic.v1"
+  llm:
+    # 2026-06-22: critic moved to the core plane (operator: Anthropic is
+    # reserved for consult/deep_consult ONLY). This makes the critic a SAME-MODEL
+    # judge of country_assessor — self-correlated — so the analyzed analyst sets
+    # eval.allow_self_correlated=true to make that explicit (the heterogeneity
+    # guard compares subprovider-vs-stackref and won't trip on its own).
+    # TO REVERT to a heterogeneous Anthropic judge: set raw back to
+    # llm.anthropic.opus_4_7 here AND set allow_self_correlated=false on
+    # country_assessor's descriptor. max_tokens below is INERT on the core plane (vLLM
+    # doesn't send it) — kept for documentation / the eventual revert.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1536
+  budget_tokens_per_day: 2000000
+
+cadence:
+  # ── A3: cadence sized to the critic's cost + the assessor's output rate ──
+  #
+  # The critic grades ONE analyst-output row per run (direct_queries; it does
+  # NOT fan out across the 19 G20 targets — see subscription.substrate). The
+  # LLM is the PAID Anthropic Sonnet/Opus, so this budget is real dollars and
+  # the cap (50 000 tok/day) is tighter relative to volume than the assessor's.
+  #
+  # Per-run tokens: one finding body + rubric in, a graded critique out.
+  #   ≈ input 800–1 500 + output ≤ max_tokens 1536 ≈ 2 300–3 000 tok/run.
+  # Budget headroom: 50 000 / 3 000 ≈ 16 graded rows/day.
+  #
+  # The assessor now emits ≈ 19 × 4 ticks = 76 findings/day (post-A3). We do
+  # NOT need to critique every finding — the critic samples to feed the
+  # optimizer (min_critiques_required: 1). Run every 2h (12 ticks/day):
+  #   12 × 3 000 = 36 000 ≤ 50 000  → SAFE, ~28% headroom, and 12 samples/day
+  #   amply feed the daily optimizer compile. The old "*/10" (144 ticks/day)
+  #   was 9× the budget-affordable rate, so the cap exhausted after ~16 ticks
+  #   and the critic went dark for the rest of the day — exactly the
+  #   starvation A3 removes.
+  #
+  # NB: a constant period must divide evenly into the minute/hour fields —
+  # "*/90 * * * *" is a trap (the minutes field caps at 59, so it fires
+  # hourly, not every 90 min). "0 */2 * * *" gives a clean 2h period that
+  # cron_to_reminder_timing maps to a fixed 120-min Dapr Reminder.
+  fallback_schedule: "0 */2 * * *"
+  # Direct-query critic: no per-target fan-out, so the cooldown is a simple
+  # re-fire floor on the single global run. Hold it just under the 2h cadence
+  # (110 min) so a coalesced re-trigger can't double the per-tick spend.
+  cooldown_seconds: 6600
+
+# Agency grant — incident_response so a critique that surfaces a high-severity
+# miss can escalate.  Replaces the retired tools_whitelist surface.
+action_packs:
+  - pack_id: incident_response
+
+outputs:
+  - kind: nats_stream
+    config:
+      channel: critiques
+
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "factuality", "weight": 0.4,
+       "description": "Are named entities, dates, and quantitative claims verifiable against cited evidence?"},
+      {"name": "completeness", "weight": 0.3,
+       "description": "Does the finding cover causes, actors, time horizon, and downstream impacts for the country in scope?"},
+      {"name": "severity_calibration", "weight": 0.3,
+       "description": "Does stated confidence match evidence strength? Penalize over- and under-confidence."}
+    ], "scale": "0.0-1.0"}
+  optimizer:
+    analyzed_analyst_id: country_assessor
+  allow_self_correlated: false

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Backfill world leaders from Wikidata SPARQL.
 
 Fetches current and historical heads of state and government with

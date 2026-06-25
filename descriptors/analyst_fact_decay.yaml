@@ -1,0 +1,67 @@
+# fact_decay — the facts-table maintenance sweep (temporal lifecycle).
+#
+# A `deterministic`-kind META analyst over the shared `facts` table — modeled
+# on analyst_hypothesis_lifecycle.yaml (the sibling deterministic maintenance
+# descriptor that wires its built-but-uninvoked sub_handler). The handler is
+# fully built at legba.data.analysts.deterministic_handlers.fact_decay; before
+# this descriptor NOTHING invoked sub_handler='fact_decay', so the temporal
+# fact semantics (migration 0032: valid_until / superseded_by /
+# confidence_components) were inert — facts had indefinite lifetime and 0 were
+# ever expired or confidence-decayed (the live audit gap).
+#
+# Two idempotent, forward-progressing UPDATEs per run (no LLM, no token budget):
+#   1. EXPIRE — facts with an explicit `valid_until` in the past get
+#      superseded_by stamped (temporal expiry).
+#   2. DECAY  — stale facts (no recent confidence decay) get a small
+#      stale-confidence decrement toward the 0.1 floor, recorded in
+#      confidence_components.decay.
+# The per-run summary FindingPayload (expired_count / decayed_count) is the
+# cadence receipt — exactly how situation_clustering / hypothesis_lifecycle
+# keep a FINDING summary while side-writing rows directly.
+#
+# NB: the sibling nexus_decay sub_handler is now wired separately
+# (analyst_nexus_decay.yaml) — PIECE A's migration 0033 lands the real `nexuses`
+# table, so the decay sweep that this note previously called dead is live.
+
+identity:
+  id: fact_decay
+  name: Fact Temporal-Lifecycle Decay Sweep
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: fact_decay_activation
+
+subscription:
+  # META analyst: one global sweep per tick directly over the `facts` table via
+  # deps.pg_pool (the situation_clustering / hypothesis_lifecycle precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: fact_decay
+  # No LLM block, no token budget — pure Python UPDATEs over the `facts` table.
+
+cadence:
+  # Every 8h at :23 — fact decay is a slow temporal-maintenance sweep (30-day
+  # stale window), so it does NOT need frequent firing. The :23 minute + 8h
+  # period is OFFSET from the other deterministic maintenance analysts so they
+  # do not all fire on the same tick:
+  #   situation_clustering "5-59/20"  · hypothesis_lifecycle "10-59/20"
+  #   integrity_sweep      "41 */1"   · fact_decay (this)    "23 */8"
+  fallback_schedule: "23 */8 * * *"
+  # Idempotent + forward-progressing UPDATEs — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+outputs: []

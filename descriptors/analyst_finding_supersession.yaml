@@ -1,0 +1,92 @@
+# P-FS — Finding Supersession analyst descriptor (PIVOT_BUILD_PLAN §12, W3).
+#
+# A first-class `deterministic`-kind analyst over the SHARED analyst-output pool.
+# It fixes the live duplicate-findings problem: analysts re-assess an evolving
+# situation each cadence cycle and re-emit near-duplicate findings (the
+# finding_supersessions table is otherwise EMPTY and analyst_outputs.
+# situation_signature / superseded_by never get set). P-09's dedup is
+# *signal*-level and does NOT cover this — supersession is the *analysis-plane*
+# mechanism.
+#
+# Target-agnostic + META: supersession is an observation-level property of the
+# shared finding pool, not a per-target interpretation. The subscription
+# declares NO `targets` selector, so the cadence heartbeat is a SINGLE global
+# run (not a per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets.
+# The handler pulls eligible findings directly via deps.pg_pool (it ignores the
+# materialized input slice / time window) and clusters across ALL
+# finding-producing analysts — which also catches the stray
+# mis-scoped-duplicate-analyst case the risk item calls out.
+#
+# Method:
+#   * kind = deterministic — pure code, NO LLM, token usage always zero.
+#   * impl = the deterministic kind dispatcher module:run_method. The
+#     deterministic kind routes by `options.sub_handler`; the runtime injects
+#     `sub_handler: finding_supersession` into the run options at fire time
+#     (cadence + coalesced trigger both) — see
+#     dapr_actors.AnalystActor._run: it reads `descriptor.method.sub_handler`
+#     and falls back to `identity.id`. We set it explicitly here AND keep the id
+#     equal to the sub-handler name so either path resolves it.
+#   * The sweep is idempotent + forward-progressing (a finding, once superseded,
+#     drops out of the eligible `superseded_by IS NULL` set), so re-runs only
+#     ever re-cluster the currently-live set + any new arrivals — never
+#     destructive, both finding rows are preserved.
+#
+# Behaviour (legba.data.analysts.deterministic_handlers.finding_supersession):
+#   * Cluster findings by situation_signature (explicit `data.situation_id` /
+#     `data.situation_signature`, else a derived `sig:<topic>|<entity tokens>`).
+#   * Within a multi-member cluster the newest finding (latest produced_at,
+#     tie-broken by id) is canonical; older near-dups get `superseded_by` set +
+#     a `finding_supersessions` link row (older -> newer).
+#   * Bare summary/metrics findings (no derivable signature) never cluster.
+#
+# Cadence:
+#   * fallback_schedule = "*/20 * * * *" — re-cluster the live finding pool every
+#     20 min (a touch slower than P-09 dedup at */15 — supersession reasons over
+#     the *output* of analysts that themselves run on cadence).
+#   * cooldown_seconds = 300 — 5-min floor between runs (the sweep is idempotent).
+#
+# Registered via scripts/bringup_register_finding_supersession.py or the registry
+# REST API — NOT inline through a test fixture.
+
+identity:
+  id: finding_supersession
+  name: Finding Supersession
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: pfs_finding_supersession
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over
+  # the whole shared finding pool. The handler pulls eligible (not-yet-superseded)
+  # findings directly via deps.pg_pool (it ignores the materialized input slice).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: finding_supersession
+  # Deterministic kinds carry no LLM block and no per-day token budget — the
+  # whole run is pure Python over the analyst_outputs / finding_supersessions
+  # substrate.
+
+cadence:
+  fallback_schedule: "*/20 * * * *"
+  cooldown_seconds: 300
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND
+# (FindingPayload -> findings table) writes a per-run summary finding. The
+# supersession work itself lands directly in finding_supersessions +
+# analyst_outputs.situation_signature / superseded_by.
+outputs: []

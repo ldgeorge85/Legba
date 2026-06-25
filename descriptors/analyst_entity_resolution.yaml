@@ -1,0 +1,81 @@
+# Entity Resolution analyst descriptor — ongoing NER-mention → entity-graph fold.
+#
+# Makes scripts/backfill_entity_graph.py continuous (PIVOT_BUILD_PLAN §9
+# fast-follow). A first-class `deterministic`-kind analyst over the SHARED raw
+# signal pool: it resolves `signals.payload.entities` (NER mentions) into the
+# entity substrate — `entity_profiles` + `signal_entity_links` + co-occurrence
+# `proposed_edges` — every time it fires, so the Entities / Entity-Graph panels
+# and /api/v1/entities* stay current as new signals arrive.
+#
+# Target-agnostic + META: entity resolution is an observation-level property of
+# the shared pool, not a per-target interpretation. The subscription declares NO
+# `targets` selector, so the cadence heartbeat is a SINGLE global run (not a
+# per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets.
+#
+# Method:
+#   * kind = deterministic — pure code, NO LLM, token usage always zero.
+#   * impl = the deterministic kind dispatcher module:run_method.
+#   * sub_handler = entity_resolution — the runtime injects this into the run
+#     options at fire time (cadence + coalesced trigger). The
+#     deterministic_handlers.entity_resolution sweep is idempotent + forward-
+#     progressing (stamps signals.entities_resolved_at), so re-runs are safe.
+#
+# Cadence:
+#   * fallback_schedule = "*/10 * * * *" — fold new signals every 10 min.
+#   * cooldown_seconds = 300 — 5-min floor between runs (the sweep is idempotent).
+#
+# Registered via scripts/bringup_register_entity_resolution.py or the registry
+# REST API.
+
+identity:
+  id: entity_resolution
+  name: Entity Resolution
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: entity_resolution
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over
+  # the whole shared signal pool. The handler pulls un-resolved signals directly
+  # via deps.pg_pool (it ignores the materialized input slice / time window).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: entity_resolution
+  # Deterministic kinds carry no LLM block and no per-day token budget — the
+  # whole run is pure Python over signals → entity substrate.
+
+cadence:
+  # ── A3: deterministic kind → token-budget-EXEMPT ──
+  #
+  # method.kind=deterministic carries no LLM block and no budget_tokens_per_day
+  # (BudgetEnforcer treats absent/0 as "no per-analyst budget"; the run spends
+  # zero tokens). It is ALSO a META analyst — no subscription.targets, so the
+  # cadence heartbeat is a SINGLE global sweep per tick, NOT a 19-way fan-out.
+  # So neither the per-analyst cap nor the global token envelope is touched by
+  # this analyst, and A2's concurrency change does not multiply its cost. The
+  # only cost is DB compute over un-resolved signals; the sweep is idempotent
+  # + forward-progressing (stamps entities_resolved_at), so a 10-min cadence
+  # keeps the entity graph current without token-budget contention.
+  fallback_schedule: "*/10 * * * *"
+  cooldown_seconds: 300
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND
+# (FindingPayload -> findings table) writes a per-run summary finding. The graph
+# work itself lands directly in entity_profiles + signal_entity_links +
+# proposed_edges.
+outputs: []

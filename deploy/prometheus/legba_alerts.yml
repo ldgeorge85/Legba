@@ -1,0 +1,137 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Legba Prometheus alert rules (resilience P2).
+#
+# Companion to the registry's /metrics exposition
+# (src/legba/data/registry/metrics_api.py). Load this into a Prometheus
+# server that scrapes the registry's /metrics endpoint, e.g.:
+#
+#   # prometheus.yml
+#   rule_files:
+#     - /etc/prometheus/legba_alerts.yml
+#   scrape_configs:
+#     - job_name: legba-registry
+#       metrics_path: /metrics
+#       static_configs:
+#         - targets: ["legba-registry:8090"]
+#
+# Each alert keys off a REAL gauge/counter the exposition emits — no
+# synthesized series. Thresholds are conservative starting points; tune the
+# `for:` windows + values to the rig's observed steady state.
+
+groups:
+  - name: legba-resilience
+    rules:
+      # --- Scrape health -------------------------------------------------
+      # The exposition flips legba_metrics_scrape_ok to 0 when a substrate
+      # query inside the scrape failed (partial/broken read), and `absent()`
+      # catches the registry being down / unscrapeable entirely.
+      - alert: LegbaMetricsScrapeFailing
+        expr: legba_metrics_scrape_ok == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Legba /metrics scrape is failing"
+          description: >-
+            The registry's /metrics endpoint reported a failed substrate
+            scrape (legba_metrics_scrape_ok=0) for 5m. One of the metric
+            queries is erroring — check registry logs for metrics.scrape.failed.
+
+      - alert: LegbaMetricsEndpointDown
+        expr: absent(legba_metrics_scrape_ok)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Legba /metrics endpoint is unreachable"
+          description: >-
+            Prometheus has not scraped legba_metrics_scrape_ok for 5m — the
+            registry is down or the scrape target is misconfigured.
+
+      # --- Cursor frozen (ingest stalled) --------------------------------
+      # legba_signal_ingest_age_seconds climbs without bound when no new
+      # signal lands. 30m of no ingestion across all sources is anomalous on
+      # a live rig (the busiest poll cadences are minutes).
+      - alert: LegbaIngestCursorFrozen
+        expr: legba_signal_ingest_age_seconds > 1800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Legba signal ingestion has stalled"
+          description: >-
+            No new signal has been ingested in over 30m
+            (legba_signal_ingest_age_seconds={{ $value | humanizeDuration }}).
+            The ingest cursor is likely frozen — check source pollers / NATS.
+
+      - alert: LegbaIngestCursorFrozenCritical
+        expr: legba_signal_ingest_age_seconds > 7200
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Legba signal ingestion stalled for 2h+"
+          description: >-
+            No new signal in over 2h
+            (legba_signal_ingest_age_seconds={{ $value | humanizeDuration }}).
+            Ingestion is hard-stalled.
+
+      # --- DLQ growth ----------------------------------------------------
+      # Any open dead-letter row is a validation/dispatch failure that needs
+      # operator triage; sustained growth means a systemic write-path break.
+      - alert: LegbaDLQNonEmpty
+        expr: legba_dlq_open > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Legba dead-letter queue '{{ $labels.queue }}' has open rows"
+          description: >-
+            {{ $value }} unresolved rows in the {{ $labels.queue }} DLQ for
+            15m. Inspect descriptor_dead_letter / output_dead_letter for the
+            validation_error and resolve.
+
+      - alert: LegbaDLQGrowing
+        expr: increase(legba_dlq_open[1h]) > 10
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Legba DLQ '{{ $labels.queue }}' is growing fast"
+          description: >-
+            The {{ $labels.queue }} DLQ grew by more than 10 rows in the last
+            hour — a write path is systematically rejecting output.
+
+      # --- Budget exhaustion ---------------------------------------------
+      # When an operator has set a global token cap, fire as spend approaches
+      # and at the cap. The cap series is absent when no cap is configured, so
+      # these only evaluate on capped buckets.
+      - alert: LegbaBudgetEnvelopeNearCap
+        expr: >-
+          legba_budget_envelope_tokens_used
+          / legba_budget_envelope_tokens_cap > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Legba global token budget near cap"
+          description: >-
+            Today's global token spend is over 90% of the configured cap
+            ({{ $value | humanizePercentage }}). Analysts will start demoting /
+            pausing at the cap per the envelope's on_exceeded policy.
+
+      - alert: LegbaBudgetEnvelopeExhausted
+        expr: >-
+          legba_budget_envelope_tokens_used
+          >= legba_budget_envelope_tokens_cap
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Legba global token budget exhausted"
+          description: >-
+            Today's global token spend has reached the configured cap. The
+            BudgetEnforcer is now applying the envelope's on_exceeded policy
+            (demote_all / pause_all / alert_only).

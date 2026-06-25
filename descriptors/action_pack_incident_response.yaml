@@ -1,0 +1,61 @@
+# P-11 — incident_response action pack (PIVOT §4.8 seed pack).
+#
+# Grants the `escalate` + `create_incident` tools, which emit to the pack's
+# CHANNELS via the existing output-kind surface (alert / nats_stream / webhook /
+# a2a_skill). No job plane — escalation is synchronous: the tool emits the
+# escalation/incident payload to every declared channel and returns the
+# emitted-channel summary.
+#
+# Applicability: relevant to targets whose scope carries an `incident` or
+# `security` tag. Governor caps escalation rate so an analyst stuck in a loop
+# can't flood the SOC.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: incident_response
+  name: Incident Response
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: p11_agency
+  created: "2026-06-03T00:00:00Z"
+
+tools:
+  - name: escalate
+    config:
+      default_severity: warning
+  - name: create_incident
+    config:
+      default_severity: critical
+
+# Channels reuse the existing output kinds — the pack's actions emit here.
+channels:
+  - name: ops_alert
+    kind: alert
+    config:
+      subject: channels.ops_alert
+      severity_threshold: warning
+  - name: soc_stream
+    kind: nats_stream
+    config:
+      subject: channels.soc.incidents
+
+prompt_fragments:
+  - >-
+    When a subscribed signal indicates an active incident, call
+    create_incident(title, detail, severity) to open a tracked incident, or
+    escalate(target_ref, severity, detail) to raise an existing finding to ops.
+
+rules:
+  - "Set severity from the finding's confidence + impact, never higher than 'critical'."
+
+applies_to_tags:
+  - incident
+  - security
+
+governor:
+  budget_account: incident_response
+  max_invocations_per_hour: 60
+  api_rate_per_minute: 10

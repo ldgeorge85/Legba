@@ -1,0 +1,89 @@
+# Shared GIS SourceDescriptor: source.usgs.earthquakes — the first model-free
+# non-text modality (structured / GeoJSON).
+#
+# The source-first pivot's first-class acquisition unit (PIVOT §4.1–§4.4). ONE
+# poll/connection for this GeoJSON feed regardless of how many targets consume
+# it. Targets wire by PREDICATE (a tags/kind/modality source_selector), then
+# narrow the shared raw pool via a per-target Subscription (geo / modality).
+#
+# Real GeoJSON: https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson
+#   — a public, no-auth, RFC 7946 FeatureCollection (Point geometries with
+#   magnitude/place/time properties). Refreshed every minute upstream.
+#
+# This is the MODEL-FREE path: GeoJSON is already structured, so no extraction
+# model runs. The geojson source handler (legba.data.sources.geojson) emits one
+# Signal per feature with modality=structured + mime_type=application/geo+json;
+# the UI's application/geo+json modality renderer (MapLibre, reached via
+# ModalityRef) draws the feature on a map directly from the inlined geometry.
+#
+# subscription_policy: open  → targets auto-wire by selector (PIVOT §4.4.1).
+# owner_tenant: shared       → any tenant may subscribe (PIVOT §8 shared source).
+
+identity:
+  id: source.usgs.earthquakes
+  name: USGS — Significant Earthquakes (GeoJSON)
+  kind: geojson
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active
+  owner: gis_bringup
+  created: "2026-06-08T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # geo intentionally OMITTED — this is a GLOBAL feed. A consuming target's geo
+  # lives in its Subscription.geo (signal-level narrowing), not in source scope.
+  geo: []
+  languages: [en]
+  tags: [gis, geospatial, structured, hazard, seismic, global]
+
+acquisition: poll
+
+cadence:
+  # */5 — one poll per 5 min for the whole platform (not per target). USGS
+  # refreshes upstream every minute; 5 min is a courteous cadence.
+  schedule:
+    factory_kind: cron
+    raw: "*/5 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson"
+  # GeoJSON top-level `id` member uniquely identifies a quake event upstream.
+  feature_id_key:
+    factory_kind: text
+    raw: "id"
+  # Defensive bound — the significant-week feed is small, but cap regardless.
+  max_features:
+    factory_kind: number
+    raw: 5000
+
+pipeline:
+  # Baseline enrichment runs ONCE per signal at the source, not per target.
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL/id-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # geocode can refine the structured geo column from the feature centroid;
+    # no text enrichers are wired (this modality carries no text body).
+    - kind: geocode
+      config: {}
+  # reference — keep media_ref as a pointer to the source document; the
+  # per-feature geometry is already inlined in the payload (model-free, no
+  # eager fetch).
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800            # significant-week window
+  delivery: lossy
+
+subscription_policy: open

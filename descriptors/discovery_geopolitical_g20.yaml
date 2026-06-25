@@ -1,0 +1,130 @@
+# L-200 — G20 country discovery descriptor (operator-scoped clone of
+# discovery_geopolitical_countries.yaml).
+#
+# Materialises 19 country target instances scoped to the G20 minus the
+# EU (which has no ISO-3166-1 code).  Sibling to the full-249 descriptor
+# at descriptors/discovery_geopolitical_countries.yaml — the full one
+# is currently retired; we use this narrower set as the production
+# rollout starting point per Lewis's call (2026-06-02): "G20 for now."
+#
+# Per-country body shape after relabel (same as the parent template):
+#   identity.id          = country_geopolitical_<iso2_lower>
+#   identity.inherits    = ["template_country"]
+#   scope.geo            = ["<iso2>"]
+#   scope.languages      = ["<bcp-47-1>", ..., "en"]
+#   scope.tags           = ["geopolitical", "news", "g20"]
+#
+# 19 ISO-2 codes: AR AU BR CA CN DE FR GB ID IN IT JP KR MX RU SA TR US ZA
+# (EU has no ISO-3166-1 alpha-2 — they're an economic + political union,
+#  not a country in the seed table.)
+
+identity:
+  id: discovery_geopolitical_g20
+  name: "G20 Per-Country Geopolitical Discovery"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"
+  abstraction_level: L2
+  inherits:
+    - template_country_active
+  state: active
+  owner: legba_geopolitical
+  created: "2026-06-02T00:00:00Z"
+
+scope:
+  geo: ["XX"]
+  languages: ["en"]
+  entity_classes:
+    - country
+    - organization
+    - person
+    - location
+    - military_unit
+    - political_party
+    - armed_group
+    - international_org
+    - corporation
+    - media_outlet
+    - event_series
+    - concept
+    - commodity
+    - infrastructure
+  relationship_types:
+    - AlliedWith
+    - HostileTo
+    - MemberOf
+    - LeaderOf
+    - SuppliesWeaponsTo
+    - TradesWith
+    - BordersWith
+    - SignatoryTo
+    - SanctionsAgainst
+    - OccupiedBy
+    - SubsidiaryOf
+    - PartnersWith
+    - CompetesWith
+    - DiplomaticRelationsWith
+    - MilitaryPresenceIn
+  time_horizon_days: 90
+  predicate: null
+
+discovery:
+  kind: country_list_discovery
+  list_source: iso_3166
+  emit_per_match: true
+  relabel:
+    # 1. Keep only G20 countries — short list of ISO-2 codes.  This is
+    #    the only difference from the parent discovery descriptor.  The
+    #    keep predicate runs against the candidate's country_iso2 label
+    #    before any other rule processes it.
+    - source_labels: [country_iso2]
+      action: keep
+      predicate: >
+        country_iso2 in ['AR','AU','BR','CA','CN','DE','FR','GB','ID','IN',
+                         'IT','JP','KR','MX','RU','SA','TR','US','ZA']
+
+    # 2. Copy iso2 → scope.geo[0].
+    - source_labels: [country_iso2]
+      target_label: scope.geo
+      action: set_list
+
+    # 3. Lookup BCP-47 locale list from iso2, fallback to candidate's
+    #    own language list.
+    - source_labels: [country_iso2, country_languages]
+      target_label: scope.languages
+      action: lookup_languages
+
+    # 4. English fallback on every country target.
+    - source_labels: [scope.languages]
+      target_label: scope.languages
+      action: merge_list
+      extend_with: [en]
+
+    # 5. Materialised target id = country_geopolitical_<iso2_lower>.
+    - source_labels: [country_iso2]
+      target_label: identity.id
+      action: format
+      replacement: "country_geopolitical_{{ country_iso2 | lower }}"
+
+    # 6. Re-assert template_country_active lineage on each materialised body.
+    - source_labels: [country_iso2]
+      target_label: identity.inherits
+      action: merge_list
+      extend_with: [template_country_active]
+
+    # 7. Tag the materialised targets so the UI subscription filter can
+    #    pick them out — same tag convention as the parent + 'g20'.
+    - source_labels: [country_iso2]
+      target_label: tags
+      action: merge_list
+      extend_with: [geopolitical, news, g20]
+
+  # Disappearance ratio default (0.30) is fine — the G20 membership is
+  # stable on years-scale.  alert_and_pause is the right anomaly mode.
+
+sources: []
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []
+analyst: null
+outputs: []

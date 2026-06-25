@@ -1,0 +1,83 @@
+# competing_hypotheses — the PIECE C ACH (Analysis of Competing Hypotheses) producer.
+#
+# A META analyst kind (no subscription.targets => single global sweep per tick,
+# the relationship_reifier / situation_clustering precedent). It is the REAL
+# hypotheses producer (the situation-gated deterministic hypothesis_lifecycle
+# emitted 0 rows because every situation went dormant — see
+# planning/DATA_ANALYSIS_DEEP_REVIEW_2026-06-16.md §1.2). This kind is NOT gated
+# on active situations; it reads the temporally-current evidence base directly.
+#
+# Each tick, per focal topic (recent situation, ranked by intensity):
+#   1. READ the temporally-CURRENT evidence base — facts (superseded_by IS NULL),
+#      findings linked to the topic, and signed/typed nexuses (Piece A),
+#   2. GENERATE >= 2 COMPETING hypotheses (each with a MANDATORY counter-thesis)
+#      via the LLM provider plane (NEVER litellm; budget-gated + degrade-not-drop
+#      to a deterministic escalate/de-escalate/status-quo triad),
+#   3. SCORE the evidence x hypothesis MATRIX (consistency + DIAGNOSTICITY —
+#      evidence that DISCRIMINATES between hypotheses weighs more),
+#   4. COMPUTE the integer EVIDENCE BALANCE per hypothesis + auto-transition
+#      active -> confirmed / refuted past ±K, and
+#   5. side-write one OutputKind.HYPOTHESIS row per hypothesis via the LIVE
+#      write_hypothesis path (the ACH matrix/balance/diagnosticity ride in the
+#      payload's diagnostic_evidence jsonb column).
+#
+# The HYPOTHESIS rows are the real output; the per-run FindingPayload summary
+# (topics/hypotheses/confirmed/refuted) is the cadence receipt — exactly how
+# relationship_reifier side-writes nexuses + returns a FINDING summary.
+
+identity:
+  id: competing_hypotheses
+  name: ACH Competing-Hypotheses Producer (diagnosticity-weighted)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: competing_hypotheses
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: piece_c_ach_activation
+
+subscription:
+  # No `targets` block => META analyst (single global sweep; _cadence_targets
+  # returns None). Reads situations + current facts + findings + nexuses directly
+  # via deps.pg_pool (the relationship_reifier / hypothesis_lifecycle precedent);
+  # it does NOT consume a per-target signal slice and is NOT gated on active
+  # situations.
+  other_analysts: []
+  substrate:
+    direct_queries: true        # reads situations/facts/findings/nexuses via deps.pg_pool
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # method.kind is a constrained Literal; runtime dispatch is on identity.kind
+  # (competing_hypotheses). llm_planner matches the single-turn chat_complete
+  # generation shape the kind uses; the LLM is an ENRICHMENT (the kind degrades
+  # to a deterministic hypothesis set when the budget is exhausted or the call
+  # fails), so the matrix + balance + rows always land.
+  kind: llm_planner
+  prompt_module: "legba.prompts.competing_hypotheses.v1"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1024           # a small JSON list of competing theses per topic
+    temperature: 0.2
+    max_topics: 12             # hard per-run cap on focal topics (budget bound)
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Twice daily, OFFSET after relationship_reifier ("45 */12 * * *") and the
+  # assessors so the evidence base (facts/findings/nexuses) it reasons over is
+  # freshly produced this cycle.
+  fallback_schedule: "50 */12 * * *"
+  cooldown_seconds: 39600        # 11h (below the 12h interval)
+
+outputs: []

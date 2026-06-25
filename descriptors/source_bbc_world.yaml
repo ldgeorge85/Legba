@@ -1,0 +1,93 @@
+# P-17 — shared global-news SourceDescriptor: source.bbc.world.
+#
+# The source-first pivot's first-class acquisition unit (PIVOT §4.1–§4.4).
+# ONE poll/connection for this RSS feed regardless of how many country
+# targets consume it.  Every G20 country target wires to this source by
+# PREDICATE (a tags/kind source_selector — see descriptors/target_country_g20.yaml
+# + scripts/bringup_register_g20_country_targets.py), then narrows the shared
+# raw pool to its own country via a per-target Subscription.geo filter.  No
+# per-target source duplication — that is the whole point of the model.
+#
+# Real RSS: https://feeds.bbci.co.uk/news/world/rss.xml — probed 2026-06-03,
+# HTTP 200, text/xml, valid RSS 2.0 body.
+#
+# subscription_policy: open  → targets auto-wire by selector (PIVOT §4.4.1).
+# owner_tenant: shared       → any tenant may subscribe (PIVOT §8 shared source).
+# scope.tags advertise what selectors match against (news / world / geopolitical).
+
+identity:
+  id: source.bbc.world
+  name: BBC News — World
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active
+  owner: p17_reregister
+  created: "2026-06-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # geo intentionally OMITTED — this is a GLOBAL feed.  A target's geo lives in
+  # its Subscription.geo (signal-level narrowing), not in the source scope.
+  geo: []
+  languages: [en]
+  tags: [news, world, geopolitical, global]
+
+acquisition: poll
+
+cadence:
+  # */15 — one poll per 15 min for the whole platform (not per target).
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://feeds.bbci.co.uk/news/world/rss.xml"
+
+pipeline:
+  # Baseline enrichment runs ONCE per signal at the source, not per target.
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect runs FIRST so ner_multilingual can use the detected
+    # language; it lives in `enrichment` (annotator, no drop). The
+    # dedupe_tier_1/2 ingestion_filters above run at INGEST (SourceCore): a raw
+    # item matching by canonical-URL (tier 1) or content hash (tier 2) is KEPT
+    # and linked to the matched canonical (signal_aliases + canonical_signal_id)
+    # — never collapsed. canonical_only subscribers then receive one row per dup
+    # set; the periodic cross_source_dedup analyst still adds tier-3 semantic links.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: fact_extractor          # Piece 2 — (subject,predicate,value) facts from REBEL relations at ingest
+      config:
+        backend: relation           # reuse /extract REBEL triples (full articles yield rich relations)
+        emit_graph_edges: false
+        max_facts_per_signal: 30
+        # REBEL stamps every triple confidence=1.0, so a min_confidence floor
+        # can't filter noise. This light validity gate drops triples whose
+        # subject/value is purely a spelled-out quantity/ordinal ("sixth",
+        # "at least five") — the worst categorically-wrong REBEL output the
+        # audit flagged. Conservative: a single real-name token keeps the triple.
+        reject_quantity_endpoints: true
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

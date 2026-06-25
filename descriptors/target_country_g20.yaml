@@ -1,0 +1,110 @@
+# P-17 — new-model G20 country target (EXAMPLE / documentation copy).
+#
+# This is the operator-readable shape of ONE materialised G20 country target.
+# scripts/bringup_register_g20_country_targets.py synthesises all 19 of these
+# (one per G20 ISO-3166-1 alpha-2 code, read from the iso_countries seed table)
+# with per-country id / scope.geo / scope.languages substituted.  Brazil (BR)
+# is the worked example here.
+#
+# THE WHOLE POINT (PIVOT §4.4): this target owns NO inline sources.  It wires
+# to the shared global-news SourceDescriptors (source.bbc.world /
+# source.aljazeera.world / source.dw.world) by a PREDICATE source_selector
+# (tags=[news] + kinds=[rss]), then narrows the shared raw pool to Brazil via
+# a per-target Subscription.geo + predicate.  No per-target source duplication:
+# 19 targets share 3 source connections, not 57.
+#
+# This is also the fix for the live duplicate-findings issue: ONE correctly
+# geo-scoped analyst per target (the inline analyst block below, materialised
+# per country), instead of one brazil-scoped analyst fanning out across every
+# country (the old brazil-analyst-on-all-countries bug) plus the stray
+# india_energy_inline_critic_test.
+
+identity:
+  id: country_g20_br
+  name: "G20 — Brazil"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: active
+  owner: p17_reregister
+  created: "2026-06-03T00:00:00Z"
+
+scope:
+  domain: geo                        # discriminated-union tag — REQUIRED
+  geo: [BR]
+  languages: [pt-BR, en]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - person
+    - location
+    - political_party
+    - international_org
+    - infrastructure
+    - media_outlet
+  relationship_types:
+    - AlliedWith
+    - HostileTo
+    - MemberOf
+    - TradesWith
+    - SanctionsAgainst
+    - DiplomaticRelationsWith
+  time_horizon_days: 90
+  predicate: null
+  # tags double as the UI subscription-filter keys + the target's own surface
+  # labels (NOT the source-selector match keys — those are on the SourceRef).
+  tags: [geopolitical, news, g20]
+
+# NO inline `sources:` SourceBindings — this is the new model.  We reference the
+# shared sources by selector + subscribe by predicate.
+sources:
+  - source_selector:
+      # Match ANY open shared source advertising the `news` tag whose kind is
+      # `rss`.  Resolves to {source.bbc.world, source.aljazeera.world,
+      # source.dw.world} — all three shared feeds, one connection each.
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      # Signal-level slice: narrow the shared global pool to Brazil.  geo[] is
+      # the structured indexed filter (NATS subject + SQL WHERE); the Starlark
+      # residual is the long-tail confirmation (compiled at registration).
+      geo: [BR]
+      predicate: 'geo_match(["BR"])'
+      canonical_only: true
+
+# ONE inline analyst per target — correctly geo-scoped to THIS country.  No
+# separate analyst descriptor fanning out across countries.  The inline analyst
+# inherits this target's allowed_action_packs (no separate grant).
+analyst:
+  use: inline_target
+  cadence:
+    fallback_schedule: "*/10 * * * *"
+  method:
+    kind: llm_planner
+    prompt_module: "legba.runtime.analyst_method:_DEFAULT_SYSTEM"
+    budget_tokens_per_day: 200000
+    llm:
+      primary:
+        factory_kind: stack_ref
+        raw: llm.primary.openai_compat
+        expected_family: llm_provider
+
+# Action packs this target's analysts MAY use (PIVOT §4.8).  The inline analyst
+# inherits these; the cross-target critic/optimizer/consult grant their own.
+allowed_action_packs:
+  - pack_id: media_processing
+  - pack_id: incident_response
+  - pack_id: escalate_finding
+
+pipeline:
+  ingestion_filters: []              # baseline enrichment runs at the SOURCE now
+  enrichment: []
+  routing: []
+
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: intelligence.country_g20_br_assessment

@@ -1,0 +1,120 @@
+# syntax=docker/dockerfile:1.7
+#
+# legba-registry — FastAPI descriptor / stack / vault HTTP surface
+#
+# Multi-stage:
+#   builder  — installs deps + the legba package into /install
+#   runtime  — copies /install into a clean python:3.11-slim, runs legba-registry
+#
+# Image stays minimal: no compiler toolchain in the runtime layer.
+# Per docs/AI_MODELS.md the registry never imports torch / spacy /
+# sentence-transformers / scipy — those were retired in L-205. The
+# heavy dapr / dspy / temporalio deps live in sibling images
+# (Dockerfile.runtime, Dockerfile.temporal-worker) — the registry does
+# not need them.
+#
+# Build:    docker compose --profile runtime build legba-registry
+# Run:      docker compose --profile runtime up -d legba-registry
+# Verify:   docker exec legba-legba-registry-1 legba-registry --help
+
+# ---------------------------------------------------------------- builder
+FROM python:3.11-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Build deps for any wheels that still compile from sdist (rare with
+# slim base — primarily pynacl + asyncpg if no wheel ships for the
+# python+platform combo).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        libffi-dev \
+        libsodium-dev \
+        libpq-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Registry-only deps. Keep this list explicit (not `pip install legba`)
+# so the runtime image stays out of the dapr / dspy / temporalio sets.
+# Versions match pyproject.toml — bump in lockstep.
+RUN pip install --prefix=/install \
+        "fastapi>=0.115" \
+        "uvicorn[standard]>=0.32" \
+        "pydantic>=2.0" \
+        "asyncpg>=0.29" \
+        "redis[hiredis]>=5.0" \
+        "nats-py>=2.7" \
+        "pynacl>=1.5" \
+        "httpx>=0.27" \
+        "qdrant-client>=1.9" \
+        "croniter>=2.0" \
+        "python-dotenv>=1.0" \
+        "python-multipart>=0.0.9" \
+        "jinja2>=3.1" \
+        "pyyaml>=6.0" \
+        "starlark-pyo3>=2026.1" \
+        # stix2 is imported eagerly by legba.data.outputs.__init__
+        # (which the registry pulls via ..outputs.ui_panel). Light dep
+        # (~5 MB transitive: antlr4-runtime + simplejson + stix2-patterns).
+        "stix2>=3.0" \
+        # slowapi: registry-process rate limiting (data/registry/rate_limit.py)
+        # — pulls limits + Deprecated. Absent => the limiter degrades to a
+        # loud-warn no-op (rate limiting INERT), so it MUST be listed here
+        # (the explicit list, not pyproject, is what the registry installs).
+        "slowapi>=0.1.9"
+
+# Install the legba source tree without its declared deps (we already
+# pulled the subset we want). Using --no-deps + editable build wires
+# the console scripts (legba-registry, legba-mcp, legba-runtime-dapr,
+# legba-temporal-worker) into /install/bin without dragging in dspy /
+# dapr / temporalio.
+COPY pyproject.toml /build/pyproject.toml
+COPY src /build/src
+RUN pip install --prefix=/install --no-deps /build
+
+# Strip bytecode caches + test fixtures from installed packages.
+RUN find /install -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -type d -regex '.*/\(tests\|testing\)' -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -name "*.pyc" -delete 2>/dev/null || true
+
+# --------------------------------------------------------------- runtime
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/install/bin:$PATH \
+    PYTHONPATH=/install/lib/python3.11/site-packages
+
+# Runtime libs only — no compilers, no headers.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        libsodium23 \
+        libpq5 \
+        curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /install
+
+WORKDIR /app
+
+# Default registry config — overridable via env at compose level.
+ENV LEGBA_REGISTRY_API_HOST=0.0.0.0 \
+    LEGBA_REGISTRY_API_PORT=8090
+
+EXPOSE 8090
+
+# Healthcheck: readiness probe (resilience-observability W-1b §4). Hits the
+# unauthenticated /api/v1/registry/healthz route, which pings Postgres
+# (SELECT 1) + NATS (is_connected) and answers 503 when either substrate
+# dependency is down. `curl -f` treats the 503 as failure, so the container
+# only reports HEALTHY when it can actually serve — not merely when it has
+# bound a socket. No token needed (healthz carries no auth dependency).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
+  CMD curl -sf http://127.0.0.1:8090/api/v1/registry/healthz >/dev/null || exit 1
+
+ENTRYPOINT ["legba-registry"]

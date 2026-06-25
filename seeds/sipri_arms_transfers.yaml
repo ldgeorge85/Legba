@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# sipri_arms_transfers.yaml — hand-curated authoritative arms-transfer baseline
+# (flavor-b proof seed, SIPRI tier). A small, real "who-arms-whom" set distilled
+# from SIPRI's Arms Transfers Database (the public TIV / supplier–recipient
+# tables, www.sipri.org/databases/armstransfers). A fresh Legba instance imports
+# this so an analyst boots already knowing the major patronage / arms-supply
+# relationships between states.
+#
+# Mapped by src/legba/data/seed/adapters/sipri_arms_transfers.py:
+#   * each supplier->recipient relationship -> a typed SIGNED nexus
+#       subject = supplier_country
+#       rel_type = 'ArmsTransferTo'
+#       object  = recipient_country
+#       polarity = +1   (SUPPORTIVE — see the convention note below)
+#       valid_from = the start of the modern transfer relationship
+#
+# POLARITY CONVENTION (documented; consistent with the signed-nexus model):
+#   An arms transfer is a *materially cooperative / patronage* relationship — the
+#   supplier is backing the recipient's military. So polarity = +1 (supportive),
+#   mirroring world_baseline's MemberOf(+1) institutional-cooperation precedent
+#   and the OPPOSITE sign of acled_conflict's HostileTo(-1) antagonism. This lets
+#   structural-balance / graph-mining read a supplier->recipient edge as alignment.
+#
+# All rows are source_type='seed', confidence ~0.9, with a real valid_from.
+# valid_from is the (approximate) start year of the current supply relationship
+# (year-precision -> Jan 1). Kept deliberately small but real; correct in broad
+# strokes as of the curation date below. Re-import is idempotent (the driver
+# upserts; no duplicate open triples).
+
+meta:
+  curated_at: "2026-01-01"
+  source: "SIPRI Arms Transfers Database (public supplier-recipient TIV tables)"
+  note: >
+    A representative slice of the largest state-to-state arms-supply
+    relationships of the last ~25 years. polarity is +1 (an arms transfer is a
+    supportive/patronage tie). tiv_rank is an indicative ordering of the
+    supplier's transfers to that recipient, not a precise volume.
+
+# --- Arms transfers -> signed nexuses --------------------------------------
+# rel_type / polarity default to ArmsTransferTo / +1 unless overridden per row.
+transfers:
+  # United States — the largest global supplier.
+  - { supplier: "United States", recipient: "Saudi Arabia", valid_from: "2000-01-01", tiv_rank: 1 }
+  - { supplier: "United States", recipient: "Japan",        valid_from: "2000-01-01", tiv_rank: 2 }
+  - { supplier: "United States", recipient: "South Korea",  valid_from: "2000-01-01", tiv_rank: 3 }
+  - { supplier: "United States", recipient: "Australia",    valid_from: "2000-01-01", tiv_rank: 4 }
+  - { supplier: "United States", recipient: "Israel",       valid_from: "2000-01-01", tiv_rank: 5 }
+  - { supplier: "United States", recipient: "United Arab Emirates", valid_from: "2000-01-01", tiv_rank: 6 }
+  - { supplier: "United States", recipient: "Ukraine",      valid_from: "2022-02-24", tiv_rank: 7 }
+
+  # Russia — historically the second-largest supplier.
+  - { supplier: "Russia", recipient: "India",   valid_from: "2000-01-01", tiv_rank: 1 }
+  - { supplier: "Russia", recipient: "China",   valid_from: "2000-01-01", tiv_rank: 2 }
+  - { supplier: "Russia", recipient: "Algeria", valid_from: "2000-01-01", tiv_rank: 3 }
+  - { supplier: "Russia", recipient: "Egypt",   valid_from: "2014-01-01", tiv_rank: 4 }
+  - { supplier: "Russia", recipient: "Vietnam", valid_from: "2000-01-01", tiv_rank: 5 }
+
+  # France.
+  - { supplier: "France", recipient: "India",        valid_from: "2016-01-01", tiv_rank: 1 }
+  - { supplier: "France", recipient: "Egypt",        valid_from: "2015-01-01", tiv_rank: 2 }
+  - { supplier: "France", recipient: "Qatar",        valid_from: "2015-01-01", tiv_rank: 3 }
+  - { supplier: "France", recipient: "United Arab Emirates", valid_from: "2021-01-01", tiv_rank: 4 }
+
+  # China.
+  - { supplier: "China", recipient: "Pakistan",   valid_from: "2000-01-01", tiv_rank: 1 }
+  - { supplier: "China", recipient: "Bangladesh", valid_from: "2000-01-01", tiv_rank: 2 }
+  - { supplier: "China", recipient: "Myanmar",    valid_from: "2000-01-01", tiv_rank: 3 }
+
+  # Germany.
+  - { supplier: "Germany", recipient: "Egypt",        valid_from: "2015-01-01", tiv_rank: 1 }
+  - { supplier: "Germany", recipient: "South Korea",  valid_from: "2000-01-01", tiv_rank: 2 }
+  - { supplier: "Germany", recipient: "Israel",       valid_from: "2000-01-01", tiv_rank: 3 }
+
+  # United Kingdom.
+  - { supplier: "United Kingdom", recipient: "Saudi Arabia", valid_from: "2000-01-01", tiv_rank: 1 }
+  - { supplier: "United Kingdom", recipient: "Oman",         valid_from: "2000-01-01", tiv_rank: 2 }
+
+  # Italy / South Korea — mid-tier suppliers with notable recipients.
+  - { supplier: "Italy",       recipient: "Turkey",  valid_from: "2000-01-01", tiv_rank: 1 }
+  - { supplier: "South Korea", recipient: "Poland",  valid_from: "2022-01-01", tiv_rank: 1 }

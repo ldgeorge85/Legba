@@ -1,0 +1,36 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: legba-actor-state
+spec:
+  # Dapr Postgres state store component. Backs Dapr's actor state (when
+  # the runtime opts into Dapr placement). The Phase 5a host writes its
+  # own ``actor_state`` table directly via asyncpg — this component lands
+  # so Phase 5 broad fan-out can flip on the Dapr-side state via a config
+  # change rather than code change.
+  #
+  # P-14: this state store now targets a DEDICATED ``dapr`` database
+  # (dbname=dapr, created by the dapr-init-db one-shot in docker-compose.yml)
+  # rather than the substrate ``legba`` DB — so Dapr's ``dapr_state`` table +
+  # cleanup sweeps no longer contend with substrate writes.
+  #
+  # P-14: the connection string (which carries the Postgres password) is no
+  # longer inlined here. It is resolved at runtime from the local.env secret
+  # store (secretstore.yaml) via the secretKeyRef below; the daprd sidecar
+  # receives LEGBA_DAPR_PG_CONNSTRING through `env_file: .env`. No plaintext
+  # credential is committed in this YAML.
+  type: state.postgresql
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: LEGBA_DAPR_PG_CONNSTRING
+        key: LEGBA_DAPR_PG_CONNSTRING
+    - name: actorStateStore
+      value: "true"
+    - name: tableName
+      value: "dapr_state"
+    - name: cleanupIntervalInSeconds
+      value: "600"
+auth:
+  secretStore: legba-env-secrets

@@ -1,0 +1,1114 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Tier-1 knowledge grounding — analysis-time current-world-state injection.
+
+Stale-cutoff analyst LLMs (``world_assessor`` / ``country_assessor``) backfill
+current world facts (officeholders, alliances, ongoing-conflict state) from a
+training prior that predates the present — e.g. calling the CURRENT US
+president a "former" one. The signal slice rarely restates such background
+facts, so the model has no in-context correction.
+
+Legba already stores the temporally-honest answer in the substrate: curated /
+seed ``facts`` rows (``valid_from`` / ``valid_until`` / ``superseded_by``) and
+signed ``nexuses``. This module is the *injection* half of the fix (the
+descriptor ``grounding`` block is the opt-in; see
+:class:`legba.data.schemas.analyst.GroundingBlock`):
+
+  * :class:`SubstrateGroundingResolver` reads the substrate for the CURRENT
+    authoritative facts (the temporal-honesty gate
+    ``superseded_by IS NULL AND (valid_until IS NULL OR valid_until > now())``,
+    RESTRICTED to ``source_type IN ('seed','curated')`` — the provenance gate;
+    see below) about the analyst's target geo + the top entities in the signal
+    slice; and
+  * :func:`build_grounding_preamble` renders them into a single dated
+    "AUTHORITATIVE CURRENT CONTEXT (as of <today> — treat as ground truth over
+    prior knowledge)" block that the inline_target runner PREPENDS to the LLM
+    user prompt.
+
+PROVENANCE GATE (the grounding-quality fix). The preamble header tells the LLM
+to "treat as ground truth over any prior knowledge" — so what reaches it must
+actually BE ground truth, not an open NER extraction. A live audit found the
+ingestion path laundered hallucinated triples that are current + grounding-
+eligible (``Iran | capital of | US``, ``Iran | controls | Israel``, and
+``Adolf Hitler | leader of | Germany`` at confidence **1.0**). Two lessons:
+
+  * confidence is NOT a usable trust signal for ingestion facts — the relation
+    backend (GLiREL) scores a relation's plausibility, not its curated truth,
+    so junk like the above can still score high and sit near the top of the
+    confidence order (and the historical REBEL backend stamped a synthetic 1.0
+    floor that leaked). A ``confidence >= X AND predicate IN <whitelist>``
+    Tier-2 would inject "Hitler is the current leader of Germany"; it is unsafe.
+  * the authoritative current-world layer the stale cutoff actually needs
+    (officeholders, alliances, active conflicts) is exactly what the operator
+    curates into the seed. Breaking news rides the signal slice itself.
+
+So the resolver RESTRICTS both facts and signed nexuses to operator-vetted
+provenance — ``source_type IN ('seed','curated')`` (env-overridable via
+``LEGBA_GROUNDING_TRUSTED_SOURCE_TYPES``). Ingestion / agent rows never reach
+the "ground truth" block. This also subsumes the leg-1b coherence filter: an
+ingested ``<person> | leader of | <geo>`` can no longer contradict the seeded
+officeholder because it is filtered out wholesale, not row-by-row.
+
+Design constraints (per planning/KNOWLEDGE_GROUNDING_PLAN.md Tier 1):
+
+  * NO new vector / embed dependency — this is a couple of cheap Postgres
+    reads against the same current-facts gate
+    :mod:`legba.runtime.substrate_query_port` already uses. (The
+    ``vector:world_context`` source is the declared Tier-2 follow-up.)
+  * Token-capped via ``max_facts`` so the preamble can't blow the context.
+  * Off unless declared — the resolver is only constructed for analysts whose
+    descriptor sets ``grounding.enabled: true`` (the deps-builder gate); a
+    resolver handed an empty candidate set returns ``None`` (no preamble) so a
+    thin slice never injects a stray header.
+  * Degrade-not-drop — any read failure logs + yields ``None`` (no preamble)
+    rather than failing the analyst run. Grounding is an enrichment.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
+from typing import Any, Iterable, Mapping, Sequence
+
+logger = logging.getLogger(__name__)
+
+
+__all__ = [
+    "GroundingFact",
+    "GroundingGraphStructure",
+    "GroundingInterestingItem",
+    "GroundingNexus",
+    "GroundingSituation",
+    "SubstrateGroundingResolver",
+    "build_graph_structure_block",
+    "build_grounding_preamble",
+    "build_situations_block",
+    "collect_grounding_candidates",
+    "situation_grounding_min_intensity",
+    "situation_scope_for_target",
+    "trusted_source_types",
+]
+
+
+# The provenance gate (see the module docstring's PROVENANCE GATE note). Only
+# operator-vetted ``source_type`` values reach the "treat as ground truth"
+# preamble; ingestion/agent rows are dropped wholesale because confidence is
+# not a usable trust signal for them (NER hallucinations land at conf 1.0).
+# Env-overridable so an operator who later adds a high-trust source_type (e.g.
+# a vetted ``wikidata`` lane distinct from ``seed``) can admit it without a
+# code change; an empty/blank override falls back to the safe default.
+_DEFAULT_TRUSTED_SOURCE_TYPES: tuple[str, ...] = ("seed", "curated")
+
+
+def trusted_source_types() -> tuple[str, ...]:
+    """The ``source_type`` values admitted into the grounding preamble.
+
+    Reads ``LEGBA_GROUNDING_TRUSTED_SOURCE_TYPES`` (comma-separated,
+    case-insensitive); falls back to :data:`_DEFAULT_TRUSTED_SOURCE_TYPES`
+    when unset, blank, or all-empty. Values are lowercased to match the
+    ``source_type`` column convention.
+    """
+    raw = os.getenv("LEGBA_GROUNDING_TRUSTED_SOURCE_TYPES")
+    if not raw or not raw.strip():
+        return _DEFAULT_TRUSTED_SOURCE_TYPES
+    parsed = tuple(t.strip().lower() for t in raw.split(",") if t.strip())
+    return parsed or _DEFAULT_TRUSTED_SOURCE_TYPES
+
+
+# A bare Wikidata QID (``Q22686``) — what a fact value degrades to when an
+# upstream label lookup failed. Injecting "head of state: Q22686" is worse than
+# injecting nothing (the LLM can't read it), so any value/term that is JUST a
+# QID is skipped at the resolver chokepoint — we degrade to no-grounding for
+# that fact rather than emit an unreadable line. Conservative by construction:
+# the anchored pattern matches ONLY a bare QID; a normal name ("Donald Trump",
+# even one that happens to contain a Q) passes straight through.
+_BARE_QID_RE = re.compile(r"^Q[0-9]+$")
+
+
+def _is_bare_qid(value: Any) -> bool:
+    """True only when ``value`` is a bare Wikidata QID (``^Q[0-9]+$``)."""
+    return isinstance(value, str) and _BARE_QID_RE.match(value.strip()) is not None
+
+
+# A name shorter than this is too generic to ground on (drops "US", bare
+# initials, junk NER 1-2 char tags). 3 keeps real country/person names.
+_MIN_CANDIDATE_LEN = 3
+# How many distinct candidate names we resolve at most (a guard so a
+# tag-heavy slice can't fan out into hundreds of ILIKE probes). The per-fact
+# cap (``max_facts``) bounds the OUTPUT; this bounds the QUERY width.
+_MAX_CANDIDATES = 24
+# How many signed nexuses (alliances/hostility) we fold in alongside facts.
+# Small — the structural picture is a few load-bearing edges, not the graph.
+_MAX_NEXUSES = 12
+# How many ongoing situation frames we fold into the (separate, clearly-
+# labelled) ASSESSED SITUATIONS block — the most intense open frames, not the
+# whole list.
+_MAX_SITUATIONS = 8
+# How many items per category (tense actors / brokers / proxy chains) we fold
+# into the (separate, clearly-labelled) ASSESSED STRUCTURE block — the headline
+# interesting structures the knowledge graph surfaced, not the full enumeration.
+_MAX_GRAPH_STRUCTURE = 6
+
+
+# Quality guard for the situations grounding block (review M2). Clustered
+# "nothing to report" findings get a signature + materialise as situations (e.g.
+# "No France-specific weather alerts in the latest batch of signals"); they are
+# NON-events and must never be injected as an ongoing situation. The name filter
+# is ALWAYS on; the intensity floor is OFF by default (operators raise it via env
+# to trim faded dormant frames). Conservative: only the explicit "No … (alerts /
+# -specific / in the latest batch)" non-event shapes match — a real "No-fly zone
+# declared …" or "No deal reached …" does NOT.
+_NON_EVENT_SITUATION_RE = re.compile(
+    r"^\s*no\b.*(in the latest batch|[- ]specific|alerts?)",
+    re.IGNORECASE,
+)
+
+
+def situation_grounding_min_intensity() -> float:
+    """Minimum ``intensity_score`` an ongoing frame needs to ground.
+
+    Reads ``LEGBA_SITUATION_GROUNDING_MIN_INTENSITY``; defaults to 0.0 (off) so
+    the gate is opt-in. A bad value falls back to 0.0.
+    """
+    raw = os.getenv("LEGBA_SITUATION_GROUNDING_MIN_INTENSITY")
+    if not raw or not raw.strip():
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_non_event_situation(name: Any) -> bool:
+    """True for a clustered 'nothing to report' non-event frame (must not ground)."""
+    return isinstance(name, str) and _NON_EVENT_SITUATION_RE.search(name) is not None
+
+
+class GroundingFact:
+    """A single current authoritative fact row, normalised for rendering."""
+
+    __slots__ = ("subject", "predicate", "value", "valid_from", "source_type", "confidence")
+
+    def __init__(
+        self,
+        *,
+        subject: str,
+        predicate: str,
+        value: str,
+        valid_from: datetime | None,
+        source_type: str | None,
+        confidence: float | None,
+    ) -> None:
+        self.subject = subject
+        self.predicate = predicate
+        self.value = value
+        self.valid_from = valid_from
+        self.source_type = source_type
+        self.confidence = confidence
+
+    def render(self) -> str:
+        since = ""
+        if isinstance(self.valid_from, datetime):
+            since = f" (since {self.valid_from.date().isoformat()})"
+        return f"{self.subject} — {self.predicate}: {self.value}{since}"
+
+
+class GroundingNexus:
+    """A single current signed relationship (alliance/hostility), for rendering."""
+
+    __slots__ = ("subject", "rel_type", "object", "polarity", "valid_from")
+
+    def __init__(
+        self,
+        *,
+        subject: str,
+        rel_type: str,
+        object: str,
+        polarity: int | None,
+        valid_from: datetime | None,
+    ) -> None:
+        self.subject = subject
+        self.rel_type = rel_type
+        self.object = object
+        self.polarity = polarity
+        self.valid_from = valid_from
+
+    def render(self) -> str:
+        sign = ""
+        if self.polarity is not None and self.polarity < 0:
+            sign = " [antagonistic]"
+        elif self.polarity is not None and self.polarity > 0:
+            sign = " [supportive]"
+        since = ""
+        if isinstance(self.valid_from, datetime):
+            since = f" (since {self.valid_from.date().isoformat()})"
+        return f"{self.subject} {self.rel_type} {self.object}{sign}{since}"
+
+
+class GroundingSituation:
+    """An ONGOING situation frame, for the (separate, clearly-labelled) ASSESSED
+    SITUATIONS block — analysis-derived persistent context, NOT ground truth."""
+
+    __slots__ = ("name", "category", "status", "intensity_score", "valid_from", "last_event_at")
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        category: str | None,
+        status: str | None,
+        intensity_score: float | None,
+        valid_from: datetime | None,
+        last_event_at: datetime | None = None,
+    ) -> None:
+        self.name = name
+        self.category = category
+        self.status = status
+        self.intensity_score = intensity_score
+        self.valid_from = valid_from
+        self.last_event_at = last_event_at
+
+    def render(self, *, now: datetime | None = None) -> str:
+        bits: list[str] = []
+        if self.status:
+            bits.append(str(self.status))
+        if self.intensity_score is not None:
+            bits.append(f"intensity {self.intensity_score:.1f}")
+        if isinstance(self.valid_from, datetime):
+            bits.append(f"ongoing since {self.valid_from.date().isoformat()}")
+        # Staleness signal (review follow-up): a dormant frame's last member
+        # finding can be days old — surface the age so the reading LLM can
+        # down-weight a quiet frame rather than treating it as live news.
+        if isinstance(self.last_event_at, datetime):
+            ref = now or datetime.now(tz=timezone.utc)
+            age_days = max(0, (ref - self.last_event_at).days)
+            bits.append(
+                "last activity today" if age_days == 0
+                else f"last activity {age_days}d ago"
+            )
+        meta = f" [{'; '.join(bits)}]" if bits else ""
+        return f"{self.name}{meta}"
+
+
+class GroundingInterestingItem:
+    """One ranked entry from the graph_metrics ``interesting`` shortlist (the
+    shared contract that ``graph_mining`` + ``structural_balance`` now ADD to
+    their payload). Preferred over the raw frustration/betweenness enumeration
+    when present — it carries the producer's own rationale + ranking, so the
+    block reads as a curated shortlist rather than a metric dump.
+
+    Fields mirror the contract: ``kind`` (tense_actor | broker | new_hostile_edge
+    | sign_imbalanced_triad | proxy_chain), ``label`` (human label), ``score``
+    (0..1, higher = more interesting), ``rationale`` (one NL line), ``entities``
+    (the entity names involved, for scope matching)."""
+
+    __slots__ = ("kind", "label", "score", "rationale", "entities")
+
+    def __init__(
+        self,
+        *,
+        kind: str,
+        label: str,
+        score: float,
+        rationale: str,
+        entities: list[str],
+    ) -> None:
+        self.kind = kind
+        self.label = label
+        self.score = score
+        self.rationale = rationale
+        self.entities = entities
+
+
+class GroundingGraphStructure:
+    """The headline interesting STRUCTURES the knowledge graph surfaced, for the
+    (separate, clearly-labelled) ASSESSED STRUCTURE block — analysis-derived from
+    the signed relationship graph (structural_balance + graph_mining metrics),
+    NOT ground truth.
+
+    PREFERRED path — ``interesting``: the ranked shortlist the producers now emit
+    on their graph_metrics payload (the shared contract). When present, the block
+    renders these (kind-grouped, with each item's rationale) and the raw
+    enumeration below is left empty.
+
+    FALLBACK path — the raw enumeration extracted from the metric maps when no
+    ``interesting`` list is present (older payloads):
+
+    * ``frustration`` — (actor, sign-imbalanced-triad count): the most
+      structurally TENSE actors (caught in conflicting/unbalanced ties).
+    * ``brokers`` — (actor, betweenness): high-betweenness cut-points that sit
+      between otherwise-separated camps.
+    * ``proxy_chains`` — pre-rendered indirect/cut-out link strings (A → via → B).
+    """
+
+    __slots__ = ("frustration", "brokers", "proxy_chains", "interesting")
+
+    def __init__(
+        self,
+        *,
+        frustration: list[tuple[str, float]],
+        brokers: list[tuple[str, float]],
+        proxy_chains: list[str],
+        interesting: list[GroundingInterestingItem] | None = None,
+    ) -> None:
+        self.frustration = frustration
+        self.brokers = brokers
+        self.proxy_chains = proxy_chains
+        self.interesting = interesting or []
+
+    def is_empty(self) -> bool:
+        return not (self.interesting or self.frustration or self.brokers or self.proxy_chains)
+
+
+def _json_or_dict(payload: Any) -> dict[str, Any]:
+    """asyncpg returns a jsonb column as a str (default codec) or a dict — coerce
+    to a dict, degrading a malformed payload to ``{}`` (never raise on grounding)."""
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+            return parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+    return {}
+
+
+def _top_graph_items(
+    d: Any, cand_lc: set[str], limit: int, *, min_value: float | None = None,
+) -> list[tuple[str, float]]:
+    """From a {name: numeric} map, the top-``limit`` (name, value) pairs — names
+    matching the assessor's candidate entities FIRST (their structure is the most
+    relevant), then the highest-value global structures. Junk names (too short /
+    bare QID) are dropped."""
+    if not isinstance(d, dict):
+        return []
+    items: list[tuple[str, float]] = []
+    for name, val in d.items():
+        if not isinstance(name, str) or len(name.strip()) < _MIN_CANDIDATE_LEN:
+            continue
+        if _is_bare_qid(name):
+            continue
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            continue
+        if min_value is not None and v <= min_value:
+            continue
+        items.append((name, v))
+    in_scope = sorted(
+        (it for it in items if it[0].casefold() in cand_lc), key=lambda x: x[1], reverse=True,
+    )
+    out_scope = sorted(
+        (it for it in items if it[0].casefold() not in cand_lc), key=lambda x: x[1], reverse=True,
+    )
+    return (in_scope + out_scope)[:limit]
+
+
+def _top_brokers(d: Any, cand_lc: set[str], limit: int) -> list[tuple[str, float]]:
+    """Flatten {name: {betweenness, degree}} → top-``limit`` (name, betweenness),
+    keeping only true brokers (betweenness > 0 — a high-degree hub with zero
+    betweenness, e.g. a catalog body, is NOT a cut-point)."""
+    if not isinstance(d, dict):
+        return []
+    flat: dict[str, float] = {}
+    for name, metrics in d.items():
+        b = metrics.get("betweenness") if isinstance(metrics, dict) else None
+        try:
+            bf = float(b)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if bf > 0:
+            flat[name] = bf
+    return _top_graph_items(flat, cand_lc, limit, min_value=0.0)
+
+
+def _render_proxy_chain(c: Any) -> str | None:
+    """Best-effort one-line render of a discovered proxy/cut-out chain (the
+    graph_mining payload shape varies across versions — handle str/dict/list)."""
+    if isinstance(c, str):
+        return c.strip() or None
+    if isinstance(c, dict):
+        subj = c.get("subject") or c.get("source") or c.get("a") or c.get("head")
+        via = c.get("intermediary") or c.get("via") or c.get("through")
+        obj = c.get("object") or c.get("target") or c.get("b") or c.get("tail")
+        sign = c.get("sign") or c.get("polarity") or c.get("sign_product")
+        if subj and obj:
+            mid = f" → {via} →" if via else " →"
+            tag = ""
+            try:
+                if sign is not None and float(sign) < 0:
+                    tag = " [hostile path]"
+                elif sign is not None and float(sign) > 0:
+                    tag = " [aligned path]"
+            except (TypeError, ValueError):
+                pass
+            return f"{subj}{mid} {obj}{tag}"
+    if isinstance(c, (list, tuple)) and len(c) >= 2:
+        return " → ".join(str(x) for x in c)
+    return None
+
+
+def _top_proxy_chains(chains: Any, cand_lc: set[str], limit: int) -> list[str]:
+    """Render up to ``limit`` notable proxy chains, preferring ones that touch a
+    candidate entity."""
+    if not isinstance(chains, list):
+        return []
+    rendered = [(s, any(n in s.casefold() for n in cand_lc))
+                for s in (_render_proxy_chain(c) for c in chains) if s]
+    # candidate-touching chains first, order otherwise preserved (already ranked upstream)
+    ordered = [s for s, hit in rendered if hit] + [s for s, hit in rendered if not hit]
+    out: list[str] = []
+    for s in ordered:
+        if s not in out:
+            out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+
+# The kinds the shared ``interesting`` shortlist contract emits. An item with an
+# unknown kind still renders (under its own kind label) — the set is only used to
+# fix a stable group ORDER for the rendered block.
+_INTERESTING_KIND_ORDER: tuple[str, ...] = (
+    "tense_actor",
+    "broker",
+    "new_hostile_edge",
+    "sign_imbalanced_triad",
+    "proxy_chain",
+)
+
+
+def _collect_interesting(
+    payloads: Mapping[str, dict[str, Any]], cand_lc: set[str], limit: int,
+) -> list[GroundingInterestingItem]:
+    """Merge + rank the ``interesting`` shortlists across the metric payloads
+    (the shared contract). Items touching a candidate entity rank FIRST (their
+    structure is the most relevant to this assessor's scope), then by descending
+    ``score``. Junk rows (no label, non-numeric score) are dropped; the merged
+    list is de-duplicated on (kind, label) and capped at ``limit``.
+
+    ``limit`` here bounds the WHOLE shortlist (not per-kind) — the producers
+    already cap at ~12 and self-rank, so a single overall cap keeps the block
+    tight without re-imposing the per-category fallback shape.
+    """
+    merged: list[tuple[GroundingInterestingItem, bool]] = []
+    seen: set[tuple[str, str]] = set()
+    for payload in payloads.values():
+        raw = payload.get("interesting")
+        if not isinstance(raw, list):
+            continue
+        for it in raw:
+            if not isinstance(it, Mapping):
+                continue
+            label = it.get("label")
+            if not isinstance(label, str) or not label.strip():
+                continue
+            kind = it.get("kind")
+            kind = kind.strip() if isinstance(kind, str) and kind.strip() else "structure"
+            try:
+                score = float(it.get("score"))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                score = 0.0
+            key = (kind, label.strip().casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            entities = [
+                str(e) for e in (it.get("entities") or []) if isinstance(e, str) and e.strip()
+            ]
+            rationale = it.get("rationale")
+            rationale = rationale.strip() if isinstance(rationale, str) else ""
+            in_scope = any(e.casefold() in cand_lc for e in entities) or (
+                label.strip().casefold() in cand_lc
+            )
+            merged.append(
+                (
+                    GroundingInterestingItem(
+                        kind=kind,
+                        label=label.strip(),
+                        score=score,
+                        rationale=rationale,
+                        entities=entities,
+                    ),
+                    in_scope,
+                )
+            )
+    # candidate-touching first, then score desc (the producers' own ranking).
+    merged.sort(key=lambda t: (t[1], t[0].score), reverse=True)
+    return [item for item, _ in merged[:limit]]
+
+
+def situation_scope_for_target(target_id: str | None) -> str | None:
+    """The ``situations.target_id`` to scope situation grounding to, or ``None``
+    for a GLOBAL view.
+
+    A per-country assessor grounds against ITS country's open frames — situation
+    rows whose ``target_id`` equals the assessor's country target (populated at
+    clustering time from the finding topic; migration 0042). A global
+    meta-analyst (``world_assessor`` — no country target) grounds against the
+    most intense open frames across all targets, so it gets ``None``. Scoping on
+    the populated ``target_id`` (rather than the ``category==slug`` coincidence)
+    means a future THEMATIC situation — different ``target_id`` — never leaks
+    into a country assessor's grounding.
+    """
+    if not target_id or not isinstance(target_id, str):
+        return None
+    tid = target_id.strip()
+    return tid if tid.startswith("country") else None
+
+
+# ---------------------------------------------------------------------------
+# Candidate extraction (deterministic, no DB) — target geo + slice entities
+# ---------------------------------------------------------------------------
+
+
+def collect_grounding_candidates(
+    inputs: Sequence[Mapping[str, Any]],
+    *,
+    target_id: str | None,
+    scope: Sequence[str],
+    static_candidates: Sequence[str] = (),
+) -> list[str]:
+    """Pull the candidate entity/geo names to ground on, in priority order.
+
+    Reads ONLY the in-memory signal slice (the same rows the runner renders) +
+    the run's ``target_id`` — no DB. Returns a de-duplicated, length-capped
+    list of canonical-ish names; the resolver matches them against
+    ``facts.subject`` / ``nexuses.subject``.
+
+      * ``static_candidates`` → ALWAYS-ON names prepended regardless of slice
+        content. For a GLOBAL meta-analyst (world_assessor) whose slice can be
+        flooded by a high-volume source, this guarantees the major ongoing
+        world-state (active-conflict parties — Iran/US/Israel/…) is grounded
+        even when today's slice doesn't surface them. Decouples grounding from
+        slice luck.
+      * ``target_geo``     → the run's ``target_id`` slug expanded to a country
+        name when it looks like a ``country_<name>`` target, plus the most
+        common ``geo`` codes/names across the slice rows.
+      * ``slice_entities`` → the signal ``tags`` + the NER ``payload.entities`` +
+        any analyst ``key_entities``, and a light pass over titles.
+
+    Order matters: ``static_candidates`` then ``target_geo`` come first so a
+    tight ``max_facts`` budget spends on the always-on world-state + the
+    analyst's own scope before the slice's long tail.
+    """
+    scope_set = set(scope or ())
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def _add(name: Any, *, min_len: int = _MIN_CANDIDATE_LEN) -> None:
+        if not isinstance(name, str):
+            return
+        n = name.strip()
+        if len(n) < min_len:
+            return
+        # Drop pure-numeric / date-shaped junk tags.
+        if n.replace("-", "").replace("/", "").replace(".", "").isdigit():
+            return
+        key = n.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        ordered.append(n)
+
+    # 0) static_candidates — always-on world-state (no scope gate; prepended).
+    for sc in static_candidates or ():
+        _add(sc, min_len=2)
+
+    # 1) target_geo — the analyst's own scope.
+    if "target_geo" in scope_set:
+        # The target-id geo token is EXPLICIT scope (an ISO-2 code like "us"),
+        # not NER noise — exempt it from the junk-rejection min-length floor so
+        # it can match an ISO-keyed subject; the slice country names below are
+        # the primary match.
+        for geo_name in _target_id_geo_names(target_id):
+            _add(geo_name, min_len=2)
+        # Most-frequent geo across the slice (the per-target slice is already
+        # geo-narrowed, so the dominant geo is the analyst's country).
+        geo_counts: dict[str, int] = {}
+        for row in inputs:
+            for g in row.get("geo") or []:
+                if isinstance(g, str) and g.strip():
+                    geo_counts[g.strip()] = geo_counts.get(g.strip(), 0) + 1
+        for g, _c in sorted(geo_counts.items(), key=lambda kv: kv[1], reverse=True):
+            _add(g)
+
+    # 2) slice_entities — the named figures the slice talks about.
+    if "slice_entities" in scope_set:
+        for row in inputs:
+            tags = row.get("tags") or []
+            if isinstance(tags, (list, tuple)):
+                for t in tags:
+                    # Skip the synthetic provenance tags the narrator stamps.
+                    if isinstance(t, str) and not t.startswith(
+                        ("target:", "analyst:", "severity:", "g20", "world_assessment")
+                    ):
+                        _add(t)
+            # Lift structured key_entities the narrator may have stamped.
+            data = row.get("data")
+            if isinstance(data, Mapping):
+                for ke in data.get("key_entities") or []:
+                    _add(ke)
+                # THE bridge fix: NER writes its named entities to
+                # ``payload["entities"]`` (list of {text,class,confidence}), NOT
+                # to ``tags`` or ``key_entities`` — those are usually empty on a
+                # raw ingested signal. Without this, a geopolitical signal in the
+                # slice contributes NO candidates, so the resolver never queries
+                # the seeded conflict facts/nexuses for the named countries
+                # (e.g. an Iran article never grounds the US⇄Iran war nexus).
+                # Lift entity TEXT, conf-gated to skip low-confidence NER noise;
+                # accept both the {text,...} dict shape and a bare string.
+                for ent in data.get("entities") or []:
+                    if isinstance(ent, Mapping):
+                        conf = ent.get("confidence")
+                        if isinstance(conf, (int, float)) and conf < 0.5:
+                            continue
+                        _add(ent.get("text"))
+                    elif isinstance(ent, str):
+                        _add(ent)
+            if len(ordered) >= _MAX_CANDIDATES:
+                break
+
+    return ordered[:_MAX_CANDIDATES]
+
+
+def _target_id_geo_names(target_id: str | None) -> Iterable[str]:
+    """Best-effort geo names from a target id slug (``country_g20_us`` → 'us').
+
+    Conservative: only emits the trailing token of a ``country_*`` /
+    ``*_country_*`` slug, which the resolver matches case-insensitively
+    against ``facts.subject`` (ISO code or country name). A non-country target
+    id yields nothing — the slice ``geo`` codes carry the scope instead.
+    """
+    if not target_id or not isinstance(target_id, str):
+        return ()
+    tid = target_id.strip().lower()
+    if "country" not in tid:
+        return ()
+    token = tid.rsplit("_", 1)[-1]
+    if len(token) >= 2:
+        return (token,)
+    return ()
+
+
+# ---------------------------------------------------------------------------
+# Substrate resolver — current authoritative facts + signed nexuses
+# ---------------------------------------------------------------------------
+
+
+class SubstrateGroundingResolver:
+    """Reads CURRENT authoritative facts/nexuses for a candidate name set.
+
+    Constructed once per grounded analyst by the deps-builder (closing over
+    the substrate ``pg_pool``); called per run with the candidate names. The
+    current-facts gate matches
+    :mod:`legba.runtime.substrate_query_port` — open rows only
+    (``superseded_by IS NULL AND (valid_until IS NULL OR valid_until >
+    now())``) — and is RESTRICTED to ``source_type IN ('seed','curated')``
+    (env-overridable; see the module-level PROVENANCE GATE note) so a
+    hallucinated live/ingestion fact is EXCLUDED outright, not merely
+    outranked.
+    """
+
+    def __init__(self, *, pg_pool: Any) -> None:
+        self._pool = pg_pool
+
+    async def resolve(
+        self, candidates: Sequence[str], *, max_facts: int,
+    ) -> tuple[list[GroundingFact], list[GroundingNexus]]:
+        """Return (facts, nexuses) for the candidates, capped at ``max_facts``.
+
+        Facts are the primary budget consumer; nexuses are a small extra
+        structural layer (capped at :data:`_MAX_NEXUSES`, never exceeding the
+        leftover fact budget). An empty candidate set short-circuits to
+        ``([], [])`` so no query runs.
+        """
+        names = [c for c in candidates if c and c.strip()]
+        if not names or max_facts <= 0:
+            return [], []
+
+        # Resolve the provenance gate ONCE per run so facts and nexuses share
+        # the same trusted-source set (and the env is read a single time).
+        trusted = list(trusted_source_types())
+        try:
+            facts = await self._query_facts(names, trusted=trusted, limit=max_facts)
+            nexus_budget = min(_MAX_NEXUSES, max(0, max_facts - len(facts)))
+            nexuses = (
+                await self._query_nexuses(names, trusted=trusted, limit=nexus_budget)
+                if nexus_budget > 0
+                else []
+            )
+            return facts, nexuses
+        except Exception as exc:  # degrade-not-drop — grounding is enrichment
+            logger.warning("grounding.resolve.failed err=%s", exc)
+            return [], []
+
+    async def _query_facts(
+        self, names: Sequence[str], *, trusted: Sequence[str], limit: int,
+    ) -> list[GroundingFact]:
+        # Match any candidate as the fact SUBJECT (case-insensitive, exact —
+        # subjects are canonical entity names). Current-facts gate per
+        # substrate_query_port. PROVENANCE GATE: only operator-vetted
+        # source_type rows ('seed','curated') reach the preamble — ingestion /
+        # agent NER junk is dropped wholesale (see the module docstring). The
+        # seed/curated ORDER-BY key is kept first so that, if an operator
+        # widens the trusted set via env, canonical seed/curated still rank
+        # above any added lane.
+        lowered = [n.casefold() for n in names]
+        # A bare-QID value (``value ~ '^Q[0-9]+$'``) is an unreadable
+        # label-lookup failure — exclude it in SQL so the ``LIMIT`` budget is
+        # spent only on facts that can actually render. (The Python guard below
+        # is the in-process backstop for the same rule.)
+        sql = """
+            SELECT subject, predicate, value, valid_from, source_type, confidence
+            FROM facts
+            WHERE lower(subject) = ANY($1::text[])
+              AND source_type = ANY($2::text[])
+              AND superseded_by IS NULL
+              AND (valid_until IS NULL OR valid_until > now())
+              AND value !~ '^Q[0-9]+$'
+            ORDER BY
+              (source_type IN ('seed','curated')) DESC,
+              confidence DESC NULLS LAST,
+              valid_from DESC NULLS LAST
+            LIMIT $3
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, lowered, list(trusted), int(limit))
+        out: list[GroundingFact] = []
+        for r in rows:
+            # Backstop the SQL guard: never let a bare-QID value through to the
+            # preamble (degrade to no-grounding for this fact, not a Qxxxx line).
+            if _is_bare_qid(r["value"]):
+                continue
+            out.append(
+                GroundingFact(
+                    subject=r["subject"],
+                    predicate=r["predicate"],
+                    value=r["value"],
+                    valid_from=r["valid_from"],
+                    source_type=r["source_type"],
+                    confidence=(
+                        float(r["confidence"]) if r["confidence"] is not None else None
+                    ),
+                )
+            )
+        return out
+
+    async def _query_nexuses(
+        self, names: Sequence[str], *, trusted: Sequence[str], limit: int,
+    ) -> list[GroundingNexus]:
+        # PROVENANCE GATE (mirrors _query_facts): only seed/curated signed
+        # relationships reach the preamble. The reified/promoted ``agent``
+        # nexus lane (relationship_reifier, proposed_edge_governance) is an
+        # analysis product, not ground truth, so it is excluded here.
+        lowered = [n.casefold() for n in names]
+        sql = """
+            SELECT subject, rel_type, object, polarity, valid_from
+            FROM nexuses
+            WHERE lower(subject) = ANY($1::text[])
+              AND source_type = ANY($2::text[])
+              AND superseded_by IS NULL
+              AND (valid_until IS NULL OR valid_until > now())
+            ORDER BY
+              (source_type IN ('seed','curated')) DESC,
+              confidence DESC NULLS LAST,
+              valid_from DESC NULLS LAST
+            LIMIT $3
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, lowered, list(trusted), int(limit))
+        out: list[GroundingNexus] = []
+        for r in rows:
+            # A bare-QID subject OR object renders an unreadable edge line
+            # ("Q30 member of Q1065") — skip it (degrade to no-grounding for
+            # this relationship) for the same reason bare-QID fact values go.
+            if _is_bare_qid(r["subject"]) or _is_bare_qid(r["object"]):
+                continue
+            out.append(
+                GroundingNexus(
+                    subject=r["subject"],
+                    rel_type=r["rel_type"],
+                    object=r["object"],
+                    polarity=(int(r["polarity"]) if r["polarity"] is not None else None),
+                    valid_from=r["valid_from"],
+                )
+            )
+        return out
+
+    async def resolve_situations(
+        self, *, scope_target_id: str | None, limit: int,
+    ) -> list[GroundingSituation]:
+        """Return the OPEN (non-closed) situation frames for the scope, most
+        intense first.
+
+        ``scope_target_id`` scopes to one target's situations (a country
+        assessor's own frames, matched on the populated ``target_id`` column —
+        migration 0042); ``None`` returns the top open frames across all targets
+        (the world view). Open = ``valid_until IS NULL`` (the temporal-frame
+        gate, migration 0040) AND ``status <> 'closed'`` — so an ongoing-but-
+        quiet (dormant) frame is still surfaced as current context, while a
+        closed frame is not. Degrade-not-drop: any read failure logs + yields
+        ``[]`` (no block). The frame count is clamped to
+        :data:`_MAX_SITUATIONS` so a generous caller budget can't flood the
+        prompt with the long tail.
+        """
+        limit = min(int(limit), _MAX_SITUATIONS)
+        if limit <= 0:
+            return []
+        min_intensity = situation_grounding_min_intensity()
+        # The intensity floor is an SQL filter; the non-event name filter runs in
+        # Python (post-fetch), so over-fetch a little headroom so a dropped junk
+        # frame doesn't cost a real frame its slot.
+        sql = """
+            SELECT name, category, status, intensity_score, valid_from, last_event_at
+            FROM situations
+            WHERE superseded_by IS NULL
+              AND (valid_until IS NULL OR valid_until > now())
+              AND status <> 'closed'
+              AND intensity_score >= $2
+              AND ($1::text IS NULL OR target_id = $1)
+            ORDER BY intensity_score DESC NULLS LAST, valid_from DESC NULLS LAST
+            LIMIT $3
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    sql, scope_target_id, float(min_intensity), int(limit) + 8,
+                )
+        except Exception as exc:  # degrade-not-drop — grounding is enrichment
+            logger.warning("grounding.resolve_situations.failed err=%s", exc)
+            return []
+        out: list[GroundingSituation] = []
+        for r in rows:
+            # Skip clustered non-event frames ("No <geo>-specific … alerts …").
+            if _is_non_event_situation(r["name"]):
+                continue
+            out.append(
+                GroundingSituation(
+                    name=r["name"],
+                    category=r["category"],
+                    status=r["status"],
+                    intensity_score=(
+                        float(r["intensity_score"])
+                        if r["intensity_score"] is not None
+                        else None
+                    ),
+                    valid_from=r["valid_from"],
+                    last_event_at=r["last_event_at"],
+                )
+            )
+            if len(out) >= limit:
+                break
+        return out
+
+    async def resolve_graph_structure(
+        self, candidates: Sequence[str], *, limit: int,
+    ) -> "GroundingGraphStructure | None":
+        """Return the headline interesting STRUCTURES the knowledge graph
+        surfaced (most-tense actors, brokers, proxy chains) for the ASSESSED
+        STRUCTURE block, prioritised to the assessor's candidate entities.
+
+        Reads the LATEST ``structural_balance`` + ``graph_mining`` graph_metrics
+        rows (the interesting-edge math already runs each cadence; this is the
+        first reader — closing the compute→consume gap). PREFERS the producers'
+        own ranked ``interesting`` shortlist (the shared contract) when present —
+        each item carries a kind + rationale + score, so the block reads as a
+        curated shortlist; falls back to the raw frustration/betweenness/proxy
+        extraction for older payloads that lack it. The metrics are global (no
+        per-target column), so we scope by candidate NAME. Degrade-not-drop: any
+        read/parse failure logs + yields ``None`` (no block). Returns ``None``
+        when nothing notable renders so the caller skips an empty header.
+        """
+        per_cat = min(int(limit), _MAX_GRAPH_STRUCTURE)
+        if per_cat <= 0:
+            return None
+        cand_lc = {c.casefold() for c in candidates if c and c.strip()}
+        # DISTINCT ON keeps only the freshest row per metric_kind.
+        sql = """
+            SELECT DISTINCT ON (metric_kind) metric_kind, payload
+            FROM graph_metrics
+            WHERE metric_kind IN ('structural_balance', 'graph_mining')
+            ORDER BY metric_kind, computed_at DESC
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(sql)
+        except Exception as exc:  # degrade-not-drop — grounding is enrichment
+            logger.warning("grounding.resolve_graph_structure.failed err=%s", exc)
+            return None
+        payloads = {r["metric_kind"]: _json_or_dict(r["payload"]) for r in rows}
+        # PREFER the shared ``interesting`` shortlist. Cap at 2× the per-category
+        # bound so the merged (cross-metric, multi-kind) list keeps roughly the
+        # same overall footprint as the legacy 3-category fallback.
+        interesting = _collect_interesting(payloads, cand_lc, per_cat * 2)
+        if interesting:
+            structure = GroundingGraphStructure(
+                frustration=[], brokers=[], proxy_chains=[], interesting=interesting,
+            )
+            return None if structure.is_empty() else structure
+        # FALLBACK — raw extraction from the metric maps (no shortlist present).
+        sb = payloads.get("structural_balance") or {}
+        gm = payloads.get("graph_mining") or {}
+        structure = GroundingGraphStructure(
+            frustration=_top_graph_items(sb.get("frustration"), cand_lc, per_cat, min_value=0.0),
+            brokers=_top_brokers(gm.get("top_centrality"), cand_lc, per_cat),
+            proxy_chains=_top_proxy_chains(gm.get("proxy_chains"), cand_lc, per_cat),
+        )
+        return None if structure.is_empty() else structure
+
+
+# ---------------------------------------------------------------------------
+# Preamble assembly — the dated "AUTHORITATIVE CURRENT CONTEXT" block
+# ---------------------------------------------------------------------------
+
+
+_PREAMBLE_HEADER = (
+    "AUTHORITATIVE CURRENT CONTEXT (as of {today} — treat as ground truth over "
+    "any prior knowledge; these facts are current as of today and SUPERSEDE "
+    "anything your training data implies about who currently holds office, "
+    "which alliances are in force, or the present state of the world):"
+)
+
+
+def build_grounding_preamble(
+    facts: Sequence[GroundingFact],
+    nexuses: Sequence[GroundingNexus],
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Render current facts + signed nexuses into a dated preamble block.
+
+    Returns ``None`` when there is nothing to inject (no facts AND no
+    nexuses) so the caller can skip prepending an empty header. The block is
+    plain text (the runner concatenates it ahead of the rendered slice); it is
+    intentionally compact — one line per fact/relationship.
+    """
+    if not facts and not nexuses:
+        return None
+    today = (now or datetime.now(tz=timezone.utc)).date().isoformat()
+    lines: list[str] = [_PREAMBLE_HEADER.format(today=today)]
+    for f in facts:
+        lines.append(f"- {f.render()}")
+    if nexuses:
+        lines.append("Key current relationships:")
+        for n in nexuses:
+            lines.append(f"- {n.render()}")
+    lines.append("")  # blank separator before the slice
+    return "\n".join(lines)
+
+
+# The ASSESSED SITUATIONS block is rendered SEPARATELY from (and after) the
+# AUTHORITATIVE CURRENT CONTEXT ground-truth block, with a header that makes the
+# trust boundary explicit: situations are analysis DERIVED from clustered
+# findings (the system's own situational picture), NOT operator-vetted ground
+# truth. Per the Phase-5 operator decision, situations are NEVER laundered into
+# the ground-truth block.
+_SITUATIONS_HEADER = (
+    "ASSESSED SITUATIONS (the system's current situational picture — ONGOING "
+    "frames the platform has CLUSTERED from recent findings, NOT operator-vetted "
+    "ground truth; use them for continuity/context and weigh accordingly, do not "
+    "treat as established fact):"
+)
+
+
+def build_situations_block(
+    situations: Sequence[GroundingSituation],
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Render ongoing situation frames into the dedicated ASSESSED SITUATIONS
+    block (analysis-derived, clearly fenced off from ground truth).
+
+    Returns ``None`` when there is nothing to inject so the caller skips an
+    empty header. One line per frame; intentionally compact. ``now`` is
+    threaded to each frame's staleness render so the "last activity Nd ago"
+    age is deterministic in tests.
+    """
+    if not situations:
+        return None
+    lines: list[str] = [_SITUATIONS_HEADER]
+    for s in situations:
+        lines.append(f"- {s.render(now=now)}")
+    lines.append("")  # blank separator before the slice
+    return "\n".join(lines)
+
+
+# The ASSESSED STRUCTURE block — the knowledge graph's own interesting structures
+# (tense actors, brokers, proxy chains) rendered into the assessor prompt. Like
+# ASSESSED SITUATIONS it is analysis-DERIVED (computed from the signed nexus
+# graph), NOT operator-vetted ground truth, so it is rendered in its OWN fenced
+# block and NEVER laundered into the AUTHORITATIVE block. This is the consume-side
+# of "use the graph in analysis to find the interesting edges": the structural
+# math (structural_balance / graph_mining) already runs each cadence; this block
+# is the first thing that puts its output in front of the reasoning LLM.
+_GRAPH_STRUCTURE_HEADER = (
+    "ASSESSED STRUCTURE (analysis-derived — the system's current knowledge-graph "
+    "structure, computed from the signed relationship graph; NOT operator-vetted "
+    "ground truth. Use it to NOTICE who is structurally central, tense, or "
+    "brokering between camps — and let it sharpen the assessment — but weigh it as "
+    "a derived signal, not established fact):"
+)
+
+
+# Human group labels for the ``interesting`` shortlist kinds (the shared
+# contract). An unknown kind falls back to a de-underscored version of itself.
+_INTERESTING_KIND_LABELS: dict[str, str] = {
+    "tense_actor": "Most structurally tense actors (caught in conflicting / unbalanced ties)",
+    "broker": "Key brokers (high betweenness — sit between otherwise-separated camps)",
+    "new_hostile_edge": "Newly-hostile relationships",
+    "sign_imbalanced_triad": "Sign-imbalanced triads (a structurally unstable trio)",
+    "proxy_chain": "Notable indirect / proxy links (one actor acts on another via an intermediary)",
+}
+
+
+def build_graph_structure_block(structure: "GroundingGraphStructure | None") -> str | None:
+    """Render the knowledge graph's interesting structures into the dedicated
+    ASSESSED STRUCTURE block (analysis-derived, clearly fenced off from ground
+    truth). Returns ``None`` when there is nothing notable to inject so the caller
+    skips an empty header. Compact; bounded by :data:`_MAX_GRAPH_STRUCTURE`.
+    """
+    if structure is None or structure.is_empty():
+        return None
+    lines: list[str] = [_GRAPH_STRUCTURE_HEADER]
+    # PREFERRED: render the producers' ranked ``interesting`` shortlist, grouped
+    # by kind (stable order), each item with its one-line rationale. When the
+    # shortlist is present the raw frustration/broker/proxy enumeration is empty,
+    # so only this branch fires.
+    if structure.interesting:
+        by_kind: dict[str, list[GroundingInterestingItem]] = {}
+        for it in structure.interesting:
+            by_kind.setdefault(it.kind, []).append(it)
+        # Known kinds in their canonical order first, then any extra kinds.
+        ordered_kinds = [k for k in _INTERESTING_KIND_ORDER if k in by_kind]
+        ordered_kinds += [k for k in by_kind if k not in _INTERESTING_KIND_ORDER]
+        for kind in ordered_kinds:
+            label = _INTERESTING_KIND_LABELS.get(kind, kind.replace("_", " "))
+            lines.append(f"- {label}:")
+            for it in by_kind[kind]:
+                detail = f" — {it.rationale}" if it.rationale else ""
+                lines.append(f"  - {it.label}{detail}")
+        lines.append("")  # blank separator before the slice
+        return "\n".join(lines)
+    if structure.frustration:
+        rendered = ", ".join(f"{n} ({int(v)})" for n, v in structure.frustration)
+        lines.append(
+            "- Most structurally tense actors (caught in the most sign-imbalanced / "
+            f"conflicting ties): {rendered}"
+        )
+    if structure.brokers:
+        rendered = ", ".join(f"{n} ({v:.3f})" for n, v in structure.brokers)
+        lines.append(
+            "- Key brokers (high betweenness — sit between otherwise-separated "
+            f"camps; a natural conduit or chokepoint): {rendered}"
+        )
+    if structure.proxy_chains:
+        lines.append("- Notable indirect / proxy links (A acts on B through an intermediary):")
+        for c in structure.proxy_chains:
+            lines.append(f"  - {c}")
+    lines.append("")  # blank separator before the slice
+    return "\n".join(lines)

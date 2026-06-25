@@ -1,0 +1,135 @@
+# world_assessor — the GLOBAL situational-awareness meta-analyst.
+#
+# A single world-picture LLM run every 6h: one executive one-pager Finding that
+# synthesizes the whole tenant-wide signal slice (NOT a per-country fan-out).
+# This is the global complement to country_assessor (which is scoped per-G20
+# country by `has_tag("g20")` and fans out one run per matched target).
+#
+# ── kind = inline_target (justified) ──────────────────────────────────────
+# `inline_target` is the canonical LLM-bearing finding kind whose
+# `method.kind` is `llm_planner` and whose builder branch
+# (analyst_deps_builder._build_inline_target) wraps the configured LLM into the
+# InlineTargetRunner and emits one FindingPayload per run. The OTHER LLM kinds
+# don't fit: `meta_findings_synthesizer` reads ONLY other analysts' findings
+# (analyst_outputs), not the raw global signal slice; `deterministic` carries
+# no LLM. So inline_target + a META (no-targets) subscription is the correct
+# archetype for "one global LLM run over the recent global signal pool".
+#
+# ── single GLOBAL run (justified from _cadence_targets) ───────────────────
+# What makes a run global vs. per-target is the PRESENCE of a
+# `subscription.targets` selector — see dapr_actors.AnalystActor:
+#   * AnalystActor._cadence_targets() returns None when
+#     `subscription.targets is None` (the META case), and the cadence reminder
+#     then fires `self.run({"trigger_kind": "cadence"})` exactly ONCE — a
+#     single global run with target_filter=None.
+#   * A `targets` block — EVEN ONE WITH NO PREDICATE — is treated as a target
+#     selector: `_cadence_targets` returns "all active targets" and the actor
+#     FANS OUT one worker run per target. That is NOT what we want here.
+# Therefore this descriptor declares NO `targets` block (mirroring the META
+# integrity_sweep). With target_filter=None the default slice reader
+# (_read_substrate_slice) reads the recent tenant-wide signal pool over its
+# 24h default window — the global 24h signal slice the world assessment needs.
+#
+# NOTE on data_types/time_window: the AnalystDescriptor schema's
+# SubscriptionBlock is `extra="forbid"` and exposes ONLY {targets,
+# other_analysts, substrate}; `data_types`/`time_window` exist solely INSIDE a
+# `targets`/`other_analysts` sub-block. Since adding a `targets` block would
+# turn this into a per-target fan-out (above), they cannot be declared at the
+# subscription top level without breaking either validation or the
+# single-global-run contract. The runtime's default reader already yields a
+# signals-only, 24h, global slice — exactly the intended window — so the
+# behavior the task asks for is achieved by the defaults rather than by
+# unsupported subscription keys.
+
+identity:
+  id: world_assessor
+  name: World Situational-Awareness Assessor
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: world_assessor
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick over the
+  # tenant-wide signal pool (see _cadence_targets → None → single global run).
+  # Mirrors integrity_sweep's META subscription shape.
+  other_analysts: []
+  substrate:
+    direct_queries: false
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  prompt_module: "legba.runtime.analyst_method:_WORLD_ASSESSOR_SYSTEM"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 2048
+  budget_tokens_per_day: 1000000
+  # One global run per 6h tick (4 ticks/day). Per-run tokens for a global
+  # 50-signal slice ≈ input (~7.5k worst case) + 2048 output ≈ 9.6k tok/run;
+  # 4 × 9.6k ≈ 38k tok/day — well under the 120k/day cap (~3x headroom). The
+  # budget retry policy stays at the default `pause_until_next_window`: if the
+  # cap is ever projected to be crossed, the actor pauses THIS analyst until
+  # the next UTC bucket rather than demoting to a (non-wired) paid fallback.
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Every 6h, on the hour (00:00 / 06:00 / 12:00 / 18:00 UTC).
+  fallback_schedule: "0 */6 * * *"
+  # Cooldown MUST stay below the cadence interval (21600s): it is stamped at
+  # run-completion, so setting it == the interval pushes it past the next
+  # scheduled fire and silently halves the cadence (6h→12h). 5h50m leaves a
+  # 10-min margin (matching country_critic) while still blocking a coalesced
+  # trigger burst from spending a second global LLM call. (The runtime also
+  # applies a cadence-cooldown slack as a belt-and-braces guard.)
+  cooldown_seconds: 21000
+
+# Tier-1 knowledge grounding (L-241). Stale-cutoff LLMs backfill current world
+# state (officeholders, alliances) from a training prior that predates the
+# present — observed: this assessor called the CURRENT US president a "former"
+# one. With grounding.enabled the deps-builder PREPENDS a dated "AUTHORITATIVE
+# CURRENT CONTEXT" preamble built from the CURRENT authoritative substrate
+# facts (seed/curated, temporal-honesty-gated) about the slice's entities/geo
+# before the LLM call. A global assessor has no single target geo, so its
+# grounding leans on slice_entities (the named figures the world slice talks
+# about); target_geo is harmless (the global run has no target_id, so it
+# contributes nothing). Token-capped at max_facts.
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  # substrate = the ground-truth facts/nexuses block; situations = the SEPARATE
+  # "ASSESSED SITUATIONS" block (ongoing clustered frames, analysis-derived).
+  # world_assessor has no country target, so it grounds against the top open
+  # frames across all topics (the global situational picture).
+  # graph_structure = the SEPARATE "ASSESSED STRUCTURE" block — the global
+  # knowledge-graph structure (most-tense actors / brokers / proxy chains) from
+  # the structural_balance + graph_mining metrics; analysis-derived, fenced off.
+  sources: [substrate, situations, graph_structure]
+  # FIX-2: always-on world-state. The global slice can be flooded by a
+  # high-volume source (e.g. NWS weather alerts = ~70% of 24h), starving the
+  # geopolitical signals — so without these the seeded active-conflict nexuses
+  # (US⇄Iran, Israel⇄Iran) never ground. These names match facts.subject /
+  # nexuses.subject and are queried regardless of slice content.
+  static_candidates: [Iran, United States, Israel, Russia, Ukraine, China, Gaza]
+  max_facts: 30
+
+# Surface the assessment as an A2A skill, mirroring country_assessor's output
+# binding (the FindingPayload still lands in analyst_outputs via the kind's
+# default OUTPUT_KIND.FINDING regardless).
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: intelligence.world_assessment

@@ -1,0 +1,154 @@
+# syntax=docker/dockerfile:1.7
+#
+# legba-runtime-dapr — FastAPI app daprd dispatches into for actor
+# methods + reminders. Runs the Dapr actor host on port 6090.
+#
+# Multi-stage. Deps superset of legba-registry: + dapr Python SDK +
+# dapr-ext-fastapi + langdetect (the in-process language-detect filter
+# default; the lingua/torch heavy backends retired in L-205). The DSPy
+# + temporalio deps deliberately stay out — analyst kinds lazy-import
+# dspy and degrade to direct-chat fallback when it's missing, so the
+# runtime image stays small. The optimizer kind's Temporal workflow
+# code lives in src/legba/runtime/temporal/ but isn't loaded at host
+# boot (only via the optimizer kind handler) — temporal-worker is the
+# image that pulls temporalio.
+#
+# Build:    docker compose --profile runtime build legba-runtime-dapr
+# Run:      docker compose --profile runtime --profile dapr up -d
+# Verify:   curl http://127.0.0.1:6090/healthz
+
+# ---------------------------------------------------------------- builder
+FROM python:3.11-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        libffi-dev \
+        libsodium-dev \
+        libpq-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Runtime-only deps. Superset of registry (registry deps are the
+# substrate read paths the runtime also exercises) + Dapr + lang
+# detect + numpy/pandas (deterministic analyst handlers). dspy /
+# temporalio / stix2 / heavy source kinds stay out — they belong on
+# the temporal-worker image (optimizer kind) or are lazy-loaded by
+# source kind handlers that the runtime activates on demand only
+# when the descriptor uses them.
+#
+# Source-kind deps (telethon, google-cloud-bigquery, warcio,
+# aiobotocore, feedparser, trafilatura) ARE shipped here — sources
+# are imported at runtime activation, so missing deps would crash
+# actors. They're not heavy individually; the L-205 retirements
+# removed the genuinely fat ones (torch + spacy + sentence-
+# transformers).
+RUN pip install --prefix=/install \
+        "fastapi>=0.115" \
+        "uvicorn[standard]>=0.32" \
+        "pydantic>=2.0" \
+        "asyncpg>=0.29" \
+        "redis[hiredis]>=5.0" \
+        "nats-py>=2.7" \
+        "pynacl>=1.5" \
+        "httpx>=0.27" \
+        "qdrant-client>=1.9" \
+        "croniter>=2.0" \
+        "python-dotenv>=1.0" \
+        "python-multipart>=0.0.9" \
+        "jinja2>=3.1" \
+        "pyyaml>=6.0" \
+        "starlark-pyo3>=2026.1" \
+        "dapr>=1.13" \
+        "dapr-ext-fastapi>=1.13" \
+        # dapr-ext-workflow (L-205 / P-16): the optimizer analyst kind's durable
+        # GEPA loop runs as a Dapr Workflow — the host starts an in-process
+        # WorkflowRuntime worker + passes a workflow client into the optimizer's
+        # durable-handle slot. Replaces temporalio (Temporal fully removed:
+        # no temporal-server/worker cluster, no temporalio dep). The optimizer's
+        # in-process GEPA fallback (temporal/activities) is temporalio-free.
+        "dapr-ext-workflow>=1.17" \
+        "langdetect>=1.0" \
+        "numpy>=1.26" \
+        "scikit-learn>=1.3" \
+        "pandas>=2.0" \
+        "networkx>=3.2" \
+        "pyod>=1.1" \
+        "statsforecast>=1.7" \
+        "feedparser>=6.0" \
+        "trafilatura>=1.8" \
+        "pycountry>=24.6" \
+        "geopy>=2.4" \
+        "aiohttp>=3.9" \
+        "warcio>=1.7" \
+        "aiobotocore>=2.7" \
+        # telethon — the telegram_channel source kind (MTProto user-API).
+        # ~13 MB + pyaes + rsa. Shipped so the Telegram source actor activates
+        # without a separate image; the handler still lazy-imports it.
+        "telethon>=1.36" \
+        "mcp>=1.0" \
+        # stix2 eagerly imported by legba.data.outputs.__init__
+        # (analyst outputs flow through this module at runtime).
+        "stix2>=3.0"
+# Heavy source-kind deps dropped from the base set (each lazy-imported
+# by its handler; legba.data.sources.__init__ wraps imports in try/except
+# so the runtime image stays small until a descriptor actually uses one):
+#   * google-cloud-bigquery — GDELT BigQuery source kind (pulls pyarrow ~153 MB)
+#   * telethon              — Telegram channel source kind (~13 MB + pyaes + rsa)
+# Operators who deploy GDELT or Telegram source kinds: build a custom
+# runtime image variant via Dockerfile.runtime + `pip install
+# 'legba[gdelt,telegram]'` extras (the relevant deps), or rebuild the
+# base by adding the dep to the pip line above.
+
+COPY pyproject.toml /build/pyproject.toml
+COPY src /build/src
+RUN pip install --prefix=/install --no-deps /build
+
+# Strip bytecode caches + test SUITES from the installed packages.
+# Saves ~80-150 MB on the numpy/pandas test-suite tail. Bytecode regenerates
+# at import time; test suites aren't needed at runtime.
+# NB: strip only `tests` dirs, NOT `testing` — `numpy/testing` is a PUBLIC
+# module (assert helpers) that statsforecast imports at import time; deleting
+# it broke `from statsforecast.models import AutoARIMA`, silently downgrading
+# 100% of the predictor's forecasts to naive_mean (DQ-H1).
+RUN find /install -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -type d -regex '.*/tests' -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -name "*.pyc" -delete 2>/dev/null || true \
+ && find /install -name "*.pyo" -delete 2>/dev/null || true
+
+# --------------------------------------------------------------- runtime
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/install/bin:$PATH \
+    PYTHONPATH=/install/lib/python3.11/site-packages
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        libsodium23 \
+        libpq5 \
+        curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /install
+
+WORKDIR /app
+
+# Default Dapr-host port matches the sidecar's `-app-port 6090`.
+ENV LEGBA_RUNTIME_HTTP_HOST=0.0.0.0 \
+    LEGBA_RUNTIME_HTTP_PORT=6090
+
+EXPOSE 6090
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=4 \
+  CMD curl -sf http://127.0.0.1:6090/healthz || exit 1
+
+ENTRYPOINT ["legba-runtime-dapr"]

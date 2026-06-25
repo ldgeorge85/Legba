@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Backfill organization memberships that Wikidata SPARQL didn't return.
 
 Hardcoded authoritative data for: BRICS, UN Security Council (permanent),

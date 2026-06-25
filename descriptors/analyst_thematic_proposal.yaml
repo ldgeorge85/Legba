@@ -1,0 +1,59 @@
+# Situation Detection analyst descriptor (Phase 5b — detect → propose → promote).
+#
+# A `deterministic`-kind META analyst over the shared situations table. The
+# downstream sibling of situation_clustering: clustering MATERIALIZES situations
+# (bottom-up, as a byproduct of per-country analysis); THIS handler scans the
+# OPEN high-intensity situations that no active thematic target covers and
+# PROPOSEs a candidate thematic frame for each — a suggested contains_any
+# scope.predicate an operator can register (scripts/bringup_register_situation_
+# targets.py) to give that situation its own focused signal slice + dedicated
+# analyst.
+#
+# Capability model (ratified): analysts PROPOSE, operators ACTIVATE — NO
+# control-plane writes. This handler NEVER registers a target; it emits a single
+# FINDING whose data.proposals lists the candidate frames. Once a thematic
+# target covers a situation (its predicate mentions the situation's terms), the
+# situation stops being proposed — the loop converges.
+#
+# Cadence:
+#   * fallback_schedule = "10-59/30 * * * *" — every 30 min, OFFSET 10 min after
+#     situation_clustering ("5-59/20") so the intensities it reads are fresh.
+#   * cooldown_seconds = 600 — the proposal is a slow-changing advisory.
+
+identity:
+  id: thematic_proposal
+  name: Thematic Proposal
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: thematic_proposal
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # situations table. The handler reads situations + active thematic targets
+  # directly via deps.pg_pool (it ignores the materialized input slice).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: thematic_proposal
+
+cadence:
+  fallback_schedule: "10-59/30 * * * *"
+  cooldown_seconds: 600
+
+# The deterministic kind's default OUTPUT_KIND writes the per-run proposal
+# finding (data.proposals). No extra output sinks.
+outputs: []

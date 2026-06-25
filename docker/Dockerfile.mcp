@@ -1,0 +1,95 @@
+# syntax=docker/dockerfile:1.7
+#
+# legba-mcp — MCP stdio server. Lewis uses this from Claude Code via
+# the standard MCP host wiring; the entry point reads MCP protocol
+# frames on stdin and writes them on stdout, so this image is
+# launched per-conversation by the MCP client and exits when the
+# client disconnects. It is NOT a long-running daemon.
+#
+# Why containerize at all? So Claude Code's MCP config can spawn it
+# under `docker run -i --rm legba/legba-mcp` instead of relying on a
+# host-side python interpreter + sys.path matching the deployment's
+# legba install. The wiring stays "no npm / no python on the host
+# for the legba surfaces."
+#
+# Deps: the registry/substrate read-path set (asyncpg + redis +
+# qdrant + nats + pydantic + pynacl + httpx + croniter
+# + starlark-pyo3 for predicate-eval-on-read paths) + the mcp Python
+# SDK. No dapr / dspy / temporalio / stix2.
+#
+# Build:    docker compose --profile mcp build legba-mcp
+# Run:      docker run -i --rm --network legba_default legba/legba-mcp
+
+# ---------------------------------------------------------------- builder
+FROM python:3.11-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        libffi-dev \
+        libsodium-dev \
+        libpq-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN pip install --prefix=/install \
+        "mcp>=1.0" \
+        "pydantic>=2.0" \
+        "asyncpg>=0.29" \
+        "redis[hiredis]>=5.0" \
+        "nats-py>=2.7" \
+        "pynacl>=1.5" \
+        "httpx>=0.27" \
+        "qdrant-client>=1.9" \
+        "croniter>=2.0" \
+        "python-dotenv>=1.0" \
+        "pyyaml>=6.0" \
+        "starlark-pyo3>=2026.1" \
+        # fastapi is pulled by legba.data.outputs (a2a_skill module imports
+        # APIRouter at module level). MCP doesn't run an HTTP server but
+        # the import path traverses the outputs surface for shared model
+        # types. Light dep (~2 MB).
+        "fastapi>=0.115" \
+        # stix2 eagerly imported by legba.data.outputs.__init__.
+        "stix2>=3.0"
+
+COPY pyproject.toml /build/pyproject.toml
+COPY src /build/src
+RUN pip install --prefix=/install --no-deps /build
+
+# Strip bytecode caches + test fixtures.
+RUN find /install -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -type d -regex '.*/\(tests\|testing\)' -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -name "*.pyc" -delete 2>/dev/null || true
+
+# --------------------------------------------------------------- runtime
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/install/bin:$PATH \
+    PYTHONPATH=/install/lib/python3.11/site-packages
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        libsodium23 \
+        libpq5 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /install
+
+WORKDIR /app
+
+# MCP stdio server. The entry point logs to STDERR and emits MCP
+# protocol on STDOUT (per legba.ui.mcp_server.main). Do not redirect
+# stderr to stdout — that would corrupt the protocol stream.
+#
+# No HEALTHCHECK — short-lived process; MCP client owns lifecycle.
+ENTRYPOINT ["legba-mcp"]

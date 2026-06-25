@@ -1,0 +1,338 @@
+/**
+ * The World — map renderer on Leaflet (NOT WebGL).
+ *
+ * MapLibre/deck.gl render via WebGL, which Chrome refuses to composite inside a
+ * Dockview tile's CSS transform — the canvas paints but stays invisible. Leaflet
+ * draws with plain DOM + SVG/Canvas2D, which composites normally in a tile, so
+ * this docks like any other panel. Reuses the same typed data hooks (./mapData),
+ * the shared world store (./worldState), and the global selection store.
+ *
+ * Base = the bundled Natural Earth GeoJSON (dark land) over a dark background —
+ * no external tile server. Signals are aggregated to their geocoded point
+ * (country centroid) and drawn as severity-colored circles; findings + situations
+ * as their own markers. Clicking opens the drill drawer + sets the selection.
+ */
+import { useEffect, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import {
+  MapContainer,
+  GeoJSON,
+  CircleMarker,
+  Tooltip,
+  useMap,
+} from 'react-leaflet'
+import type { PathOptions } from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+import {
+  useWorldSignals,
+  useWorldFindings,
+  useWorldSituations,
+} from './mapData'
+import { useWorldState } from './worldState'
+import { useSelection } from '@/state/selection'
+import {
+  SEVERITY_COLOR,
+  SITUATION_COLOR,
+  type Severity,
+  type WorldSignal,
+} from './types'
+
+const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+  info: 0,
+}
+
+const LAND_STYLE: PathOptions = {
+  fillColor: '#1b2433',
+  fillOpacity: 1,
+  color: '#3a4965',
+  weight: 0.6,
+}
+
+/**
+ * Age-based decay multiplier in [DECAY_FLOOR, 1]. A point at the window end
+ * (age 0) renders at full strength; a point at the window start fades toward
+ * the floor (kept >0 so the oldest in-window points stay faintly visible
+ * rather than vanishing). The curve is squared so recent activity dominates.
+ * Returns 1 when decay is off or the window has no span.
+ */
+const DECAY_FLOOR = 0.18
+
+function decayFactor(
+  ts: number,
+  startMs: number,
+  endMs: number,
+  enabled: boolean,
+): number {
+  if (!enabled) return 1
+  const span = endMs - startMs
+  if (span <= 0) return 1
+  const age = endMs - ts
+  const fresh = 1 - Math.min(Math.max(age / span, 0), 1)
+  return DECAY_FLOOR + (1 - DECAY_FLOOR) * fresh * fresh
+}
+
+interface SignalCluster {
+  key: string
+  lat: number
+  lon: number
+  count: number
+  maxSeverity: Severity
+  /** Freshest signal ts in the cluster — drives its decay (a cluster with
+   *  recent activity stays bright even if it also holds older signals). */
+  freshestTs: number
+  signals: WorldSignal[]
+}
+
+/** Keep Leaflet sized to its container — it measures on mount, and a tile that
+ *  lays out after mount would otherwise leave the map at the wrong size. */
+function ResizeFix() {
+  const map = useMap()
+  useEffect(() => {
+    const el = map.getContainer()
+    map.invalidateSize()
+    const ro = new ResizeObserver(() => map.invalidateSize())
+    ro.observe(el)
+    const t = setTimeout(() => map.invalidateSize(), 300)
+    return () => {
+      ro.disconnect()
+      clearTimeout(t)
+    }
+  }, [map])
+  return null
+}
+
+export default function LeafletWorldMap() {
+  const { signals } = useWorldSignals()
+  const { findings } = useWorldFindings()
+  const { situations } = useWorldSituations()
+  const layers = useWorldState((s) => s.layers)
+  const windowStartMs = useWorldState((s) => s.windowStartMs)
+  const windowEndMs = useWorldState((s) => s.windowEndMs)
+  const filters = useWorldState((s) => s.filters)
+  const decay = useWorldState((s) => s.decay)
+  const setCount = useWorldState((s) => s.setCount)
+  const setFilterOptions = useWorldState((s) => s.setFilterOptions)
+  const openDrawer = useWorldState((s) => s.openDrawer)
+  const select = useSelection((s) => s.select)
+
+  const base = useQuery({
+    queryKey: ['world-geojson'],
+    queryFn: () => fetch('/world.geojson').then((r) => r.json()),
+    staleTime: Infinity,
+  })
+
+  const minRank = filters.minSeverity != null ? SEVERITY_RANK[filters.minSeverity] : 0
+
+  // Window first (the existing client-side cut), then the operator's plot
+  // filters. Severity is a floor; source/country are exact-match on whichever
+  // dimension a row carries (findings/situations have no sourceId, so the
+  // source filter only narrows signals).
+  const winSignals = useMemo(
+    () =>
+      signals.filter(
+        (s) =>
+          s.ts >= windowStartMs &&
+          s.ts <= windowEndMs &&
+          SEVERITY_RANK[s.severity] >= minRank &&
+          (filters.source == null || s.sourceId === filters.source) &&
+          (filters.country == null || s.countries.includes(filters.country)),
+      ),
+    [signals, windowStartMs, windowEndMs, minRank, filters.source, filters.country],
+  )
+  const winFindings = useMemo(
+    () =>
+      findings.filter(
+        (f) =>
+          f.lat != null &&
+          f.lon != null &&
+          f.ts >= windowStartMs &&
+          f.ts <= windowEndMs &&
+          SEVERITY_RANK[f.severity] >= minRank &&
+          (filters.country == null || f.countries.includes(filters.country)),
+      ),
+    [findings, windowStartMs, windowEndMs, minRank, filters.country],
+  )
+  const winSituations = useMemo(
+    () =>
+      situations.filter(
+        (s) =>
+          s.lat != null &&
+          s.lon != null &&
+          s.ts >= windowStartMs &&
+          s.ts <= windowEndMs &&
+          (filters.country == null || s.countries.includes(filters.country)),
+      ),
+    [situations, windowStartMs, windowEndMs, filters.country],
+  )
+
+  // Publish the source/country option lists for the LayerPanel dropdowns,
+  // derived from the in-window data (pre source/country filter so the operator
+  // can still switch between values). Severity floor still applies.
+  const winSignalsForOptions = useMemo(
+    () =>
+      signals.filter(
+        (s) =>
+          s.ts >= windowStartMs &&
+          s.ts <= windowEndMs &&
+          SEVERITY_RANK[s.severity] >= minRank,
+      ),
+    [signals, windowStartMs, windowEndMs, minRank],
+  )
+  const filterOptions = useMemo(() => {
+    const sources = new Set<string>()
+    const countries = new Set<string>()
+    for (const s of winSignalsForOptions) {
+      if (s.sourceId) sources.add(s.sourceId)
+      for (const c of s.countries) countries.add(c)
+    }
+    for (const f of findings) for (const c of f.countries) countries.add(c)
+    for (const s of situations) for (const c of s.countries) countries.add(c)
+    return {
+      sources: [...sources].sort(),
+      countries: [...countries].sort(),
+    }
+  }, [winSignalsForOptions, findings, situations])
+  useEffect(
+    () => setFilterOptions(filterOptions),
+    [filterOptions, setFilterOptions],
+  )
+
+  // Aggregate signals onto their geocoded point so the map shows a clean set of
+  // severity-colored circles instead of thousands of overlapping dots.
+  const clusters = useMemo<SignalCluster[]>(() => {
+    const m = new Map<string, SignalCluster>()
+    for (const s of winSignals) {
+      const key = `${s.lat.toFixed(2)},${s.lon.toFixed(2)}`
+      const c = m.get(key)
+      if (c) {
+        c.count++
+        c.signals.push(s)
+        if (s.ts > c.freshestTs) c.freshestTs = s.ts
+        if (SEVERITY_RANK[s.severity] > SEVERITY_RANK[c.maxSeverity]) c.maxSeverity = s.severity
+      } else {
+        m.set(key, {
+          key,
+          lat: s.lat,
+          lon: s.lon,
+          count: 1,
+          maxSeverity: s.severity,
+          freshestTs: s.ts,
+          signals: [s],
+        })
+      }
+    }
+    return [...m.values()]
+  }, [winSignals])
+
+  useEffect(() => setCount('signals', winSignals.length), [winSignals.length, setCount])
+  useEffect(() => setCount('findings', winFindings.length), [winFindings.length, setCount])
+  useEffect(() => setCount('situations', winSituations.length), [winSituations.length, setCount])
+
+  return (
+    <div className="h-full w-full" style={{ background: '#0a0c10' }}>
+      <MapContainer
+        center={[20, 0]}
+        zoom={2}
+        minZoom={1}
+        maxZoom={8}
+        worldCopyJump
+        preferCanvas
+        attributionControl={false}
+        style={{ height: '100%', width: '100%', background: '#0a0c10' }}
+      >
+        <ResizeFix />
+        {base.data ? <GeoJSON data={base.data} style={() => LAND_STYLE} /> : null}
+
+        {layers.signals &&
+          clusters.map((c) => {
+            const d = decayFactor(c.freshestTs, windowStartMs, windowEndMs, decay)
+            return (
+            <CircleMarker
+              key={`s-${c.key}`}
+              center={[c.lat, c.lon]}
+              radius={Math.min(6 + Math.sqrt(c.count) * 2.5, 28) * (0.5 + 0.5 * d)}
+              pathOptions={{
+                color: SEVERITY_COLOR[c.maxSeverity],
+                fillColor: SEVERITY_COLOR[c.maxSeverity],
+                fillOpacity: 0.45 * d,
+                opacity: d,
+                weight: 1,
+              }}
+              eventHandlers={{
+                click: () => {
+                  openDrawer({
+                    title: `${c.count} signal${c.count === 1 ? '' : 's'}`,
+                    signals: c.signals,
+                    findings: [],
+                  })
+                  const src = c.signals[0]?.sourceId
+                  if (src) select({ kind: 'source', id: src, label: src })
+                },
+              }}
+            >
+              <Tooltip>{c.count} signals</Tooltip>
+            </CircleMarker>
+            )
+          })}
+
+        {layers.findings &&
+          winFindings.map((f) => {
+            const d = decayFactor(f.ts, windowStartMs, windowEndMs, decay)
+            return (
+            <CircleMarker
+              key={`f-${f.id}`}
+              center={[f.lat as number, f.lon as number]}
+              radius={6 * (0.5 + 0.5 * d)}
+              pathOptions={{
+                color: '#ffffff',
+                fillColor: SEVERITY_COLOR[f.severity],
+                fillOpacity: 0.85 * d,
+                opacity: d,
+                weight: 1,
+              }}
+              eventHandlers={{
+                click: () => {
+                  openDrawer({ title: f.title, signals: [], findings: [f] })
+                  select({ kind: 'finding', id: f.id, label: f.title })
+                },
+              }}
+            >
+              <Tooltip>{f.title}</Tooltip>
+            </CircleMarker>
+            )
+          })}
+
+        {layers.situations &&
+          winSituations.map((s) => {
+            const d = decayFactor(s.ts, windowStartMs, windowEndMs, decay)
+            return (
+            <CircleMarker
+              key={`sit-${s.id}`}
+              center={[s.lat as number, s.lon as number]}
+              radius={10 * (0.5 + 0.5 * d)}
+              pathOptions={{
+                color: '#0a0c10',
+                fillColor: SITUATION_COLOR[s.lifecycle],
+                fillOpacity: 0.85 * d,
+                opacity: d,
+                weight: 2,
+              }}
+              eventHandlers={{
+                click: () => {
+                  openDrawer({ title: s.title, signals: [], findings: [] })
+                  select({ kind: 'situation', id: s.id, label: s.title })
+                },
+              }}
+            >
+              <Tooltip>{s.title}</Tooltip>
+            </CircleMarker>
+            )
+          })}
+      </MapContainer>
+    </div>
+  )
+}

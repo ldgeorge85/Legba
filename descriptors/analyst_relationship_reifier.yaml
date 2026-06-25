@@ -1,0 +1,69 @@
+# relationship_reifier — the PIECE A reified-typed-Nexus producer (centerpiece).
+#
+# A META analyst kind (no subscription.targets => single global sweep per tick,
+# the meta_synthesizer / situation_clustering precedent). Each tick it:
+#   1. reads pending co-mentioned entity pairs from proposed_edges that are not
+#      yet reified into an OPEN nexus (+ recent facts as context),
+#   2. types each pair via the LLM provider plane (the D2 8B path — typed
+#      rel_type + canonical POLARITY sign + intent + channel + intermediary;
+#      NEVER litellm), and
+#   3. side-writes a `nexus` row per typed pair via the live write_nexus path
+#      (valid_from = event time, supersession on a polarity/label change).
+#
+# The nexus rows are the real output; the per-run FindingPayload summary is the
+# cadence receipt (exactly how situation_clustering side-writes situations).
+# This is what lights up the dormant structural_balance + graph_mining
+# refinement consumers over a SIGNED typed graph (PIECE A light-up).
+
+identity:
+  id: relationship_reifier
+  name: Reified Typed-Nexus Producer (8B-typed, signed)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: relationship_reifier
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: piece_a_nexus_activation
+
+subscription:
+  # No `targets` block => META analyst (single global sweep; _cadence_targets
+  # returns None). The reifier reads proposed_edges + facts directly via
+  # deps.pg_pool (the situation_clustering / hypothesis_lifecycle precedent);
+  # it does NOT consume a per-target signal slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true        # reads proposed_edges + facts via deps.pg_pool
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # method.kind is a constrained Literal; runtime dispatch is on identity.kind
+  # (relationship_reifier). llm_planner matches the single-turn chat_complete
+  # typing shape the kind uses (same as the other LLM-bearing kinds).
+  kind: llm_planner
+  prompt_module: "legba.prompts.relationship_reifier.v1"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 384            # one tiny typed JSON object per pair (8B path)
+    temperature: 0.1
+    max_candidates: 40         # hard per-run cap on pairs typed (budget bound)
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Twice daily, OFFSET after entity_resolution / the assessors so a fresh
+  # proposed_edges sweep is present. Reify is the next hop after resolution.
+  fallback_schedule: "45 */12 * * *"
+  cooldown_seconds: 39600        # 11h (below the 12h interval)
+
+outputs: []

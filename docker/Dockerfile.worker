@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1.7
+#
+# legba-dapr-workflow-worker — the optimizer kind's GEPA compile worker.
+#
+# This is the ONLY image that carries dspy (+ its litellm transitive dep).
+# It is a thin layer over the runtime image: same code + substrate deps,
+# plus dspy 3.0 for the GEPA teleprompter. The base runtime image stays
+# dspy-free on purpose — dspy/litellm must NEVER reach the production
+# runtime image or the analyst inference hot path (operator hard rule;
+# see planning/OPTIMIZER_DSPY_GEPA_PLAN.md). Even here litellm is never
+# invoked: the GEPA loop drives a custom dspy.BaseLM (LegbaProviderLM)
+# over our own LLMProviderHandler, so litellm is an inert transitive dep.
+#
+# Build:  docker compose --profile dapr-workflow build legba-dapr-workflow-worker
+# Run:    docker compose --profile dapr-workflow up -d legba-dapr-workflow-worker
+#
+# The worker reaches its own daprd sidecar's workflow-engine gRPC channel
+# (DAPR_RUNTIME_HOST / DAPR_GRPC_PORT); it registers the same optimizer
+# workflow + activities the in-host runtime would, so a workflow scheduled
+# by the optimizer kind is serviced here.
+
+FROM legba/legba-runtime-dapr:latest AS worker
+
+# dspy 3.0 (+ GEPA) installed into the same /install prefix the runtime
+# image uses (PYTHONPATH=/install/lib/python3.11/site-packages). pip
+# resolves against the already-present tree (numpy/pandas/pydantic), so
+# only dspy + its missing deps (litellm/optuna/...) are added.
+RUN pip install --prefix=/install "dspy-ai>=3.0" \
+ && find /install -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -name "*.pyc" -delete 2>/dev/null || true
+
+# Sanity: the GEPA teleprompter must be importable in THIS image (it is the
+# whole reason the worker exists). Fails the build loudly if dspy<3.0 slipped in.
+RUN python -c "import dspy; assert hasattr(dspy, 'GEPA'), 'dspy.GEPA missing — need dspy>=3.0'; print('dspy', dspy.__version__, 'GEPA OK')"
+
+ENTRYPOINT ["legba-dapr-workflow-worker"]

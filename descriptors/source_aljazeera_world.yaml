@@ -1,0 +1,84 @@
+# P-17 — shared global-news SourceDescriptor: source.aljazeera.world.
+#
+# Second shared global feed (peer of source.bbc.world).  Same model: one poll
+# for the whole platform, open subscription_policy, shared tenant, scope.tags
+# advertising what target source_selectors match against.  Having >1 shared
+# source proves the selector resolves to the SET of matching sources (a target
+# wires to BOTH bbc + aljazeera + dw by one tags=[news] selector — no per-target
+# source list).
+#
+# Real RSS: https://www.aljazeera.com/xml/rss/all.xml — probed 2026-06-03,
+# HTTP 200, application/rss+xml, valid RSS 2.0 body.
+
+identity:
+  id: source.aljazeera.world
+  name: Al Jazeera — All News
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"
+  abstraction_level: L1
+  state: active
+  owner: p17_reregister
+  created: "2026-06-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [news, world, geopolitical, global]
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.aljazeera.com/xml/rss/all.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    # language_detect runs FIRST so ner_multilingual can use the detected
+    # language; it lives in `enrichment` (annotator, no drop). The
+    # dedupe_tier_1/2 ingestion_filters above run at INGEST (SourceCore): a raw
+    # item matching by canonical-URL (tier 1) or content hash (tier 2) is KEPT
+    # and linked to the matched canonical (signal_aliases + canonical_signal_id)
+    # — never collapsed. canonical_only subscribers then receive one row per dup
+    # set; the periodic cross_source_dedup analyst still adds tier-3 semantic links.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: fact_extractor          # Piece 2 — (subject,predicate,value) facts from REBEL relations at ingest
+      config:
+        backend: relation           # reuse /extract REBEL triples (full articles yield rich relations)
+        emit_graph_edges: false
+        max_facts_per_signal: 30
+        # REBEL stamps every triple confidence=1.0, so a min_confidence floor
+        # can't filter noise. This light validity gate drops triples whose
+        # subject/value is purely a spelled-out quantity/ordinal ("sixth",
+        # "at least five") — the worst categorically-wrong REBEL output the
+        # audit flagged. Conservative: a single real-name token keeps the triple.
+        reject_quantity_endpoints: true
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

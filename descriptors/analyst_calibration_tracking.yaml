@@ -1,0 +1,61 @@
+# calibration_tracking — the dormant Brier-calibration feedback loop (PIECE C).
+#
+# A `deterministic`-kind META analyst (sub_handler=calibration_tracking) — wires
+# the BUILT-but-unregistered calibration_tracking handler so hypothesis +
+# prediction confidence is Brier-calibrated against OUTCOMES over time. This is
+# the calibration closure loop the deep review names as dormant
+# (DATA_ANALYSIS_DEEP_REVIEW_2026-06-16.md §1.3 / §2 Rank 3).
+#
+# Each tick it pulls resolved hypotheses (the ACH competing_hypotheses producer's
+# confirmed/refuted rows) + resolved predictions, computes:
+#   * the overall Brier score (mean (claimed - outcome)^2),
+#   * per-analyst Brier (cross-analyst comparison),
+#   * reliability bins (a calibration curve), and
+#   * a rolling-Brier drift signal (z-score vs the trailing window).
+# The per-run FindingPayload carries the metrics in its data column.
+#
+# META analyst: no subscription.targets => single global sweep per tick; reads
+# the hypotheses/predictions tables directly via deps.pg_pool. Pure SQL/numpy,
+# NO LLM — staggered off the other deterministic maintenance analysts so they
+# don't co-fire.
+
+identity:
+  id: calibration_tracking
+  name: Hypothesis + Prediction Brier Calibration
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: piece_c_calibration_activation
+
+subscription:
+  # META analyst: one global sweep per tick over the resolved hypotheses +
+  # predictions. Reads directly via deps.pg_pool (the situation_clustering /
+  # hypothesis_lifecycle precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: calibration_tracking
+  # No LLM block, no token budget — pure SQL/numpy over hypotheses + predictions.
+
+cadence:
+  # Once daily, OFFSET from the other deterministic maintenance analysts
+  # (hypothesis_lifecycle "10-59/20 * * * *", fact_decay, situation_clustering)
+  # so the calibration sweep runs AFTER a day's worth of hypotheses have had a
+  # chance to resolve. Staggered minute so it never co-fires.
+  fallback_schedule: "20 3 * * *"
+  cooldown_seconds: 79200        # 22h (below the 24h interval)
+
+outputs: []

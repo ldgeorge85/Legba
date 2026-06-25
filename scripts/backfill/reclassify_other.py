@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Reclassify signals with category='other' using the GPU models service.
 
 Reads signals from Postgres where category='other', sends each title
@@ -7,7 +9,7 @@ to the /classify endpoint, and updates the category if confidence > 0.5.
 Usage:
     docker compose -p legba run --rm -v $(pwd)/scripts:/scripts \
       -e DATABASE_URL=postgresql://legba:legba@postgres:5432/legba \
-      -e MODELS_API_URL=https://models.ai1.infra.innoscale.net \
+      -e MODELS_API_URL=https://nlp.example.internal \
       -e MODELS_API_USER=legba \
       -e MODELS_API_PASS=$MODELS_API_PASS \
       ingestion python3 /scripts/backfill/reclassify_other.py

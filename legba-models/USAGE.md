@@ -1,10 +1,9 @@
 # Legba Models — API Usage & Integration Guide
 
-**Service:** https://models.ai1.infra.innoscale.net
-**Auth:** HTTP Basic Auth (same user list as sd.ai1, plus `legba` service account)
+**Service:** https://nlp.example.internal
+**Auth:** HTTP Basic Auth (the `legba` service account)
 **Internal (no auth):** `http://legba-models:8700` from any container on the `fastchat` Docker network
-**Deployed:** 2026-03-19
-**Host:** ai1.infra.innoscale.net — GPU 0 (Tesla T4, 16GB)
+**Host:** a GPU host — GPU 0 (Tesla T4, 16GB)
 
 ---
 
@@ -33,7 +32,7 @@ First call to each endpoint after startup is slower (~2s) due to model warmup. S
 
 ```bash
 curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  https://models.ai1.infra.innoscale.net/health
+  https://nlp.example.internal/health
 ```
 
 Response:
@@ -74,7 +73,7 @@ Translates text from a source language to English (or another supported language
 
 ```bash
 curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://models.ai1.infra.innoscale.net/translate \
+  -X POST https://nlp.example.internal/translate \
   -H "Content-Type: application/json" \
   -d '{
     "text": "صواريخ باليستية أطلقتها إيران على أهداف إسرائيلية",
@@ -131,7 +130,7 @@ Zero-shot classification using DeBERTa-v3. Classifies text against category labe
 
 ```bash
 curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://models.ai1.infra.innoscale.net/classify \
+  -X POST https://nlp.example.internal/classify \
   -H "Content-Type: application/json" \
   -d '{"text": "Iran launched ballistic missiles at Israeli military targets"}'
 ```
@@ -166,7 +165,7 @@ Pass your own labels for flexible re-classification or sub-categorization:
 
 ```bash
 curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://models.ai1.infra.innoscale.net/classify \
+  -X POST https://nlp.example.internal/classify \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Federal Reserve raises interest rates by 25 basis points",
@@ -213,7 +212,7 @@ async def classify(self, text: str) -> tuple[str, float]:
 
 ## 3. Relation Extraction — POST /extract
 
-Extracts structured (subject, predicate, object) triples from text using REBEL-large.
+Extracts structured (subject, predicate, object) triples from text using GLiREL-large (zero-shot relation extraction).
 
 **When to call:** After NER, before storage. Extract triples from signal title + summary. Store as facts with `source_cycle=0` (ingestion-generated). Normalize predicates against existing vocabulary.
 
@@ -221,7 +220,7 @@ Extracts structured (subject, predicate, object) triples from text using REBEL-l
 
 ```bash
 curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://models.ai1.infra.innoscale.net/extract \
+  -X POST https://nlp.example.internal/extract \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Barack Obama was born in Hawaii. He served as the 44th president of the United States."
@@ -277,7 +276,7 @@ Generates a one-sentence summary from multiple texts using T5-small.
 
 ```bash
 curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://models.ai1.infra.innoscale.net/summarize \
+  -X POST https://nlp.example.internal/summarize \
   -H "Content-Type: application/json" \
   -d '{
     "texts": [
@@ -423,14 +422,16 @@ if cluster.signal_count >= 3 and self._models.available:
 
 ## Infrastructure Details
 
-### GPU Layout (ai1.infra.innoscale.net)
+### GPU Layout
 
-| GPU | Device | Services | VRAM Used |
-|-----|--------|----------|-----------|
-| 0 | Tesla T4 (16GB) | Embeddings (~1.3GB) + Whisper STT (~3.3GB) + **Legba models (~3.9GB)** | ~8.6GB |
-| 1 | Tesla T4 (16GB) | ComfyUI + Kokoro TTS | ~5.5GB |
-| 2 | A6000 (48GB) | vLLM TP0 | ~45.5GB |
-| 3 | A6000 (48GB) | vLLM TP1 | ~45.5GB |
+The service runs on a single GPU (Tesla T4, 16GB), sharing it with the
+embedding and Whisper STT models:
+
+| Component | VRAM |
+|-----------|------|
+| Embeddings | ~1.3GB |
+| Whisper STT | ~3.3GB |
+| **Legba models (NLLB + DeBERTa + GLiREL + T5)** | ~3.9GB |
 
 ### Models Loaded
 
@@ -438,22 +439,22 @@ if cluster.signal_count >= 3 and self._models.available:
 |-------|---------------|---------|------|
 | NLLB-200-distilled-600M | `facebook/nllb-200-distilled-600M` | Translation | ~1.2GB |
 | DeBERTa-v3 zero-shot | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | Classification | ~500MB |
-| REBEL-large | `Babelscape/rebel-large` | Relation extraction | ~1.5GB |
+| GLiREL-large | `jackboyla/glirel-large-v0` | Relation extraction | ~1.5GB |
 | T5-small | `google-t5/t5-small` | Summarization | ~250MB |
 
-### File Paths on ai1
+### File Paths
 
 | Path | Contents |
 |------|----------|
-| `/usr/local/deployments/legba-models/` | Dockerfile, docker-compose.yml, entrypoint.sh, app/ |
-| `/usr/local/deployments/caddy/etc/conf.d/models.ai1.infra.innoscale.net.caddy` | Caddy reverse proxy + basic auth |
-| `/mnt/data/models/legba/venv/` | Python venv (torch 2.6.0+cu124, transformers, FastAPI) |
-| `/mnt/data/models/legba/hf-cache/` | HuggingFace model weights (~5-6GB) |
+| `<deploy-dir>/legba-models/` | Dockerfile, docker-compose.yml, entrypoint.sh, app/ |
+| `<caddy-conf-dir>/models.<host>.caddy` | Caddy reverse proxy + basic auth |
+| `<model-dir>/venv/` | Python venv (torch 2.6.0+cu124, transformers, FastAPI) |
+| `<model-dir>/hf-cache/` | HuggingFace model weights (~5-6GB) |
 
 ### Container Management
 
 ```bash
-cd /usr/local/deployments/legba-models
+cd <deploy-dir>/legba-models
 
 # Logs
 docker logs legba-models --tail 50
@@ -465,7 +466,7 @@ docker compose restart
 docker compose build && docker compose up -d
 
 # Force fresh venv rebuild (after requirements change)
-rm -rf /mnt/data/models/legba/venv
+rm -rf <model-dir>/venv
 docker compose restart
 ```
 

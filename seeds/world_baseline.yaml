@@ -1,0 +1,170 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# world_baseline.yaml — hand-curated authoritative world baseline (flavor b
+# proof seed). A fresh Legba instance imports this so an analyst boots with a
+# real starting knowledge base instead of a blank substrate.
+#
+# Mapped by src/legba/data/seed/adapters/world_baseline.py:
+#   * leaders  -> facts   (subject=leader, predicate='LeaderOf', object=country)
+#                 + a country-SUBJECT office fact (subject=country,
+#                   predicate='head of state' by default, overridable per row
+#                   via `office:`, value=leader) — the supersession-correct
+#                   shape the grounding injection reads.
+#   * alliances-> nexuses (subject=country, rel_type=MemberOf/AlliedWith,
+#                          object=bloc/country, polarity=+1)
+#   * conflicts-> nexuses (subject=country, rel_type=InActiveConflictWith,
+#                          object=belligerent, polarity=-1) — the CURRENT
+#                          active-conflict layer the world_assessor anchors on
+#                          so a months-old event is not framed as current.
+#
+# All rows are source_type='seed', confidence ~0.95, with a real valid_from.
+# Dates are inauguration / accession / conflict-start dates. Kept deliberately
+# small but real; correct as of the curation date below. Re-import is idempotent.
+
+meta:
+  curated_at: "2026-06-19"
+  note: >
+    Current heads of state/government of the G20 (the office-holder a country
+    analyst should assume by default) + the major bloc memberships + the active
+    conflicts. A leader is modelled as the head of GOVERNMENT where that is the
+    executive (PMs), else the head of STATE (presidents); a state with a
+    non-executive head of state alongside an executive (Iran's Supreme Leader +
+    President) carries a per-row `office:` so the two do not supersede each
+    other. valid_from is the start of the current term / conflict.
+
+# --- Leaders -> facts (predicate 'LeaderOf') -------------------------------
+# confidence default 0.95 unless overridden per row.
+leaders:
+  - leader: "Joe Biden"
+    country: "United States"
+    valid_from: "2021-01-20"
+  - leader: "Keir Starmer"
+    country: "United Kingdom"
+    valid_from: "2024-07-05"
+  - leader: "Emmanuel Macron"
+    country: "France"
+    valid_from: "2017-05-14"
+  - leader: "Olaf Scholz"
+    country: "Germany"
+    valid_from: "2021-12-08"
+  - leader: "Giorgia Meloni"
+    country: "Italy"
+    valid_from: "2022-10-22"
+  - leader: "Justin Trudeau"
+    country: "Canada"
+    valid_from: "2015-11-04"
+  - leader: "Narendra Modi"
+    country: "India"
+    valid_from: "2014-05-26"
+  - leader: "Luiz Inacio Lula da Silva"
+    country: "Brazil"
+    valid_from: "2023-01-01"
+  - leader: "Vladimir Putin"
+    country: "Russia"
+    valid_from: "2012-05-07"
+  - leader: "Xi Jinping"
+    country: "China"
+    valid_from: "2013-03-14"
+  - leader: "Fumio Kishida"
+    country: "Japan"
+    valid_from: "2021-10-04"
+  - leader: "Yoon Suk Yeol"
+    country: "South Korea"
+    valid_from: "2022-05-10"
+  - leader: "Anthony Albanese"
+    country: "Australia"
+    valid_from: "2022-05-23"
+  - leader: "Andres Manuel Lopez Obrador"
+    country: "Mexico"
+    valid_from: "2018-12-01"
+  - leader: "Javier Milei"
+    country: "Argentina"
+    valid_from: "2023-12-10"
+  - leader: "Recep Tayyip Erdogan"
+    country: "Turkey"
+    valid_from: "2014-08-28"
+  - leader: "Cyril Ramaphosa"
+    country: "South Africa"
+    valid_from: "2018-02-15"
+  - leader: "Mohammed bin Salman"
+    country: "Saudi Arabia"
+    valid_from: "2022-09-27"
+  - leader: "Prabowo Subianto"
+    country: "Indonesia"
+    valid_from: "2024-10-20"
+
+  # --- Iran (the temporal-collapse fix; web-verified ground truth) ----------
+  # Iran's head of STATE is the Supreme Leader (the real executive authority),
+  # NOT the President. The prior Supreme Leader Ali Khamenei was killed in the
+  # US-Israel strike; his office fact is CLOSED (valid_until 2026-02-28) and the
+  # adapter's auto-supersession points it at the successor. Mojtaba Khamenei is
+  # the CURRENT (open) head of state since 2026-03-08. The executive President
+  # is carried separately under `office: "head of government"` so it does NOT
+  # supersede the Supreme Leader on the (Iran, 'head of state') key.
+  - leader: "Ali Khamenei"
+    country: "Iran"
+    valid_from: "1989-06-04"
+    valid_until: "2026-02-28"
+  - leader: "Mojtaba Khamenei"
+    country: "Iran"
+    valid_from: "2026-03-08"
+  - leader: "Masoud Pezeshkian"
+    country: "Iran"
+    office: "head of government"
+    valid_from: "2024-07-28"
+
+# --- Alliance memberships -> signed nexuses --------------------------------
+# Each membership becomes a typed signed nexus
+#   (subject=country, rel_type='MemberOf', object=bloc, polarity=+1)
+# valid_from is the country's accession date to the bloc.
+alliances:
+  - bloc: "NATO"
+    rel_type: "MemberOf"
+    polarity: 1
+    members:
+      - { country: "United States",  valid_from: "1949-04-04" }
+      - { country: "United Kingdom", valid_from: "1949-04-04" }
+      - { country: "France",         valid_from: "1949-04-04" }
+      - { country: "Canada",         valid_from: "1949-04-04" }
+      - { country: "Italy",          valid_from: "1949-04-04" }
+      - { country: "Germany",        valid_from: "1955-05-06" }
+      - { country: "Turkey",         valid_from: "1952-02-18" }
+  - bloc: "European Union"
+    rel_type: "MemberOf"
+    polarity: 1
+    members:
+      - { country: "France",  valid_from: "1958-01-01" }
+      - { country: "Germany", valid_from: "1958-01-01" }
+      - { country: "Italy",   valid_from: "1958-01-01" }
+  - bloc: "BRICS"
+    rel_type: "MemberOf"
+    polarity: 1
+    members:
+      - { country: "Brazil",       valid_from: "2009-06-16" }
+      - { country: "Russia",       valid_from: "2009-06-16" }
+      - { country: "India",        valid_from: "2009-06-16" }
+      - { country: "China",        valid_from: "2009-06-16" }
+      - { country: "South Africa", valid_from: "2010-12-24" }
+      - { country: "Saudi Arabia", valid_from: "2024-01-01" }
+  - bloc: "Gulf Cooperation Council"
+    rel_type: "MemberOf"
+    polarity: 1
+    members:
+      - { country: "Saudi Arabia", valid_from: "1981-05-25" }
+
+# --- Active conflicts -> signed -1 nexuses ---------------------------------
+# The CURRENT active-conflict layer (the piece that was missing). Each conflict
+# lists its belligerents; the adapter emits one signed -1 nexus per ORDERED
+# pair (subject=country, rel_type='InActiveConflictWith', object=belligerent)
+# so the grounding resolver — which matches on nexuses.subject — surfaces the
+# war whichever side a country analyst is scoped to. Distinct belligerent pairs
+# are distinct typed triples, so a country in several wars keeps one open edge
+# per opponent (no self-supersession). Adding a conflict (e.g. Russia-Ukraine)
+# is a one-line entry below. valid_from is the conflict-onset date; set
+# valid_until when a conflict ends (the edge then closes, dropping out of the
+# current-state grounding).
+conflicts:
+  - name: "US-Israel-Iran war"
+    belligerents: ["Iran", "United States", "Israel"]
+    valid_from: "2026-02-28"

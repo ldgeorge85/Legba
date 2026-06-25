@@ -1,0 +1,18 @@
+# legba-media — service runtime deps.
+#
+# The FastAPI/uvicorn/pydantic trio is all that the SHIPPED (seam) service
+# needs — it serves /health + the loud 503 on each extraction kind. The heavy
+# model stacks (Whisper / a VLM / an OCR engine) are deliberately NOT pinned
+# here: they are added alongside their backend in app.main.load_backends()
+# when the live endpoint is provisioned (D2 PREP-not-PROVISION). The entrypoint
+# installs torch on the cu124 wheel index ahead of these, mirroring
+# legba-models, so a model backend can `import torch` once wired.
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.0
+
+# --- model backends (uncomment + pin alongside a load_backends() wire) ---
+# transformers>=4.46.0          # Whisper / VLM via transformers pipelines
+# faster-whisper>=1.0.0         # CTranslate2 Whisper (lighter transcribe path)
+# pillow                        # image decode for caption/ocr/detect
+# pytesseract                   # OCR (also needs the tesseract apt package)

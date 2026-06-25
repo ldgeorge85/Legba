@@ -1,0 +1,73 @@
+# country_predictor — per-G20-country event-tempo forecaster.
+#
+# Wires the L-174 predictor analyst kind (predictor.py — AutoARIMA + naive-mean
+# fallback, fully built) onto the live G20 fan-out. Mirrors country_assessor's
+# subscription (predicate has_tag("g20") → one run per G20 target), but reads a
+# 14-day window of that target's signals, aggregates a daily event-count
+# series, and emits a numeric forecast (+ conformal CI) of near-future event
+# tempo per country.
+#
+# STAT-ONLY by design: NO method.llm.primary → pure statistical forecast, zero
+# LLM cost. The narrative is the predictor's fixed terse string, not an LLM
+# call. (Add an llm.primary stack_ref later to turn on the LLM narrative.)
+#
+# Reconciles the feature-review honesty gap "predictor advertised but does not
+# fire": before this descriptor the predictor kind had only the retired
+# india_energy_predictor (pre-pivot) and produced 0 outputs.
+
+identity:
+  id: country_predictor
+  name: Country Event-Tempo Predictor (G20)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: predictor
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Prediction
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: release_predictor_activation
+
+subscription:
+  targets:
+    # Same fan-out set as country_assessor: one forecast per G20 country.
+    predicate: 'has_tag("g20")'
+    data_types: [signal]
+    # 14 days of signal history so the daily-aggregated series has enough
+    # points for AutoARIMA (else the naive-mean fallback). Honored by the
+    # substrate slice reader (reads subscription.targets.time_window).
+    time_window: 336h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: stat_forecaster
+  # No llm.primary → stat-only (no LLM in the critical path; the budget
+  # enforcer zeroes per-run LLM allowance for this kind). horizon_days/ci_level
+  # are the forecast knobs read by _build_predictor.
+  llm:
+    horizon_days: 7
+    ci_level: 90
+
+cadence:
+  # Twice daily — a 7-day forecast does not need frequent refresh.
+  fallback_schedule: "0 */12 * * *"
+  # Below the 12h interval (stamped at completion; see the dapr_actors cadence
+  # cooldown note) — 11h leaves a 1h margin so each country fires both ticks.
+  cooldown_seconds: 39600
+
+# Output sink — mirrors how the pre-pivot india_energy_predictor (and
+# country_assessor's a2a_skill binding) exposed analyst output: register the
+# forecasts as a queryable A2A intelligence skill so predictions reach a sink
+# instead of sitting orphaned in the predictions table (the live audit gap:
+# country_predictor.outputs=[] → 20 predictions routed nowhere). a2a_skill is
+# registered at descriptor-activate time (A2ASkillRegistry), making the
+# G20 event-tempo forecasts discoverable + retrievable downstream.
+# NB: stix_bundle is deliberately NOT used here — the STIX exporter has no
+# PredictionPayload mapping (it raises TypeError), so binding it would no-op.
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: intelligence.g20_country_forecast

@@ -1,0 +1,1212 @@
+# Legba — Architecture
+
+*The authoritative system architecture for the source-first automated analysis
+& knowledge-fusion platform: what Legba is, why it is shaped this way, how the pieces compose, and
+where each piece actually lives in the tree. This is the **spine + why** doc. For
+the implementation surface (APIs, files, deployment) see `DESIGN.md`; for "life
+of a…" walkthroughs see `FLOWS.md`; for the module-by-module map see
+`CODE_MAP.md`; for operations see `RUNBOOK.md`. The binding plan + altitude frame
+this doc serves is `planning/ANALYSIS_LAYER_PLAN_2026-06-15.md`.*
+
+> **Honesty contract.** Every factual claim below is traceable to code
+> (`file:line` cited liberally). Where a capability is *built but not wired*, or
+> *declared but absent*, this doc says so in-line — it does not imply more than
+> ships. The authoritative not-built list is `docs/SEAMS.md`.
+
+---
+
+## 0. Orientation — what processes / flows / triggers / schedules / scales
+
+Read this first if the whole shape has gone foggy. The detail sections expand each piece.
+
+**Three planes.** (1) **Substrate** = shared state/truth: Postgres+AGE (descriptors, signals, facts, nexuses, entities, hypotheses, outputs), NATS JetStream (signal bus + events), Qdrant (vectors), Redis (hot state/cache). (2) **Control plane** = `legba-registry` (FastAPI): the descriptor registry + lifecycle FSM + API/WS + vault + DLQ — *everything is a descriptor* (source/target/analyst/stack). (3) **Runtime plane** = `legba-runtime-dapr`: turns active descriptors into **Dapr virtual actors** that read/write the substrate (+ `legba-dapr-workflow-worker` for the multi-step Workflows: deep-consult, GEPA optimizer).
+
+**The live flow (what processes what):**
+```
+EXTERNAL ─▶ SourceActor ─▶ baseline filter ─▶ predicate ─▶ TargetActor ─▶ AnalystActor ─▶ emit
+sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-target +   handlers
+           poll/webhook)   dedupe/source_cred/  (signal→     subscribes     cross-target/   (alert/webhook/
+           → canonical     fact_extract on      matching     its slice)     meta) reads     STIX/UI/MCP)
+           Signal → NATS    the Signal)          targets)                    slice+substrate
+                                                                             → writes outputs
+```
+
+**Two analysis tiers — never collapse them.** Analysis happens at *two distinct times* on two distinct triggers:
+- **TIER 1 — INLINE, at-ingest, per-signal (deterministic, no LLM).** The `data/filters/` **baseline enrichment pipeline** runs *synchronously on each Signal at acquisition*, BEFORE fan-out, inside the `SourceActor`: `language_detect → geocode → ner_multilingual → classify → source_credibility → ingest_dedupe (dedupe_4tier, tiers 1-2) → fact_extractor`. It is deterministic / local-NLP (GLiREL + DeBERTa zero-shot + pycountry/Nominatim) — **no analyst LLM** — and its *writes are altitude-0 substrate*: the **enriched signal** (geo/language/tags/entity_classes promoted to indexed columns, in-place on the one `signals` row) plus **altitude-0 `facts`** (`source_type='ingestion'`, `valid_from`-stamped) + **entity rows / `signal_entity_links`** off the NER spans. This is the "enrich once, read many" tier (§6.1, Flow 1). See `data/filters/__init__.py` for the kind registry; `data/sources/baseline.py:282-294` for the tier ordering; `data/filters/dedupe.py:248` (`kind="dedupe_4tier"`); `data/filters/fact_extractor.py` (§5.7).
+- **TIER 2 — SLICE / CADENCE analysts (`data/analysts/`, LLM + deterministic reasoning).** These read *accumulated slices / substrate* on a Dapr reminder or a reactive trigger and *reason* — they do NOT run per-signal. This is altitudes 1-3 (findings, situations, hypotheses, nexuses, meta-findings, deep consult). The cost firewall between the two: heavy reasoning is cadence-batched so LLM cost is decoupled from the ingest firehose.
+
+**What triggers / schedules what** (Tier 2) — two mechanisms, both **Dapr reminders/triggers** (no external cron in the loop): **(a) reactive coalescing triggers** — per-target analysts fire when enough new signals accumulate (NATS-driven); **(b) cadence reminders** — cross-target & meta analysts fire on a schedule (`world_assessor`/`country_assessor` ~6h, `competing_hypotheses`/`graph_mining`/`relationship_reifier` ~12h, `calibration_tracking` ~1d). SourceActors schedule their own polls (the Tier-1 pipeline rides each poll). The reminder *is* the scheduler.
+
+**Where Wikidata / grounding fit (out-of-band, decoupled by the substrate):** Wikidata is **not a live source** — it never touches the signal pipeline. It is a **seed** (`scripts/seed.py --source wikidata_leaders`, operator-run / cron-able) that writes *current* `head of state` facts INTO the substrate (superseding the stale officeholder). Separately, at *analysis time*, grounding-enabled analysts' **GROUND phase** READS those current facts back OUT of the substrate and injects a dated preamble into the LLM prompt (Flow 10). The two movements don't know about each other — the substrate is the hand-off. See §5.8.
+
+**What scales** — the **actors are the workers** (SourceActor/TargetActor/AnalystActor); Dapr **placement** redistributes them across `legba-runtime-dapr` replicas, so you scale out by adding replicas. **Cadence-batching is the key move:** analysts run on a schedule, not per-signal, so **LLM cost is decoupled from the ingest firehose**. The substrate scales independently (PG read-replicas/partitioning, NATS, Qdrant). **Singletons needing leader election:** the reconcile loop + the discovery informer (single-replica fail-loud guard otherwise; 2-replica placement + leader election proven locally). **The real ceiling is LLM throughput** (budget-gated) — which is exactly why the heavy graph work is deterministic Python and the analysis layer is cadence-batched. (Full treatment: `planning/SCALING.md`.)
+
+**What runs OUTSIDE the source→output loop (out-of-band).** Not everything is the live `SOURCE ─▶ … ─▶ OUTPUT` pipeline. The decoupled processes — each handing off through the substrate, never on the signal hot path:
+- **Seeds** (`scripts/seed.py` → `data/seed/`): curated/authoritative roots imported INTO `facts`/`nexuses` with `source_type='seed'` + a `seed_batches` ledger row — adapters `world_baseline` / `wikidata_leaders` / `acled_conflict` / `sipri_arms_transfers` (operator-run / cron-able; §5.7, Flow 9). Wikidata is a *seed*, not a live source.
+- **Backfills** (`scripts/backfill_entity_canonicalization.py`, `scripts/backfill_entity_graph.py`; `SourceActor`'s optional `source_credibility` host-lookup at write-time, §6.1): one-shot substrate repairs over already-stored rows.
+- **Bringup / registration** (`scripts/bringup_register_*.py` + the 46-entry `bringup_register_source_catalog.py`): pushes descriptors into the registry tables at deploy — the live source/analyst set is the DB rows, not the `descriptors/*.yaml` files.
+- **Dapr Workflows** (`legba-dapr-workflow-worker`, `runtime/dapr_workflow/`): the multi-step durable jobs that don't fit a turn-based actor — the **GEPA optimizer** (§9, Flow 4) and **deep-consult** (§9, Flow 5). Scheduled detached from an actor run.
+- **Maintenance / GC** (deterministic analysts on cadence, `data/analysts/deterministic_handlers/`): `fact_decay` / `nexus_decay` (temporal-confidence decay + expiry), `finding_supersession`, `entity_gc`, `signals_retention` (0036), `integrity_sweep`, `reminder_gc` (`runtime/reminder_gc.py`, GC of reminders for retired `actor_state` rows). These UPDATE/prune pre-existing rows.
+- **Per-source liveness watchdog** (`liveness_watchdog.check_source_cadence_once`, cadence): detects a silent source by comparing `now()` to `max(signals.fetched_at)` per source, then lateral-joins `source_poll_outcomes` (0046) for the *why* — `SourceActor.pull_once` writes a `source_poll_outcomes` row for every NON-productive poll (empty HTTP-200-with-0-signals, or error; productive polls are self-evidencing via their `signals` rows and are not logged), carrying the handler's own health diagnosis so the watchdog alert (and the UI) can distinguish a genuinely quiet feed from a broken one.
+- **Meta-analysts over the substrate** (altitude 2): `meta_findings_synthesizer` / `cross_analyst_correlator` / `competing_hypotheses` / `calibration_tracking` — they read accumulated outputs, not signals (Tier-2 cadence, but analysis-of-analysis rather than first-order).
+- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0046`, current head **0046**): schema evolution, applied PG-direct out of band. The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), and `source_poll_outcomes` (0046).
+
+### 0.1 Substrate data inventory — what is kept where, written-by / read-by
+
+Per store, the actual datasets and their producers/consumers (verified 2026-06). The runtime substrate is **four backing services** — Postgres+AGE, NATS JetStream, Qdrant, Redis (the time-series-metrics and full-text-search stores that earlier drafts over-claimed have been removed; see SEAMS):
+
+| Store | Datasets kept | Written by | Read by |
+|---|---|---|---|
+| **Postgres + Apache AGE** (PRIMARY / source of truth) | **descriptors** (`source_/target_/analyst_/action_pack_/stack_/wiring_descriptors`); **acquisition** (`signals`, `signal_aliases`, `signal_entity_links`); **knowledge substrate** (`facts`, `nexuses`, `entity_profiles`/`entity_profile_versions`, `hypotheses`, `proposed_edges`, `situations`, `graph_metrics`); **outputs/provenance** (`analyst_outputs`, `analyst_traces`, `analyst_critiques`, `output_dead_letter`, `descriptor_dead_letter`); **runtime state** (`actor_state`, `actor_filter_state`, `trigger_state`, `discovery_state`); **governance** (`governor_events`, `budget_ledger`, `global_budget_envelope`, `budget_demotion_events`, `action_pack_invocations`, `alert_sink_deliveries`); **liveness** (`source_poll_outcomes` — provenance for non-productive source polls, 0046); **consult audit** (`consult_sessions` / `consult_turns`, 0039); **audit** (`audit_checkpoints`, `descriptor_audit_log`); **seeding** (`seed_batches`); **reference** (`iso_countries`, `source_credibility`, `vocabulary_entries`); plus the **dormant AGE graph `legba_graph`** *inside* PG (9 vertex / 14 edge labels registered, but **near-empty / off-path** — the operative graph is the relational `nexuses` table; §5.5 "AGE re-evaluation") | Tier-1 pipeline (signals/facts/entities); Tier-2 analysts + workflows (outputs/facts/nexuses/hypotheses); registry (descriptors/audit); runtime (state); seeds (facts/nexuses + `seed_batches`) | every read path — analyst slices, consult tools, grounding resolver, the API/UI, lineage walks |
+| **NATS JetStream** | **transport / events, NOT a dataset store** — `legba_signals` (interest-retention signal bus), 4 registry-lifecycle streams, the DLQ stream, work-queues, consult-step relay. Transient fan-out; the durable copy is always in PG | SourceActors (signal publish), registry (lifecycle events), analysts (output envelopes + consult steps) | subscription consumers, the reconcile loop, the SSE relay, job workers |
+| **Qdrant** | **1 collection `legba_signals`** — signal vectors (1024-dim BGE-M3 cosine), used by ingest-dedupe tiers 3-4 (the expensive semantic tier) | Tier-1 dedupe / embedder | dedupe tier 3-4; consult `vector_search`. (Grounding Tier-2 `vector:world_context` is a *declared future seam*, §5.8 — not a live collection) |
+| **Redis** | **TTL'd cache only** — geocode cache, ingest-dedup hints, registry-health, intelmq source state (~84 keys live) | Tier-1 filters, health checker | the same filters / health (cache-aside; never a source of truth) |
+| **SeaweedFS** | object store for retained media — **schema-slotted stack-component kind; NO handler shipped** (eager-media extraction is a seam, §6.3) | (none) | (none) |
+
+> **Removed stores.** A dedicated time-series-metrics store (Grafana/TimescaleDB observability) and a full-text-search backing (OpenSearch BM25, primary + audit) were both *provisioned-but-idle* with zero callers and have been **removed from the codebase**. Time-series metrics and full-text search are now **declared seams** (see SEAMS): there is no metrics store, and `search_signals` uses Postgres FTS (`to_tsvector`/`plainto_tsquery`). `anomaly_detection` is unaffected — it reads `time_bucket()` from the **primary Postgres pool**, not a separate cluster.
+
+---
+
+## 1. The altitude map — the organizing frame
+
+Everything in Legba sorts by **altitude**: how far above the raw signal it sits.
+This is the frame that tells you *where* each piece belongs and keeps the build
+from collapsing into a god-agent. It is the spine of the analysis layer and the
+lens for the rest of this document.
+
+| Altitude | Layer | Produced by | Status (verified 2026-06-16) |
+|---|---|---|---|
+| **0 — Extraction** | temporal facts (atomic `(subject, predicate, value)` assertions, valid-from/until + supersession) | the ingest-time **`fact_extractor`** enrichment stage (per-signal, GLiREL backend) + analyst/workflow `write_fact` | **LIVE** — `OutputKind.FACT` + `write_fact` + `facts` temporal schema; ≈225 ingestion facts (§5.7) |
+| **0 — Relations** | reified typed signed **Nexus** (`subject →[intermediary]→ object`, `rel_type` + polarity ∈ {−1,0,+1} + intent) | the **`relationship_reifier`** META analyst (8B-LLM types co-mention pairs) | **LIVE** — `OutputKind.NEXUS` + `write_nexus` + `nexuses` table; ≈15 agent + 17 seed signed nexuses (§5.7) |
+| **1 — First-order** | findings | `inline_target` (country_assessor; world_assessor, `method.kind=llm_planner`), `predictor` (country_predictor) | **LIVE** |
+| **1 — Maintenance** | situations (**first-class temporal frames**, 0040–0042) / supersessions / critiques / predictions / STIX / fact-&-nexus decay | situation_clustering (+ `thematic_proposal`), finding_supersession, `critic`, `predictor`, emit-bindings, `fact_decay` / `nexus_decay` / `structural_balance` / `graph_mining` | **LIVE** — situations carry `situation_signature` + `valid_from`/`valid_until`/`superseded_by` + `target_id` (0040–0042); the events substitute (no `events` table) |
+| **2 — Second-order** | meta-findings (analysis-of-analysis) | `meta_findings_synthesizer` / `cross_analyst_correlator` | **LIVE — registered** (§5.3) |
+| **2 — Second-order** | hypotheses (competing claims, ACH matrix; per-cell scoring is LLM-scored on Heuer CC/C/N/I/II with a lexical fallback — §5.3) | the **`competing_hypotheses`** (alias `ach`) META analyst + `calibration_tracking` (Brier reads `resolved_outcome`; exogenous resolver built + firing — subsequent-facts auto-resolver that ABSTAINS on undirected theses + operator-label path — alongside the live self-consistency tier, §5.3) | **LIVE** — ≈34 hypotheses, ≈3 confirmed / 8 refuted (§5.7) |
+| **3 — On-demand deep** | deep consult (a staged analytical job: plan→acquire→analyze→synthesize) | the **deep-consult Dapr Workflow** | **LIVE** — registered alongside `optimizer_workflow` (§9) |
+
+Two clean regimes fall out: **extraction is always-on at ingest** (altitude 0,
+once per signal); **deep analysis is on-demand** (altitude 3). The entire stack —
+altitude 0 (temporal facts + reified Nexus), altitude 1 (the continuous live
+loop), altitude 2 (meta-findings + ACH hypotheses) and altitude 3 (deep consult)
+— is now wired and live-proven; what was the "open frontier" of the pre-2026-06
+drafts has been built out as the **data-analysis rigor layer** (§5.7). Each tier
+rides a rail that already existed with a working precedent (§9).
+
+---
+
+## 2. The problem: situational awareness at scale
+
+Legba's job is to **continuously make sense of the world from many vantage
+points** — countries, sectors, entities, customer estates, single persons of
+interest — and to keep a current, provenance-traceable model of "what is true
+now" for each of them, cheaply, in parallel, over many heterogeneous data
+sources.
+
+The naive shape of such a system — *one watcher owns its sources, pulls them,
+enriches what it pulls, and reasons over the result* — does not survive contact
+with scale. The forces that break it:
+
+- **Fan-out.** Hundreds of country/topic watchers sharing the same ~10 news
+  feeds means hundreds of redundant polls, cursors, and dedup pipelines over
+  identical bytes.
+- **Cost per acquisition.** Per-query-billed sources (asset-surface scanners,
+  certificate-transparency lookups, paid OSINT) make *per-watcher* polling
+  economically impossible. Sharing the acquisition is the only viable primitive.
+- **Expensive enrichment.** Transcribing audio, captioning images, running NER
+  and embedding must happen **once per observation**, never once per consumer of
+  that observation.
+- **Real-time where it matters.** Some signals (a confirmed match, a critical
+  severity) must be reacted to as they land — not at the next scheduled poll —
+  while everything else stays batched and cost-bounded.
+
+The shared root cause is that *observation* (acquiring and normalizing a fact
+about the world) and *interpretation* (deciding what that fact means for a
+particular concern) are entangled. Legba's architecture is the move that
+separates them.
+
+## 3. The source-first answer: ingest once, enrich once, match many
+
+The central design commitment:
+
+> **A signal is an observation, not an interpretation.** Sources own
+> acquisition. They ingest a fact about the world *once*, enrich it *once* in a
+> target-agnostic way, and publish it *once* into a shared pool. Targets are
+> passive subscribers that *match many* of those signals out of the shared pool
+> by predicate. Analysts coalesce matched signals into findings.
+
+Concretely, a `Signal` (`src/legba/data/sources/_contract.py:137`) carries **no
+`target_id`** — the docstring states it explicitly: *"the observation is
+source-owned: `target_id` is gone — it lives only on derived analyst outputs"*
+(`_contract.py:140-143`). A signal records *where it came from* (`source_id`,
+`source_version`, `_contract.py:156-157`), *what produced this row*
+(`produced_by_kind` ∈ source/job/analyst/deterministic/system,
+`_contract.py:159-161`), *what it is* (`modality`, `mime_type`, `media_ref`,
+`_contract.py:168-172`), and the enrichment computed once at acquisition
+(`language`, `geo`, `tags`, `entity_classes` — indexed columns for filtering,
+`_contract.py:192-195`). It does **not** record what it means to anyone.
+`target_id` lives only on **analyst outputs** — interpretation is target-owned;
+observation is shared.
+
+This one inversion pays off everywhere:
+
+- **One source = one pull/connection**, no matter how many concerns consume it.
+- **Heavy enrichment runs once**, at the source, for all consumers.
+- A target's "view" is a **predicate-filtered slice** of the shared pool — no
+  copies, no per-target marker rows.
+- **Real-time and batch fall out of the same mechanism**: a published signal
+  both notifies live subscribers (NATS) and persists to a queryable pool
+  (Postgres), so late joiners and re-analysis read the same source of truth.
+
+## 4. The spine
+
+The whole system is one pipeline, read left to right. Everything above (the
+altitude map, the planes, the actor model) is a refinement of this picture.
+
+```
+   SOURCES ───────► SIGNALS ──────► predicate FAN-OUT ──────► TARGETS ─────► ANALYSTS ─────► OUTPUTS
+   (acquire)        (observe,        (match-many)            (a concern)    (reason)        (interpret)
+                     enrich once)
+
+  ┌────────────┐   write canonical   ┌───────────────────┐   subscription   ┌──────────────┐
+  │ SourceActor│──── signal ROW ────►│  shared signal pool│   resolves to    │ TargetDescr. │
+  │  (per src) │   (Postgres, ONCE)  │  Postgres `signals`│   per-target     │  SourceRef = │
+  │            │                     │   = source of truth│   consumer       │  id|selector │
+  │  poll      │   publish event     │                    │                  │  Subscription│
+  │  (Reminder)│──► legba.signals.   │  NATS JetStream    │                  │  = filter +  │
+  │  push      │    <tenant>.<src>.  │  `legba_signals`   │                  │  Starlark    │
+  │  (webhook) │    <modality>.      │   = notification   │                  │  residual    │
+  └────────────┘    <event_class>    │     bus            │                  └──────┬───────┘
+        │           (coarse subject) └─────────┬──────────┘                         │
+        │ baseline                             │  two-stage match:                  │ cadence
+        │ enrich ONCE                          │  (1) SQL WHERE on indexed cols     │ reminder
+        │ lang→language                        │      (geo/tags/entity_classes      │ fires the
+        │ geocode→geo                          │       via GIN, modalities btree)   ▼ analyst
+        │ classify→tags                        │  (2) Starlark residual on the   ┌──────────────┐
+        │ ner→entity_classes                   │      narrowed stream            │ AnalystActor │
+        ▼                                      │  (5ms wall-clock budget)        │  PRIMARY     │
+   (enriched signal,                           └────────────────────────────────│  owns cadence│
+    target-agnostic)                                                            │  reminder,   │
+                                                                                │  FANS OUT 1  │
+   ┌────────────────────────── derived_from (lineage) ◄────────────────────────│  run/target  │
+   │                                                                            │  to PER-     │
+   ▼  ASYNC JOBS (NATS work-queue + competing-consumer workers)                 │  WORKER      │
+  process_media (Whisper/VLM/OCR, hosted) — the live job kind                   │  actors      │
+   result → derived signal (derived_from → raw) → re-enters FAN-OUT             └──────┬───────┘
+                                                                                       │ run_method
+                                                                                       ▼
+                                       OUTPUTS: OutputKind ∈ {finding, situation,
+                                       hypothesis, prediction, alert, meta_finding,
+                                       critique, fact, nexus,
+                                       prompt_module_candidate}
+                                       → write_analyst_output → analyst_outputs /
+                                         situations / hypotheses / facts / nexuses
+                                       → NATS analyst.<id>.<channel>
+                                       → emit-bindings (STIX bundle, alert sinks, …)
+                                       → receipt chain (SHA-256) + derived_from
+```
+
+Each box is a section below: SOURCES + SIGNALS + FAN-OUT (§6 acquisition/analysis
+planes), the actor model that runs them (§7), OUTPUTS + provenance (§8), and the
+self-improvement seam that closes the loop (§10).
+
+## 5. The core abstractions
+
+Six declarative units compose the system. Each is a pydantic descriptor (under
+`src/legba/data/schemas/`) — strict, content-hashed, registry-managed.
+
+### 5.1 Source — *what to acquire, and how*
+
+A `SourceDescriptor` (`schemas/source.py:183`) is a first-class acquisition unit.
+It declares its `acquisition` mode (`poll` or `push`), its per-kind `config` (RSS
+URL, scanner query, webhook spec), a `cadence` (for poll sources — a cron
+schedule fired by a Dapr Reminder), a baseline `pipeline` (the enrich-once
+stages — `SourcePipeline`, `schemas/source.py:119`), the substrate `deps` it
+needs (Postgres reader, vault secrets, Qdrant — declared *once*, resolved by its
+actor at activation), and an `output` policy (NATS subject, retention,
+lossy/lossless). It advertises a `scope` (`owner_tenant`, `geo`, `languages`,
+`tags`) — the metadata targets match against — and a `subscription_policy`
+(`open` / `allowlist` / `grant`) gating who may subscribe.
+
+A source that must register upstream before it receives anything (a webhook
+subscription, a watchlist registration) declares a `provision` block whose
+`on_activate` lifecycle hook fires the outbound registration and `on_retire`
+deregisters.
+
+> **Future seam:** acquisition is `poll | push` today. A long-lived-consumer
+> `stream` mode (raw socket / MQTT / SSE with no webhook or poll API) is a
+> documented, non-breaking extension — add the enum value and a handler when a
+> real source demands it (`docs/SEAMS.md`).
+
+### 5.2 Target — *what to watch*
+
+A `TargetDescriptor` (`schemas/target.py`) is *scope + subscription + analysts*.
+It owns **no sources of its own** — it references shared sources through a list
+of `SourceRef` (`schemas/source.py:304`), each of which is exactly one of:
+
+- an **explicit** `source_id` (subscribe to a named source), or
+- a **`source_selector`** predicate over source *scope* (subscribe to *any*
+  source whose tags/geo/languages/tenant/kind match — newly-discovered matching
+  sources **auto-wire**, but only for `open`-policy sources;
+  `subscription/sourceref.py:167-243`).
+
+Each `SourceRef` carries a `Subscription` (`schemas/source.py:223`): a structured
+signal filter (geo, languages, tags, entity_classes, modalities — indexed) plus
+an optional Starlark **residual** predicate for the long tail (`mentions(...)`,
+`severity_at_least(...)`, `host_ip in cidr(...)`), evaluated on the
+`TARGET_SCOPE` predicate surface.
+
+A target's `scope` is **polymorphic by domain** (`GeoScope` / `EstateScope` /
+`EntityScope`, a discriminated union). A target watching a single person or a
+customer estate no longer fakes `geo: ["XX"]` — the same platform serves
+geopolitical SA, attack-surface monitoring, and single-entity tracking as
+first-class shapes.
+
+### 5.3 Analyst — *how to reason*
+
+An `AnalystDescriptor` (`schemas/analyst.py`) declares a `method`, a
+`subscription` (which targets/analysts it reads, by selector predicate;
+`SubscriptionTargets`, `schemas/analyst.py:212`, carrying a `time_window`), a
+`cadence` (its trigger + `fallback_schedule` + `cooldown`), `outputs`,
+`action_packs` (its agency grant — §5.6), and an optional `eval` block. It
+produces typed outputs stamped with `target_id` + `analyst_id` + `derived_from`
+provenance.
+
+Analysts come in an **open taxonomy**. The deps-builder dispatches **twelve**
+built-in kinds (`build_analyst_run_method`, `analyst_deps_builder.py:227-278`):
+`inline_target`, `cross_target_raw`, `meta_findings_synthesizer`,
+`cross_analyst_correlator`, `relationship_reifier`, `competing_hypotheses`
+(alias `ach`), `deterministic`, `predictor`, `critic`, `optimizer`,
+`consult_on_demand`, `deep_consult`, plus operator-registered extension kinds
+(via the `analyst_kind` vocabulary). The same twelve are listed in
+`_KIND_MODULE_NAMES` (`data/analysts/__init__.py:88-101`), consumed by
+`discover_analyst_kinds()`. The *analyst kind* (the `build_*` branch) is distinct
+from the `method.kind`: e.g. both `country_assessor` and `world_assessor` are
+analyst-kind `inline_target` but carry different `method.kind`
+(`world_assessor.method.kind = llm_planner`, the LLM-planner finding shape;
+`descriptors/analyst_world_assessor.yaml:49,70`). The graph composes the same way
+at every tier — a meta-analyst subscribes to upstream analyst findings exactly as
+a target subscribes to source signals, all on the shared `legba.signals.>`
+stream.
+
+The kinds added by the data-analysis rigor arc (§5.7) and now **registered**:
+
+- **`relationship_reifier`** (`data/analysts/relationship_reifier.py`) — a META
+  kind that reads candidate co-mention pairs from `proposed_edges` (anti-joined
+  against open `nexuses`, confidence ≥ 0.45) plus recent open `facts` for
+  context, types each pair via the 8B LLM plane into `rel_type` + canonical
+  polarity sign + `intent` + `channel` (+ optional `intermediary`), and writes a
+  `nexus` row (`write_nexus`, `:555`) stamped with the pair's event time. Hard
+  cap of 40 candidates/run, budget-gated per call (`:464-471`), **never litellm**
+  (only `deps.llm.chat_complete`).
+- **`competing_hypotheses`** (alias `ach`, `data/analysts/competing_hypotheses.py`)
+  — a META kind that reads focal `situations` by `intensity_score` (a 14-day
+  window, **not** gated on `status='active'`), current facts
+  (`superseded_by IS NULL AND valid_until IS NULL`), and open signed `nexuses`.
+  It emits **≥2** mutually-exclusive hypotheses, each with a mandatory
+  counter-thesis, laid out on a Heuer consistency matrix (CC/C/N/I/II → ±2) with
+  diagnosticity weighting and an integer evidence balance; ±2 transitions move a
+  hypothesis to a `confirmed` / `refuted` status. The evidence base is scoped to
+  the topic's **resolved-entity set** (`entity_profiles` canonical names — exact
+  membership, **not** a `LIKE '%name%'` substring). It writes
+  `OutputKind.HYPOTHESIS` via `write_hypothesis` with the full ACH matrix in
+  `diagnostic_evidence` jsonb. A deterministic escalate/de-escalate/status-quo
+  fallback runs when the LLM is unavailable; **never litellm**.
+
+  > **The per-cell consistency matrix is now LLM-scored.** The LLM proposes the
+  > hypothesis *set* (thesis / counter-thesis pairs) **and** scores every matrix
+  > cell on Heuer's CC/C/N/I/II scale via
+  > `_score_consistency_matrix_llm` (`competing_hypotheses.py:746`) — one batched
+  > call per topic through the analyst provider plane (`deps.llm.chat_complete`),
+  > budget-gated by `check_envelope()`, **never litellm/dspy**. When the budget
+  > envelope is exhausted (or the LLM is unavailable / unparsable), the run falls
+  > back **per cell** to the deterministic lexical/polarity counter
+  > `_score_consistency` (escalation vs de-escalation cues ± signed-nexus polarity
+  > → −2..+2). Each hypothesis row records which path ran under
+  > `diagnostic_evidence[].matrix_scorer` (`"llm"` or `"lexical"`). Because cells
+  > are now semantically scored, the `confirmed` / `refuted` status transitions
+  > are **more defensible** than the old "leading / dominated" framing.
+  > **Residual caveat:** a budget-exhausted run still falls back to the lexical
+  > scorer — check `matrix_scorer` before treating a matrix as semantic — and the
+  > matrix is an analysis of the current evidence base, not an adjudicated verdict
+  > (calibration is the exogenous check — its resolver is built and firing, with
+  > the subsequent-facts auto-resolver now ABSTAINING on undirected theses; see
+  > below + §13).
+- **`deep_consult`** (`data/analysts/deep_consult.py`) — the altitude-3 on-demand
+  kind whose `run_method` short-circuits to *schedule* the deep-consult Dapr
+  Workflow and return a task id immediately (§9).
+- **`meta_findings_synthesizer`** / **`cross_analyst_correlator`** — the
+  altitude-2 meta producers, now registered (`analyst_meta_synthesizer.yaml` /
+  `analyst_cross_correlator.yaml`); the prior "built but unregistered → 0 rows"
+  dormancy is closed.
+
+The bringup set (`scripts/bringup_register_analysts.py`) now registers:
+`country_assessor` (inline_target), `world_assessor`, `country_critic` (critic),
+`country_optimizer` (optimizer), `consult_default` (consult_on_demand),
+`country_predictor` (predictor), `meta_synthesizer`, `cross_correlator`,
+`competing_hypotheses` (ach), `calibration_tracking`, `fact_decay`,
+`deep_consult`, `relationship_reifier`, `structural_balance`, `graph_mining`,
+`nexus_decay`, **`proposed_edge_governance`** (promote/reject the `proposed_edges`
+queue into `nexuses`, rejecting demonym/junk endpoints — P3-1), and
+**`thematic_proposal`** (propose thematic frames for uncovered hot situations,
+for operator promotion to thematic targets — Phase 5b). The situation-gated
+`hypothesis_lifecycle` producer is **retired
+from bringup** — it emitted 0 rows (gated on `active` situations that go dormant)
+and `competing_hypotheses` superseded it as the real, fact/nexus-driven
+producer; its module + tests + deterministic-dispatch entry are kept for a
+possible future lifecycle-maintenance role but it is not registered
+(`bringup_register_analysts.py:60-67`).
+
+### 5.4 Descriptor + the registry — *hot-pluggability and provenance*
+
+All three families (plus action-packs and stack components) are **content-hashed
+descriptors** managed by the descriptor registry (`src/legba/data/registry/`).
+The registry gives every descriptor:
+
+- **Content-hashed identity** — a descriptor's `version` *is* the hash of its
+  body, so "is this the same descriptor as before?" needs no operator-managed
+  version string. An operator can re-tune a target fifty times a day, each
+  producing a new content hash, while the *schema* version stays stable for
+  months.
+- **A lifecycle FSM** (`draft → configured → active → paused → retired`) with
+  per-state hooks (a source's upstream provisioning fires on `on_activate`).
+- **An Ed25519-signed audit log** (`registry/audit.py`) — every mutation is
+  persisted with a signature over canonical JSON, in the same transaction as the
+  mutation, so an audit-write failure aborts the change.
+- **A DLQ on validation failure** (`descriptor_dead_letter` table +
+  `legba.dlq.descriptor.*` NATS subject) — a malformed descriptor never
+  half-lands.
+- **NATS events** per state change (`descriptor.<action>.<family>.<id>`), which
+  the runtime's reconcile loop consumes.
+
+Register → configure → activate. No redeploy for content changes. This is the
+well-trodden CRD/connector pattern (Kubernetes CRDs, Prometheus scrape configs,
+dbt models); what is distinctive is that the **cognitive layer is descriptors
+too** — analysts carry eval loops and self-tuning optimizers, so the declarative
+composition runs all the way up.
+
+### 5.5 Substrate — *the shared blackboard*
+
+The substrate is a polyglot backend; every store is itself a registry-managed
+**stack component** (`schemas/stack.py`) with credentials held in a separate
+XSalsa20-Poly1305 vault (`registry/credentials.py`, PyNaCl SecretBox — master key
+from `LEGBA_DATA_MASTER_KEY`, 32-byte hex) — descriptors reference secrets by id,
+never plaintext.
+
+> **AGE re-evaluation — DECISION (2026-06-23).** The knowledge graph lives
+> **relationally** in the reified `nexuses` table (subject / `intermediary` /
+> object / `rel_type` / signed polarity / intent / channel / confidence + the
+> temporal lifecycle), and all graph *computation* — centrality, structural
+> balance, proxy-chain sign-product mining, broker scoring — runs in **networkx,
+> in-process** over that table (`data/analysts/deterministic_handlers/`:
+> `structural_balance.py`, `graph_mining.py`). The Apache AGE graph `legba_graph`
+> is **retained but dormant**: both AGE write-legs ship **off by default**
+> (`emit_graph_edges=False` in `fact_extractor.py`; `LEGBA_AGE_DERIVED_FROM` off in
+> `dapr_actors.py`), so live it holds only a handful of demo edges
+> (**~3,918 nexuses vs ~10 AGE edges / 27 vertices**, measured 2026-06-23). **No
+> active analysis path depends on AGE** — the two analytic consumers pull their
+> signed edges from `nexuses` (`_augment_from_nexuses`) and only *best-effort
+> augment* from AGE; `/entities/graph` and provenance lineage are plain relational
+> SQL (recursive CTE over `derived_from uuid[]`); and the #99 "Notable Structure"
+> grounding block + agency `query_paths` / `find_proxy_chains` / `query_brokers`
+> tools all run as recursive CTEs / networkx over `nexuses`.
+>
+> **Decision:** keep the relational `nexuses` graph as the **canonical** knowledge
+> graph with networkx for compute; treat AGE as an **optional, currently-inert**
+> acceleration path that the project does **not** depend on. **Rationale:** at the
+> current scale (low thousands of edges) networkx over `nexuses` is simpler, fully
+> featured, transactional with the rest of the substrate, and already powers
+> grounding + agency queries + the operator surface (#99); a second graph engine
+> (AGE Cypher, or a standalone Neo4j/Memgraph) would add a query language, an
+> `agtype` text-parsing dialect, a per-connection session tax, and a sync pipeline
+> for **no current benefit**. **Falsifiable revisit trigger:** re-evaluate adopting
+> a native graph engine if the live nexus edge count exceeds **~250k** *or*
+> multi-hop traversal latency in the recursive-CTE / networkx path exceeds **~2 s
+> p95** for a routine analyst slice — i.e. when DB-side variable-length traversal
+> would earn its operational cost. The detailed code-grounded investigation (which
+> additionally recommends *dropping* AGE outright as a follow-up cleanup, an
+> operator-gated change) is in `planning/AGE_REEVAL_2026-06-24.md`.
+
+| Store | Role | Status |
+|---|---|---|
+| **Postgres** (+ dormant Apache AGE) | canonical relational pool (46 tables) + provenance; **the operative knowledge graph is the relational `nexuses` table**, with graph compute in in-process networkx. The `legba_graph` AGE graph exists (9 vertex / 14 edge labels) but is **near-empty and off the critical path** — write-legs default-off (§5.5, "AGE re-evaluation") | **LIVE — relational pool is source of truth**; AGE dormant (`data/migrations/0001_baseline.sql`, `data/postgres.py`) |
+| **NATS JetStream** | notification bus + durable streams + work queues; `legba_signals` (interest retention) + 4 registry-lifecycle streams + DLQ | **LIVE** (`data/nats.py`, `registry/streams.py`) |
+| **Qdrant** | vector embeddings — `legba_signals` collection (1024-dim BGE-M3 cosine), per-target collections optional | **LIVE** (`data/stack/vector_store/qdrant.py`) |
+| **Vault** | `stack_credentials` table, XSalsa20-Poly1305, versioned rotation | **LIVE** (`registry/credentials.py`) |
+| **Redis** | hot state / caches — geocode cache, ingest-dedup, registry health, intelmq source | **LIVE as a cache** (`data/redis.py`, `data/filters/geocode.py`, `data/filters/dedupe.py`) |
+| **SeaweedFS** | object store for retained media | **schema-slotted stack-component kind; NO handler shipped** |
+| time-series metrics / full-text search | observability store + BM25 backing | **REMOVED — declared seams** (no metrics store; `search_signals` uses Postgres FTS; see SEAMS) |
+
+The Postgres `signals` table is the **source of truth** (canonical, persistent,
+queryable for batch reads and backfill, `data/migrations/0001_baseline.sql`);
+NATS is the **notification bus** (transient, fan-out). The same observation lives in
+both, which is exactly why real-time delivery and batch re-analysis are one
+mechanism rather than two. NATS subject tokens cannot contain dots, so
+`SourceDescriptor.id` is flattened by `subject_token()` (`data/nats.py:86-95`).
+
+> **Reality check.** The Postgres/AGE + NATS + Qdrant + vault + Redis-as-cache
+> set is what is actually exercised. SeaweedFS has a schema-slotted stack kind
+> but **no live substrate handler** — it is a declared seam, not a running
+> integration. (The former TimescaleDB metrics store and OpenSearch full-text
+> backing have been removed outright; time-series metrics and full-text search
+> are now declared seams — see SEAMS.) Earlier drafts listed all of these as if
+> first-class; this doc corrects that.
+
+The data-analysis rigor arc (§5.7) added three things to the Postgres substrate
+(migrations live under `src/legba/data/migrations/`):
+
+- **`facts` temporal columns** (`0032_facts_decay_columns.sql`) — adds
+  `valid_until`, `superseded_by`, `confidence_components` to the existing `facts`
+  table, drops the old full-triple unique index, and adds the partial **open-only**
+  unique index `idx_facts_temporal_triple_open` on `(lower(subject),
+  lower(predicate), lower(value), COALESCE(valid_from, '1970-01-01'))` scoped to
+  `WHERE valid_until IS NULL AND superseded_by IS NULL` — so the single "what is
+  true now" row per triple is unique while superseded history accumulates.
+- **`nexuses` table** (`0033_nexuses.sql`) — the reified-relationship store:
+  `subject` / `intermediary` (nullable; NULL = direct) / `object` / `rel_type` /
+  `label` / `polarity smallint` (CHECK ∈ {−1, 0, +1}, `nexuses_polarity_ck`) /
+  `intent` / `channel` / `confidence` / `valid_from` / `valid_until` /
+  `superseded_by` / `derived_from uuid[]` / `source_signal_ids uuid[]` / `data
+  jsonb` / the universal provenance columns, default `schema_uri
+  iglu:legba/nexus/jsonschema/1-0-0`. It carries the same open-only partial
+  unique index pattern (`idx_nexuses_triple_open`) and a signed-open index.
+- **`seed_batches` ledger** + the seeding marker (`0034_seed_batches.sql`) —
+  `seed_batches` (`source` / `kind` / `source_type` / `imported_at` / `counts` /
+  `manifest`), plus `seed_batch_id` added to **both** `facts` and `nexuses` and
+  `source_type` added to `nexuses` (the marker the curated-seeding path stamps;
+  §5.7).
+- **`situations` first-class** (`0040_situations_first_class.sql` +
+  `0041_situations_valid_from_repair.sql` + `0042_situations_target_id_backfill.sql`)
+  — promotes situations from mutable bottom-up snapshots to **temporal frames**: a
+  real `situation_signature` column + a `UNIQUE (situation_signature, analyst_id)`
+  upsert key (so the standard `write_situation` provenance path has an upsert
+  target and "which situation owns this finding" is a plain join), the
+  `valid_from` / `valid_until` / `superseded_by` temporal columns (0041 repaired an
+  inverted `valid_from` backfill), and a populated `target_id` (0042). Situations
+  are now the persistent FRAMES that serve as a grounding source and the **events
+  substitute** — there is no `events` table; events = signals + `get_timeline`
+  (which includes situation spans). This closes what earlier drafts called the
+  Phase-5 "open frontier": situations are DONE, not a horizon target.
+- **`source_poll_outcomes`** (`0046_source_poll_outcomes.sql`) — append-only
+  provenance for every NON-productive source poll (empty HTTP-200-with-0-signals,
+  or error), carrying the handler's own `health_state` diagnosis; the per-source
+  liveness watchdog lateral-joins it to explain *why* a source went silent (§0).
+
+### 5.6 Action-pack — *modular, allow-listed analyst agency*
+
+Analyst capability is **granted, not hard-coded**. An `ActionPack`
+(`schemas/action_pack.py`) is a registrable, versioned, content-hashed bundle of
+*(tools + prompt fragments/rules + escalation channels + a per-pack governor +
+an applicability predicate)*. Seed packs: `media_processing` (`process_media`),
+`incident_response` (`escalate`/`create_incident` → channels), `substrate_read`
+(the consult kind's four governed read tools), and `escalate_finding` (fires on
+gated findings). (The `discovery` pack was retired per decision F-1.)
+
+Effective capability is an **intersection**: an analyst declares `action_packs`
+(what it *may* use); a target or domain template declares `allowed_action_packs`
+(what the context *permits*); a pack declares its own `applicability`. A
+capability an analyst requests but its domain doesn't allow cannot fire. Every
+pack carries a `governor` (budget + rate caps). This is the sole agency-grant
+surface; there is no flat tool whitelist.
+
+### 5.7 The data-analysis rigor layer — *temporal-honest knowledge*
+
+Above the per-signal findings sits a coherent **knowledge layer** built this arc.
+Its commitment is the one the pre-pivot system had and the early pivot lost:
+**facts and relationships are temporal and falsifiable, not snapshots**. The
+pipeline reads bottom-up:
+
+1. **Temporal facts** (altitude 0). The ingest-time **`fact_extractor`** stage
+   (`data/filters/fact_extractor.py`, a descriptor-gated `pipeline.enrichment`
+   filter, `kind="fact_extractor"`) reuses the GLiREL triples that
+   `ner_multilingual` already put on the signal (falling back to the hosted
+   `/extract` endpoint), rejects junk (numeric/date/unit endpoints, and an
+   opt-in `reject_quantity_endpoints` gate), and writes each
+   `(subject, predicate, value)` into the `facts` table with
+   `source_type='ingestion'` and **`valid_from` = the signal's event time**
+   (`_published_at_dt`/`_last_seen_dt`/`_event_dt`, else `fetched_at`). It is
+   enabled on the three world feeds — `source_bbc_world.yaml`,
+   `source_aljazeera_world.yaml`, `source_dw_world.yaml`. Before each insert,
+   `supersede_prior_facts` (`provenance/writes.py:658`) closes any open row for
+   the same `(subject, predicate)` whose **value differs** (`valid_until=now()`
+   + `superseded_by`), so the single open row per triple *is* "what is true now"
+   while history accrues. Analyst- and workflow-emitted facts share the same
+   write contract via `write_fact` (`OutputKind.FACT`).
+2. **Reified typed signed Nexus** (altitude 0, relations). The
+   **`relationship_reifier`** META analyst (§5.3) lifts raw co-mention edges into
+   *typed, directional, signed* relationships: `subject →[intermediary]→ object`
+   with a `rel_type` label, a canonical **polarity** sign (+1 supportive / −1
+   antagonistic / 0 neutral — the structural-balance convention), an `intent`,
+   and a `channel`. An 8B LLM does the typing; the row lands in `nexuses` via
+   `write_nexus`, with the same valid-from / supersession lifecycle as facts
+   (`supersede_prior_nexuses`, `writes.py:822`). Live examples: *Iran —HostileTo→
+   Strait of Hormuz* (−1), *Musk —LeaderOf→ SpaceX* (+1), *Brazil —MemberOf→
+   BRICS* (+1).
+3. **Deterministic refinement** over the signed graph. Three deterministic
+   sub-handlers (`data/analysts/deterministic_handlers/`), each now wired to a
+   descriptor: **`structural_balance`** (signed-triad balance: balanced vs.
+   frustrated triads, per-node frustration; it also owns the authoritative
+   `POLARITY` edge-label→sign table), **`graph_mining`** (community detection,
+   centrality, and **proxy-chain** sign-products through intermediaries), and
+   **`nexus_decay`** (confidence decay for nexuses older than 30 days — the
+   nexus-table sibling of `fact_decay`). `structural_balance` and `graph_mining`
+   now persist their results through the `_graph_metrics_sink` helper
+   (`deterministic_handlers/_graph_metrics_sink.py` — `write_graph_metric`), so
+   the signed-graph metrics land as queryable rows rather than log-only output.
+4. **Competing hypotheses + calibration** (altitude 2). The
+   **`competing_hypotheses`** (alias `ach`) META analyst (§5.3) runs the
+   **Analysis of Competing Hypotheses** structure: focal situations × current
+   facts × signed nexuses → ≥2 mutually-exclusive hypotheses, each with a
+   mandatory counter-thesis, laid out on a Heuer consistency matrix with
+   diagnosticity weighting and integer evidence balance; ±2 transitions promote a
+   hypothesis to `confirmed` / `refuted`. **The per-cell consistency matrix is now
+   LLM-scored** (Heuer CC/C/N/I/II via the model plane, budget-gated, never
+   litellm), with the deterministic lexical/polarity counter as the
+   budget-exhausted per-cell fallback (each row records `matrix_scorer`); evidence
+   is scoped to the resolved-entity set, not a substring (see §5.3). The
+   **`calibration_tracking`** handler closes the loop with a Brier score over
+   resolved hypotheses. The **exogenous** `resolved_outcome` column (migration
+   0038) is **built and firing** — stamped against facts produced *after* the
+   hypothesis (`resolved_by = 'subsequent_facts'`) or by an operator label
+   (`resolved_by = 'operator:<id>'`), never the hypothesis's own evidence balance,
+   so that the Brier can measure consistency against new evidence rather than
+   self-consistency. The subsequent-facts auto-resolver now **ABSTAINS on
+   undirected theses** (it previously auto-graded undirected facts TRUE, which
+   inflated the headline rate); it runs alongside the live `status_transition`
+   (self-consistency) tier (rows in that tier are flagged `self_consistency_only`).
+   The **goal** remains a real Brier against resolved real-world outcomes.
+   Residual caveats: the subsequent-facts auto-resolver is a coarse directional
+   heuristic (the operator-label path is higher-fidelity), the gradeable
+   directional resolution rate is modest, and a budget-exhausted run falls back to
+   the lexical scorer. No proven-forecast-accuracy claim is made.
+
+This whole layer is **temporal-honest** end to end: every fact and nexus carries
+`valid_from` / `valid_until` / `superseded_by`, an open-only partial unique index
+makes "the current value" a single queryable row, and a value/polarity change
+closes the prior row rather than overwriting it — so the substrate answers both
+"what is true now" and "what did we believe, when".
+
+**Seeding (curated baseline).** A small primitive lets curated knowledge enter
+the same tables without masquerading as live ingestion. Every fact and nexus
+carries a `source_type` (`ingestion` / `agent` / `seed`) and an optional
+`seed_batch_id`; both are threaded (default `None`) through
+`write_analyst_output → _insert_for_spec → _insert_fact`/`_insert_nexus`
+(`writes.py:128-129`), and the `seed_batches` ledger records each import's
+`source`, `counts`, and `manifest`. The `src/legba/data/seed/` framework defines
+a `SeedSource` protocol + a `SeedDriver`, driven by the `scripts/seed.py` CLI,
+with **four** registered adapters: `world_baseline` (curated-YAML flavor-b
+reference, zero network dep), `wikidata_leaders` (Wikidata-SPARQL current heads
+of state/government → `LeaderOf` facts), `acled_conflict` (ACLED conflict-events
+backfill → conflict-event facts + signed nexuses), and `sipri_arms_transfers`
+(curated-SIPRI-YAML arms transfers → signed nexuses). A seed write stamps
+`source_type='seed'` + the batch id so a batch is selectively refreshable /
+purgeable and never confused with a real observation. Live today: seed batch
+`414473c8`, ≈19 seed facts + 17 seed signed nexuses.
+
+**Seed temporal honesty — `valid_until` now threaded end-to-end.** Curated
+seeds enter with their `valid_from` (term start / accession) **and** a parsed
+`valid_until` where the source carries one: `FactPayload` / `NexusPayload` now
+**both carry a `valid_until` field** (`models.py:329`, `:371` — added by the
+Phase-B write-path work), and the seed driver threads it through
+(`seed/_driver.py:366-367`, `:409-410`). The remaining nuance is that a
+*differing* live observation also supersedes a seeded row via
+`supersede_prior_facts`/`supersede_prior_nexuses`, but expiry **purely** by a
+seed's stored end date (with no superseding observation) is still not driven by
+a background sweep — the row carries its `valid_until` and the current-facts
+gate (`valid_until IS NULL OR valid_until > now()`) excludes it once that date
+passes, so it is temporally honest at read time even without an active sweep.
+
+### 5.8 Knowledge grounding — *the substrate IS the grounding store*
+
+The analyst LLM plane has a **stale-cutoff** problem: a hosted model whose
+training prior predates the present backfills current-world facts (who holds
+office, which alliances are in force, the state of an ongoing conflict) from
+that prior — e.g. calling the *current* US president a "former" one, because its
+cutoff predates the 2024 election. The signal slice rarely *restates* such
+background facts, so the model has no in-context correction.
+
+The insight that closes this: **the data-analysis rigor layer (§5.7) already IS
+the grounding store.** Temporal facts (`valid_from`/`valid_until`/`superseded_by`)
++ reified signed nexuses + seed roots are exactly a current-world-state model
+with a single queryable "what is true now" row per assertion. The fix is not a
+new store — it is (Tier 0) curating *current* data **in**, and (Tier 1)
+**injecting** it at analysis time. Plan: `planning/KNOWLEDGE_GROUNDING_PLAN.md`.
+
+- **Tier 0 — current data in (seed adapters with temporal supersession).** The
+  `wikidata_leaders` seed adapter (`data/seed/adapters/wikidata_leaders.py`)
+  pulls **current** heads of state/government from the live Wikidata SPARQL
+  endpoint and emits, alongside the subject=leader `LeaderOf` fact, a
+  **country-subject** office fact `<country> | head of state | <leader>` keyed on
+  the *country* (`_HEAD_OF_STATE_PREDICATE = "head of state"`,
+  `wikidata_leaders.py:72`, mirrored by `world_baseline.py:50`). That shape is
+  the supersession-correct one: because `supersede_prior_facts` keys on
+  `(subject, predicate)`, a leader change on a country-keyed fact **closes the
+  prior officeholder** (`valid_until = now()` + `superseded_by`) via the Phase-B
+  `valid_until` write path — whereas a subject=leader fact could not, since its
+  subject is the person. Both adapters use the same canonical predicate, so a
+  fresh Wikidata pull supersedes a stale curated `world_baseline` leader for the
+  same country.
+  - **Bare-QID resolution.** Wikidata's SPARQL label service occasionally returns
+    a bare `Qxxxx` id instead of a name (live-observed for some P6
+    head-of-government rows — notably **Trump `Q22686`**, whose entity carries no
+    English `labels.en` key at all). `_resolve_bare_qid_labels`
+    (`wikidata_leaders.py:241`) gathers every bare-QID label cell and does one
+    batched `wbgetentities` Action-API call, preferring `labels.en.value` and
+    **falling back to the `sitelinks.enwiki.title`** — that enwiki-sitelink
+    fallback is exactly what resolves `Q22686` → "Donald Trump". A QID neither
+    path can resolve is left bare and **dropped** at `map` (never emitted as a
+    `Qxxxx` value). Live-verified: US head of state = `Donald Trump` (since
+    2025-01-20), current, superseding the QID.
+
+- **Tier 1 — injection at analysis time (opt-in descriptor block).** A
+  `GroundingBlock` (`data/schemas/analyst.py:522`) is an optional
+  `AnalystDescriptor.grounding` field — `enabled` (default **`False`**), `scope`
+  (`target_geo` / `slice_entities`, default both), `sources` (`substrate` today;
+  `vector:world_context` accepted but inert — Tier 2), `max_facts` (default 30).
+  Off unless declared, so no non-opted-in analyst pays a read. When enabled,
+  `analyst_deps_builder._build_grounding_hook` (`analyst_deps_builder.py:378`)
+  closes a `SubstrateGroundingResolver` (`runtime/grounding.py`) over the
+  substrate `pg_pool` and installs a per-run hook. The hook (a) extracts
+  candidate names from the in-memory slice + the run's `target_id`
+  (`collect_grounding_candidates` — no DB), (b) resolves the **current**
+  authoritative rows with the same temporal-honesty gate the analysis plane uses
+  (`superseded_by IS NULL AND (valid_until IS NULL OR valid_until > now())`),
+  **preferring `source_type IN ('seed','curated')`** so a seeded ground truth
+  outranks a hallucinated live fact, and **excludes bare-QID values in SQL and
+  again in Python** (never injects an unreadable `Qxxxx` line), and (c) renders a
+  dated **"AUTHORITATIVE CURRENT CONTEXT (as of `<today>` — treat as ground truth
+  over prior knowledge)"** preamble (`build_grounding_preamble`). The
+  `inline_target` runner's **GROUND** phase
+  (`data/analysts/inline_target.py:592-612`) **prepends** that preamble to the LLM
+  user prompt — degrade-not-drop: any resolver/read failure logs and yields
+  `None` (no preamble), never failing the run, and an empty candidate set
+  produces no header. Opted IN on `analyst_world_assessor.yaml` and
+  `analyst_country_assessor.yaml` (`grounding.enabled: true`).
+  - **Canary (live-verified).** A US assessment's context now contains
+    "United States — head of state: Donald Trump (since 2025-01-20)".
+
+- **Tier 2 — vector `world_context` collection.** A curated unstructured-brief
+  collection is a **declared future seam** (it needs the embedder-through-port,
+  L-114). The schema already accepts `sources: [vector:world_context]` so
+  descriptors can pre-declare it, but the deps-builder logs and the resolver
+  no-ops on any non-`substrate` source until that wiring lands
+  (`analyst_deps_builder.py:419-425`).
+
+Grounding is purely additive over the substrate: it is a couple of cheap
+current-facts Postgres reads gated by a default-off descriptor field, injected as
+a prompt preamble — no new store, no new dependency, and never a hard failure.
+
+## 6. The four planes
+
+The system decomposes into four decoupled planes — `source_first_runtime.py`
+assembles the latter three on top of the substrate. The seam that makes
+everything work is the split between **acquisition** (ingest-once) and
+**analysis** (match-many).
+
+### 6.1 Acquisition — the inline analysis Tier (Tier 1)
+
+This is the **TIER-1 INLINE per-signal pipeline** of §0: it runs *synchronously,
+once per Signal, at acquisition, BEFORE fan-out*, and is **deterministic / local
+NLP — no analyst LLM**. Its writes are altitude-0 substrate: the **enriched
+signal** (in place on the one `signals` row), altitude-0 **`facts`**
+(`source_type='ingestion'`), and **entity rows + `signal_entity_links`** off the
+NER spans. Everything downstream of fan-out (the cadence/slice analysts) is
+Tier 2.
+
+A `SourceActor` polls on a Reminder or wakes on an inbound webhook
+(`runtime/source_actor.py`). Its `pull_once` → `_process_one`
+(`source_actor.py:482`) runs the source's baseline pipeline
+(`run_baseline`, `data/sources/baseline.py:242`) to produce **one** canonical,
+target-agnostic signal. Baseline enrichment runs in three tiers
+(`baseline.py:282-294`): tier-1 structured (always, deterministic), tier-2 eager
+media (opt-in via `pipeline.media`), tier-3 NLP enrichment stages
+(`descriptor.pipeline.enrichment` → `language_detect → language`,
+`geocode → geo`, `classify → tags`, `ner_multilingual → entity_classes`). The
+enrichment chain is wired from the descriptor at host bring-up by
+`enrichment_factory` (`source_first_runtime.py:181-203`) into a `PipelineRunner`
+(`runtime/pipeline.py:76`). (Source descriptors reach the registry two ways: the
+operator-pinned `descriptors/source_*.yaml`, **plus** the 46-entry **catalog**
+(43 `rss` + 3 `geojson`) in `scripts/bringup_register_source_catalog.py`
+registered directly into `source_descriptors` — NWS, NASA EONET, WHO/CDC/HRW, RSS
+feeds — so the full live source set is the DB rows, not the YAML files; see
+`docs/SOURCES.md` for the catalog table and the 3 / 46 / 49 scope model.) **Enrichment mutates the signal in
+place** — there is
+no separate enrichment table; the enriched signal is written canonically to the
+single `signals` table (`source_actor.py:520-525`), with the structured columns
+indexed for subscription pushdown. The signal is then published once to a coarse
+NATS subject `legba.signals.<tenant>.<source_token>.<modality>.<event_class>`
+(`data/nats.py:98-115`).
+
+> **Note:** `language_detect` and `geocode` are deterministic (pure-Python +
+> pycountry/Nominatim with Redis cache). `ner_multilingual` and `classify` call
+> the hosted `legba-models` service (GLiREL-large `POST /extract`, DeBERTa-v3
+> zero-shot `POST /classify`) — these are remote model calls. The altitude-0
+> **`fact_extractor`** stage now slots into exactly this chain next to NER (§5.7):
+> it reuses NER's GLiREL triples, stamps `valid_from`, and writes `facts` rows. It
+> is live on the BBC / Al Jazeera / Deutsche Welle world feeds.
+>
+> **Source credibility at ingest.** `signals.source_credibility` was previously
+> 100% NULL because the `source_credibility` pipeline filter only runs when a
+> descriptor *binds* that kind (the live descriptors don't), while the
+> credibility table is scored for ~65 hosts. `SourceActor` now backfills the
+> column at write time via a host lookup against the `source_credibility` table
+> (`source_actor.py:340` `lookup_source_credibility`, applied at `:406-408`), so
+> the score is populated even for sources that didn't declare the filter.
+
+### 6.2 Analysis (predicate fan-out)
+
+The **subscription engine** (`runtime/subscription/engine.py:71`) resolves each
+active target's `SourceRef`s into authorized bindings — `resolve_source_refs()` →
+`enforce_subscription()` (policy check against the source's
+`subscription_policy`) → `subject_filters_for()` → `ensure_durable_consumer()`.
+It binds **one per-target aggregated JetStream consumer** subject-filtered to
+that target's coarse axes, collapsing N×M per-(target,source) consumers toward N.
+
+Signal matching is **two-stage** (`subscription/filter.py:62-108`):
+
+1. **Structured SQL `WHERE`** on indexed columns — `geo`/`tags`/`entity_classes`
+   via GIN overlay, `languages`/`modalities` via btree — pinned to the bound
+   `source_id` + `owner_tenant`.
+2. **Starlark residual** on the narrowed set (`residual_matches()`,
+   `filter.py:194-219`) — compiled and cached in an LRU (`compiler.py`), evaluated
+   under a **5ms SIGALRM wall-clock budget**, expression-only (no `def`/`load`/
+   `lambda`, ≤4KiB, banned tokens rejected). Step-cap / memory-cap are an
+   acknowledged gap in the `starlark-pyo3` binding, mitigated by the
+   expression-only gate + wall-clock budget (`compiler.py:36-42`).
+
+> **Cost rule (load-bearing):** immediate per-signal invocation is for *cheap*
+> reactions only (deterministic detectors, dedup, severity-gated alerts).
+> Expensive (LLM) analysis is always coalesced; the cooldown is the cost
+> governor. LLM analysts fire reactively on the accumulation / cadence gates,
+> never per-signal.
+
+> **Bounded per-run dedup (load-bearing for the actor-invoke budget).** The
+> `cross_source_dedup` deterministic analyst does **not** re-scan the whole
+> `signals` table every cadence. Its candidate query (a) skips content-hash
+> groups already fully canonicalised — in the DB, via
+> `HAVING COUNT(*) > 1 AND COUNT(*) FILTER (WHERE canonical_signal_id IS NULL) > 0`
+> (`cross_source_dedup.py:193-194`) — and (b) is capped at
+> `max_groups_per_run` (`DEFAULT_MAX_GROUPS_PER_RUN = 500`,
+> `cross_source_dedup.py:90`) with a stable `ORDER BY content_hash`, so each run
+> does bounded work and the backlog drains across successive frequent cadences.
+> This is the real fix behind raising the actor-invoke timeout
+> (`LEGBA_ACTOR_INVOKE_TIMEOUT_SECONDS`, default 180s) — the cap keeps a run
+> inside the budget without changing the dedupe result for any group it
+> processes.
+
+### 6.3 Async jobs
+
+A NATS **work-queue with competing-consumer workers** (`JobWorkerPool`) backs
+bounded, stateless, interchangeable jobs. `process_media` is the live job kind.
+An analyst with the right action-pack enqueues a `process_media` job mid-
+reasoning; the worker pulls and processes the artifact; the result lands as a
+**derived signal** (`derived_from` → the raw signal) which re-enters the
+fan-out → trigger path — heavy extraction is paid for only when reasoning needs
+it.
+
+> **Seam:** the job plane — queue, durable consumer, worker pool — is live, the
+> `process_media` envelope + governed agency tool exist, and a completed job's
+> derived signal re-enters fan-out. What remains a seam is the extraction service
+> itself: with no `LEGBA_MEDIA_API_URL` configured, eager and on-demand
+> extraction refuse loudly (typed `MediaEndpointNotConfiguredError`, no row
+> written, `source_actor.py:408-423`).
+
+### 6.4 Substrate
+
+The shared stores of §5.5. Both the acquisition and analysis planes read and
+write it; the async plane feeds derived signals back into it.
+
+## 7. The runtime — the Dapr virtual-actor model
+
+The runtime turns descriptors into running work via **Dapr virtual actors** plus
+a reconcile loop that watches registry events and activates/retires actors to
+match the registry. A virtual actor is addressable, turn-based (one invocation at
+a time per id), reminder/timer-driven, and scale-from-zero. Parallelism is
+*across* actors, distributed over runtime replicas by Dapr's placement service.
+The whole runtime collapses to a **single control plane** — one `daprd` per
+process (the seam that retired the Temporal backend).
+
+Actor id grammar is `kind::descriptor_id::tail` (`dapr_actors.py:558-579`); for a
+primary actor `tail` is the descriptor content-hash, for a worker actor `tail` is
+the `target_id`.
+
+### 7.1 SourceActor
+
+Per source descriptor. Owns its poll Reminder (or webhook wake), runs the
+baseline pipeline (§6.1), and writes + publishes one canonical signal. Event-time
+for cursor advancement lives on `payload._published_at_dt` (RSS) / `_last_seen_dt`
+(OpenSanctions) / `_event_dt` (generic), falling back to `fetched_at`
+(`source_actor.py:194-208`).
+
+### 7.2 AnalystActor — cadence reminder + fan-out
+
+This is the heart of the analysis runtime (`AnalystActor`,
+`dapr_actors.py:1158`; `run()` at `:1590`). Its lifecycle:
+
+1. **PRIMARY owns the cadence.** On `_on_activate`, `cron_to_reminder_timing()`
+   (`dapr_actors.py:1238`, from `descriptor.cadence.fallback_schedule`) registers
+   the durable `run_cadence` reminder. A stale-fire self-disarm guard
+   (`reminder_guard_decision`, `:582`) unregisters on version bump, skips when
+   paused/error.
+2. **Cadence tick → target matching.** `receive_reminder` (`:1295`) →
+   `_reminder_guard` → `_cadence_targets()` (`:1464`) evaluates the
+   `subscription.targets` Starlark predicate (`ANALYST_SUBSCRIPTION` surface,
+   e.g. `has_tag('g20')`) against the active target descriptors. **One selector
+   binds all G20 targets** — no per-target enumeration.
+3. **Fan-out (A2 concurrency).** `_fanout_to_workers()` (`:1351`) chunks the
+   matched targets at `_FANOUT_CHUNK = 5` (`:548`) and dispatches **one run per
+   matched target** to a distinct **per-(analyst,target) worker actor**
+   `analyst::<descriptor_id>::<target_id>` (`_worker_actor_id`, `:558`), via an
+   `ActorProxy.run({target_filter: tid})`, bounded by a `Semaphore` to avoid a
+   thundering herd. Workers **lazy-activate** with the `target_filter` in hand,
+   carrying no separate cadence — the primary owns the heartbeat.
+4. **Per-target cooldown + slack.** Each worker gates on a per-target
+   `cooldown_by_target[target_filter]` (`:1648`), absorbing **5%-of-cooldown
+   slack** (capped 600s, `:1662-1665`) to fix drift when `cooldown_seconds ≈
+   cadence interval` (the `6h→12h` bug fixed by commit `cefd8ca`).
+5. **Read slice.** `_read_substrate_slice(descriptor, target_filter)`
+   (`:3005-3050`) reads the kind's substrate window — default 24h signals, or the
+   descriptor's `subscription.targets.time_window` (e.g. `336h`,
+   `:3006-3027`). Kind-specific overrides exist (the `critic` reads
+   `analyst_outputs` rows by id instead of signals).
+6. **Kind dispatch.** `build_analyst_run_method` (`analyst_deps_builder.py:99`)
+   has resolved the kind's module, LLM handler, and deps bundle at deps-build
+   time; `run()` invokes the 3-arg `run_method(inputs, options, kind_deps)`.
+7. **Budget gate + retry + demotion.** `budget.precall_check` projects token
+   overrun → `throttle`/`exhausted`/`global_exhausted` with an audit trail and
+   demotion-state setting; a transient-exception retry loop (exponential backoff,
+   max 3, `_classify_exception` bucketing budget/transient/hard) wraps the call.
+
+> **Declared seam:** the demotion path logs a *pause-until-reset* instead of a
+> real cheap-model fallback (`fallback_run_method` is wired but the
+> `demote_and_continue` strategy is a documented seam, `docs/SEAMS.md` F-2,
+> `dapr_actors.py:1770-1794`).
+
+8. **Output dispatch.** §8.
+
+Scheduling is Dapr Reminders (fixed period) plus the trigger engine's in-process
+cadence ticker; there is no Dapr Jobs (cron) integration.
+
+## 8. Outputs — the provenance + write paths
+
+When `run_method` returns, the actor selects the payload for the descriptor's
+declared `OutputKind` and writes it through the universal provenance path.
+
+### 8.1 The OutputKind enum (the REAL members)
+
+`OutputKind` (`data/provenance/kinds.py:57-87`) has **exactly ten** members:
+
+```
+finding · situation · hypothesis · prediction · alert
+meta_finding · critique · fact · nexus · prompt_module_candidate
+```
+
+`fact` and `nexus` are the knowledge-layer kinds added by the data-analysis
+rigor arc (§5.7). Each is fully plumbed exactly like `hypothesis`:
+`OutputKind.FACT` / `write_fact` / `facts` table (`kinds.py:173-179`,
+`writes.py:385`) and `OutputKind.NEXUS` / `write_nexus` / `nexuses` table
+(`kinds.py:180-186`, `writes.py:416`). The fact path is dual-producer: the
+ingest-time `fact_extractor` stage writes source-owned facts
+(`source_type='ingestion'`, no analyst_id) through its own lower-level
+`_insert_fact`, and `write_fact` is the analyst/workflow path — both share one
+write contract. `fact_decay` and `nexus_decay` are the temporal-lifecycle
+maintenance handlers that UPDATE pre-existing rows.
+
+There is also deliberately **no `signal` kind** — signals are source-owned rows
+written by the canonical ingestion path, never routed through this registry
+(`kinds.py:57-67`).
+
+### 8.2 The write path
+
+`write_analyst_output` (`data/provenance/writes.py:115`) is the generic wrapper:
+
+1. `spec_for_kind` (`kinds.py:172`) looks up the kind's table + payload model +
+   schema URI + NATS subject.
+2. Pydantic validation; a `ValidationError` routes to the
+   `output_dead_letter` table via `route_to_output_dead_letter`
+   (`provenance/dlq.py`) — invalid output never half-lands.
+3. `ProvenanceFields.from_analyst()` (`provenance/_core.py`) builds the universal
+   provenance: `produced_at`, `derived_from` (uuid[]), `schema_uri` (Iglu).
+4. `_insert_for_spec` (`writes.py:450`) routes the INSERT:
+   `situation` → `situations`; `hypothesis` → `hypotheses`; `fact` → `facts`
+   (open-only upsert + `supersede_prior_facts`); `nexus` → `nexuses` (open-only
+   upsert + `supersede_prior_nexuses`); everything else
+   (`finding`/`prediction`/`alert`/`meta_finding`/`critique`/
+   `prompt_module_candidate`) → the generic `analyst_outputs` table. The
+   `facts`/`nexuses` routes honor the `source_type` / `seed_batch_id` seeding
+   markers (§5.7); other kinds ignore them.
+5. NATS publish to `analyst.<analyst_id>.<channel>` — channel mapped by
+   `_NATS_CHANNEL_BY_KIND` (`dapr_actors.py:2368-2375`: FINDING→findings,
+   SITUATION→situations, …). `_safe_publish` swallows broker hiccups so the
+   substrate INSERT is the source of truth.
+
+### 8.3 Receipt chain + emit-bindings
+
+After the row is written, the actor records a **tamper-evident SHA-256 receipt
+chain** over the canonical JSON of the run, threading `intermediate_steps` +
+`tool_calls` (`compute_receipt_hash`, `provenance/_core.py:352-383`; chained in
+`dapr_actors.py`) — distinct from, and complementary to, the Ed25519-signed
+*registry* audit log. It then dispatches to **output-kind emit handlers**
+(`_emit_output_bindings`, `dapr_actors.py:2565`) discovered via
+`discover_output_kinds()`. Two emitters are live:
+
+- **STIX 2.1 bundle** (`data/outputs/stix_bundle.py`) — FindingPayload→Report,
+  SituationPayload→Incident+Report, HypothesisPayload→Report[analysis],
+  AlertPayload→Indicator|Report; published to `legba.outputs.stix.<target_id>`.
+- **`alert` sinks** (`data/outputs/alert.py` + `alert_sinks/`) — coerces the
+  live FindingPayload into a severity-gated `AlertPayload` and fans out on the
+  severity ladder (NATS always; Pushover at medium+; XMPP/Matrix at high+ if the
+  extras are installed). `_emit_output_bindings` threads the `pg_pool` and the
+  persisted output row id (`OutputContext.alert_row_id`) so the alert sink writes
+  its `alert_sink_deliveries` audit rows — the **2026-06 audit-plumbing fix**: the
+  sink now writes `alert_sink_deliveries` rows when it fires (the prior
+  `alert_sink_deliveries=0` was the missing plumbing, not a missing path).
+  **Residual caveat:** successful-delivery audit and error audit remain in separate
+  columns — there is no single unified delivery-status view yet. The `alert`
+  binding is wired on `country_assessor` with `min_severity: high`
+  (`descriptors/analyst_country_assessor.yaml:139`), so a high-severity G20
+  finding now reaches the operator sinks.
+
+Findings that cross the escalation gate additionally fire the `escalate_finding`
+action pack through the governed agency pipeline (`_maybe_escalate_finding`). The
+gate is a **dual OR test** (`escalation_gate_decision`, `agency/binding.py`): it
+fires when an explicit finding severity is **≥ high** *OR* finding confidence is
+**≥ 0.85** — an unknown/absent severity never fires on its own (conservative), so a
+finding with neither a high severity nor 0.85 confidence does not escalate.
+
+## 9. The actor → Dapr-Workflow seam (the optimizer precedent)
+
+Some work is too long and too expensive to run inside a turn-based actor: the
+**optimizer** kind runs a GEPA/DSPy self-improvement loop over logged traces ⋈
+critiques — a multi-step, multi-hour, deterministic-replay job. Legba runs it as
+a **Dapr Workflow** (durabletask) on the same `daprd` sidecar — *not* as an actor
+and *not* on any external workflow cluster. This is the **substrate that replaced
+Temporal**, collapsing the runtime to one control plane.
+
+The seam (`runtime/dapr_workflow/`) is the precedent every future durable job
+follows:
+
+- The optimizer **kind** calls a stable `temporal_client.start_optimizer_workflow()`
+  (`data/analysts/optimizer.py:754` — the field name is historical; it just means
+  "workflow client").
+- `DaprOptimizerWorkflowClient.start_optimizer_workflow()`
+  (`dapr_workflow/client.py:221`) schedules `optimizer_workflow` against daprd's
+  gRPC endpoint and returns a `DaprWorkflowHandle`.
+- The `optimizer_workflow` **orchestrator** (`dapr_workflow/workflow.py:134`)
+  yields `validate_training_set_activity` then `compile_candidate_activity` (with
+  a retry policy). The orchestrator body is **strictly deterministic** — no
+  wall-clock/RNG/I/O; all non-determinism is pushed into activities (replay
+  contract, `workflow.py:20-24`).
+- `compile_candidate_activity` delegates to the shared GEPA core
+  (`_run_gepa_loop`, `dapr_workflow/gepa.py:254`), reused identically by the
+  `InProcessWorkflowClient` fallback (for tests / when `dapr.ext.workflow` is
+  absent).
+- All LLM calls route through `LegbaProviderLM` (`dapr_workflow/dspy_lm.py:147`),
+  a custom `dspy.BaseLM` adapter that drives Legba's own `LLMProviderHandler` —
+  **never litellm** (operator hard rule; litellm is inert in the worker image).
+- The worker registers the orchestrator + activities **by function name**
+  (`build_workflow_runtime`, `dapr_workflow/worker.py:58-107`), embedded in the
+  runtime when `LEGBA_EMBED_WORKFLOW_WORKER=1` or standalone via the
+  `legba-dapr-workflow-worker` container (`docker-compose.yml`, dspy lives only
+  in this worker's image).
+
+> **The pattern is now used twice.** `build_workflow_runtime`
+> (`worker.py:107-117`) registers **both** workflows by function name on the one
+> runtime: `optimizer_workflow` (+ `validate_training_set_activity` /
+> `compile_candidate_activity`) and **`deep_consult_workflow`** (+ `plan_activity`
+> / `acquire_activity` / `analyze_activity` / `synthesize_activity`), so the same
+> worker / console script services both — no second container. The deep-consult
+> workflow (altitude 3, §1) followed this exact seam precisely: a new orchestrator
+> + activities in `worker.py`, a client in `dapr_workflow/deep_consult_client.py`,
+> and a `deep_consult` kind module in `data/analysts/` whose `run_method`
+> short-circuits to *schedule* the workflow and return a task id.
+> `POST /api/v1/deep_consult` returns **202 + a task_id** in <1s (the actor
+> schedules detached over the runtime's dapr sidecar), the staged workflow
+> (plan→acquire→analyze→synthesize) runs for minutes→hours, and
+> `GET /api/v1/deep_consult/{task_id}` polls by reading the produced FINDING row
+> back from Postgres keyed by run_id (`registry/deep_consult_api.py`).
+>
+> **Gotcha (load-bearing):** a Dapr Workflow `instance_id` must **not** contain
+> `::` — activity result parsing splits on `::` and hangs forever otherwise
+> (`optimizer.py:508-519`). Worker actor ids use `::`; workflow ids must not.
+
+## 10. Self-improvement — closing the loop
+
+The analysis graph closes on itself. A **critic** analyst (a *different* model
+than the one it grades — heterogeneity is the point, not multi-agent debate)
+scores analyst outputs against a rubric grounded in substrate facts; the critic
+reads `analyst_outputs` by id via its kind-specific read slice
+(`_critic_ungraded_targets`, `dapr_actors.py:1394`). Those critiques feed the
+**optimizer** (§9), which produces candidate prompt-module versions
+(`OutputKind.PROMPT_MODULE_CANDIDATE` → `analyst_outputs`), gated by
+human-reviewed promotion (champion instruction → live system prompt,
+operator-gated). Because `derived_from` chains cross source-descriptor refs, a
+critic can walk provenance from a finding all the way back to the raw signal and
+its source.
+
+## 11. How it scales
+
+The architecture's scaling story is the same inversion told three ways.
+
+- **Many analysts on one shared substrate.** Adding a country, a sector, or a
+  whole new domain is *registering descriptors into a running instance*, not
+  deploying a new instance. Cross-target reasoning is free — the substrate is
+  shared by definition, so a correlator analyst over pooled findings is just
+  another subscriber.
+- **Shared sources, not per-target binding.** N targets over one feed is **one**
+  poll, **one** enrichment, **one** stored signal — fanned out by predicate.
+  Shared sources carry `owner_tenant = shared`; per-customer sources are
+  tenant-scoped; the subscription filter enforces the boundary.
+- **The right execution shape for each workload.** Addressable, mostly-idle,
+  request-driven work (sources, targets, analysts) is **Dapr actors**, scaling by
+  replica count. Long, durable, multi-step work (the optimizer) is a **Dapr
+  Workflow**. High-throughput, interchangeable, bounded work (media extraction)
+  is a **NATS work-queue worker pool**, scaling by workers. No serialized actor
+  is ever a throughput bottleneck — that work is a job.
+
+NATS subjects are deliberately **coarse** (tenant/source/modality/event-class);
+exact matching is the SQL `WHERE` (batch) plus the Starlark residual on the
+narrowed stream (real-time). Subscriptions never try to express arbitrary
+predicates as subjects.
+
+## 12. Provenance and hot-pluggability, end to end
+
+Two properties hold across every layer and are not bolt-ons:
+
+- **Hot-pluggability.** Every unit — source, target, analyst, action-pack, stack
+  component — is a registry descriptor with content-hashed identity, a lifecycle
+  FSM, a signed audit trail, and a DLQ. Operators compose and re-tune at runtime;
+  the reconcile loop converges the running actors. A new source kind or action
+  pack is an **extension point**, not a schema change.
+- **Provenance.** Every observation is source-attributed; every interpretation is
+  `target_id` + `analyst_id` + `derived_from`. Lineage is a recursive query;
+  per-analyst conclusions are a tamper-evident hash chain; every descriptor
+  mutation is Ed25519-signed.
+
+## 13. Live, proven state
+
+The full loop — **altitudes 0 through 3** — runs end-to-end from cold-start
+(empty volumes, the `0001_baseline.sql` baseline + the forward chain
+`0032`…`0046` under `src/legba/data/migrations/`, current head **0046** — the
+`facts`/`nexuses`/`seed_batches` schema plus the entity-profile composite key
+(`0035`), signals retention (`0036`), the AGE output label (`0037`), the ACH
+`resolved_outcome` column (`0038`), the consult-sessions tables (`0039`),
+**situations-as-first-class + repairs (`0040`–`0042`)**, the data-quality
+backfills (`0043`–`0045`), and `source_poll_outcomes` (`0046`)):
+
+- Real RSS sources (BBC / Deutsche Welle / Al Jazeera) acquire enriched signals —
+  geo, language, and entity-class promoted to indexed columns; the
+  `fact_extractor` stage extracts ≈225 temporal `facts` (`source_type=ingestion`)
+  with `valid_from` stamped + value-change supersession.
+- Fan-out on `legba.signals.>` routes them to the G20 country targets, each
+  subscribing by a geo/tag predicate and coalesced by a `country_assessor`
+  analyst that binds to all G20 targets via a single `has_tag("g20")` selector.
+- The targets produce distinct per-country findings, each with `derived_from`
+  provenance and receipt chains; `country_predictor` fans out predictions over
+  the same G20 set; the STIX emitter serializes live payloads to bundles and the
+  `alert` sinks deliver high-severity findings to operators.
+- An entity knowledge graph (`entity_profiles` / `signal_entity_links` /
+  `proposed_edges`) is kept current by an ongoing `entity_resolution`
+  deterministic analyst, which now **canonicalizes** every NER span through
+  `canonicalize_entity` (`deterministic_handlers/_entity_canon.py`: HTML /
+  possessive strip + alias map + pycountry gazetteer type correction) *before*
+  the dedup key, appending a content-addressed `derived_from` marker and an
+  `entity_profile_versions` row (Phase C; the live backfill collapsed
+  country-as-person rows to 0 and "United States" 13 surface fragments → 1). The
+  `proposed_edge_governance` handler promotes pending `proposed_edges` into
+  neutral `CoOccursWith` nexuses, and the **`relationship_reifier`** lifts the
+  typed co-mention edges into ≈15 agent + 17 seed *typed, signed* `nexuses` (e.g.
+  *Iran—HostileTo→ Strait of Hormuz* −1, *Musk—LeaderOf→ SpaceX* +1,
+  *Brazil—MemberOf→ BRICS* +1).
+- The **`competing_hypotheses` (ACH)** analyst produces ≈34 hypotheses (≈3
+  confirmed / 8 refuted), each with a Heuer consistency × diagnosticity matrix in
+  `diagnostic_evidence`. **The per-cell consistency is now LLM-scored** (Heuer
+  CC/C/N/I/II, budget-gated, with the deterministic lexical/polarity counter as
+  the budget-exhausted per-cell fallback — each row records `matrix_scorer`; §5.3),
+  and evidence is scoped to the resolved-entity set, so `confirmed` / `refuted`
+  are defensible. `calibration_tracking` scores them with a Brier number whose
+  **exogenous** `resolved_outcome` (migration 0038) — stamped against subsequent
+  facts or an operator label rather than the hypothesis's own evidence balance — is
+  **built and firing**, with the subsequent-facts auto-resolver now **ABSTAINING
+  on undirected theses** (it previously auto-graded them TRUE, inflating the
+  headline rate); it runs alongside the live `status_transition` (self-consistency)
+  tier (rows there flagged `self_consistency_only`). The goal remains a real Brier
+  against resolved real-world outcomes. Residual caveats: the subsequent-facts
+  auto-resolver is a coarse directional heuristic (the operator-label path is
+  higher-fidelity), the gradeable directional resolution rate is modest, and a
+  budget-exhausted run falls back to the lexical scorer; no proven-forecast-accuracy
+  claim (§5.7).
+  `meta_findings_synthesizer` / `cross_analyst_correlator` run as registered
+  altitude-2 producers.
+- The **optimizer** runs as a real Dapr Workflow on an isolated worker (GEPA
+  proven on a 175k-token run, never litellm). The **deep-consult** workflow rides
+  the same worker (plan→acquire→analyze→synthesize), submitted detached via
+  `POST /api/v1/deep_consult` (202 + task_id), polled to a persisted finding.
+- An on-demand **consult** engine runs a ReAct analyst against the live substrate
+  (`POST /api/v1/consult`, `consult_on_demand` kind, 4 governed read tools) in
+  two modes: **`chat`** (default — multi-turn via a client-held `messages[]`, no
+  durable finding; each ReAct step streamed to a request-scoped NATS subject and
+  relayed to the browser as SSE via `GET /api/v1/consult/stream/{request_id}`)
+  and **`deep`** (persists a finding row).
+- A **curated-seeding** primitive (`source_type` + `seed_batch_id` + the
+  `seed_batches` ledger + the `src/legba/data/seed/` framework + `scripts/seed.py`)
+  imports flavor-b `world_baseline` knowledge into the same tables; seed batch
+  `414473c8` is live.
+
+The whole loop is now wired; the data-analysis rigor layer (§5.7) closed the
+"open frontier" that earlier drafts described.
+
+## 14. Built vs. declared seams
+
+The loop in §13 is live — including the full altitude-0..3 data-analysis rigor
+layer (§5.7), which was the open frontier in the pre-2026-06 drafts. What is
+*not* built is declared, never implied — the authoritative list is
+`docs/SEAMS.md`. The architecturally significant remaining seams:
+
+- **Eager media extraction** — job plane + `process_media` envelope live; the
+  Whisper/VLM/OCR handlers and SeaweedFS object store are seams; non-text media
+  is referenced, not extracted (§6.3).
+- **Fallback-model demotion** — `demote_and_continue` logs a pause instead of a
+  real cheap-model fallback (`docs/SEAMS.md` F-2).
+- **`stream` acquisition** — `poll | push` live; long-lived-consumer mode is a
+  documented enum extension (§5.1).
+- **SeaweedFS object store** — schema-slotted stack kind; no live handler (§5.5).
+- **Time-series metrics / full-text search** — the former TimescaleDB metrics
+  store and OpenSearch BM25 backing were removed; both are declared seams now
+  (no metrics store; `search_signals` uses Postgres FTS) — see SEAMS.
+- **Nexus → AGE-edge mirroring** — typed signed `nexuses` are the relational
+  source of truth; mirroring them onto `legba_graph` edges is deferred (the
+  `derived_from` AGE hook in `write_analyst_output` is left in place but not
+  called, `writes.py:225`).
+- **Dapr long-activity workflow round-trip** (SEAM #23) — on daprd 1.17.9 a
+  Workflow orchestrator does not reliably resume after a *long* activity (short
+  ones deliver), even though the activity runs fine and returns; the GEPA
+  optimizer + deep-consult round-trip therefore **degrade to an in-process
+  fallback**. Verified not our code (threads idle post-compile, reproduces on a
+  fresh engine). Declared, not silently worked around.
+- **RBAC / multi-tenant isolation** — designed, not built (`docs/DIRECTION.md`
+  §1–§2, `docs/SEAMS.md` #14). See the perimeter note below.
+
+**Deployment perimeter — single-operator, single-tenant (LOCKED).** Legba ships
+as a single-operator, single-tenant deployment: one operator, one instance, one
+shared Caddy `basic_auth` credential, one logical tenant
+(`owner_tenant = 'default'`/`'shared'`). There is **no in-application RBAC,
+multi-tenant isolation, or per-role access control** at this release — the
+network/deployment perimeter (Caddy `basic_auth` + loopback-bound internal
+services) is the security boundary, and the acquisition-plane `owner_tenant`
+column is forward-compat metadata, not an isolation guarantee you should rely on
+to separate untrusting tenants. Scoped tokens, SSO, and analysis-plane tenancy
+enforcement are real future direction items (`docs/DIRECTION.md` §0–§2), gated
+and never silently half-built. No enterprise / multi-tenant / RBAC capability is
+claimed.
+
+## 15. Read next
+
+- `FLOWS.md` — "life of a…" walkthroughs (a signal, an analyst cycle, a fact, a
+  reified nexus, an ACH hypothesis, a consult, the optimizer + deep-consult
+  workflows).
+- `CODE_MAP.md` — package/module map keyed to responsibilities.
+- `DESIGN.md` — full implementation design (APIs, files, deployment).
+- `RUNBOOK.md` — runtime bootstrap, deps resolvers, operations.
+- `AI_MODELS.md` — the model-serving surface (LLM, embeddings, NLP).
+- `planning/ANALYSIS_LAYER_PLAN_2026-06-15.md` — the altitude frame + the
+  build pieces this architecture serves.

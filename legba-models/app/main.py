@@ -4,13 +4,15 @@ Serves translation, classification, relation extraction, and summarization
 on a single T4 GPU via FastAPI.
 """
 
+import hmac
+import os
 import time
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import torch
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from transformers import (
     AutoModelForSeq2SeqLM,
@@ -20,6 +22,37 @@ from transformers import (
 )
 
 logger = logging.getLogger("legba")
+
+# ---------------------------------------------------------------------------
+# Auth (defense-in-depth)
+# ---------------------------------------------------------------------------
+# These endpoints are deployment-mitigated by a 127.0.0.1 bind (the service is
+# never published to a public interface — see RUNBOOK). As a second layer, an
+# OPTIONAL shared secret can be required: when LEGBA_MODELS_API_SECRET is set,
+# every inference endpoint requires a matching X-Models-Secret header (constant-
+# time compare). When the env var is UNSET the check is a no-op so the local
+# dev path is unbroken. /health stays open for liveness probes.
+_MODELS_SECRET_ENV = "LEGBA_MODELS_API_SECRET"
+_MODELS_SECRET_HEADER = "X-Models-Secret"
+
+
+def require_models_secret(
+    x_models_secret: Optional[str] = Header(default=None, alias=_MODELS_SECRET_HEADER),
+) -> None:
+    """Enforce the shared-secret header when one is configured.
+
+    No-op when ``LEGBA_MODELS_API_SECRET`` is unset/empty (dev default).
+    """
+    configured = (os.getenv(_MODELS_SECRET_ENV) or "").strip()
+    if not configured:
+        return
+    presented = (x_models_secret or "").strip()
+    if not presented or not hmac.compare_digest(presented, configured):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"missing or invalid {_MODELS_SECRET_HEADER} header",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Model registry — populated at startup
@@ -40,6 +73,17 @@ NLLB_LANG_CODES = {
     "de": "deu_Latn",
     "uk": "ukr_Cyrl",
     "tr": "tur_Latn",
+    "pt": "por_Latn",
+    "it": "ita_Latn",
+    "nl": "nld_Latn",
+    "pl": "pol_Latn",
+    "ja": "jpn_Jpan",
+    "ko": "kor_Hang",
+    "hi": "hin_Deva",
+    "vi": "vie_Latn",
+    "id": "ind_Latn",
+    "th": "tha_Thai",
+    "ur": "urd_Arab",
 }
 
 # Classification categories
@@ -85,11 +129,13 @@ def load_models():
         device=device,
     )
 
-    # 3. REBEL relation extraction
-    logger.info("Loading REBEL-large ...")
-    rebel_id = "Babelscape/rebel-large"
-    MODELS["rebel_tokenizer"] = AutoTokenizer.from_pretrained(rebel_id)
-    MODELS["rebel_model"] = AutoModelForSeq2SeqLM.from_pretrained(rebel_id).half().to(device)
+    # 3. GLiREL zero-shot relation extraction (replaces REBEL)
+    logger.info("Loading GLiREL-large ...")
+    from glirel import GLiREL
+    glirel_model = GLiREL.from_pretrained("jackboyla/glirel-large-v0")
+    if device == "cuda":
+        glirel_model = glirel_model.to(device)
+    MODELS["glirel"] = glirel_model
 
     # 4. T5-small summarization
     logger.info("Loading T5-small ...")
@@ -101,8 +147,10 @@ def load_models():
     logger.info("Loading spaCy en_core_web_trf ...")
     try:
         import spacy
-        spacy.require_gpu()
-        MODELS["spacy_nlp"] = spacy.load("en_core_web_trf")
+        spacy.require_gpu(0)
+        nlp = spacy.load("en_core_web_trf")
+        _ = nlp("Warm-up test.")
+        MODELS["spacy_nlp"] = nlp
         logger.info("spaCy trf loaded on GPU")
     except Exception as e:
         logger.warning(f"spaCy trf failed to load: {e}. NER endpoint will be unavailable.")
@@ -156,8 +204,41 @@ class ClassifyResponse(BaseModel):
     ms: float
 
 
+# Default relation labels for zero-shot extraction (geopolitical / news domain)
+DEFAULT_RELATION_LABELS = [
+    "leader of",
+    "member of",
+    "located in",
+    "headquarters in",
+    "founded by",
+    "part of",
+    "ally of",
+    "opponent of",
+    "conflict with",
+    "signed agreement with",
+    "sanctioned by",
+    "spokesperson for",
+    "operates in",
+    "supplies to",
+    "border with",
+    "capital of",
+    "controls",
+    "parent organization of",
+    "subsidiary of",
+    "employed by",
+]
+
+
 class ExtractRequest(BaseModel):
     text: str
+    labels: Optional[list[str]] = Field(
+        default=None,
+        description="Relation labels to extract. If omitted, uses default geopolitical/news labels.",
+    )
+    threshold: float = Field(
+        default=0.3,
+        description="Minimum confidence score for extracted relations.",
+    )
 
 
 class Triple(BaseModel):
@@ -221,7 +302,11 @@ def health():
     }
 
 
-@app.post("/translate", response_model=TranslateResponse)
+@app.post(
+    "/translate",
+    response_model=TranslateResponse,
+    dependencies=[Depends(require_models_secret)],
+)
 def translate(req: TranslateRequest):
     t0 = time.perf_counter()
 
@@ -256,7 +341,11 @@ def translate(req: TranslateRequest):
     )
 
 
-@app.post("/classify", response_model=ClassifyResponse)
+@app.post(
+    "/classify",
+    response_model=ClassifyResponse,
+    dependencies=[Depends(require_models_secret)],
+)
 def classify(req: ClassifyRequest):
     t0 = time.perf_counter()
 
@@ -296,55 +385,79 @@ def classify(req: ClassifyRequest):
     )
 
 
-def _parse_rebel_triplets(generated_text: str) -> list[Triple]:
-    """Parse REBEL's generated text into triples.
+@app.post(
+    "/extract",
+    response_model=ExtractResponse,
+    dependencies=[Depends(require_models_secret)],
+)
+async def extract(req: ExtractRequest):
+    """Extract relation triples using GLiREL zero-shot relation extraction.
 
-    REBEL actual output format: <triplet> SUBJECT <subj> OBJECT <obj> RELATION
-    The tokens between markers are: head=subject, after <subj>=object, after <obj>=relation.
+    Uses spaCy NER to identify entities, then GLiREL to classify relations
+    between entity pairs. Must be async to run on the main event loop thread
+    where spaCy/CuPy's CUDA context was initialized.
     """
-    triples = []
-    parts = generated_text.strip().replace("<s>", "").replace("<pad>", "").replace("</s>", "")
-    for segment in parts.split("<triplet>"):
-        segment = segment.strip()
-        if not segment:
-            continue
-        if "<subj>" in segment and "<obj>" in segment:
-            head_rest = segment.split("<subj>")
-            subject = head_rest[0].strip()
-            obj_rest = head_rest[1].split("<obj>")
-            obj = obj_rest[0].strip()
-            relation = obj_rest[1].strip()
-            if subject and obj and relation:
-                triples.append(Triple(subject=subject, predicate=relation, object=obj))
-    return triples
-
-
-@app.post("/extract", response_model=ExtractResponse)
-def extract(req: ExtractRequest):
     t0 = time.perf_counter()
 
-    tokenizer = MODELS["rebel_tokenizer"]
-    model = MODELS["rebel_model"]
-    device = MODELS["device"]
+    # Re-activate CuPy/thinc GPU context for this call
+    try:
+        import spacy
+        spacy.require_gpu(0)
+    except Exception:
+        pass
 
-    inputs = tokenizer(req.text, return_tensors="pt", truncation=True, max_length=512).to(device)
+    nlp = MODELS.get("spacy_nlp")
+    glirel_model = MODELS.get("glirel")
+    if nlp is None or glirel_model is None:
+        return ExtractResponse(triples=[], ms=0.0)
+
+    # Step 1: spaCy NER to get entities and tokens
+    doc = nlp(req.text[:2000])
+    tokens = [token.text for token in doc]
+
+    # Build NER list in GLiREL format: [start_tok, end_tok (inclusive), TYPE, text]
+    ner = []
+    for ent in doc.ents:
+        start_tok = ent.start
+        end_tok = ent.end - 1  # GLiREL uses inclusive end index
+        ner.append([start_tok, end_tok, ent.label_, ent.text])
+
+    if len(ner) < 2:
+        ms = (time.perf_counter() - t0) * 1000
+        return ExtractResponse(triples=[], ms=round(ms, 1))
+
+    # Step 2: GLiREL relation extraction
+    labels = req.labels if req.labels else DEFAULT_RELATION_LABELS
 
     with torch.no_grad():
-        output_ids = model.generate(
-            **inputs,
-            max_length=256,
-            num_beams=3,
+        relations = glirel_model.predict_relations(
+            tokens,
+            labels,
+            threshold=req.threshold,
+            ner=ner,
+            top_k=1,
         )
 
-    generated = tokenizer.batch_decode(output_ids, skip_special_tokens=False)[0]
-    triples = _parse_rebel_triplets(generated)
+    # Step 3: Convert to Triple format
+    triples = []
+    for rel in sorted(relations, key=lambda x: x["score"], reverse=True):
+        head_text = " ".join(rel["head_text"]) if isinstance(rel["head_text"], list) else rel["head_text"]
+        tail_text = " ".join(rel["tail_text"]) if isinstance(rel["tail_text"], list) else rel["tail_text"]
+        triples.append(Triple(
+            subject=head_text,
+            predicate=rel["label"],
+            object=tail_text,
+        ))
 
     ms = (time.perf_counter() - t0) * 1000
-
     return ExtractResponse(triples=triples, ms=round(ms, 1))
 
 
-@app.post("/summarize", response_model=SummarizeResponse)
+@app.post(
+    "/summarize",
+    response_model=SummarizeResponse,
+    dependencies=[Depends(require_models_secret)],
+)
 def summarize(req: SummarizeRequest):
     t0 = time.perf_counter()
 
@@ -372,10 +485,25 @@ def summarize(req: SummarizeRequest):
     return SummarizeResponse(summary=summary, ms=round(ms, 1))
 
 
-@app.post("/ner", response_model=NerResponse)
-def ner(req: NerRequest):
-    """Extract named entities using spaCy transformer model (GPU)."""
+@app.post(
+    "/ner",
+    response_model=NerResponse,
+    dependencies=[Depends(require_models_secret)],
+)
+async def ner(req: NerRequest):
+    """Extract named entities using spaCy transformer model (GPU).
+
+    Must be async to run on the main event loop thread where
+    spaCy/CuPy's CUDA context was initialized.
+    """
     t0 = time.perf_counter()
+
+    # Re-activate CuPy/thinc GPU context for this call
+    try:
+        import spacy
+        spacy.require_gpu(0)
+    except Exception:
+        pass
 
     nlp = MODELS.get("spacy_nlp")
     if nlp is None:

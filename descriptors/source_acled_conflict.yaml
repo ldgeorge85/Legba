@@ -1,0 +1,112 @@
+# S-2 — keyed SourceDescriptor: source.acled.conflict (kind: acled).
+#
+# ACLED (Armed Conflict Location & Event Data) — conflict / protest /
+# political-violence events, 230+ countries, weekly updates. Handler:
+# src/legba/data/sources/acled.py (ACLEDSourceHandler, config schema
+# ACLEDConfig). Structured records (event_type, actors, fatalities,
+# lat/long) — model-free ingest; one Signal per ACLED record.
+#
+# ⚠ LICENSE / ToS: ACLED's Terms of Use (https://acleddata.com/terms-of-use/)
+# permit NON-COMMERCIAL use and FORBID REDISTRIBUTION of the data. Signals
+# ingested from this source must stay inside the operating rig — do not
+# re-export, re-publish, or expose ACLED-derived rows through any external
+# output (STIX bundles, MCP tools, alert sinks) without an ACLED license
+# that covers it.
+#
+# KEYED — activation gating (S-2 convention):
+#   * identity.state is DRAFT. Draft descriptors register fine in bulk but
+#     get NO live actor (runtime/dapr_host.py action executor:
+#     "draft/configured — no live actor wanted"), so a keyless rig stays
+#     healthy with this file committed.
+#   * config.username_secret / password_secret are VAULT REFS (vault ids,
+#     never the plaintext). ACLED uses OAuth2 password grant: at pull time the
+#     handler resolves both via SourceContext.secrets_resolve →
+#     CredentialVault.resolve (src/legba/data/registry/credentials.py),
+#     POSTs them to the OAuth2 token endpoint, and Bearer-auths the read. A
+#     missing secret raises MissingSecretError — the pull fails loud, nothing
+#     fabricates output. (tests/data_pkg/test_keyed_descriptor_vault_gating.py.)
+#
+# OPERATOR FLIP (to go live):
+#   1. Store the OAuth2 creds (account email as username + password):
+#        POST {registry}/api/v1/registry/vault/secrets
+#             {"secret_id": "source.acled.username", "plaintext": "<email>"}
+#             {"secret_id": "source.acled.password", "plaintext": "<password>"}
+#      (or set ACLED_USERNAME / ACLED_PASSWORD in .env and run
+#      scripts/bringup_vault_load.py). NOTE: the ACLED account must also be
+#      GRANTED data-API access in the ACLED Access portal — a token alone
+#      returns HTTP 403 "Access denied" on the read until access is granted.
+#   2. Register/refresh this descriptor through the source registrar.
+#   3. Transition draft → configured → active:
+#        POST {registry}/api/v1/registry/descriptors/source/source.acled.conflict/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+
+identity:
+  id: source.acled.conflict
+  name: ACLED — Conflict & Political Violence Events
+  kind: acled
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # KEYED — operator flips after vault load
+  owner: s2_keyed_sources
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Global feed — consuming targets narrow by Subscription.geo.
+  geo: []
+  languages: [en]
+  tags: [conflict, political_violence, protest, events, structured, global]
+
+acquisition: poll
+
+cadence:
+  # ACLED publishes weekly; one daily poll is generous and stays far under
+  # the free tier's 1000 requests/day.
+  schedule:
+    factory_kind: cron
+    raw: "0 6 * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 120
+
+config:
+  # OAuth2 password grant (ACLED retired the legacy api-key method). The
+  # username is the ACLED account email; both are vault refs resolved at pull
+  # time. Load them via scripts/bringup_vault_load.py (ACLED_USERNAME /
+  # ACLED_PASSWORD in .env) before flipping this descriptor to active.
+  username_secret:
+    factory_kind: secret
+    raw: "source.acled.username"
+  password_secret:
+    factory_kind: secret
+    raw: "source.acled.password"
+  # No country/region/event_type filter — full feed; targets narrow via
+  # Subscription. lookback_days=7 matches the weekly publish cadence.
+  lookback_days:
+    factory_kind: number
+    raw: 7
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # external_id (ACLED data_id) canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # Records carry lat/long + country already; geocode refines the
+    # structured geo column. No text enrichers — notes field is short.
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps:
+  vault_secrets:
+    - source.acled.username
+    - source.acled.password
+
+output:
+  retention: interest
+  max_age_seconds: 604800            # weekly publish window
+  delivery: lossy
+
+subscription_policy: open

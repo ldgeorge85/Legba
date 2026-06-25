@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Export backfill/seed data as a portable SQL file.
 
 Dumps all facts with source_type='seed' and optionally entity profiles

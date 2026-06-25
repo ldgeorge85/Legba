@@ -1,0 +1,71 @@
+# P-17 — new-model optimizer analyst: country_optimizer.
+#
+# kind: optimizer.  method.kind: dspy_compile (L-176; exempt from prompt_module).
+# Reads analyst_traces ⋈ analyst_critiques on run_id over a window and emits a
+# PromptModuleCandidate for the country_assessor's prompt module.  Promotion is
+# human_gated.  Runs as a Temporal workflow (the one actor kind that does).
+#
+# An optimizer analyst MUST declare an eval block (schema constraint).
+
+identity:
+  id: country_optimizer
+  name: G20 Country Optimizer (DSPy + GEPA)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"
+  kind: optimizer
+  type_signature:
+    input_type: legba.runtime.TraceCritiqueJoin
+    output_type: legba.runtime.PromptModuleCandidate
+  state: active
+  owner: p17_reregister
+
+subscription:
+  # Walks analyst_traces ⋈ analyst_critiques — not the signal slice.
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: dspy_compile
+  budget_tokens_per_day: 2000000
+
+cadence:
+  # ── A3: cadence sized to the daily compile cost ──
+  #
+  # The optimizer is NOT a per-target fan-out (substrate.direct_queries; it
+  # walks analyst_traces ⋈ analyst_critiques). ONE compile run per cadence
+  # tick. A GEPA/DSPy compile fires a bounded set of trial LLM calls over the
+  # trace set; the 200 000 tok/day cap envelopes a single daily compile with
+  # room for the trial fan-out (min_traces_required: 10 → tens of trial calls
+  # × ~3 000 tok ≈ well under 200k). Daily-at-03:00-UTC is correct on two
+  # counts: (1) one compile/day matches the 200k budget exactly — running it
+  # more often would not improve the human-gated candidate and would risk the
+  # cap; (2) 03:00 UTC is off-peak relative to the assessor's 6-hourly sweeps
+  # (00/06/12/18), so the compile's trial calls don't contend with the
+  # assessor fan-out for provider capacity or the global envelope.
+  fallback_schedule: "0 3 * * *"
+  # 6h cooldown ≫ the daily cadence gap is already implied, but kept explicit
+  # so a manual re-trigger can't kick off a second same-day compile.
+  cooldown_seconds: 21600
+
+outputs:
+  - kind: nats_stream
+    config:
+      channel: prompt_module_candidates
+
+eval:
+  optimizer:
+    analyzed_analyst_id: country_assessor
+    # Per-analyst prompt module (#37): the REAL country_assessor baseline
+    # (legba/prompts/country_assessor/v1.py — instructions = the live
+    # country-assessor system prompt), NOT the generic inline_target module.
+    # GEPA evolves THIS; the promoted champion becomes country_assessor's
+    # live system prompt. (Also the convention fallback for analyzed
+    # analyst country_assessor → legba.prompts.country_assessor.v1.)
+    parent_prompt_module_path: legba.prompts.country_assessor.v1
+    min_traces_required: 10
+    min_critiques_required: 1
+    promotion_policy: human_gated

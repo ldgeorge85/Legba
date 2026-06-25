@@ -1,0 +1,97 @@
+# S-2 — keyed SourceDescriptor: source.mediacloud.world (kind: mediacloud).
+#
+# MediaCloud (Berkman-Klein) open news corpus — billion-story scale,
+# free API key. Handler: src/legba/data/sources/mediacloud.py
+# (MediaCloudSourceHandler, config schema MediaCloudConfig). Text stories →
+# full baseline text enrichment chain (language_detect / ner / geocode).
+#
+# KEYED — activation gating (S-2 convention):
+#   * identity.state is DRAFT — bulk registration creates no live actor
+#     (runtime/dapr_host.py skips draft/configured descriptors).
+#   * config.api_key_secret is a VAULT REF (the descriptor never carries
+#     the key). MediaCloudConfig accepts the bare vault-id string the
+#     source factory unwraps; at pull time the handler calls the threaded
+#     StandardDeps.secrets_resolve → CredentialVault.resolve
+#     (src/legba/data/registry/credentials.py), which raises
+#     MissingSecretError when the vault has no such key — the pull fails
+#     loud. (Asserted by tests/data_pkg/test_keyed_descriptor_vault_gating.py.)
+#
+# OPERATOR FLIP (to go live):
+#   1. Store the key:
+#        POST {registry}/api/v1/registry/vault/secrets
+#             {"secret_id": "source.mediacloud.api_key", "plaintext": "<key>"}
+#      (or set MEDIACLOUD_API_KEY in .env and run scripts/bringup_vault_load.py).
+#   2. Optionally edit config.query / collections below for your coverage.
+#   3. Register/refresh this descriptor, then transition:
+#        POST {registry}/api/v1/registry/descriptors/source/source.mediacloud.world/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+
+identity:
+  id: source.mediacloud.world
+  name: MediaCloud — World News Search
+  kind: mediacloud
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # KEYED — operator flips after vault load
+  owner: s2_keyed_sources
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [news, media, world, geopolitical, global]
+
+acquisition: poll
+
+cadence:
+  # Every 30 min — matches the committed template_country_active.yaml
+  # cadence for this kind; MediaCloud's free tier tolerates it.
+  schedule:
+    factory_kind: cron
+    raw: "*/30 * * * *"
+  cooldown_seconds: 120
+  jitter_seconds: 60
+
+config:
+  api_key_secret:
+    factory_kind: secret
+    raw: "source.mediacloud.api_key"
+  # Broad geopolitical query — operators narrow per deployment. MediaCloud
+  # query DSL mirrors Elasticsearch query-string syntax.
+  query:
+    factory_kind: text
+    raw: "(conflict OR sanctions OR election OR coup OR protest) AND language:en"
+  lookback_days:
+    factory_kind: number
+    raw: 1
+  page_size:
+    factory_kind: number
+    raw: 1000
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps:
+  vault_secrets:
+    - source.mediacloud.api_key
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

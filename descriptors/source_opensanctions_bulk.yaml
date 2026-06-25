@@ -1,0 +1,83 @@
+# S-2 — KEYLESS SourceDescriptor: source.opensanctions.bulk
+# (kind: opensanctions, mode: bulk_csv).
+#
+# OpenSanctions consolidated catalog (sanctions lists, PEPs, wanted /
+# criminal lists) via the public bulk CSV
+# (https://data.opensanctions.org/datasets/latest/<dataset>/targets.simple.csv).
+# Handler: src/legba/data/sources/opensanctions.py
+# (OpenSanctionsSourceHandler, config schema OpenSanctionsConfig).
+# bulk_csv mode requires NO AUTH per the handler ("bulk_csv — full
+# dataset. No auth.") — so this descriptor is ACTIVATION-READY: it ships
+# state: active and starts polling as soon as it is registered and the
+# reconcile loop creates its actor. One FollowTheMoney entity per Signal.
+#
+# LICENSE NOTE: OpenSanctions data is CC-BY-NC for non-commercial use;
+# commercial deployments need a data license (their license model also
+# offers the self-hosted API for high-volume use — see
+# descriptors/source_opensanctions_api.yaml for the keyed API mode).
+#
+# Cursor: max(row.last_seen) — re-pulls only advance, dedupe tiers link
+# re-seen entities to their canonical signal instead of duplicating.
+
+identity:
+  id: source.opensanctions.bulk
+  name: OpenSanctions — Bulk Catalog (CSV)
+  kind: opensanctions
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active                      # KEYLESS — safe to auto-activate on registration
+  owner: s2_keyed_sources
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [sanctions, pep, compliance, entities, structured, global]
+
+acquisition: poll
+
+cadence:
+  # OpenSanctions rebuilds datasets daily; one daily pull off-peak.
+  schedule:
+    factory_kind: cron
+    raw: "30 4 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 300
+
+config:
+  mode:
+    factory_kind: text
+    raw: "bulk_csv"
+  # `default` = the curated default collection. Operators wanting the full
+  # firehose switch to `all`; narrower slices: `sanctions`, `peps`, ...
+  dataset:
+    factory_kind: text
+    raw: "default"
+  # First-run safety belt: cap rows per pull so a fresh cursor doesn't
+  # ingest the entire catalog in one actor turn. 0 = uncapped.
+  max_bulk_rows:
+    factory_kind: number
+    raw: 50000
+  timeout_seconds:
+    factory_kind: number
+    raw: 300
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # FTM entity id canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment: []                     # structured FTM entities — no text chain
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800            # entities are slow-moving; week window
+  delivery: lossy
+
+subscription_policy: open

@@ -1,3 +1,107 @@
-legba.civislux.us {
-	reverse_proxy ui-v2:8503
+# Legba — edge caddy. Serves the site at $LEGBA_PUBLIC_DOMAIN (set in .env; see
+# .env.example). For a real domain, TLS is automatic via Let's Encrypt; host
+# binds :80 + :443. Falls back to `localhost` (Caddy internal CA) when unset.
+#
+# Two-layer auth (2026-06-01):
+#   1. Browser-prompt perimeter gate via caddy basic_auth.  Lewis
+#      types the password once per session; browser caches.
+#   2. Registry bearer-token gate (OP-1, `LEGBA_REGISTRY_API_TOKEN`).
+#      Caddy injects the bearer for upstream after basic_auth
+#      validates, so the SPA never needs to know the token.  This
+#      avoids the SPA's `Authorization: Bearer ...` colliding with
+#      caddy's basic_auth (which would cause a 401-loop / re-prompt).
+#
+# The SPA's `apiGet` sends no Authorization header when localStorage
+# is empty → browser auto-attaches its cached Basic → caddy
+# basic_auth validates → `header_up` replaces with Bearer → registry
+# receives the right token.  WebSocket upgrades same path.
+#
+# Retired vhosts from the pre-reshape config (ui-v2 / legba2/dcmaster
+# basic_auth shells) deliberately not carried forward.
+
+{
+	admin off
+}
+
+# Snippet — Caddyfile snippets must live at global scope, before site
+# blocks. Imported below into the handle blocks that need the perimeter
+# basic_auth.
+# The bcrypt hash is read from the LEGBA_BASIC_AUTH_HASH env var (caddy reads
+# env_file: .env, same channel as LEGBA_REGISTRY_API_TOKEN) so the credential
+# is NOT committed to the repo. Set it in .env (gitignored); see .env.example.
+# Rotate by regenerating: `caddy hash-password --plaintext '<newpw>'`.
+(basic_auth_perimeter) {
+	basic_auth {
+		legba {$LEGBA_BASIC_AUTH_HASH}
+	}
+}
+
+{$LEGBA_PUBLIC_DOMAIN:localhost} {
+	encode gzip
+
+	# WebSocket event stream — bypasses basic_auth because browsers
+	# CAN'T carry `Authorization: Basic ...` on the WS upgrade request
+	# (the `new WebSocket()` JS API doesn't expose request headers).
+	# basic_auth on this path causes a 401 → browser-prompt loop on
+	# every reconnect attempt.  Security is preserved via the Bearer
+	# injection: only requests through this caddy get the bearer, so
+	# the registry rejects any external direct hit.
+	handle /api/v1/registry/events* {
+		reverse_proxy legba-registry:8090 {
+			header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
+		}
+	}
+
+	# All other API endpoints — basic_auth perimeter + Bearer injection.
+	# The SPA's apiGet doesn't send any Authorization header when
+	# localStorage is empty (the canonical state today), so the
+	# browser's cached basic_auth flows through cleanly.  `header_up`
+	# then replaces the Basic with the registry's bearer.
+	#
+	# Active upstream health (resilience-observability W-1b §4): Caddy polls
+	# the unauthenticated readiness probe (Postgres + NATS ping). When the
+	# registry can't serve its substrate, /healthz answers 503, Caddy marks
+	# the upstream down and fails requests fast instead of hanging on a
+	# half-dead process. The probe carries no auth dependency, so no Bearer
+	# is needed for the health request itself.
+	handle /api/* {
+		import basic_auth_perimeter
+		reverse_proxy legba-registry:8090 {
+			header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
+			health_uri /api/v1/registry/healthz
+			health_interval 15s
+			health_timeout 5s
+			health_status 200
+		}
+	}
+
+	handle /ws/* {
+		reverse_proxy legba-registry:8090 {
+			header_up Authorization "Bearer {$LEGBA_REGISTRY_API_TOKEN}"
+		}
+	}
+
+	# SPA static + client-side routing fallback. `dist/` is built
+	# by legba-ui-build (one-shot job that publishes into the
+	# `legba_ui_dist` volume mounted here read-only).  basic_auth
+	# gates the SPA itself so the bundle isn't publicly downloadable.
+	# Self-hosted PMTiles basemap (UI v4). Range-request file server over a
+	# read-only mount; if the file is absent the SPA falls back to demotiles.
+	handle /tiles/* {
+		import basic_auth_perimeter
+		root * /srv
+		file_server
+	}
+
+	handle {
+		import basic_auth_perimeter
+		root * /srv/legba-ui
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output stdout
+		format console
+	}
 }

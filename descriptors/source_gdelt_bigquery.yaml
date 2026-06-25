@@ -1,0 +1,108 @@
+# S-2 — keyed SourceDescriptor: source.gdelt.bigquery (kind: gdelt_query).
+#
+# GDELT 2.0 event stream via BigQuery (`gdelt-bq.gdeltv2.events`). Handler:
+# src/legba/data/sources/gdelt.py (GDELTBigQuerySourceHandler, config schema
+# GDELTConfig). Structured CAMEO event rows — model-free ingest.
+#
+# COST MODEL (why every knob below exists): BigQuery bills by bytes
+# SCANNED. The handler dry-runs every query first and REFUSES any pull
+# whose estimate exceeds cost_cap_bytes_per_pull; daily_cap_bytes is a
+# rolling per-UTC-day ceiling tracked in the handler's state store; and
+# max_rows_per_pull is a hard LIMIT clause. Raise them deliberately.
+#
+# RUNTIME IMAGE NOTE: google-cloud-bigquery is NOT in the base runtime
+# image (docker/Dockerfile.runtime drops it — pyarrow ~153 MB). Deploying
+# this kind needs an image built with `pip install 'legba[gdelt]'`; without
+# it the handler's lazy import raises a clean ImportError at pull time.
+#
+# KEYED — activation gating (S-2 convention):
+#   * identity.state is DRAFT — registers in bulk, no live actor until the
+#     operator flips it (runtime/dapr_host.py skips draft/configured).
+#   * config.bq_credentials_secret is a VAULT REF to the GCP
+#     service-account JSON key. The handler resolves it through
+#     SourceContext.secrets_resolve → CredentialVault.resolve
+#     (src/legba/data/registry/credentials.py), which raises
+#     MissingSecretError when absent — pull fails loud, no fabricated rows.
+#
+# OPERATOR FLIP (to go live):
+#   1. Store the service-account JSON (single-line) in the vault:
+#        POST {registry}/api/v1/registry/vault/secrets
+#             {"secret_id": "source.gdelt.bigquery_sa", "plaintext": "<sa-json>"}
+#      (or set GDELT_BQ_SERVICE_ACCOUNT_JSON in .env and run
+#       scripts/bringup_vault_load.py).
+#   2. Deploy a runtime image with the legba[gdelt] extra installed.
+#   3. Register/refresh this descriptor, then transition:
+#        POST {registry}/api/v1/registry/descriptors/source/source.gdelt.bigquery/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+
+identity:
+  id: source.gdelt.bigquery
+  name: GDELT 2.0 Events — BigQuery
+  kind: gdelt_query
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # KEYED + billable — operator flips deliberately
+  owner: s2_keyed_sources
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [news, events, geopolitical, structured, global]
+
+acquisition: poll
+
+cadence:
+  # Every 2 hours — matches the committed template_country_active.yaml
+  # cadence for this kind; GDELT refreshes upstream every 15 minutes but
+  # each poll costs a BigQuery scan, so cadence IS the budget lever.
+  schedule:
+    factory_kind: cron
+    raw: "0 */2 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 300
+
+config:
+  bq_credentials_secret:
+    factory_kind: secret
+    raw: "source.gdelt.bigquery_sa"
+  # No cameo_country/event filter committed — operators SHOULD narrow
+  # (cameo_country or event_root_codes) before activating: an unfiltered
+  # window scans the widest slice and burns the caps fastest.
+  lookback_minutes:
+    factory_kind: number
+    raw: 120                          # one cadence window; no gap, no overlap
+  # --- cost caps (handler-enforced; dry-run before every pull) ---
+  cost_cap_bytes_per_pull:
+    factory_kind: number
+    raw: 1073741824                   # 1 GiB per pull — handler default, explicit here
+  daily_cap_bytes:
+    factory_kind: number
+    raw: 10737418240                  # 10 GiB rolling per UTC day
+  max_rows_per_pull:
+    factory_kind: number
+    raw: 10000
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # GLOBALEVENTID canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: geocode                  # refine from ActionGeo lat/long
+      config: {}
+  media: reference
+
+deps:
+  vault_secrets:
+    - source.gdelt.bigquery_sa
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

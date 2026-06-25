@@ -1,0 +1,62 @@
+# A-3c — escalate_finding action pack (decision D1: the example pack that
+# demonstrates the FULL agency lifecycle end-to-end with no stub in its
+# path).
+#
+# Flow: an analyst whose finding crosses the gate below invokes `escalate`
+# → three-way resolution (this grant ∩ the target's allowed_action_packs ∩
+# applies_to_tags) → governor pre-call caps → dispatch (the channel
+# emitter publishes the escalation onto NATS `channels.escalations`) →
+# settle → `action_pack_invocations` + `governor_events` audit rows.
+#
+# Gate semantics (read by the actor run path from this tool config):
+# escalate fires when the finding carries an explicit severity at/above
+# `severity_gate`, OR confidence at/above `confidence_gate` (LLM findings
+# rarely stamp a severity; confidence is the live gate).
+#
+# Applicability: tag-scoped to g20 targets — the live working set — so the
+# applicability leg of the resolution is demonstrably real (a non-g20
+# target denies with a visible governor BLOCK).
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: escalate_finding
+  name: Escalate Finding
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: a3_agency
+  created: "2026-06-09T00:00:00Z"
+
+tools:
+  - name: escalate
+    config:
+      default_severity: high
+      severity_gate: high
+      confidence_gate: 0.85
+
+channels:
+  - name: escalations
+    kind: alert
+    config:
+      subject: channels.escalations
+      severity_threshold: high
+
+prompt_fragments:
+  - >-
+    When a finding indicates an urgent development (explicit high/critical
+    severity, or high confidence), call escalate(severity, title, detail,
+    target_ref) to raise it to the operator channel.
+
+rules:
+  - "Escalate at most once per finding; the governor rate cap is a backstop, not a budget."
+  - "Set severity from evidence, never above 'critical'."
+
+applies_to_tags:
+  - g20
+
+governor:
+  budget_account: escalate_finding
+  max_invocations_per_hour: 30
+  api_rate_per_minute: 5

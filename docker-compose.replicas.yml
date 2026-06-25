@@ -1,0 +1,157 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# docker-compose.replicas.yml — LOCAL 2-replica proof for scaling-multinode.
+#
+# WHAT THIS IS (locked decision D3 / planning/SCALING.md §scaling-multinode):
+#   A second `legba-runtime-dapr` replica with its OWN co-located daprd sidecar,
+#   so Dapr placement redistributes the SourceActor / AnalystActor / TargetActor
+#   set across two replicas, reminders fire on the owning node, and the trigger
+#   engine's shared durable consumer load-balances fan-out. It PROVES the
+#   multi-node design locally — it is NOT a load test (no synthetic injector;
+#   that harness was dropped per D3).
+#
+# WHY A HAND-WRITTEN SECOND SERVICE (not `deploy.replicas: 2`):
+#   compose's `deploy.replicas` scales ONE service to N identical containers,
+#   but it CANNOT pair each replica with its OWN sidecar — every replica would
+#   share the single `dapr-sidecar`, and daprd is 1:1 with an app instance
+#   (it dispatches actor calls/reminders to exactly one app-channel address).
+#   So a real per-replica sidecar requires either Kubernetes (the dapr
+#   sidecar-injector gives every pod its own daprd natively — the production
+#   target) or, locally, an explicit second (app + sidecar) pair. This override
+#   is that explicit pair. The open question "compose vs k8s" (planning doc) is
+#   answered here for the LOCAL PROOF only: compose, sidecar-per-explicit-service.
+#
+# THE SINGLETON-LOOP SAFETY (the point of this package):
+#   Both replicas declare LEGBA_REPLICA_COUNT=2 + LEGBA_LEADER_ELECTION=pg-advisory.
+#     * The fail-loud guard (assert_singleton_safe) PASSES because election is on
+#       (drop LEGBA_LEADER_ELECTION from either replica and it REFUSES to boot —
+#       that is the interim guard working).
+#     * The Postgres advisory lock (LeaderLease) elects ONE leader; only the
+#       leader runs the reconcile resync + the descriptor informer. The other
+#       replica runs the hot actor/fan-out/trigger path but NOT the control loop.
+#
+# HOW TO RUN IT:
+#   docker compose -f docker-compose.yml -f docker-compose.replicas.yml \
+#     --profile runtime up -d
+#   (the base file's `dapr`/`runtime` profiles bring up placement + scheduler +
+#    the shared substrate; this override adds replica 2 + sidecar 2.)
+#
+# THE DOCUMENTED PROOF PROCEDURE lives in docs/RUNBOOK.md §"Multi-replica local
+# proof" — it is the step-by-step verify (placement spread, single leader,
+# reminder ownership, failover). This file + that runbook section are the D3
+# deliverable.
+
+services:
+  # ---- Replica 2's co-located daprd sidecar -------------------------------
+  # Same app-id ("legba-runtime") + same placement/scheduler as the base
+  # `dapr-sidecar` — that is what makes placement treat the two app instances
+  # as ONE actor host cluster and consistent-hash actor IDs across them. The
+  # ONLY differences from the base sidecar are the app-channel address (points
+  # at replica 2) and the loopback host port (3501/50011, to avoid colliding
+  # with the base sidecar's 3500/50001).
+  dapr-sidecar-2:
+    image: daprio/dapr:1.17.9  # pinned — must match the base sidecar tag
+    profiles: ["runtime"]
+    env_file: .env
+    environment:
+      LEGBA_NATS_TOKEN: ${LEGBA_NATS_TOKEN:-}
+    depends_on:
+      dapr-placement:
+        condition: service_started
+      dapr-scheduler:
+        condition: service_started
+      dapr-init-db:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    entrypoint: ["/daprd"]
+    command:
+      - "-app-id"
+      - "legba-runtime"                 # SAME app-id → one logical actor host
+      - "-app-channel-address"
+      - "legba-runtime-dapr-2"          # ...but THIS replica's app channel
+      - "-app-port"
+      - "6090"
+      - "-dapr-http-port"
+      - "3500"
+      - "-dapr-grpc-port"
+      - "50001"
+      - "-placement-host-address"
+      - "dapr-placement:50005"          # SAME placement → cross-replica spread
+      - "-scheduler-host-address"
+      - "dapr-scheduler:50006"          # SAME scheduler → reminder ownership
+      - "-resources-path"
+      - "/dapr/components"
+      - "-config"
+      - "/dapr/components/configuration.yaml"
+      - "-log-level"
+      - "info"
+    ports:
+      # Loopback-only (B-1), distinct host ports from the base sidecar.
+      - "127.0.0.1:3501:3500"
+      - "127.0.0.1:50011:50001"
+    volumes:
+      - ./dapr/components:/dapr/components:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # ---- Replica 2 of the runtime app ---------------------------------------
+  # Identical image + env to the base `legba-runtime-dapr`, plus the
+  # multi-replica knobs. Talks to ITS OWN sidecar (dapr-sidecar-2).
+  legba-runtime-dapr-2:
+    image: legba/legba-runtime-dapr:latest
+    profiles: ["runtime"]
+    env_file: .env
+    environment:
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_REDIS_HOST: redis
+      LEGBA_DATA_QDRANT_HOST: qdrant
+      LEGBA_DATA_NATS_URL: nats://nats:4222
+      LEGBA_RUNTIME_HTTP_HOST: 0.0.0.0
+      LEGBA_RUNTIME_HTTP_PORT: "6090"
+      # ---- scaling-multinode knobs -------------------------------------
+      # >1 replica declared + leader election ON. The fail-loud guard passes
+      # ONLY because election is on; the advisory lock then elects one leader.
+      LEGBA_REPLICA_COUNT: "2"
+      LEGBA_LEADER_ELECTION: "pg-advisory"
+      # This replica's own sidecar.
+      DAPR_RUNTIME_HOST: dapr-sidecar-2
+      DAPR_HTTP_PORT: "3500"
+      DAPR_GRPC_PORT: "50001"
+      DAPR_HTTP_ENDPOINT: http://dapr-sidecar-2:3500
+      DAPR_GRPC_ENDPOINT: dapr-sidecar-2:50001
+      LEGBA_REGISTRY_URL: http://legba-registry:8090
+      LEGBA_REGISTRY_API_URL: http://legba-registry:8090
+      LEGBA_EMBED_WORKFLOW_WORKER: "${LEGBA_EMBED_WORKFLOW_WORKER:-1}"
+    depends_on:
+      legba-registry:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:6091:6090"  # B-1: loopback-only; distinct from replica 1's 6090
+    networks:
+      - default
+    restart: unless-stopped
+
+  # ---- Replica 1 gets the same multi-replica knobs ------------------------
+  # The base `legba-runtime-dapr` defaults to single-node (no knobs). For the
+  # 2-replica proof it must ALSO declare the count + election, or its boot guard
+  # would (correctly) be the single-node posture while replica 2 contends — and
+  # without election on BOTH, replica 1 would still run the singleton loops
+  # unconditionally. Setting the knobs here makes replica 1 contend for the
+  # SAME advisory lock, so exactly one of {replica 1, replica 2} leads.
+  legba-runtime-dapr:
+    environment:
+      LEGBA_REPLICA_COUNT: "2"
+      LEGBA_LEADER_ELECTION: "pg-advisory"

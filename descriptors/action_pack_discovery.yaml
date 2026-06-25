@@ -1,0 +1,61 @@
+# RETIRED (decision F-1, 2026-06-09): the discover_sources tool's job
+# enqueue fed crawl_discovery/query_discovery kinds that no worker
+# handler ever consumed. The tool handler was removed; source discovery
+# ships via the registry discovery route; job-based deep crawl is a
+# designed direction item (docs/DIRECTION.md). Kept for registry
+# history; no bringup script registers it.
+# P-11 — discovery action pack (PIVOT §4.8 seed pack).
+#
+# Grants the `discover_sources` tool. The TOOL INTERFACE is complete here: the
+# tool enqueues a `crawl_discovery` / `query_discovery` job (both already in
+# envelope.KNOWN_JOB_KINDS) onto the W2 job plane carrying the crawl/query
+# inputs. The discovery-KIND HANDLER that consumes those jobs — and materialises
+# discovered SourceDescriptors — lands at I3/I4 with P-13; until then the enqueue
+# is real but unhandled (a worker marks it failed:no-handler). This is the
+# documented, non-blocking seam.
+#
+# Governor: the crawl/discovery-specific caps (max_sources_per_window,
+# crawl_max_depth, crawl_max_pages, api_rate_per_minute) bound an unsupervised
+# crawl so a discovery analyst can't fan out unbounded sources. The
+# max_sources_per_window cap is enforced on the REQUEST (the tool reports the
+# requested max_sources as `units`), not just after discovery returns.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: discovery
+  name: Source Discovery
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: retired
+  owner: p11_agency
+  created: "2026-06-03T00:00:00Z"
+
+tools:
+  - name: discover_sources
+    async_job: true
+    config:
+      default_job_kind: crawl_discovery
+
+prompt_fragments:
+  - >-
+    When the current source set under-covers the target's scope, call
+    discover_sources(seed, depth, max_sources) to propose candidate sources for
+    operator review. You do NOT auto-activate sources — discovery proposes.
+
+rules:
+  - "Never request more than the governor's max_sources_per_window in one call."
+
+# Applicability: relevant to discovery-capable targets (a `discovery` scope tag).
+applies_to_tags:
+  - discovery
+
+governor:
+  budget_account: discovery
+  max_invocations_per_hour: 20
+  api_rate_per_minute: 5
+  # discovery/crawl-specific caps
+  max_sources_per_window: 50
+  crawl_max_depth: 3
+  crawl_max_pages: 500

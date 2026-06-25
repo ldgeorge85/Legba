@@ -1,0 +1,96 @@
+# S-2 — keyed SourceDescriptor: source.opensanctions.api
+# (kind: opensanctions, mode: api).
+#
+# OpenSanctions paginated REST API (https://api.opensanctions.org) —
+# low-volume / drill-down counterpart of the keyless bulk descriptor
+# (descriptors/source_opensanctions_bulk.yaml). Requires an API key (free
+# tier available; commercial use needs a license — their self_hosted mode
+# is the license-compliant high-volume path). Handler:
+# src/legba/data/sources/opensanctions.py (OpenSanctionsSourceHandler).
+#
+# KEYED — activation gating (S-2 convention):
+#   * identity.state is DRAFT — bulk registration creates no live actor
+#     (runtime/dapr_host.py skips draft/configured descriptors).
+#   * config.api_key_secret is a VAULT REF. The handler resolves it BEFORE
+#     any HTTP call (pull-time, ctx.secrets_resolve / the factory-threaded
+#     resolver) via CredentialVault.resolve
+#     (src/legba/data/registry/credentials.py), which raises
+#     MissingSecretError when the key is absent — the pull fails loud; it
+#     never runs the keyed API unauthenticated.
+#     (Asserted by tests/data_pkg/test_keyed_descriptor_vault_gating.py.)
+#
+# OPERATOR FLIP (to go live):
+#   1. Store the key:
+#        POST {registry}/api/v1/registry/vault/secrets
+#             {"secret_id": "source.opensanctions.api_key", "plaintext": "<key>"}
+#      (or set OPENSANCTIONS_API_KEY in .env and run
+#       scripts/bringup_vault_load.py).
+#   2. Register/refresh this descriptor, then transition:
+#        POST {registry}/api/v1/registry/descriptors/source/source.opensanctions.api/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+
+identity:
+  id: source.opensanctions.api
+  name: OpenSanctions — REST API (keyed)
+  kind: opensanctions
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # KEYED — operator flips after vault load
+  owner: s2_keyed_sources
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [sanctions, pep, compliance, entities, structured, global, api]
+
+acquisition: poll
+
+cadence:
+  # Drill-down cadence — the bulk descriptor owns the daily full sync;
+  # the API mode tracks incremental changes (modified_since cursor).
+  schedule:
+    factory_kind: cron
+    raw: "0 */6 * * *"
+  cooldown_seconds: 300
+  jitter_seconds: 120
+
+config:
+  mode:
+    factory_kind: text
+    raw: "api"
+  api_key_secret:
+    factory_kind: secret
+    raw: "source.opensanctions.api_key"
+  dataset:
+    factory_kind: text
+    raw: "default"
+  schema_filter:
+    factory_kind: list
+    item_kind: text
+    raw: [Person, Organization, Company, Sanction]
+  api_page_size:
+    factory_kind: number
+    raw: 100
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # FTM entity id canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment: []                     # structured FTM entities — no text chain
+  media: reference
+
+deps:
+  vault_secrets:
+    - source.opensanctions.api_key
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

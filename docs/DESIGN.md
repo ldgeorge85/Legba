@@ -1,930 +1,912 @@
 # Legba — Implementation Design
 
-*Key design decisions, data flows, and component interactions.*
-*Last updated: 2026-03-25*
+**Scope:** the authoritative in-repo implementation design for the source-first
+Legba platform. This is the cold-start orientation for engineers and operators
+walking up to the repo: what each subsystem is, how the pieces fit, and where to
+look in the code. It pairs with `docs/RUNBOOK.md` (operations), `docs/UI.md`
+(the operator console), and `docs/ARCHITECTURE.md` (the conceptual orientation
+and design rationale).
+
+Sections marked **(future seam)** describe declared shape that the code carries
+but does not yet exercise end-to-end; everything else is live.
 
 ---
 
-## 1. Design Philosophy
+## 1. Frame
 
-Legba is designed around three principles:
+### 1.1 What Legba is
 
-1. **Autonomy over orchestration** — The agent decides what to do, not a predefined pipeline. The supervisor manages lifecycle; the agent manages intelligence.
-2. **Grounded over generative** — Every claim must trace to tool output, not LLM confabulation. Information layers (identity vs facts vs tools) are explicitly separated in prompts.
-3. **Persistence over performance** — The agent runs continuously. Every design choice prioritizes reliability, graceful degradation, and data preservation over speed.
+Legba is an autonomous, **source-first** analysis & knowledge-fusion platform. Three kinds of
+declarative **descriptors** — sources, targets, analysts (plus action-packs) —
+are registered into a shared **substrate**, and a **Dapr virtual-actor runtime**
+turns each descriptor into a running actor that reads and writes that substrate.
 
----
+The organizing principle is **ingest once, enrich once, match many**:
 
-## 2. LLM Integration
+- A **source** owns acquisition. Its actor polls or receives push, produces
+  **one canonical, target-agnostic signal** per observation, enriches it once
+  (baseline language / geo / entity NER), and publishes it once to NATS
+  JetStream. Signals are *observations*, not interpretations — they carry no
+  `target_id`.
+- A **fan-out plane** routes each published signal to the **many** targets that
+  subscribe to it, by predicate.
+- A **target** is a passive subscriber: a declarative "what to watch" that
+  references shared sources and slices their signals by predicate.
+- An **analyst** coalesces the signals matched for a (analyst, target) pair and
+  produces findings / situations / hypotheses / predictions / critiques, each
+  with full `derived_from` provenance and a per-analyst hash-chained receipt chain (Ed25519-checkpointed).
 
-### Why Single-Turn
+Everything composable is a descriptor; the runtime executes whatever is
+registered. Adding a country, a feed, or an analysis pattern is a registration,
+not a deploy.
 
-Every LLM call is a fresh `[system, user]` message pair — no multi-turn conversation. This is deliberate:
+### 1.2 Where it sits
 
-- **Context control**: The assembler controls exactly what the LLM sees. No accumulated conversation drift.
-- **Token budget enforcement**: Each call is budgeted independently (120k max). Flexible sections (memories, goals) are truncated first; system, inbox, and task request are never truncated.
-- **GPT-OSS compatibility**: The model doesn't reliably handle the system role via `/v1/chat/completions`. Both messages are combined into a single `{"role": "user"}` message by `format.py:to_chat_messages()`.
+A single instance hosts many domains at once — geopolitical awareness, attack-
+surface monitoring, data-center watch — as different *sets of descriptors*, not
+different deployments. The substrate, registry, runtime, and outputs are shared;
+the descriptors specialize. AI models are hosted out-of-process via the
+`legba-models` service (§10); LLM providers are resolved through the
+stack registry.
 
-### Why `{"actions": [...]}` Wrapper
+### 1.3 Proven state
 
-GPT-OSS's reasoning mode expects exactly 2 output messages (reasoning + final). When tool calls were bare JSON objects, the model sometimes wrapped each in a separate Harmony message block, triggering `"Expected 2 output messages, but got N"` errors. The single-object wrapper ensures all tool calls live in one final message.
-
-### Sliding Window
-
-The tool loop (REASON+ACT) can run up to 20 steps. Each step rebuilds the full prompt. To prevent context exhaustion:
-- The 8 most recent tool results are included in full
-- Older results are condensed to one-line summaries
-- A working memory (key observations noted by the LLM via `note_to_self`) persists across all steps
-
-### Tool Loop Resilience
-
-Two retry mechanisms prevent premature loop exits:
-- **API error retry**: On transient LLM API errors (timeouts, 500s, rate limits), retries up to 2 times with exponential backoff. Failed attempts don't count against the step budget.
-- **Format retry**: When the LLM returns an unparseable response (no valid `{"actions": [...]}` found), re-prompts up to 2 times with explicit format instructions before falling through to forced-final.
-
-### Planned-Tool Filtering
-
-After PLAN, the cycle parses a `Tools:` line from the plan output. During REASON:
-- Listed tools get full parameter definitions in the system prompt
-- All other tools get name + one-line description only
-- `explain_tool` is registered for on-demand full-definition lookup
-
-This saves ~5-10k tokens per cycle without limiting the agent's capabilities.
-
----
-
-## 3. Memory Architecture
-
-### Six Layers, Each with a Purpose
-
-| Layer | Store | TTL | Purpose |
-|-------|-------|-----|---------|
-| Registers | Redis | Per-cycle | Counters, flags, cycle state, journal, reports |
-| Short-term episodic | Qdrant | ~50 cycles | Recent actions/observations (1 per cycle) |
-| Long-term episodic | Qdrant | Indefinite | Significant events auto-promoted at significance >= 0.6 |
-| Structured | Postgres | Indefinite | Facts, goals, sources, signals, events, entity profiles |
-| Graph | Apache AGE | Indefinite | Entity relationships (Cypher queries) |
-| Bulk | OpenSearch | Indefinite | Full-text search, signal/event indices, aggregations |
-| Journal archive | OpenSearch | Indefinite | Permanent record of all journal entries and consolidations (`legba-journal` index) |
-| Config versions | Postgres | Indefinite | Versioned prompt templates, guidance, mission config (`config_versions` table) |
-| Temporal graph | AGE + TimescaleDB | Indefinite | Weighted edges, structural balance triads, graph entropy, relationship history |
-
-### Why Separate Stores
-
-Each store serves a different access pattern:
-- **Qdrant** for "what's relevant to what I'm doing now?" (embedding similarity with time decay)
-- **Postgres** for "what do I know about entity X?" (structured queries, JSONB profiles)
-- **AGE** for "how are these entities connected?" (Cypher pattern matching)
-- **OpenSearch** for "find all signals/events mentioning this term" (full-text search + aggregations)
-- **Redis** for "what happened last cycle?" (fast key-value, no persistence guarantees needed)
-
-### Fact Evidence Tracking
-
-Each fact accumulates an `evidence_set` — a list of evidence items linking the fact to the signals, events, or tool results that support it. Evidence items record:
-
-- **signal_id / event_id** — the backing evidence
-- **relationship** — how the evidence relates to the fact (`supports`, `corroborates`, `challenges`)
-- **confidence** — the evidence item's individual strength
-- **observed_at** — when the evidence was recorded
-
-This allows traceability: any stored fact can answer "what signals support this claim?" The maintenance daemon and subconscious service both write evidence items as they detect corroboration or contradiction.
-
-### Contradiction Detection
-
-When a new fact is stored, the structured store checks for contradictions against existing facts sharing the same subject. Contradictions are detected via two mechanisms:
-
-1. **Predicate-level incompatibility** — A table of semantically contradictory predicate pairs (e.g., `AlliedWith` contradicts `HostileTo`; `MemberOf` contradicts `WithdrewFrom`). If the new fact's predicate contradicts an existing active fact on the same subject, the existing fact is flagged.
-
-2. **Value-level conflict** — For predicates like `LeaderOf` or `CapitalOf` where only one value is valid at a time, a new fact with a different value automatically supersedes the old one (volatile auto-supersede).
-
-Contradicted facts are not deleted — they are lowered in confidence (typically -0.3) and retain a `contradiction_of` back-reference. This preserves the full evidence chain and lets the agent or operator review conflicting information rather than silently discarding it.
-
-### Entity Resolution Cascade
-
-When the agent encounters an entity name:
-1. Exact canonical name match
-2. Alias match (e.g., "Russian Federation" → "Russia")
-3. Case-insensitive match
-4. Fuzzy match (SequenceMatcher > 85%)
-5. Create stub (completeness 0.0, to be filled later)
-
-This prevents entity fragmentation — "Iran", "Islamic Republic of Iran", and "Tehran government" collapse to one node.
-
-### Relationship Normalization
-
-30 canonical relationship types with 70+ aliases normalized at the storage layer. The agent can say `"PresidentOf"` and it becomes `LeaderOf`. Unrecognized types fuzzy-match or fall back to `RelatedTo`. This keeps the graph schema consistent without constraining the LLM's natural language.
-
-### Nexus Nodes (Reified Relationships)
-
-Simple edges work for direct relationships (US AlliedWith UK), but proxy chains, covert channels, and intermediary-mediated interactions need richer structure. A **Nexus node** is a reified relationship — an AGE vertex of label `Nexus` that sits between the actor and target, connected by three typed edges:
-
-- **PARTY_TO** (actor -> Nexus) — who initiates
-- **TARGETS** (Nexus -> target) — who is acted upon
-- **CONDUCTED_VIA** (Nexus -> intermediary) — optional proxy or channel entity
-
-Each Nexus carries `channel` (proxy, covert, diplomatic, financial, military, etc.), `intent` (hostile, supportive, neutral), and a free-text `description`. A corresponding row in the `nexus_operations` Postgres table holds the full metadata and links to evidence.
-
-Nexus nodes coexist with flat edges in the same graph. The `graph_store_nexus` tool creates them; `graph_store` continues to handle direct relationships. Structural balance analysis reads `intent` from Nexus nodes for edge signing, so proxy warfare and covert operations factor into triadic stability calculations alongside explicit AlliedWith/HostileTo edges.
-
-### Temporal Fact Enforcement
-
-Facts carry `valid_from` and `valid_until` timestamps. Two auto-supersession mechanisms keep the fact base current:
-
-1. **Volatile predicates** (LeaderOf, HeadOfState, HeadOfGovernment, etc.) — a new value for a different subject auto-supersedes the old one across subjects (e.g., storing "Country X LeaderOf PersonB" supersedes "Country X LeaderOf PersonA").
-2. **Single-value predicates** (broader set including CapitalOf, President, PrimeMinister, etc.) — a new value for the same subject auto-supersedes the old one (e.g., "France CapitalOf Paris" is protected; "France CapitalOf Lyon" would supersede it).
-
-Superseded facts receive a `valid_until = NOW()` and a `superseded_by` foreign key. Default queries exclude expired and superseded facts, but the full history remains available for temporal analysis.
+A cold start from empty volumes (the single `0001_baseline.sql` schema migration) brings the full loop
+up: real RSS sources (BBC / Deutsche Welle / Al Jazeera) → enriched signals (geo +
+language + entity classes promoted to indexed columns) → fan-out on
+`legba.signals.>` → G20 country targets, each coalesced by one country-assessor
+analyst → distinct per-country findings with provenance + receipt chains. The
+reactive path (source polls → fan-out → coalesced trigger fires → findings) is
+**proven live in the real stack** — most recently re-verified 2026-06-09 after the
+`dapr-scheduler` embedded-etcd fix that restores reminder recurrence (§6.3 /
+RUNBOOK §0); before that fix the loop fired once at boot then went silent. An
+entity knowledge graph (`entity_profiles` / `signal_entity_links` /
+`proposed_edges`) is kept current by an ongoing `entity_resolution` deterministic
+analyst; finding-level supersession (§7.2) keeps the per-situation finding set
+from accumulating near-dups each cadence cycle.
 
 ---
 
-## 4. Cycle Flow
+## 2. The four planes
 
-### Module Structure
+Legba factors into four planes. The first three are runtime; the fourth is
+storage.
 
-`cycle.py` is a thin orchestrator (~435 lines) that inherits from 13 phase mixins in the `phases/` directory (plan/act logic merged into cycle.py). Each mixin owns one phase of the cycle:
+1. **Acquisition** — `SourceActor` pulls/receives, runs baseline enrichment once
+   per signal, writes the canonical signal to the `signals` table, and publishes
+   it onto the coarse `legba.signals.<tenant>.<source>.<modality>.<event_class>`
+   subject (captured by the `legba_signals` JetStream stream). The
+   subscription/fan-out engine resolves which targets subscribe to which sources
+   and binds per-target JetStream consumers subject-filtered to that taxonomy.
+2. **Analysis** — `TargetActor` is the subscriber identity the fan-out delivers
+   to; `AnalystActor` reads its matched slice and runs its method. A coalescing
+   **trigger engine** (live + reactive — §6.6) decides *when* an analyst
+   fires (cadence + accumulation + severity, clamped by cooldown), dispatching a
+   coalesced fire to the analyst actor for *any* method kind, LLM included. An
+   **agency** plane lets an analyst resolve → govern → dispatch an action-pack
+   tool mid-run.
+3. **Async jobs** — a NATS work-queue (`legba.runtime.jobs.JobQueue`) with a
+   competing-consumer `JobWorkerPool`. `process_media` is the live job kind;
+   landed derived signals re-enter the fan-out → trigger path. (Source
+   discovery runs via the registry route, not the job plane; job-based
+   deep crawl is a designed direction item — `docs/DIRECTION.md`.)
+4. **Substrate** — Postgres (relational; the operative knowledge graph is the
+   relational `nexuses` table + networkx, with the Apache AGE graph dormant —
+   ARCHITECTURE.md §5.5), Qdrant (vectors),
+   Redis (hot state + caches), NATS JetStream (event bus + durable streams + KV).
 
-| Mixin | File | Phase |
-|-------|------|-------|
-| `WakeMixin` | `phases/wake.py` | Service init, tool registration |
-| `OrientMixin` | `phases/orient.py` | Memory/context gathering, live infra health check |
-| *(plan logic)* | *(merged into cycle.py)* | LLM planning + tool selection |
-| *(act logic)* | *(merged into cycle.py)* | Tool loop execution |
-| `ReflectMixin` | `phases/reflect.py` | Significance, facts, graph extraction |
-| `NarrateMixin` | `phases/narrate.py` | Journal entries + consolidation |
-| `PersistMixin` | `phases/persist.py` | Memory storage, goal completion, heartbeat |
-| `IntrospectMixin` | `phases/introspect.py` | Mission review, analysis reports |
-| `ResearchMixin` | `phases/research.py` | Entity enrichment cycles |
-| `AcquireMixin` | `phases/acquire.py` | Dedicated source fetching + signal ingestion (legacy; only when ingestion service not active) |
-| `CurateMixin` | `phases/curate.py` | Signal review, event creation, editorial judgment (replaces ACQUIRE when ingestion active) |
-| `SurveyMixin` | `phases/survey.py` | Analytical desk work — situations, graph building, hypothesis evaluation (replaces NORMAL) |
-| `SynthesizeMixin` | `phases/synthesize.py` | Deep-dive investigation, situation briefs, hypothesis creation |
-| `AnalyzeMixin` | `phases/analyze.py` | Pattern detection, graph mining, anomaly detection |
-| `EvolveMixin` | `phases/evolve.py` | Self-improvement, operational scorecard, change tracking |
-
-Class attributes (e.g. `_JOURNAL_KEY`, `_JOURNAL_MAX_ENTRIES`) are defined on their owning mixin and accessed via MRO since `AgentCycle` inherits all mixins. Phase modules use `TYPE_CHECKING` guards for `AgentCycle` type hints to avoid circular imports.
-
-### Normal Cycle
-
-```
-main.py:main()
-  └── AgentCycle.run()
-        ├── _wake()                     [phases/wake.py]
-        │     ├── Load challenge.json, seed goal, world briefing
-        │     ├── Connect: Redis, Postgres/AGE, Qdrant, OpenSearch, NATS, Airflow
-        │     ├── _register_builtin_tools() → 67 tools from 19 modules + 2 config tools
-        │     └── Drain NATS inbox
-        │
-        ├── _orient()                   [phases/orient.py]
-        │     ├── Retrieve episodic memories (Qdrant similarity search)
-        │     ├── Load active goals + goal work tracker (Postgres + Redis)
-        │     ├── Query known facts (Postgres)
-        │     ├── Live infrastructure health check (Postgres, AGE, Redis, Qdrant)
-        │     ├── Build graph inventory (entity counts by type, top relationships)
-        │     ├── Query source health stats (total sources, utilization %)
-        │     ├── Get NATS queue summary
-        │     ├── Load previous reflection forward
-        │     ├── Load journal context (consolidation + recent entries)
-        │     ├── Compute priority stack (situation ranking by velocity/goals/watches/recency)
-        │     └── Inject differential briefing from subconscious accumulator (Redis)
-        │
-        ├── _plan()                     [phases/plan.py]
-        │     ├── assemble_plan_prompt() → [system, user]
-        │     ├── LLM completion → prose plan + "Tools: tool1, tool2, ..."
-        │     └── Parse planned_tools set
-        │
-        ├── _act()                      [phases/act.py]
-        │     ├── assemble_reason_prompt(planned_tools=...) → [system, user]
-        │     └── llm_client.reason_with_tools()
-        │           ├── For each step (up to 20):
-        │           │     ├── LLM generates {"actions": [...]}
-        │           │     ├── tool_parser extracts tool calls
-        │           │     ├── executor runs tools concurrently
-        │           │     ├── Results added to working memory
-        │           │     ├── Sliding window: keep last 8 full, condense older
-        │           │     ├── Re-grounding prompt every 8 steps
-        │           │     └── Check graceful shutdown flag
-        │           └── Returns results summary
-        │
-        ├── _reflect()                  [phases/reflect.py]
-        │     ├── assemble_reflect_prompt() → [system, user]
-        │     └── LLM → JSON: {summary, significance, facts, entities, goal_progress, ...}
-        │
-        ├── _narrate()                  [phases/narrate.py]
-        │     ├── assemble_narrate_prompt() → [system, user]
-        │     ├── LLM → JSON array of 1-3 journal entries
-        │     └── Archive entries to OpenSearch (legba-journal index)
-        │
-        └── _persist()                  [phases/persist.py]
-              ├── Store episodic memory (Qdrant)
-              ├── Auto-complete goals at 100% progress
-              ├── Auto-promote memories (significance >= 0.6 → long-term)
-              ├── Update goal work tracker (Redis)
-              ├── Store facts from reflection (Postgres, normalized predicates, triple-deduped)
-              ├── Publish outbox messages (NATS)
-              ├── Store journal entries (Redis)
-              └── Liveness check (nonce echo — dedicated LLM call, reasoning: low)
-```
-
-### Survey Cycle (default — replaces NORMAL)
-
-The default cycle type when no specialized cycle fires. Analytical desk work with a restricted tool set — no feed_parse, no source fetching, no code modification. Rate-limited http_request (max 2 calls/cycle, verification only).
-
-```
-_wake() → _orient() →
-  _survey()
-    ├── _build_survey_context()
-    │   ├── Recent events (last 24h)
-    │   ├── Active situations with intensity scores
-    │   ├── Events not linked to any situation
-    │   ├── Active predictions needing evidence check
-    │   ├── Recent watch triggers
-    │   ├── Journal investigation leads
-    │   └── Uncurated signal count (cached for dynamic CURATE promotion)
-    ├── assemble_survey_prompt() with SURVEY_TOOLS
-    ├── reason_with_tools() → full tool loop with rate-limited executor
-    ├── _reflect()
-    ├── _narrate()
-    └── _persist()
-```
-
-Tier 3 dynamic fill: when no Tier 1 or Tier 2 cycle fires, CURATE and SURVEY compete on score. CURATE scores by uncurated signal backlog (capped at 0.6), SURVEY is fixed at 0.4. Cooldown halves the previous dynamic type's score to prevent repetition.
-
-### Synthesize Cycle (every 10, non-evolve/introspection)
-
-Deep-dive investigation into a single situation or emerging pattern. Produces a named deliverable: a **Situation Brief** stored in Redis and archived to OpenSearch.
-
-```
-_wake() → _orient() →
-  _synthesize()
-    ├── _build_synthesize_context()
-    │   ├── Recently investigated threads (anti-rabbit-holing from Redis)
-    │   ├── Candidate situations ranked by novelty and intensity
-    │   ├── Active predictions for evaluation
-    │   ├── High-activity entities (last 48h)
-    │   └── Journal investigation leads
-    ├── assemble_synthesize_prompt() with SYNTHESIZE_TOOLS
-    ├── reason_with_tools() → full tool loop with http_request
-    ├── _store_situation_brief() → Redis + OpenSearch archive
-    ├── _update_synth_history() → track thread rotation
-    ├── _reflect()
-    ├── _narrate()
-    └── _persist()
-```
-
-### Research Cycle (every 7, non-introspection/analysis/synthesize)
-
-Replaces PLAN → ACT with entity enrichment using a restricted tool set:
-
-```
-_wake() → _orient() →
-  _research()
-    ├── _build_entity_health_summary()
-    │   └── SQL: entity completeness scores, event counts, assertion counts
-    ├── assemble_research_prompt(entity_health=..., allowed_tools=RESEARCH_TOOLS)
-    ├── reason_with_tools() → full tool loop (http_request, entity/graph/memory tools, os_search)
-    ├── _reflect()
-    ├── _narrate()
-    └── _persist()
-```
-
-Research targets: entities with low completeness but high event involvement. Primary sources: Wikipedia API, official references, cross-referencing existing data.
-
-### Introspection Cycle (every 15)
-
-Replaces PLAN → ACT with a deep self-assessment using internal-only tools:
-
-```
-_wake() → _orient() →
-  _run_introspection()
-    ├── assemble_introspection_prompt() with restricted tools:
-    │   graph_query, graph_store, memory_query, entity_inspect,
-    │   goal_update, goal_list, note_to_self, explain_tool
-    ├── reason_with_tools() → full tool loop with internal tools
-    ├── _reflect()
-    ├── _narrate()
-    ├── _journal_consolidation()
-    │   ├── LLM weaves all journal entries since last consolidation
-    │   │   into a single narrative (Legba's inner voice)
-    │   └── Archive consolidation to OpenSearch before clearing entries
-    ├── _generate_analysis_report()
-    │   ├── Query graph relationships, entity profiles, recent events
-    │   └── LLM produces "Current World Assessment" (1000-3000 words)
-    │       with strict anti-hallucination rules
-    └── _persist()
-```
-
-### Acquire Cycle (legacy fallback)
-
-Only used when the ingestion service is not active. The agent fetches sources directly and stores signals. Dormant when ingestion service is running.
-
-### Curate Cycle (every 9, when ingestion active)
-
-Replaces ACQUIRE when the ingestion service handles source fetching. The agent applies editorial judgment to raw signals and auto-created events:
-
-```
-_wake() → _orient() →
-  _curate()
-    ├── _build_curate_context()
-    │   ├── Unclustered signals (no linked event, top 20 by confidence)
-    │   ├── Auto-created events with signal_count <= 2 (top 15, need review)
-    │   ├── Trending events with signal_count > 2 (top 5)
-    │   └── Data overview (total signals, events, unlinked count)
-    ├── assemble_curate_prompt() with restricted tools:
-    │   signal_query, signal_search, event_create, event_update,
-    │   event_query, event_link_signal, entity_profile, entity_inspect,
-    │   entity_resolve, graph_store, graph_query, memory_query
-    ├── reason_with_tools() → full tool loop with curate tools
-    ├── _reflect()
-    ├── _narrate()
-    └── _persist()
-```
-
-The agent can: link unclustered signals to existing events (`event_link_signal`), create new events from signals the clusterer missed (`event_create`, confidence 0.7), refine auto-created events by improving titles, adjusting severity, or adding summaries (`event_update`), and enrich entity profiles.
+The production host (`legba-runtime-dapr`) boots all four:
+`runtime/dapr_host.bring_up_production_runtime` wires the substrate connections,
+the reconcile loop, and the deps resolvers; `runtime/source_first_runtime.
+bring_up_source_first_planes` assembles the job, subscription, trigger, and
+agency planes on top.
 
 ---
 
-## 5. Data Flow: Signal-to-Event Pipeline
+## 3. The actors
 
-Legba uses a two-tier information model: **signals** (raw ingested material) and **events** (derived real-world occurrences). Signals are atomic collection units; events are the analytical units that reports, situations, and graph analysis operate on.
+All actors are Dapr-native (`dapr.actor.Actor`), hosted in one process
+(`runtime/dapr_actors.py` for Target/Analyst; `runtime/source_actor.py` for
+Source). There is no embedded asyncio host — `daprd` routes every
+`ActorProxy` invocation to the host's FastAPI surface on port 6090.
 
-### Signal Ingestion
+**Identity.** Dapr addresses an actor by `(actor_type, actor_id)`. The
+`actor_id` grammar is `kind::descriptor_id::content_hash[:16]` — the sole
+constructor is `runtime/reconcile._default_actor_id`. The descriptor identity
+(id + version) is recoverable from the id, so clients need no lookup table.
 
-```
-Source → Fetch → Normalize → Dedup → Signal (Postgres + OpenSearch)
-                                         │
-                                         ├── signal_entity_links (spaCy NER)
-                                         └── Increment source signal count
+**State.** Each actor persists a `record` (lifecycle, last run, outcome, error
+counters, cooldowns) via `self._state_manager`, backed by a Postgres Dapr state
+component on the isolated `dapr` database. State survives sidecar restarts.
 
-      entity_resolve(name, signal_id, role)
-            ├── Resolution cascade (exact → alias → fuzzy → stub)
-            ├── Create/update EntityProfile in Postgres
-            └── Create SignalEntityLink junction
+**Dependency wiring.** Dapr's actor factory can't take custom kwargs, so heavy
+deps live in a process-global registry keyed by `actor_id`. On a cache miss
+(e.g. post-restart, before the host re-registers), a process-registered async
+**resolver** reconstructs the deps from the descriptor via the registry's REST
+surface and caches the result. The fallback is gated by
+`LEGBA_DEPS_FALLBACK_ENABLED` (default on).
 
-      graph_store(entity, relate_to, relation_type, since)
-            ├── Normalize relationship type (70+ aliases → 30 canonical)
-            ├── Fuzzy entity matching (prevent duplicates)
-            └── Upsert vertex + MERGE edge in AGE
+### 3.1 SourceActor — acquisition
 
-      graph_store_nexus(type, channel, intent, actor, target, via)
-            ├── Create Nexus node + PARTY_TO/TARGETS/CONDUCTED_VIA edges
-            └── For proxy chains, covert channels, intermediary relationships
-```
+Owns one `SourceDescriptor`. Pulls/ingests **once** regardless of consumer
+count, writes one canonical `Signal`, publishes it. Two acquisition modes:
 
-### Composite Confidence Scoring
+- **poll** — at activation registers a Dapr **Reminder** from `cadence.schedule`
+  (durable across restarts). Each fire pulls the handler, runs the per-source
+  baseline enrichment, writes via `write_canonical_signal`, publishes, and
+  persists the cursor.
+- **push** — registers the handler against the shared inbound-webhook router; an
+  inbound POST wakes the handler, which emits Signals through an `emit_signal`
+  callback onto the same baseline → write → publish path.
 
-Each signal carries a composite confidence score derived from a gatekeeper formula:
+Either mode runs the **source-side ingest dedupe** (tiers 1–2 — canonical-URL
+hash then content hash) after the canonical insert, built from the descriptor's
+`pipeline.ingestion_filters`; a duplicate raw row is *linked* to its canonical
+(`signal_aliases` + `canonical_signal_id`), never collapsed (§7.1). This is the
+cheap deterministic counterpart to the pool-wide `cross_source_dedup` analyst.
 
-```
-Gate     = source_reliability * classification_confidence
-Modifier = 0.4 * temporal_freshness + 0.35 * corroboration + 0.25 * specificity
-Confidence = Gate * Modifier
-```
+A source may also register an outbound **upstream watch** at activation
+(`provision` block) and deprovision it on retire, idempotently. The core logic
+lives in a plain `SourceCore` class (directly testable without a sidecar); the
+`SourceActor` wrapper delegates to it.
 
-The gate ensures unreliable sources or poorly classified signals can never produce high confidence regardless of other factors. The modifier captures freshness, corroboration, and specificity:
+The baseline enrichment chain (`descriptor.pipeline.enrichment`:
+`language_detect` / `geocode` / `ner_multilingual` / `classify`) is built once by
+the host (which owns the NLP / Qdrant / embedding clients) and threaded in. After
+enrichment the host promotes payload annotations (`payload.geo.country_iso2`,
+`payload.language`, `payload.entities[].class`) into the **typed, indexed**
+`signals.geo` / `signals.language` / `signals.entity_classes` columns — the
+coarse axes the fan-out and per-target scoping match on. Enrichment is
+annotate-only and best-effort: a filter error never drops the signal.
 
-| Component | Source | Range |
-|-----------|--------|-------|
-| `source_reliability` | `sources.reliability` column | 0.0-1.0 |
-| `classification_confidence` | Classifier self-reported score | 0.0-1.0 |
-| `temporal_freshness` | Linear decay: 1.0 at 0h, 0.5 at 24h, 0.0 at 168h | 0.0-1.0 |
-| `corroboration` | Independent source count on the same event (maintenance daemon) | 0.0-1.0 |
-| `specificity` | SLM-assessed signal specificity (subconscious service) | 0.0-1.0 |
+**Tenant-consistency invariant.** The fan-out publishes the *in-memory* Signal
+(`model_dump_json`), so any field the write path pins on the row must also be
+stamped on the object — specifically `owner_tenant`, which is set from the
+source's `scope.owner_tenant` before write *and* publish. This matters because
+the subject (`legba.signals.<tenant>.…`), the subscription binding, and the
+real-time matcher (`subscription/filter.matches`) all key on `owner_tenant`:
+if the published envelope's tenant disagreed with the row's, the durable
+consumer would still *deliver* every signal but the matcher would *reject*
+every one on its tenant guard, silently disabling all reactive triggering while
+the batch/cadence path (which reads the row) kept working. Source acquisition
+therefore stamps the row, the subject, and the envelope from one source of
+truth.
 
-Individual components are stored as `confidence_components` JSONB on the signal row so the composite can be recomputed when any input changes. Weights are configurable via environment variables.
+### 3.2 TargetActor — subscriber + discovery host
 
-### Signal Provenance
+A target is a passive subscriber. The TargetActor stays registered for two roles:
 
-Every signal carries a `provenance` JSONB column recording its full processing trace through the ingestion pipeline. This is an append-only log of each processing step:
+1. **Subscriber identity** the subscription engine fans out to.
+2. **Discovery materialiser host** — when the descriptor carries a `discovery`
+   block, `run()` routes to `_run_discovery_cycle` instead of an ingest path:
+   it resolves the discovery handler, drains its candidate stream, and hands the
+   list to `registry.discovered_materializer.reconcile_discovered_targets`,
+   which upserts L1 child target descriptors and retires vanished ones (guarded
+   by a disappearance-ratio threshold).
 
-- **normalizer** — source, fetch timestamp, title/body extraction
-- **dedup** — which dedup tier resolved (GUID, source_url, Jaccard), or `new` if no match
-- **confidence** — the individual component values and final composite score
-- **clusterer** — event assignment (event_id, method: new_cluster / reinforced / singleton_promoted / unclustered)
+A target's `sources` are `SourceRef` subscriptions, not target-owned pull
+bindings; the target does not poll sources itself.
 
-Provenance is immutable after creation. It provides an end-to-end audit trail answering "how did this signal get here and why does it have this confidence?"
+### 3.3 AnalystActor — reasoning
 
-### URL Discovery
+Owns one `AnalystDescriptor`. The run path reads the analyst's matched substrate
+slice (a per-kind `read_slice` reader), invokes its `run_method` (LLM or
+deterministic), enforces budget, writes the typed output via the provenance
+writers, and records into the receipt chain.
 
-The ingestion pipeline extracts URLs from signal content and stores unique base domains in a `discovered_urls` table, deduplicating against existing active sources. High-frequency domains surface to EVOLVE cycles for operator/agent review as potential new data sources.
+Two firing paths:
 
-### 4-Tier Signal Dedup
+- **Coalesced fire** — the trigger engine dispatches `run({"trigger_kind":
+  "coalesced_fire", "target_filter": <target>, ...})` for a (analyst, target)
+  pair that crossed its threshold.
+- **Cadence heartbeat** — a Dapr Reminder from `cadence.fallback_schedule`
+  guarantees coverage even when too few signals arrive to trip the trigger. A
+  **target-bound** analyst (one whose `subscription.targets` selector matches
+  targets) fans out **one run per matched target**, each with an independent
+  per-(analyst, target) cooldown — this is what produces per-country findings
+  instead of one global blob. A **meta** analyst (no target binding) does a
+  single global run.
 
-1. **GUID fast-path** — Exact match on RSS guid / Atom id. Instant rejection.
-2. **Source URL dedup** — Exact match on source_url after normalization.
-3. **Vector cosine similarity** — Embedding-based semantic dedup via Qdrant.
-4. **Jaccard similarity** — Title words with source suffix/prefix stripping (e.g., " - Reuters", "BBC News: "). 50% word overlap within +/-1 day, or last 100 signals if no timestamp.
+**Per-(analyst, target) concurrency.** A target-bound analyst is a *primary*
+actor that does not assess inline — it fans out to **per-(analyst, target)
+worker actors**, addressed `analyst::<descriptor_id>::<target_id>`. The primary
+dispatches the matched targets to their workers via `ActorProxy`, **bounded
+concurrent** (a semaphore of `_FANOUT_CHUNK`, default 5) so a wide analyst
+(e.g. `country_assessor` over 19 G20 targets) runs its per-target assessments
+in parallel instead of serializing through one actor's turn queue. Workers are
+**lazy-activated**: they carry no descriptor of their own and are only ever
+reached via the primary's fan-out or a coalesced fire, which hands them a
+`target_filter` + resolved deps so they create a minimal active record and run.
+Both cadence fan-out and coalesced fires land on the same worker path.
 
-### Deterministic Clustering (every 20 min)
+Per-(analyst, target) cooldowns live in the actor record (`cooldown_by_target`),
+keyed by `target_filter`; a global cooldown gates the whole analyst (e.g. on
+budget exhaustion). Demotion-on-budget and the typed retry policies (§6.5) also
+live here.
 
-```
-Unclustered Signals (no signal_event_links entry)
-      │
-      ├── Extract features: actors, locations, title words, timestamp, category
-      │
-      ├── Score pairwise similarity (composite):
-      │     entity overlap    0.3
-      │     title Jaccard     0.3
-      │     temporal proximity 0.2  (linear decay over 48h)
-      │     category match    0.2
-      │
-      ├── Single-linkage clustering (threshold: 0.4)
-      │
-      ├── Multi-signal clusters → Create or merge-into Event
-      │     ├── Title: highest-confidence signal's title
-      │     ├── Time window: min(timestamps) → max(timestamps)
-      │     ├── Category: modal across signals
-      │     ├── Confidence: mean, capped at 0.6 (auto-created)
-      │     └── Link all signals via signal_event_links
-      │
-      └── Singletons:
-            ├── Structured sources (NWS, USGS, GDACS, etc.) → auto-promote to 1:1 Event
-            └── RSS singletons → wait for agent or next clustering window
-```
+### 3.4 Knowledge grounding — analysis-time current-world-state injection
 
-### Event Reinforcement
+**Problem.** The analyst plane's core LLM carries a training cutoff that predates
+the present. For an assessment task that turns on *current* world state —
+who holds office, which alliances are in force, the present state of an ongoing
+conflict — the model backfills from a stale prior. The live failure that forced
+this design: the assessor called the current US president a "former" president,
+because its training data predates the 2024 election, and the signal slice (recent
+news headlines) rarely restates a background fact like "X is the head of state".
+The model had no in-context correction.
 
-When new signals cluster into an existing event:
-- `signal_count` is bumped
-- Confidence increases: `min(0.8, 0.4 + 0.05 * signal_count)`
-- `time_end` is extended to `max(timestamps)`
-- Actors/locations sets are merged
-- Threshold alerts logged at 3, 5, 10, 20 signals
+**Design rationale — the substrate is already the grounding store.** Legba already
+stores the temporally-honest answer. The temporal `facts` rows (`valid_from` /
+`valid_until` / `superseded_by`, §7.2 / `ANALYSIS.md` §7.2), the signed `nexuses`
+(reified relationships), and the **seed roots** (the curated `world_baseline`
+adapter and the live Wikidata leaders adapter) carry "who holds office now" and
+"which blocs are in force now" as first-class, supersession-aware data. So the fix
+is *not* a new store, a fine-tune, or a RAG index — it is **curate the current data
+in, then inject it at analysis time** over the substrate that already exists. This
+keeps the model swappable (grounding corrects whatever cutoff the bound model has)
+and keeps the ground truth auditable (it is curated/seed `facts` rows with full
+provenance, not prompt text).
 
-### Event Lifecycle State Machine
+**The three tiers.**
 
-Every derived event has a `lifecycle_status` that transitions deterministically based on signal activity and temporal rules. The maintenance daemon evaluates transitions on a 5-minute tick:
+- **Tier 0 — curate current data in.** The `wikidata_leaders` seed adapter
+  (`src/legba/data/seed/adapters/wikidata_leaders.py`) pulls current heads of
+  state/government from live Wikidata SPARQL and emits a **country-subject** office
+  fact (`'<country>' | 'head of state' | '<leader>'`), keyed on the country so a
+  leader change *supersedes* the prior officeholder (`valid_until = now` +
+  `superseded_by`) via the Phase-B `valid_until` write path — keying on the person
+  would leave two open "current" rows. The curated `world_baseline` adapter emits the
+  same shape, so a fresh Wikidata pull supersedes a stale curated leader. (Honesty
+  detail: some Wikidata entities have no SPARQL-resolvable English label — the
+  live case is Q22686 / Donald Trump — so a bare QID is resolved via a
+  `wbgetentities` label lookup + enwiki-sitelink fallback, and a still-unlabelled
+  entity is dropped rather than emitted as an unreadable `Qxxxx`.)
+- **Tier 1 — inject at analysis time.** A descriptor opts in with a `GroundingBlock`
+  (`src/legba/data/schemas/analyst.py` — `grounding: {enabled, scope, sources,
+  max_facts}`, off by default). The deps-builder
+  (`analyst_deps_builder._build_grounding_hook`) installs a per-run hook backed by
+  `SubstrateGroundingResolver` (`src/legba/runtime/grounding.py`); the
+  `inline_target` **GROUND** phase prepends a dated "AUTHORITATIVE CURRENT CONTEXT
+  (as of <today> — treat as ground truth over prior knowledge)" preamble built from
+  the **current** authoritative facts (the temporal-honesty gate `superseded_by IS
+  NULL AND (valid_until IS NULL OR valid_until > now())`, preferring `seed`/`curated`
+  provenance) about the target geo + top slice entities. It is degrade-not-drop (a
+  read failure leaves the prompt untouched), token-capped (`max_facts`), and skips
+  bare-QID values so it never injects an unreadable line. Opted in on
+  `world_assessor` + `country_assessor`.
+- **Tier 2 — vector `world_context` collection** (declared **future seam**). A
+  curated unstructured-brief collection for free-text background the structured
+  facts can't carry; the `GroundingBlock` accepts `vector:world_context` as a source
+  so descriptors can pre-declare it, but the resolver acts only on the structured
+  `substrate` source until the embedder-through-port wiring (L-114) lands.
 
-```
-                ┌──────────┐  signal_count >= 3   ┌────────────┐
-                │ EMERGING ├─────────────────────>│ DEVELOPING │
-                │          │                       │            │
-                │          │  no signals 48h       │            │  signal_count >= 5
-                │          ├──────────┐            │            │  AND confidence >= 0.6
-                └──────────┘          │            │            ├──────────┐
-                                      v            └─────┬──────┘          v
-                                ┌──────────┐             │          ┌──────────┐
-                                │ RESOLVED │<────────────┘          │  ACTIVE  │
-                                │          │  no signals 72h        │          │
-                                │          │                        │          │  velocity > 2.0
-                                │          │<───────────────────────┤          ├──────────┐
-                                │          │  no signals 7d         └─────┬────┘          v
-                                └─────┬────┘                              ^        ┌──────────┐
-                                      │                                   │        │ EVOLVING │
-                                      │  new signal linked                │        │          │
-                                      v                                   │        └─────┬────┘
-                                ┌──────────────┐   immediate              │              │
-                                │ REACTIVATED  ├──────────────>───────────┘  velocity    │
-                                └──────────────┘   (→ DEVELOPING)            < 1.5      │
-                                                                             ───────────┘
-```
-
-| Status | Meaning | Entry condition |
-|--------|---------|-----------------|
-| `EMERGING` | New event, few signals | Default on creation |
-| `DEVELOPING` | Gaining corroboration | signal_count >= 3, or reactivated |
-| `ACTIVE` | Confirmed, well-sourced | signal_count >= 5 AND confidence >= 0.6 |
-| `EVOLVING` | Rapid development | signal velocity > 2.0 signals/hour |
-| `RESOLVED` | No longer developing | No new signals within the decay window |
-| `REACTIVATED` | Resolved event re-emerges | New signal linked to a resolved event |
-
-Velocity is measured as signals per hour over a 6-hour trailing window. All transitions are deterministic — no LLM involved.
-
-### Agent Curation (CURATE cycle)
-
-```
-Clustered Events + Unclustered Signals
-      │
-      └── Agent CURATE cycle (editorial judgment)
-            ├── Review unclustered signals → event_create (conf 0.7) or event_link_signal
-            ├── Refine auto-events → event_update (title, severity, event_type, summary)
-            ├── Enrich entity profiles from signal/event context
-            └── Triage low-confidence events
-```
-
----
-
-## 6. Prompt Architecture
-
-### Instructions-First, Data-Last
-
-Every prompt follows this pattern:
-```
-SYSTEM: identity → rules → guidance addons → tool definitions → calling format
-USER:   --- CONTEXT DATA --- → data sections → --- END CONTEXT --- → task request
-```
-
-The task request is always last — closest to where the LLM generates. Tool definitions are at the end of the system message for the same reason.
-
-### Three Information Layers
-
-The system prompt explicitly separates:
-1. **Identity** — persona, analytical framework (how to think)
-2. **Factual content** — world briefing, context injections, tool results (supersede training priors)
-3. **Tools** — interface to the real world (tool results are ground truth)
-
-This prevents the model from treating factual briefings as fiction.
-
-### Guidance Addons
-
-Six guidance modules are appended to the system prompt in PLAN, REASON, and INTROSPECTION phases:
-
-| Addon | Content |
-|-------|---------|
-| MEMORY_MANAGEMENT | How to use memory tools, avoid duplicates, check before creating |
-| EFFICIENCY | Batching, cost awareness, parallel tool calls |
-| ANALYTICS | When to use statistical/NLP/graph analysis tools |
-| ORCHESTRATION | Airflow workflow tools (conditional — only when Airflow is available) |
-| SA_GUIDANCE | Source management, feed parsing, event quality, HTTP behavior, tagging |
-| ENTITY_GUIDANCE | Entity profiles, resolution, temporal relationships, 30 canonical types |
-
-### Phase-Specific Prompts
-
-| Phase | System | User |
-|-------|--------|------|
-| PLAN | Full identity + all guidance + tool summary | Goals + memories + graph + journal + inbox + plan request |
-| REASON | Full identity + all guidance + filtered tool defs + calling instructions | Context data (bracketed) + plan + working memory + act instruction |
-| REFLECT | Lightweight identity | Plan + working memory + results summary |
-| NARRATE | Minimal ("Write your journal entries") | Cycle summary + prior journal |
-| Research | Full identity + all guidance + research tool defs | Entity health summary + research tasks |
-| Introspection | Full identity + all guidance + internal tool defs | Mission review task + goals + work pattern |
-| Journal Consolidation | Narrative voice identity | All entries since last consolidation |
-| Analysis Report | Analyst identity | Queried data: graph, entities, events, coverage |
-| Liveness | "You are a simple echo service" | Nonce + cycle number |
+`ANALYSIS.md` §7.9 is the in-depth narrative; `AI_MODELS.md` §6 explains why this
+sits where it does relative to the bound model (it mitigates the model's training
+cutoff with substrate-sourced ground truth).
 
 ---
 
-## 7. Safety Model
+## 4. The descriptor model
 
-### Structural Isolation
-- Agent cannot reach supervisor code or process
-- Seed goal is read-only (mounted volume)
-- Audit OpenSearch hostname is never given to the agent
+Four descriptor families share one shape: content-hashed, versioned,
+lifecycle-FSM'd, audited, registry-managed. Code: `src/legba/data/schemas/`.
 
-### Heartbeat Liveness
-- Dedicated LLM call in PERSIST: echo `nonce:cycle_number`
-- Uses `reasoning: low` for efficiency
-- Moved to last step so data is saved even if liveness fails
-- Supervisor validates the response before marking cycle complete
+### 4.1 Families
 
-### Auto-Rollback
-- Self-modifications tracked in git inside the agent container
-- Supervisor reverts modifications that break the agent (container exit != 0)
+| Family | Schema | Owns |
+|---|---|---|
+| **source** | `schemas/source.py` `SourceDescriptor` | acquisition: kind, `acquisition` (poll/push), cadence, provision, baseline pipeline, output stream policy, `subscription_policy` |
+| **target** | `schemas/target.py` `TargetDescriptor` | what to watch: polymorphic scope, `sources` (`SourceRef[]`), pipeline, optional inline analyst, outputs, `allowed_action_packs` |
+| **analyst** | `schemas/analyst.py` `AnalystDescriptor` | how to reason: kind, subscription, mapping, method, cadence, outputs, `action_packs`, eval, optional `grounding` (§3.4 knowledge grounding) |
+| **action_pack** | `schemas/action_pack.py` `ActionPack` | a capability bundle: tools, prompt-fragments, rules, channels, governor, applicability |
 
-### Graceful Shutdown
-- Supervisor writes `stop_flag.json` on soft timeout (300s default)
-- Agent checks between tool steps → breaks to REFLECT → PERSIST
-- Agent can write `stop_ping.json` to extend deadline (up to 2 extensions of 300s each)
+All four enforce `strict=True, extra="forbid"`, a `schema_uri` of the form
+`legba/<family>/<MAJOR.MINOR.PATCH>`, and a `version` that is the content hash.
 
-### Event Confidence Caps
-- Auto-created events (clustering): capped at confidence 0.6
-- Agent-created events (CURATE tools): capped at confidence 0.7
-- Reinforced events (signal_count growth): capped at 0.8
-- Only the operator (via UI or manual DB update) can set confidence above 0.8
+### 4.2 The source-first contract (sources ↔ targets)
 
-### Full Audit Trail
-- Every prompt, response, tool call, and error logged to JSONL
-- Archived per-cycle in `/logs/archive/cycle_NNNNNN/`
-- Indexed in audit OpenSearch (isolated, agent cannot access)
-- 90-day ISM retention policy
+The wiring between a source and a target is fully declarative
+(`schemas/source.py`):
 
----
+- **`SourceRef`** (on a target) sets *exactly one* of `source_id` (subscribe to a
+  named source) or `source_selector` (auto-wire any source whose **scope**
+  matches), plus a `subscription`.
+- **`Subscription`** slices a source's signal stream: a structured filter
+  (`geo` / `languages` / `tags` / `entity_classes` / `modalities`, indexed and
+  pushed to the coarse NATS subject + a SQL `WHERE`) plus an optional Starlark
+  **residual** predicate (the long tail: `mentions()`, `severity_at_least()`,
+  …). `canonical_only` (default true) makes delivery dedup-aware.
+- **`SourceSelector`** matches *source scope* (not signals) — a coarse query over
+  source-descriptor metadata deciding whether a discovered source joins the
+  target. Only `open` sources auto-wire; `allowlist` / `grant` need explicit
+  opt-in. `owner_tenant` scopes which sources a target's selector will match on
+  the acquisition plane (forward-compat metadata; Legba ships single-tenant —
+  this is not an enforced multi-tenant isolation boundary, see
+  `docs/DIRECTION.md` §0–§2).
+- **`subscription_policy`** (on the source: `open` / `allowlist` / `grant`) is
+  enforced at subscription-registration time.
 
-## 8. Airflow DAGs
+### 4.3 Polymorphic target scope
 
-Four Airflow DAGs run on fixed schedules, independent of the agent cycle. They handle background maintenance, quality assurance, and decision surfacing.
+`TargetScope` is a discriminated union on `domain` (`schemas/target.py`):
 
-| DAG | Schedule | Purpose |
-|-----|----------|---------|
-| `metrics_rollup` | Hourly | Roll raw TimescaleDB metrics into hourly/daily aggregates for Grafana dashboards and baseline comparisons |
-| `source_health` | Every 6h | Auto-pause sources with >20 consecutive failures; report source utilization stats |
-| `decision_surfacing` | Every 12h | Identify stale goals (>7 days), dormant situations, merge candidates — surfaces items needing human or agent attention |
-| `eval_rubrics` | Every 8h | Automated quality evaluation: event dedup rate (<3%), graph quality (RelatedTo edges <5%, isolated nodes <5%), zero-signal source rate (<10%), entity link density |
+- **`GeoScope`** — geopolitical / OSINT: `geo`, `languages` (the founding case).
+- **`EstateScope`** — asset-estate (ASM / customer estates): `customer_id`,
+  `asset_tags`, `cloud_accounts`.
+- **`EntityScope`** — single person / org / asset: `entity_ref`.
 
-DAGs are deployed via the `workflow_define` orchestration tool (writes Python to the shared dags volume) or manually placed in `dags/`. Results from `eval_rubrics` are written to TimescaleDB as eval metrics and visualized in Grafana.
+Shared `_ScopeBase` fields: `entity_classes`, `relationship_types`,
+`time_horizon_days`, `tags`, and a compile-checked Starlark `predicate`. A target
+watching one person no longer fakes `geo: ["XX"]`.
 
-### Quality Assurance / Eval Rubrics
+### 4.4 Property factories
 
-The `eval_rubrics` DAG implements the quantitative checks from `EVALUATION_RUBRICS.md`:
-- **Event dedup rate** — duplicate event titles within 7 days, target <3%
-- **Graph quality** — RelatedTo edge ratio (lazy relationship typing) and isolated node ratio, target <5% each
-- **Source health** — active sources that have never produced a signal, target <10%
-- **Entity link density** — average entity links per event (tracks enrichment coverage)
+Descriptor config fields use named factories (`schemas/properties.py`) so the
+runtime knows enough to render UI, validate, store credentials, and resolve
+dynamic values without each descriptor reinventing them:
+`Property.Secret(name)` (vault reference — never plaintext), `Property.StackRef`
+(stack-component reference), `Property.Text/Number/Cron/RateLimit`,
+`Property.Dropdown.Static/Refreshable`, `Property.List/Dict`, `Property.OAuth2`,
+`Property.Free`. On the wire a factory value serializes as a small dict carrying
+`raw` + `factory_kind`; the runtime unwraps it before handing config to handlers.
 
-Each check writes its result to TimescaleDB (`metrics` table, dimension `eval`) so trends are visible in Grafana alongside operational metrics.
+### 4.5 L1 / L2 / L3 tiers
 
----
+`abstraction_level` on every descriptor:
 
-## 9. Dedup Strategies
+- **L1** — a concrete instance with every field explicit.
+- **L2** — a curated template with sensible defaults for one category
+  (e.g. a country template). Inherit-from-able via `inherits` (single-level,
+  multiple bases, left-to-right precedence; the descriptor overrides bases).
+- **L3** — a blessed pattern that materializes *many* L1 descriptors as a
+  coherent set.
 
-Deduplication is enforced at multiple layers — ingestion, tool-level, and background evaluation — to prevent data sprawl without constraining the LLM's flexibility.
+A descriptor carrying a `discovery` block must be L2/L3 (enforced by a model
+validator) — it is a template, not an instance.
 
-### Signal Dedup (ingestion)
+### 4.6 Lifecycle FSM
 
-Three-tier check in `ingestion/dedup.py` before any signal is stored:
-1. **GUID fast-path** — exact match on RSS guid / Atom id
-2. **Source URL** — exact match after URL normalization
-3. **Jaccard title similarity** — word-set overlap after source suffix/prefix stripping (e.g., " - Reuters"), threshold 50%, within +/-1 day window
+`draft → configured → active → paused → retired` (plus `resume`), in
+`runtime/lifecycle.py`. `configured` is the explicit "validated, schemas
+resolved, components bound, ready but not running" state — `register ≠ configure
+≠ activate`. Transitions persist through the registry and emit NATS events on
+`descriptor.<state>.<family>.<id>`. Each actor drives its own FSM on activate /
+pause / retire.
 
-### Event Dedup (agent tools)
+### 4.7 Discovery (template → instances)
 
-`derived_event_tools.py:event_create` checks before creating a new event:
-- Exact title match against recent events (7 days)
-- Jaccard title-word similarity against recent events, threshold configurable (default ~0.5). Returns `duplicate_detected` with the existing event ID so the agent can use `event_update` or `event_link_signal` instead.
+An optional `discovery` block turns a descriptor into a Prometheus-service-
+discovery-style template that materializes N instances from a dynamic candidate
+list. The block carries the discovery `kind`, a `list_source`, a typed `relabel`
+chain (rewrites each candidate's label set into template variables), and a
+`resync_policy` (disappearance-ratio threshold, default 30%, to stop a flaky
+list source from cascading mass-retirements). Both targets (`DiscoveryBlock`)
+and sources (`SourceDiscoveryBlock`) support it; the source flavor adds
+`validate_before_register` (liveness + trial pull before a candidate becomes a
+source). The operator-facing **Discovery Pipeline** panel (§5.5) renders these
+discovery descriptors, their candidate lists, and materialised instances.
 
-### Hypothesis Dedup (agent tools)
+### 4.8 Analyst kinds + action-packs
 
-`hypothesis_tools.py:hypothesis_create` checks before creating:
-- Jaccard similarity of thesis words against existing hypotheses for the same situation, threshold 0.45. Returns `duplicate_detected` with the existing hypothesis ID.
+`AnalystKind` is an **open taxonomy**: twelve built-in kinds (`inline_target`,
+`cross_target_raw`, `meta_findings_synthesizer`, `cross_analyst_correlator`,
+`relationship_reifier`, `competing_hypotheses` (alias `ach`), `deterministic`,
+`predictor`, `critic`, `optimizer`, `consult_on_demand`, `deep_consult`) plus
+runtime extensions registered through `ANALYST_KIND_REGISTRY` (mirrored from
+`vocabulary_entries` rows with `family='analyst_kind'`). The `method.kind`
+(`llm_planner` / `llm_single_turn` / `deterministic` / `hybrid` / `react_loop` /
+`stat_forecaster` / `critic` / `dspy_compile`) is what the runtime dispatches on.
 
-### Situation Dedup (agent tools)
+**Coalescing runs for deterministic and LLM-bearing analysts.** An
+`ActorTriggerRunner` dispatches a coalesced fire to the analyst actor for any
+method kind; LLM analysts fire on the accumulation / cadence gates, never
+per-signal (the per-signal guard lives in the policy, not the runner).
 
-`situation_tools.py:situation_create` checks before creating:
-- Exact name match
-- Fuzzy word-overlap (Jaccard on name words with stop-word removal), threshold 0.50. Returns `duplicate_detected` with overlap words.
-
-### Watchlist Dedup (agent tools)
-
-`watchlist_tools.py:watchlist_add` checks before creating:
-- Exact name match
-- Term overlap — Jaccard on the union of entities + keywords against existing active watches, threshold 0.50. Returns `duplicate_detected` with overlapping terms.
-
-### Background Dedup Audit
-
-The `eval_rubrics` Airflow DAG checks event dedup rate every 8 hours, flagging when duplicate titles exceed 3% of recent events.
-
----
-
-## 10. Graph Database (Apache AGE)
-
-### Why AGE, Not Neo4j
-
-AGE runs as a PostgreSQL extension — no additional service to manage. Shares the same Postgres instance as structured data. Supports Cypher queries for pattern matching.
-
-### AGE vs Neo4j Cypher Differences
-
-Key syntax differences that affect LLM-generated queries:
-
-| Pattern | Neo4j | AGE |
-|---------|-------|-----|
-| Find isolated nodes | `WHERE NOT (n)-[]-()` | `OPTIONAL MATCH (n)-[r]-() ... WHERE r IS NULL` |
-| Check existence | `WHERE EXISTS { (n)-[:REL]->() }` | `OPTIONAL MATCH (n)-[r:REL]->() ... WHERE r IS NOT NULL` |
-| Get vertex label | `labels(n)` | `label(n)` |
-| Return aliases | Optional | Required for clean output (`AS name`) |
-
-The `graph_query` tool does **not** expose raw Cypher. Instead it provides named operations (`top_connected`, `shared_connections`, `path`, `triangles`, `by_type`, `edge_types`, `isolated`, `recent_edges`) that map to pre-built AGE-compatible queries. This prevents the LLM from generating Neo4j-style Cypher that AGE rejects.
-
-### Graph Schema
-
-Vertices: labeled by entity type (CamelCase), or `Nexus` for reified relationships. Entity vertices carry `name`, `entity_id`, `created_at`, `updated_at`, plus arbitrary key-value pairs. Nexus vertices carry `op_id`, `type`, `channel`, `intent`, `description`.
-
-Edges: labeled by relationship type (30 canonical, CamelCase) for flat edges. Nexus-specific edge types: `PARTY_TO`, `TARGETS`, `CONDUCTED_VIA`. All edges support `since`, `until` (temporal) properties plus arbitrary key-value pairs.
-
-Entity deduplication: `upsert_entity` first checks for any existing vertex with the same name (regardless of label) before creating. This prevents duplicates when the entity type changes between calls.
-
----
-
-## 11. Known Limitations
-
-### LLM Behavioral Issues
-- **Multi-message errors**: GPT-OSS occasionally generates multiple Harmony message blocks → 400 error. Mitigated by `{"actions": [...]}` wrapper, but still happens (~1-2% of steps).
-- **Repetitive enrichment**: Agent sometimes re-does work it already completed. Partially addressed by goal work tracker and stall detection, but the LLM doesn't always check entity_inspect before re-enriching.
-- **Dud cycles**: Occasionally the LLM generates a brief instead of executing tools (0 actions). The forced-final mechanism catches this but the cycle is wasted.
-
-### Tool Utilization Gap
-The agent has converged on a core working set of ~15-20 tools (entity resolution, event curation, graph building, hypothesis/situation management). Orchestration tools (5) and some raw OpenSearch tools see limited use. Analytics tools are now used during ANALYSIS cycles. Config tools (`config_read`, `config_update`) are available in EVOLVE cycles for prompt self-modification via the versioned config store.
-
-### Context Pressure
-The full system prompt with all guidance addons is ~20k tokens. With tool definitions, goals, memories, and world briefing, REASON calls regularly hit 40-60k tokens — half the budget used before the LLM generates anything. The planned-tool filtering helps, but long-running tool loops with many results still approach the 120k budget.
+**Action-packs** are the agency-grant surface (superseding any flat tool
+whitelist). A pack bundles `tools` (each optionally an `async_job` onto the job
+plane), `prompt_fragments`, `rules`, `channels` (output bindings), a per-pack
+`governor` (budget + rate caps), and an applicability predicate. Effective
+capability is the intersection `analyst.action_packs ∩
+target.allowed_action_packs ∩ pack.applicability`, gated by the governor. Seed
+packs: `media_processing`, `incident_response`, `substrate_read` (the consult
+kind's governed read tools), and `escalate_finding` (the example pack that
+fires on gated findings). (The `discovery` pack was retired per decision F-1.)
+The dispatch path
+(`data/analysts/agency/agency.py`) is **resolve → govern → dispatch**: the
+`PackGovernorEnforcer` (`governor.py`) **live-enforces** the per-pack caps
+(`max_invocations_per_hour`, `api_rate_per_minute`, `max_sources_per_window`,
+`max_cost_usd_per_day`) over the `action_pack_invocations` ledger (`0025`) plus the
+global token envelope (`0022`), pre-call — any breach BLOCKs the tool and emits an
+operator-visible `governor_events` row + NATS event. The operator-facing **Action-Pack Grants**
+panel (§5.5) renders the effective intersection and the governor caps.
 
 ---
 
-## 12. Consultation Engine
+## 5. The registries + REST surface
 
-### Why Not Reuse LLMClient
+Three registries back the descriptor model. Code: `src/legba/data/registry/`.
 
-`LLMClient` is deeply coupled to the agent cycle — it manages sliding windows, working memory, phase-aware prompt assembly, forced-final fallback, and step budgets. The consultation engine needs none of this. It uses providers (`VLLMProvider` / `AnthropicProvider`) directly with its own lightweight tool-calling loop.
+### 5.1 Descriptor registry (`descriptor.py`)
 
-### Architecture
+Four families (`target` / `analyst` / `source` / `action_pack`), each on its own
+`*_descriptors` Postgres table (`target_descriptors`, `analyst_descriptors`,
+`source_descriptors`, `action_pack_descriptors`). Register flow: validate →
+content-hash → check head → INSERT with `is_head=true` → **Ed25519-signed audit
+row** → NATS publish on `descriptor.registered.<family>.<id>`. Operations:
+`register`, `register_raw` (with conversion-chain walk), `update`, `retire`,
+`promote`, `rollback`, `get`, `get_typed`, `list`, history. Validation failures
+route to a **descriptor DLQ** rather than aborting; `DescriptorValidationError`
+is recoverable. Content-hashed instances are immutable artifacts — rollback
+shifts the active head pointer back.
 
-The engine (`src/legba/ui/consult.py`) runs inside the UI container, not the agent container. It has:
+### 5.2 Stack registry + credential vault (`stack.py`, `credentials.py`)
 
-- **Own LLM config** via `CONSULT_*` env vars, defaulting to Anthropic (Claude Sonnet). This keeps the operator's interactive queries on a fast, reliable model even when the agent runs on vLLM/GPT-OSS.
-- **13 read-mostly tools** wired to the same Postgres, OpenSearch, Qdrant, Redis, and AGE stores that the agent writes to. Three write tools (`update_situation`, `update_goal`, `send_message`) allow lightweight operator actions.
-- **`respond` tool pattern**: The LLM signals it is done by calling `respond(answer=...)`. The loop terminates and the answer is returned. If the LLM never calls `respond` within 10 steps, the last assistant content is used as a fallback.
+The stack registry holds the substrate components (LLM providers, vector store,
+embedding, NATS, Postgres, Redis, proxy pool, NLP
+service). Descriptors reference a component by `Property.StackRef`. Secrets live
+in a separate **`CredentialVault`** (PyNaCl SecretBox / XSalsa20-Poly1305);
+descriptors carry `Property.Secret(secret_id)` and never plaintext. The vault
+shares the Postgres pool and decrypts with `LEGBA_DATA_MASTER_KEY` from the
+runtime container's env.
 
-### Session Management
+### 5.3 Vocabulary
 
-Multi-turn conversation state is stored in Redis under `legba:consult:session:{id}` with a 1-hour TTL. Each exchange appends the user message, any tool call/result pairs, and the final assistant response. The session key is tracked via a browser cookie.
+`entity_classes`, `relationship_types`, and `analyst_kind` are runtime-extensible
+via the vocabulary registry + a NATS-invalidated cache; new values are seen on
+the next descriptor bind without a migration.
 
-### Provider Branching
+### 5.4 REST surface (`api.py`, `server.py`, `v3_api.py`)
 
-Same branching logic as the agent, applied locally:
-- **Anthropic**: proper `system` field + multi-turn `messages` array with role alternation.
-- **vLLM**: single combined user message (system + history concatenated), matching GPT-OSS's expected format.
+A FastAPI app mounted at `/api/v1/registry/` (console entrypoint
+`legba-registry`, default port 8090). Endpoint families: `/descriptors/{family}/…`
+(CRUD + history + `typed` + retire/promote/rollback), `/stack/…`, `/vault/…`
+(register/exists/delete — never returns plaintext), `/conversions/…`,
+`/dead_letter`, `/audit` (with inline Ed25519 verification), `/vocabulary/…`, the
+consult engine (`POST /api/v1/consult`), substrate-read + lineage + entities +
+telemetry endpoints, and a WebSocket `/events` multiplexing NATS. Auth is a
+bearer token via `LEGBA_REGISTRY_API_TOKEN`. B-2 fail-closed: an unset token
+returns HTTP 503 on every guarded request unless `LEGBA_DEV_MODE=1` is set
+explicitly. The runtime
+talks to this surface (never to descriptor rows directly) so it picks up the
+registry's auth + audit + content-hash-head logic.
 
-### Error Recovery
+### 5.5 Operator UI panels (`legba-ui-v3/`)
 
-- **Empty responses**: If the provider returns empty content, the engine re-prompts once ("You returned an empty response — please try again").
-- **400 retry**: For vLLM, 400 errors (typically GPT-OSS Harmony multi-message issues) trigger a single retry.
-- **Timeout / 5xx**: Surfaced to the operator as an error message in the chat UI.
+The operator console (`docs/UI.md` is authoritative) is a dockview SPA whose
+panels are lazy-registered in `legba-ui-v3/src/panel-registry/registry.ts`. Beyond
+the registry/target/analyst/system panels, four operator panels expose the
+source-first control surfaces that previously had no UI. **As of 2026-06 all four
+ship registered + tested in `legba-ui-v3`; three (Action-Pack Grants, Subscription
+Policy/Builder, Discovery Pipeline) are fully live end-to-end, and Backfill Replay
+is a `PREVIEW_KINDS` tier — the panel is live but its backend POST is an honest 501
+(the cross-plane runtime trigger is not yet exposed through the registry).** None
+are seams:
 
----
-
-## 13. Priority Stack
-
-### Design
-
-The priority stack (`shared/priority.py`) ranks active situations by composite score to guide agent focus. Computed during ORIENT and injected into PLAN context as a differential briefing.
-
-**Scoring formula:**
-```
-score = (event_velocity * 0.3) + (goal_overlap * 0.25)
-      + (watchlist_trigger_density * 0.25) + (recency_penalty * 0.2)
-      + structural_instability_boost  (capped at 0.10)
-```
-
-**Components:**
-- **Event velocity** — new events linked to the situation per unit time
-- **Goal overlap** — how many active goals reference this situation
-- **Watchlist trigger density** — recent watch triggers matching situation entities/regions
-- **Recency penalty** — cycles since last agent attention, with adaptive staleness thresholds by severity (critical: 5 cycles, high: 10, medium: 20, low: 30)
-- **Structural instability boost** — derived from structural balance analysis; situations whose entities appear in unbalanced triads (friend-of-friend-is-enemy) receive a scoring boost
-
-The stack is advisory — it informs the agent's planning but does not override cycle type routing.
-
----
-
-## 14. Config Store Architecture
-
-Versioned configuration store (`shared/config_store.py`) backed by a Postgres `config_versions` table. Replaces filesystem-based prompt self-modification with tracked, rollback-capable versioned storage.
-
-**Schema:** `config_versions(id SERIAL, key TEXT, value TEXT, version INT, created_at TIMESTAMPTZ, created_by TEXT, notes TEXT, active BOOL)`
-
-**Operations:**
-- `get(key)` — returns the active version's value
-- `set(key, value, created_by, notes)` — creates a new version, deactivates the previous
-- `history(key, limit)` — returns version history for a key
-- `rollback(key, version)` — reactivates a specific version, deactivates the current
-
-**Seeding:** On first boot, `templates.py` contents are loaded as version 1. Subsequent changes via `config_update` tool or UI create new versions.
-
-**Access paths:**
-- Agent: `config_read` / `config_update` tools (EVOLVE cycle tool set)
-- Operator: UI config panel or `/api/v2/config` REST endpoints
-- Audit: every version records `created_by` (agent cycle number or operator username) and `notes`
-
----
-
-## 15. Hybrid LLM Routing
-
-The `PromptRouter` (`agent/llm/router.py`) routes individual prompts to different LLM providers:
-
-1. **Static overrides** — config-driven map of prompt name to provider (e.g., always route `analysis_report` to Claude)
-2. **Escalation flags** — the agent can request escalation mid-cycle for complex reasoning, or deterministic rules can trigger it
-3. **Default provider** — all unmatched prompts go to the default (typically GPT-OSS 120B)
-
-**Token budget:** A rolling 24h budget (`shared/token_budget.py`) tracks escalation provider usage in a Redis sorted set. When the budget is exceeded, escalation is disabled and all prompts fall back to the default provider. Daily totals are archived to TimescaleDB.
-
-**Integration point:** The router sits between the prompt assembler and `LLMClient`. `LLMClient.complete()` consults the router to select the provider for each call.
+- **Action-Pack Grants** (`registry.action_packs`, `panels/registry/ActionPacks.tsx`)
+  — renders the three-way agency-grant intersection `analyst.action_packs ∩
+  target.allowed_action_packs ∩ pack.applicability` (§4.8), grants/revokes a pack to
+  an analyst or target by editing its descriptor through the registry CRUD (a new
+  content-hashed, audited version), and shows the effective intersection + the
+  pack's governor caps.
+- **Subscription Policy** (`source.subscription_policy`,
+  `panels/source/SubscriptionPolicy.tsx`) — the source-side `open` / `allowlist` /
+  `grant` policy (§4.2) and which targets are authorized to subscribe; paired with a
+  **Subscription Builder** (`source.subscription_builder`) that composes a
+  `SourceRef` + structured/residual `Subscription`.
+- **Discovery Pipeline** (`registry.discovery`, `panels/registry/DiscoveryPipeline.tsx`)
+  — discovery descriptors (§4.7), their resolved candidate lists, and the L1
+  instances they materialise/retire (disappearance-ratio guard).
+- **Backfill Replay** (`system.backfill`, `panels/system/Backfill.tsx`) — operator
+  re-drive of historical signals through fan-out/triggers (`runtime/subscription/
+  backfill.py`). **Preview tier:** the panel is live, but its backend POST returns an
+  honest 501 today — the cross-plane runtime trigger is not yet exposed through the
+  registry (`PREVIEW_KINDS` in `registry.ts`).
 
 ---
 
-## 16. Auth Middleware
+## 6. The runtime
 
-JWT authentication (`ui/auth.py`, `ui/middleware.py`) with 3 roles:
+### 6.1 Dapr host + actor types
 
-| Role | Permissions |
-|------|-------------|
-| admin | read, write, delete, admin (user management) |
-| analyst | read, write |
-| viewer | read only |
+`legba-runtime-dapr` (`runtime/dapr_host.py`) builds the FastAPI app `daprd`
+routes into, registers `TargetActor` / `AnalystActor` / `SourceActor` with the
+`ActorRuntime`, and on startup runs `bring_up_production_runtime`: substrate
+connections (Postgres / NATS / Redis), the actor state store, the registry HTTP
+client, the deps resolvers, the reconcile loop + NATS informer, the source-first
+planes, the audit checkpointer, and the optimizer's Dapr-Workflow worker. The
+host mounts the A2A skill output router **only when operator-enabled**
+(`LEGBA_A2A_ENABLED=1` + a non-empty `LEGBA_A2A_TRUSTED_KEYS` allowlist, or
+`LEGBA_DEV_MODE=1`); by default the surface is fail-closed OFF and the host
+answers `/a2a/skills` with a 503 + enable recipe (never a silent 404) — see
+SEAMS #15. It also mounts an in-process tools registry (e.g. the outbound
+Mnemosyne trust-query tool, wired only when a base URL + signing key are
+present).
 
-**Architecture:**
-- `auth.py` — HMAC-SHA256 JWT implementation (no external dependency), user CRUD against Postgres `users` table, password hashing with PBKDF2
-- `middleware.py` — Starlette middleware that intercepts `/api/` routes, validates JWT from HttpOnly cookie, injects user context into request state
-- `routes/auth.py` — login/logout/me endpoints at `/api/v2/auth/*`
-- `responses.py` — standardized API error envelope
+### 6.2 Reconcile loop (`reconcile.py`)
 
-**Backward compatibility:** Auth is disabled by default (`AUTH_ENABLED=false`). When disabled, the middleware passes all requests through. Enabling auth requires setting `AUTH_ENABLED=true` and optionally `AUTH_SECRET_KEY` and `AUTH_DEFAULT_PASSWORD`.
+A Kubernetes-operator-style loop bridges desired state (the registry) to observed
+state (actor records). **Pure** per-kind reconcilers take `(observed, desired)`
+and return a `ReconcileAction` (`CREATE_ACTOR` / `TRANSITION_LIFECYCLE` /
+`RESTART_ACTOR` / `RETIRE_ACTOR` / `NOOP`); the **action executor** is the only
+mutator — it maps each action to an `ActorProxy` lifecycle call (`activate` /
+`pause` / `retire`). All three families (`target`, `analyst`, `source`)
+reconcile through the same logic; the family discriminator lives in the desired
+state + the executor's `_proxy_for`. The **informer** is a NATS subscription on
+`descriptor.>`; a 5-minute periodic resync is the backstop; one synchronous
+initial resync on bring-up activates every active descriptor.
+
+A content-hash change yields a **soft** `RESTART_ACTOR` (re-`activate()`, which
+re-reads the body) so source cursors survive; a full retire-then-create would
+lose them.
+
+### 6.3 Scheduling
+
+Cadence is **durable** via Dapr Reminders (`runtime/dapr_cron.py` converts cron →
+`(due_time, period)` reminder timing — Dapr takes Go-duration timings, not cron
+strings; only fixed-period reminders are used — there is no variable-period Dapr
+Jobs integration), persisted
+by the Dapr **scheduler** service (embedded-etcd-backed) so reminders fire across
+sidecar restarts. A poll `SourceActor` registers a `poll_<source_id>` reminder
+from `cadence.schedule`; an analyst registers a single `run_cadence` reminder from
+`cadence.fallback_schedule`. Event-driven firing is the coalescing trigger engine
+(§6.6); cadence is the coverage heartbeat.
+**Self-heal:** the reconcile resync (§6.2) re-asserts active analysts' reminders —
+an idempotent `activate()` re-registers `run_cadence` — so a silently-dropped
+reminder recovers within the resync interval instead of stranding the actor once
+it idles out (30m).
+
+**Operational reality — reminder recurrence depends on clean embedded-etcd.** The
+scheduler's reminder *recurrence* (honoring the `period`, not just the first-fire
+`dueTime`) is only as reliable as its persistent etcd state. A
+corrupted/inconsistent `dapr-scheduler` etcd dir (the `deploy/dapr-scheduler-data/`
+bind-mount) is silent-deadly: every reminder fires *once* at boot and then stops
+recurring, so source polls and analyst cadence both go quiet while the scheduler
+reports healthy and logs zero errors. This is **not** a Dapr bug or a misuse of
+`register_reminder(due_time, period)` — a clean etcd reproduces correct recurrence;
+a *partial* clear (deleting only the cluster-marker files) leaves etcd inconsistent
+and re-breaks it. The fix is a **full wipe** of the scheduler data dir followed by
+a dependency-ordered control-plane restart — see **RUNBOOK §0** for the exact
+procedure and verification. (The dapr-python SDK also serializes the period with a
+Greek-mu `µs` unit, which the scheduler honors but with a small per-period fire
+burst, absorbed by the per-(analyst, target) cooldown/dedup.)
+
+### 6.4 Budget (`runtime/budget.py`)
+
+`BudgetEnforcer` tracks token usage in `budget_ledger`, keyed by
+`(analyst_id, day)` (per-day UTC bucket). Pre-call checks gate a run; on
+exhaustion the actor either pauses until the next window or auto-demotes to the
+`method.llm.fallback` model for the rest of the bucket (per the analyst's
+`method.retry.budget` policy). A **global envelope** (migration `0022`) can flip
+*all* analysts to fallback for the current bucket. The per-pack **governor** caps
+(rate / invocation / source / daily-cost) are a separate, complementary enforcer
+on the agency dispatch path (§4.8) — **live**, over the `action_pack_invocations`
+ledger (`0025`), and it also consults the same global envelope.
+
+### 6.5 Failure semantics (`dapr_actors.py`)
+
+In-flight exceptions are classified `transient` / `budget` / `hard`. Transient
+(5xx / 429 / network) retries with backoff per `method.retry.transient`; budget
+pauses or demotes; hard (4xx / validation / unhandled) DLQs and alerts. Output
+writes validate the payload first and route invalid payloads to
+`output_dead_letter` rather than aborting the run.
+
+### 6.6 Source-first planes (`source_first_runtime.py`)
+
+`bring_up_source_first_planes` assembles, in order:
+
+- **Job plane** — `JobQueue` (work-queue stream + shared durable consumer) +
+  `JobWorkerPool` (competing consumers). The `process_media` handler is thin
+  today (**future seam**: SeaweedFS object store + hosted Whisper/VLM/OCR
+  endpoints; the job envelope exists).
+- **Agency plane** — an `Agency` over the live job queue + a channel emitter +
+  a NATS governor-event publisher, exposed via `AGENCY_HOLDER`. Two built-in
+  paths drive it in production (A-3): the consult kind routes its ReAct tool
+  calls through the governed `substrate_read` pack, and the actor run path
+  fires the `escalate_finding` pack when a finding crosses its gate (the
+  per-analyst on-ramp is `data/analysts/agency/binding.py`). Live-proven at
+  the 2026-06-10 cutover.
+- **Subscription / fan-out plane** — `SubscriptionEngine.register_target`
+  resolves each active target's `source_refs` to authorized bindings, enforces
+  source policy, and binds **one** per-target aggregated JetStream consumer,
+  subject-filtered to its coarse axes over `legba.signals.>`. Signal subjects are
+  coarse: `legba.signals.<tenant>.<source>.<modality>.<event_class>`.
+- **Trigger plane** (**live + reactive**) — a `TriggerEngine` over a
+  `Coalescer`. It consumes the matched-signal stream, marks (analyst, target)
+  pairs dirty in `trigger_state`, and fires on cadence / accumulation / severity
+  (clamped by cooldown). A fire routes to the analyst's `AnalystActor` via
+  `ActorProxy`, target-scoped. The injected runner is the `ActorTriggerRunner`,
+  which dispatches a coalesced fire for **any** method kind — deterministic *and*
+  LLM-bearing — because the "no LLM fire per signal" rule is enforced upstream in
+  the trigger **policy** (accumulation floored to a min LLM batch), so a fire that
+  reaches the runner is already a coalesced batch. This is what makes the path
+  reactive: an LLM analyst now fires on accumulation/severity, not only on its
+  Dapr cadence reminder.
+
+The wiring step (`_wire_targets_and_triggers`) is fail-soft per target: a
+legacy/incompatible descriptor or a vanished source is logged and skipped, never
+sinking the whole bring-up. Analyst→target binding has two paths: a target's
+inline `analyst_ref`, or an analyst's `subscription.targets` selector whose
+Starlark predicate (e.g. `has_tag("g20")`) is evaluated against each target's
+scope — a null predicate matches every target. This is how one
+`country_assessor` analyst coalesces over all G20 country targets without
+enumerating them. The full reactive loop is **proven live** (source polls →
+enriched signals → fan-out → coalesced fires → per-country findings; confirmed
+2026-06-09 after the scheduler-etcd fix, §6.3). Honest caveat on boot ordering:
+on a cold rig the wiring pass can complete with `trigger_regs=0` if it runs before
+targets/analysts have reached `active` — the informer/5-minute resync re-wires
+once they do, and until then the cadence heartbeat still drives coverage (see
+RUNBOOK §0 and the bring-up signposts).
+
+### 6.7 The optimizer GEPA loop (Dapr Workflow)
+
+The `optimizer` analyst kind runs its durable DSPy + **GEPA** prompt-evolution
+loop as a **Dapr Workflow** on the existing `daprd` sidecar — a deterministic
+workflow body with non-deterministic LLM activities and replay-based durability,
+fit for multi-hour batch work. The host starts an in-process `WorkflowRuntime`
+worker (`runtime/dapr_workflow/worker.build_workflow_runtime`) and threads a
+workflow client into the optimizer's durable-handle slot; the optimizer actor's
+`run()` dispatches a workflow and polls status. An in-process GEPA fallback runs
+when `dapr.ext.workflow` is unavailable. A scale-out standalone worker is
+available under `--profile dapr-workflow`.
+
+There is **no Temporal infrastructure** anywhere in the system — no Temporal
+frontend/history/matching cluster, no `temporal_persistence` / `temporal_visibility`
+database pair, no second worker image. The runtime collapses to one control plane
+(the `daprd` sidecar). The former `runtime/temporal/` Python package was deleted
+(P-CUT/C-3): its live pieces — the substrate-agnostic workflow-I/O dataclasses and
+the GEPA loop body (`_run_gepa_loop`) — now live in `runtime/dapr_workflow/gepa.py`,
+so the algorithm lives in exactly one place. The `OptimizerDeps.temporal_client`
+slot is just "the workflow client" (historically named, kept stable; env-gated to
+the Dapr-Workflow client or the in-process fallback). Nothing dials Temporal.io.
 
 ---
 
-## 17. Cognitive Architecture
+## 7. Data shape
 
-### Three-Layer Model
+Substrate schema is built by a single `src/legba/data/migrations/0001_baseline.sql`
+(Postgres) plus the forward chain (`0032`…`0039`). A cold start from empty volumes
+applies them in order. (The historical 0001→0031 migration chain was flattened to this
+baseline for the clean-slate release; it remains in git history.)
 
-Legba's processing is organized into three layers, analogous to levels of cognitive awareness:
+### 7.1 The target-agnostic signals table (`0024_pivot_substrate.sql`)
 
-| Layer | Service | LLM | Purpose |
-|-------|---------|-----|---------|
-| **Unconscious** | Maintenance daemon | None | Deterministic housekeeping: lifecycle decay, entity GC, fact expiration, corroboration scoring, integrity verification, adversarial detection, calibration tracking. Runs on a tick-based scheduler (default 60s). |
-| **Subconscious** | Subconscious service | SLM (Llama 3.1 8B) | Continuous validation and enrichment: signal quality assessment, entity resolution, classification refinement, fact corroboration, graph consistency, relationship validation. Runs three concurrent async loops (NATS consumer, timer, differential accumulator). |
-| **Conscious** | Agent cycle | Primary LLM (GPT-OSS 120B / Claude) | Deliberate analytical work: planning, reasoning, tool use, reflection, situation briefs, hypothesis evaluation. Runs discrete cycles with full context assembly and tool loops. |
+`signals` is the shared, source-owned, modality-first raw pool. It carries **no
+`target_id`**. Notable columns:
 
-The layers operate independently and concurrently. The unconscious layer requires no LLM at all — it is purely rule-based SQL and heuristics. The subconscious layer uses a small, fast, cheap model for tasks that benefit from language understanding but do not require the full reasoning capability of the primary LLM. The conscious layer uses the full primary model for complex analytical work.
+- **Provenance:** `source_id`, `source_version`, `produced_by_id`,
+  `produced_by_kind` (`source` | `job` | `analyst` | `deterministic` | `system`),
+  `fetched_at`, `owner_tenant`.
+- **Modality-first:** `modality`, `mime_type`, `media_ref`, `embedding_ref`,
+  `retention_class`, `object_ref`.
+- **Content + enrichment:** `payload` (JSONB), `canonical_url`, `raw_provenance`.
+- **Typed structured-filter columns** (baseline enrichment, indexed for
+  subscription pushdown): `language`, `geo TEXT[]`, `tags TEXT[]`,
+  `entity_classes TEXT[]`, `source_credibility`. GIN indexes on the arrays.
+- **Dedup (link, never collapse):** `content_hash`, `canonical_signal_id`, and a
+  separate `signal_aliases` link table — every raw row is kept; dedup links
+  aliases to a canonical, never deletes. Two dedup tiers run **at ingest**
+  (`data/filters/ingest_dedupe.py`, wired into `SourceCore` from the source's
+  `pipeline.ingestion_filters` `dedupe_tier_1`/`dedupe_tier_2` stages): tier 1
+  (canonical-URL hash) and tier 2 (content hash), resolved transitively to a true
+  self-canonical root. The batch `cross_source_dedup` deterministic analyst is the
+  pool-wide cadence sweep that complements this cheap ingest-time pass; the richer
+  semantic (vector) + temporal tiers 3–4 live in the target-side
+  `Dedupe4TierHandler` marker. (Source-side **tiers 1–2 are live**; the cross-
+  source semantic/temporal coalescing beyond exact-key linking is now **built,
+  off-by-default** — the `cross_source_coalesce` deterministic sub-handler
+  embeds recent canonical signals into a shared Qdrant collection and links
+  near-duplicate signals reporting the SAME event from DIFFERENT sources via
+  tier-3 cosine + tier-4 temporal/title logic, link-never-collapse. It is a
+  declared SEAM (#19): it requires the `embedding_service` + `qdrant` ports and
+  **refuses loud** when either is absent — emitting a `coalesce_unavailable`
+  finding and writing zero `signal_aliases` rows rather than fabricating links —
+  because there is no non-vector deterministic fallback for "same event,
+  different words".)
+- **Lineage:** `derived_from UUID[]` (GIN-indexed), `schema_uri`.
+- `entities_resolved_at` (in the baseline schema) — the per-signal marker the ongoing
+  `entity_resolution` analyst stamps as it folds NER mentions into the entity
+  graph (idempotent, forward-progressing).
 
-### Information Flow Between Layers
+### 7.2 Analyst outputs + provenance lineage
 
-The three layers communicate through shared data stores, not direct API calls:
+`analyst_outputs` (`0012`) is the generic, kind-discriminated table for
+`finding` / `meta_finding` / `alert` / `critique` / `prediction` /
+`prompt_module_candidate`; `situations` and `hypotheses` get dedicated tables.
+The `OutputKind` registry (`provenance/kinds.py`) maps each kind → table +
+pydantic payload model + Iglu `schema_uri` + NATS subject pattern.
 
-- **Unconscious -> Conscious**: The maintenance daemon writes lifecycle transitions, corroboration scores, and integrity metrics to Postgres and TimescaleDB. The agent reads these during ORIENT.
-- **Subconscious -> Conscious**: The subconscious service writes a differential summary to Redis (`legba:subconscious:differential`) capturing state changes between conscious cycles. The agent reads and clears this at the start of each cycle.
-- **Conscious -> Subconscious**: The agent's actions (creating events, storing facts, resolving entities) naturally create work for the subconscious via NATS triggers.
-- **Unconscious -> Subconscious**: The maintenance daemon flags adversarial signals and integrity issues that the subconscious service can pick up for SLM-powered validation.
+Every analyst-produced row carries universal provenance: producing id + version,
+`produced_at`, `derived_from UUID[]`, `schema_uri`, `run_id`. The write-side
+wrappers (`provenance/writes.py`) validate the payload, INSERT, optionally
+publish, and DLQ on invalid payload. Lineage is a recursive CTE over
+`derived_from`; `verify.py` walks it with cycle + dangling detection. AGE
+`:DerivedFrom` edge mirroring is a **future seam** (a hook exists).
 
-### Maintenance Daemon (Unconscious Layer)
+**Supersession (`0027` — live)** — analysts re-assessing an evolving situation
+re-emit near-duplicate findings; `analyst_outputs.situation_signature` clusters
+them and `superseded_by` / a `finding_supersessions` link table mark which finding
+wins, non-destructively (both rows kept; the canonical is the one row with
+`superseded_by IS NULL`). Finding-level supersession + situation clustering runs as
+an automated pass: the `finding_supersession` deterministic handler
+(`data/analysts/deterministic_handlers/finding_supersession.py`, registered in the
+deterministic-handler registry, mirroring the `signal_aliases` link pattern). Its
+situation signature is explicit-first (`data.situation_id` / `situation_signature`)
+then a derived `sig:<topic>|<sorted entity tokens>` key; findings with no derivable
+signature are left unclustered. (Substrate + automated pass are both in place.)
 
-Nine scheduled tasks, each on its own modulo interval:
+### 7.3 Entity graph
 
-| Task | Default Interval | Purpose |
-|------|-----------------|---------|
-| Lifecycle decay | 5 min | Event lifecycle state machine transitions, situation dormancy |
-| Corroboration scoring | 10 min | Count independent sources per event, update corroboration scores |
-| Metric collection | 5 min | Extended operational metrics to TimescaleDB for Grafana |
-| Situation detection | 30 min | Propose new situations from event clusters (3+ events, shared region/category/entities) |
-| Adversarial detection | 30 min | Source velocity spikes, semantic echo detection, provenance grouping |
-| Entity GC | 60 min | Mark dormant entities, detect duplicates, clean orphan graph edges, source health |
-| Fact decay | 60 min | Expire facts past `valid_until`, apply confidence decay to stale facts |
-| Calibration tracking | 60 min | Record claimed confidence vs actual outcomes for systematic bias detection |
-| Integrity verification | 12 hr | Evidence chain verification, eval rubrics (event dedup rate, graph quality, source health) |
+The entity graph is **relational**: `entity_profiles`, `signal_entity_links`,
+and `proposed_edges`. The `entity_resolution` deterministic analyst folds each
+new signal's NER mentions into it: co-occurrence edges upsert on
+`(lower(source_entity), lower(target_entity), relationship_type)`
+(`uq_proposed_edges_triple`, in the baseline schema). The Apache AGE graph
+`legba_graph` exists alongside but is **dormant / off the critical path** (its
+write-legs ship off by default); `/entities/graph` queries `proposed_edges`
+directly, not AGE (see ARCHITECTURE.md §5.5 "AGE re-evaluation", 2026-06-23).
 
-### Subconscious Service (Subconscious Layer)
+### 7.4 Runtime + audit tables
 
-Three concurrent async loops:
+`actor_state` (Dapr state), `budget_ledger` + `global_budget_envelope` (`0022`),
+`analyst_traces` (run traces + receipt-chain heads), `trigger_state` (`0028`,
+the coalescing accumulator keyed `(analyst_id, target_id)`), `legba_jobs` (job
+ledger), `descriptor_audit_log` (Ed25519-signed append-only), `audit_checkpoints`
+(per-analyst chain-head checkpoints), `descriptor_dead_letter` /
+`output_dead_letter`, `source_credibility` (`0014`), `cost_model` (`0015`),
+`action_pack_governor` state (`0025`), discovery state (`0026`),
+`ui_panel_registrations` (`0017`), and ISO-country + geopolitical-vocabulary
+seeds (`0019` / `0020`).
 
-1. **NATS consumer** — Triggered work items from other services (signal validation, entity resolution, relationship validation). Listens on `legba.subconscious.*` subjects.
-2. **Timer loop** — Periodic tasks on modulo schedule: signal validation (15 min), entity resolution (30 min), classification refinement (30 min), fact refresh (60 min), graph consistency (daily), source reliability recalc (daily).
-3. **Differential accumulator** — Tracks state changes between conscious agent cycles. Writes a JSON summary to Redis every 5 minutes capturing new signals per situation, event lifecycle transitions, entity anomalies, fact changes, hypothesis evidence changes, and watchlist matches.
+### 7.5 Modality registry (partly live, partly future seam)
 
-The SLM provider supports both vLLM (OpenAI-compatible, with `guided_json` for constrained decoding) and Anthropic (with `tool_use` for structured output). Default model: Llama 3.1 8B Instruct at temperature 0.1 for deterministic validation.
+The signals table is **modality-first** (§7.1 — `modality`, `mime_type`,
+`media_ref`, `canonical_url`, `embedding_ref` are first-class columns on every
+signal). Those columns are the contract for a single registry keyed by
+**`modality`** (coarse), optionally narrowed by **`mime_type`** (fine), that binds
+two halves which today are wired independently. Resolution is most-specific-first
+(`mime_type` → `modality` → `binary` fallback) — the same pattern as LLM
+subprovider inference (§10).
+
+One key, two handlers:
+
+| modality | ingest | UI **renderer** |
+|---|---|---|
+| `text` | passthrough *(live)* | title / body *(live)* |
+| `structured` (e.g. `application/geo+json`) | **GeoJSON source kind, model-free, *live*** — `data/sources/geojson.py`, registered in the source factory; emits `modality="structured"` + `mime_type="application/geo+json"` Signals from a GeoJSON (RFC 7946) URL, geo promoted to the `geo` column from feature properties | MapLibre map *(placeholder — `maplibre-gl` is a dep, renderer entry `implemented:false`)* |
+| `audio` | Whisper transcribe → derived text signal *(seam)* | `<audio>` (media_ref) + transcript child *(placeholder)* |
+| `video` | VLM caption + transcript → derived text *(seam)* | embedded player / `canonical_url` watch link + transcript *(placeholder)* |
+| `image` | OCR + caption → derived text *(seam)* | `<img>` (media_ref) + OCR text *(placeholder)* |
+| `binary` | none — reference only | download link *(placeholder)* |
+
+- **Ingest half** has two shapes. A whole-document structured feed is a **source
+  kind** (the GeoJSON handler — model-free: GeoJSON is already structured, so
+  there is no extraction model in the loop). Per-attachment extraction extends the
+  `MediaExtractor` protocol / `default_extractor_registry()` in
+  `data/sources/baseline.py`, dispatched by modality in the acquisition baseline;
+  each extractor
+  emits a **derived** signal stamped `derived_from` the source signal so the
+  extracted text is searchable/embeddable and appears in the lineage walk. Today
+  `text` (passthrough) and `structured`/GeoJSON (source kind) are real; the
+  Whisper/VLM/OCR extractors are the seam.
+- **Renderer half** is the `modality → renderer` registry in
+  `legba-ui-v3/src/lib/modalityRenderers.tsx` (resolved most-specific-first,
+  mime > modality > default), consumed by the lineage `ModalityRef`. Today only
+  `text` is a real renderer; every other modality — including `structured` /
+  `application/geo+json` — is a badged placeholder + a link (`implemented:false`),
+  so even the live GeoJSON ingest currently lands as a structured-badge placeholder
+  in the UI. A real renderer (a MapLibre map, a player) is a drop-in entry, no
+  call-site change.
+
+Adding a new type = drop in one ingest handler + one renderer keyed by its
+modality/mime — **no schema or plumbing change**, because the signal columns
+already carry everything the registry needs. A modality seam test
+(`tests/data_pkg/test_modality_seam.py`) proves a non-text signal routes,
+enriches (graceful skip), and dispatches without breaking. `structured`/GIS was
+the model-free first candidate and is now the first non-text modality with a live
+ingest path; remaining work is the inference-bearing extractors (Whisper/VLM/OCR)
+and the real renderers (map/player). This is the multimodal track.
 
 ---
 
-## 18. Planning Layer
+## 8. The predicate DSL — Starlark
 
-Goals, situations, watchlists, hypotheses, and predictions existed as individual features but operated as islands. The planning layer ties them into a coherent loop:
+Predicates appear on four surfaces (`data/predicates/compiler.py`
+`PredicateSurface`): `TARGET_SCOPE`, `SOURCE_FILTER`, `ANALYST_SUBSCRIPTION`,
+`CADENCE_TRIGGER`. They are the residual matchers that narrow the coarse NATS +
+SQL structured filter.
 
-```
-DETECT → ESCALATE → DEDUPLICATE → PLAN → EXECUTE → EVALUATE → ADJUST
-  │                                                               │
-  └───────────────────────────────────────────────────────────────┘
-```
+The DSL is **Starlark** via the `starlark-pyo3` (Rust) binding. Properties:
 
-### Goal Types
+- **Expression-only.** A predicate must be a single Starlark expression; banned
+  source tokens (`def`, `load(`, `lambda`, `while`, `import`, top-level `for`
+  statements) are rejected at compile, so there are no statements, no loops, no
+  imports. Comprehensions remain available.
+- **Fixed helper catalog** (`data/predicates/helpers.py`, catalog version
+  `1.0.0`) — `mentions`, `mentions_any`, `geo_match`, `geo_in`, `org_match`,
+  `recent`, `signal_age_hours`, `credibility`, `entity_class_in`, `has_tag`,
+  `has_any_tag`, `severity_at_least`, `scope_geo`, `scope_entity_classes`,
+  `target_id`, `target_kind`, `abstraction_level`, `event_type`,
+  `event_payload_get` — each tagged with the surfaces it is bound on.
+- **Compiled once at registration**, cached in a thread-safe LRU keyed by
+  `(source_hash, surface, catalog_version)`.
+- **Wall-clock budget** (5 ms default) at eval via `evaluator.run_with_budget`.
+  (Per-eval step + memory caps are not exposed by the current Rust binding; the
+  expression-only gate + wall-clock cap are the live guards.)
 
-| Type | Persistence | Created By | Purpose |
-|------|-------------|-----------|---------|
-| **Standing** | Persistent until retired | Human / seed / EVOLVE | Weights analytical priority. "Maintain SA on Iran energy infrastructure" — doesn't decompose into tasks, but an unlinked Iran energy event scores higher in SURVEY task selection. |
-| **Investigative** | Time-bound, attached to hypothesis/situation | Agent (SURVEY/ANALYSIS escalation) | Decomposes into concrete tasks. "Investigate whether Iran is deliberately curtailing oil exports" — creates research tasks, watchlists, hypothesis evaluations. Completes when the hypothesis resolves. |
+Compilation failures route to the descriptor DLQ; the schema validators
+compile-check every predicate field at registration time.
 
-### Escalation Scoring
+---
 
-A pure function (`shared/escalation.py`) that scores novel event clusters for portfolio promotion. Inputs: event count, entity overlap with existing portfolio, severity distribution, region novelty, domain coverage gap. Returns a score (0-1) and a recommendation: `ignore`, `monitor`, `situation`, `situation_and_watchlist`, or `full_portfolio` (goal + watchlist + hypothesis + research tasks).
+## 9. Security boundaries
 
-Runs in the maintenance daemon when automated situation detection finds a candidate. Also callable by the agent during SURVEY/ANALYSIS when it notices a novel pattern.
+- **Credential vault** — XSalsa20-Poly1305 (PyNaCl SecretBox); descriptors carry
+  `Property.Secret` references only; the vault decrypts with
+  `LEGBA_DATA_MASTER_KEY` (env, not in image layers).
+- **Ed25519 audit log** — every descriptor state change appends a signed row to
+  `descriptor_audit_log`; the `/audit` endpoint verifies inline. Signing identity
+  via `registry/signing.py`.
+- **Per-analyst receipt chains** — each analyst maintains a tamper-evident
+  SHA-256 chain over canonical-JSON run receipts (`provenance/receipts.py`),
+  loaded from the latest `analyst_traces` row, advanced per run, and
+  periodically Ed25519-checkpointed into `audit_checkpoints` by the host's audit
+  checkpointer.
+- **A2A envelopes** — analyst outputs bound to an `a2a_skill` are emitted as
+  Ed25519-signed envelopes (canonical JSON + nonce + DID), byte-compatible with
+  Mnemosyne's verifier.
+- **DLQ everywhere** — descriptor-validation failures, invalid output payloads,
+  and retry-exhausted NATS publishes route to dead-letter surfaces with resubmit
+  paths rather than aborting.
+- **Tenancy** — `owner_tenant` on signals + sources + the subscription policy is
+  an indexed multi-tenant seam, single-tenant-first in enforcement today.
 
-### Task Backlog
+---
 
-A persistent priority queue (Redis sorted set, `shared/task_backlog.py`) that bridges goals to cycle execution. Nine task types:
+## 10. AI models
 
-| Task Type | Target Cycle |
-|-----------|-------------|
-| `research_entity` | RESEARCH |
-| `evaluate_hypothesis` | SURVEY / ANALYSIS |
-| `deep_dive_situation` | SYNTHESIZE |
-| `create_watchlist` | SURVEY |
-| `link_events` | CURATE |
-| `resolve_contradiction` | SURVEY / ANALYSIS |
-| `review_proposed_edges` | SURVEY |
-| `coverage_gap` | SURVEY / RESEARCH |
-| `stale_goal_review` | EVOLVE |
+Models are hosted out-of-process via the `legba-models` service: a vLLM
+LLM endpoint (gpt-oss-120b), `BAAI/bge-m3` embeddings, NLLB translation, and
+spaCy/GLiREL NER.
+The runtime reaches them through stack-registry components (an `NlpServiceClient`
+for NER + classification, an embedding service for dedup + semantic correlation,
+LLM handlers for analysts). LLM **providers** (Anthropic / vLLM / OpenAI) are
+resolved through the stack registry per `Property.StackRef`. An on-demand
+**consult engine** (`consult_on_demand` analyst kind, a ReAct loop over a tool
+whitelist) answers operator questions over the substrate via `POST
+/api/v1/consult` with cited refs + uncertainty.
 
-Each cycle type checks the backlog for matching tasks. If a matching task exists, it's injected into the cycle's context as a focused directive. If no tasks match, the cycle runs its normal heuristic selection. Goal alignment amplifies task priority but never constrains it — the agent can always pivot.
+---
 
-### Reactive State Propagation
+## 11. Deployment
 
-Five rules in the maintenance daemon (`maintenance/propagation.py`) that cascade state changes across the portfolio:
+One `docker-compose.yml`, profile-gated (`docs/RUNBOOK.md` covers operations):
 
-| Trigger | Effect |
-|---------|--------|
-| Watchlist fires (new trigger) | Link event to watchlist's parent situation. Update goal progress if linked. |
-| Hypothesis evidence shifts | Update parent situation severity. If balance crosses threshold, flag for SYNTHESIZE. |
-| Situation severity escalates | If no goal covers it, create escalation candidate. |
-| Event reaches ACTIVE lifecycle | If linked to a situation with an investigative goal, add research tasks for event entities. |
-| Goal stale (no progress in 50 cycles) | Flag for EVOLVE review. |
+- **Substrate** (no profile, `docker compose up -d`): `redis`, `postgres`
+  (`apache/age`), `qdrant`, `nats` (JetStream).
+- **`--profile dapr`**: `dapr-placement`, `dapr-scheduler` (+ its init/persistent
+  etcd dir), `dapr-init-db` (isolated `dapr` database), `dapr-sidecar` (`daprd`,
+  app-id `legba-runtime`, pinned `daprio/dapr:1.17.9`).
+- **`--profile runtime`** (canonical bring-up; transitively activates `dapr` +
+  `ui`): `legba-registry` (`docker/Dockerfile.registry`, ~420 MB),
+  `legba-runtime-dapr` (`docker/Dockerfile.runtime`, the Dapr-actor host),
+  `legba-ui-build` (one-shot SPA build → shared `legba_ui_dist` volume), and
+  `legba-caddy` (edge: SPA static + `/api/*` → `legba-registry:8090`).
+- **`--profile dapr-workflow`**: `legba-dapr-workflow-worker` — the scale-out
+  optimizer worker (reuses the runtime image; embeds in `legba-runtime-dapr` by
+  default, so this container is optional).
+- **`--profile mcp`**: `legba-mcp` (`docker/Dockerfile.mcp`) — MCP stdio for
+  Claude Code, launched per-conversation via `docker run -i`.
 
-### Portfolio Review (EVOLVE cycle)
+Secrets (`LEGBA_DATA_MASTER_KEY`, model + vendor keys) flow in via `env_file:
+.env`, kept out of image layers. A retired host-mode systemd fallback is
+documented in `docs/RUNBOOK.md`.
 
-EVOLVE receives a structured portfolio view (`shared/portfolio.py`) with seven sections: active goals + progress, situations ranked by goal linkage, hypothesis health (evidence accumulation rate), watchlist effectiveness (trigger rate), prediction track record, coverage gaps (regions/domains with events but no analytical coverage), and task backlog summary. EVOLVE can retire goals, promote situations to goals, adjust priority, and flag imbalances.
+---
 
-### Goal-Weighted Cycle Routing
+## 12. Sibling docs
 
-Tier 3 dynamic scoring is extended with goal alignment:
-
-```
-base_score  = normal_heuristic_score  (CURATE backlog, SURVEY baseline, etc.)
-goal_weight = sum(goal.priority for aligned goals) / 10
-final_score = base_score * (1 + goal_weight)
-```
-
-Goals amplify, not constrain. A RESEARCH cycle for an entity linked to a high-priority goal scores higher than one for a random low-completeness entity.
+- `docs/ARCHITECTURE.md` — conceptual orientation and design rationale.
+- `docs/RUNBOOK.md` — bring-up, operations, troubleshooting.
+- `docs/UI.md` — the operator console (panels, auth chain).
+- `docs/ACQUISITION.md`, `docs/ANALYSIS.md` — the acquisition and analysis
+  planes in depth.

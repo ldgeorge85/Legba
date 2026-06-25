@@ -1,0 +1,305 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""DQ-H5b (#88) — non-productive-poll provenance at the source poll path.
+
+Exercises ``SourceCore._record_poll_outcome`` via ``pull_once``, driven against
+in-memory substrate doubles (no live Postgres / Dapr — the outcome-classification
++ best-effort-write logic is the unit, not the DB). A capturing pool records the
+``source_poll_outcomes`` INSERT so we can assert the row that would be written.
+
+Covered:
+  * an empty (HTTP-200-but-0-items) poll → ONE row, outcome='empty', no health;
+  * a handler-swallowed failure (4xx/parse-fail → health 'unhealthy', or a
+    transient → 'degraded') → outcome='error' with the health state + last_error
+    surfaced (the case ``errored`` can't see because no exception escapes);
+  * an escaped exception → outcome='error' with the exception string;
+  * a PRODUCTIVE poll (>=1 signal) → NO row (signals are self-evidencing);
+  * a capped 0-written poll → outcome='empty' + capped, and the (possibly stale)
+    handler health is NOT consulted;
+  * a provenance-write failure NEVER masks the pull result.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import uuid4
+
+import pytest
+
+from legba.data.schemas.lifecycle import LifecycleState
+from legba.data.schemas.properties import Cron
+from legba.data.schemas.source import (
+    CadenceBlock,
+    SourceDescriptor,
+    SourceIdentity,
+    SourcePipeline,
+    SourceScope,
+)
+from legba.data.sources._contract import InMemoryStateStore, Signal, SourceContext
+from legba.runtime.deps import StandardDeps
+from legba.runtime.source_actor import SourceCore, SourceDeps, _RawConfig
+
+_SOURCE_VERSION = "a" * 16
+_TENANT = "acme"
+
+
+# ---------------------------------------------------------------------------
+# Capturing substrate doubles (no live Postgres / Dapr)
+# ---------------------------------------------------------------------------
+
+
+class _CapturingConn:
+    """asyncpg-conn double. Signal writes (fetchrow) succeed; poll-outcome
+    writes (execute) are captured — or made to fail, to prove they never mask
+    the pull result."""
+
+    def __init__(self, sink: list, *, fail_execute: bool = False) -> None:
+        self._sink = sink
+        self._fail = fail_execute
+
+    async def fetchrow(self, query, *args):
+        return {"id": args[0]}        # write_canonical_signal passes id first
+
+    async def execute(self, query, *args):
+        if self._fail:
+            raise RuntimeError("boom-provenance")
+        self._sink.append((query, args))
+        return None
+
+    async def fetchval(self, *a, **k):  # pragma: no cover - unused
+        return None
+
+
+class _CapturingPool:
+    def __init__(self, *, fail_execute: bool = False) -> None:
+        self.executes: list = []
+        self._fail = fail_execute
+
+    def acquire(self):
+        sink = self.executes
+        fail = self._fail
+
+        class _Acq:
+            async def __aenter__(self_inner):
+                return _CapturingConn(sink, fail_execute=fail)
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        return _Acq()
+
+    # -- helpers ---------------------------------------------------------
+    @property
+    def outcome_writes(self) -> list[dict]:
+        """Decode every captured poll-outcome INSERT into a kwargs dict, by the
+        column order in ``_INSERT_POLL_OUTCOME``."""
+        cols = (
+            "source_id", "source_version", "owner_tenant", "outcome",
+            "health_state", "capped", "signals_written", "error",
+        )
+        rows = []
+        for query, args in self.executes:
+            if "source_poll_outcomes" in query:
+                rows.append(dict(zip(cols, args)))
+        return rows
+
+
+class _StubHandler:
+    """Yields a controllable list of Signals; optionally records a health
+    record under ``health_state_key`` (mirroring the real handlers) and/or
+    raises after yielding."""
+
+    health_state_key = "stub_health"
+
+    def __init__(self, signals, *, health=None, raise_exc=None) -> None:
+        self._signals = signals
+        self._health = health
+        self._raise = raise_exc
+
+    async def pull(self, ctx: SourceContext, since=None):
+        if self._health is not None:
+            await ctx.state_store.set(self.health_state_key, self._health)
+        for sig in self._signals:
+            yield sig
+        if self._raise is not None:
+            raise self._raise
+
+
+def _descriptor(source_id: str) -> SourceDescriptor:
+    return SourceDescriptor(
+        identity=SourceIdentity(
+            id=source_id,
+            name="poll-outcome-test",
+            kind="rss",
+            schema_uri="legba/source/3.0.0",
+            version=_SOURCE_VERSION,
+            owner="test:poll_outcome",
+            created=datetime.now(tz=timezone.utc),
+            state=LifecycleState.ACTIVE,
+        ),
+        scope=SourceScope(owner_tenant=_TENANT, languages=["en"]),
+        acquisition="poll",
+        config={"url": "http://unused"},
+        cadence=CadenceBlock(schedule=Cron(raw="*/5 * * * *")),
+        pipeline=SourcePipeline(media="reference"),
+    )
+
+
+def _entry(source_id: str) -> Signal:
+    return Signal(
+        source_id=source_id,
+        modality="text",
+        payload={"title": "item", "_published_at_dt": datetime(2025, 6, 1, tzinfo=timezone.utc)},
+        content_hash=uuid4().hex,
+    )
+
+
+def _build(handler, *, fail_execute: bool = False):
+    source_id = f"source.test.po_{uuid4().hex[:8]}"
+    sd = _descriptor(source_id)
+    pool = _CapturingPool(fail_execute=fail_execute)
+    deps = StandardDeps(pg_pool=pool, nats_publish=None)
+    core = SourceCore(f"source::{source_id}::po", SourceDeps(descriptor=sd, deps=deps))
+    store = InMemoryStateStore()
+    core.sd.handler = handler
+
+    def _make_context():
+        return SourceContext(
+            target_id=source_id,
+            target_version=_SOURCE_VERSION,
+            source_id=source_id,
+            config=_RawConfig(**(sd.config or {})),
+            state_store=store,
+            scope_geo=[],
+            scope_languages=["en"],
+        )
+
+    core._make_context = _make_context  # type: ignore[method-assign]
+    return core, pool, store, source_id
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_poll_writes_empty_outcome() -> None:
+    core, pool, _store, source_id = _build(_StubHandler([]))
+    result = await core.pull_once()
+    assert result["signals_written"] == 0
+
+    writes = pool.outcome_writes
+    assert len(writes) == 1
+    row = writes[0]
+    assert row["source_id"] == source_id
+    assert row["source_version"] == _SOURCE_VERSION
+    assert row["owner_tenant"] == _TENANT
+    assert row["outcome"] == "empty"
+    assert row["health_state"] is None
+    assert row["capped"] is False
+    assert row["signals_written"] == 0
+    assert row["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_handler_writes_error_outcome() -> None:
+    # 4xx / parse-fail: the handler swallows it (no exception escapes) but
+    # records unhealthy health — that's the case `errored` can't see.
+    health = {"state": "unhealthy", "last_error": "HTTP 403", "detail": {}}
+    core, pool, _store, _sid = _build(_StubHandler([], health=health))
+    await core.pull_once()
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "error"
+    assert row["health_state"] == "unhealthy"
+    assert row["error"] == "HTTP 403"
+    assert row["signals_written"] == 0
+
+
+@pytest.mark.asyncio
+async def test_degraded_handler_writes_error_outcome() -> None:
+    health = {"state": "degraded", "last_error": "timeout", "detail": {}}
+    core, pool, _store, _sid = _build(_StubHandler([], health=health))
+    await core.pull_once()
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "error"
+    assert row["health_state"] == "degraded"
+    assert row["error"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_healthy_empty_handler_stays_empty() -> None:
+    # A healthy feed that simply had no new items → genuine 'empty', not 'error'.
+    health = {"state": "healthy", "last_error": None, "detail": {"items_seen": 0}}
+    core, pool, _store, _sid = _build(_StubHandler([], health=health))
+    await core.pull_once()
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "empty"
+    assert row["health_state"] == "healthy"
+    assert row["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_escaped_exception_writes_error_outcome() -> None:
+    core, pool, _store, _sid = _build(
+        _StubHandler([], raise_exc=RuntimeError("connection reset"))
+    )
+    result = await core.pull_once()
+    assert result["outcome"] == "hard_fail"
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "error"
+    assert "connection reset" in (row["error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_productive_poll_writes_no_outcome() -> None:
+    # >=1 signal written → the signals rows are self-evidencing; no outcome row.
+    sid_marker = "source.test"
+    core, pool, _store, source_id = _build(_StubHandler([_entry(sid_marker)]))
+    result = await core.pull_once()
+    assert result["signals_written"] == 1
+    assert pool.outcome_writes == []
+
+
+@pytest.mark.asyncio
+async def test_capped_zero_written_does_not_consult_health(monkeypatch) -> None:
+    import legba.runtime.source_actor as sa
+
+    monkeypatch.setattr(sa, "_MAX_ENTRIES_PER_POLL", 1)
+
+    # Handler reports 'unhealthy' but the pull is CAPPED mid-stream, so that
+    # health record may be stale — the stale-guard must NOT consult it.
+    health = {"state": "unhealthy", "last_error": "stale!", "detail": {}}
+    core, pool, _store, source_id = _build(
+        _StubHandler([_entry("source.test") for _ in range(3)], health=health)
+    )
+
+    async def _drop(conn, ctx, raw):   # everything dropped → 0 written
+        return None
+
+    core._process_one = _drop  # type: ignore[method-assign]
+
+    result = await core.pull_once()
+    assert result["signals_written"] == 0
+
+    row = pool.outcome_writes[0]
+    assert row["capped"] is True
+    assert row["outcome"] == "empty"        # NOT 'error' — health was not read
+    assert row["health_state"] is None
+    assert row["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_outcome_write_failure_does_not_mask_pull() -> None:
+    # The provenance INSERT raises; pull_once must still return its summary and
+    # not propagate (best-effort write).
+    core, _pool, store, _sid = _build(_StubHandler([]), fail_execute=True)
+    result = await core.pull_once()
+    assert result["outcome"] == "noop"
+    assert result["signals_written"] == 0
+    # The cursor still persisted normally (the failure was isolated).
+    assert (await store.get("cursor")) is not None

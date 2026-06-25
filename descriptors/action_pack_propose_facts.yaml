@@ -1,0 +1,64 @@
+# S6 — propose_facts action pack (OPERATOR-GATED write-back, review S-1).
+#
+# Grants three WRITE tools an agentic assessor may use to propose changes back
+# into the substrate — but only through the SAME provenance-stamped, governed,
+# DLQ-safe writers the analyst run path uses:
+#
+#   * propose_fact   -> write_fact   (facts table, source_type='proposed')
+#   * request_source -> write_hypothesis (status='source_request' — coverage gap)
+#   * open_question  -> write_hypothesis (status='open_question')
+#
+# NONE of these call a raw INSERT — every write runs validation, junk-gating
+# (propose_fact uses the ingest _is_junk_triple gate), supersession, and routes
+# malformed payloads to output_dead_letter. propose_fact REQUIRES derived_from
+# lineage and clamps confidence to a cautious ceiling: a write with no cited
+# source is refused. This is the review S-1 closure — untrusted RSS text that
+# reaches an assessor cannot auto-mutate the knowledge layer.
+#
+# OPERATOR-GATED posture: the default is NO write surface. A write tool runs
+# only when this pack is EFFECTIVE for an (assessor, target) pair — the analyst
+# GRANTS it via `action_packs` AND the target ALLOWS it via
+# `allowed_action_packs` — and the runtime has wired the write surface
+# (ToolContext.writeback). Operators withhold writes simply by NOT allowing this
+# pack on a target. The governor caps the write rate so a looping assessor
+# cannot flood the substrate. See docs/AGENCY_GATING_MODEL.md.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: propose_facts
+  name: Propose Facts (write-back)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: s6_agency
+  created: "2026-06-19T00:00:00Z"
+
+tools:
+  - name: propose_fact
+    config:
+      # A proposed fact is a hypothesis-grade assertion, never ground truth —
+      # the handler clamps confidence to a cautious ceiling regardless.
+      requires_derived_from: true
+  - name: request_source
+    config: {}
+  - name: open_question
+    config: {}
+
+prompt_fragments:
+  - >-
+    When your investigation establishes a new (subject, predicate, value) fact,
+    call propose_fact(subject, predicate, value, derived_from=[refs]) — ALWAYS
+    cite the substrate refs it derives from. Use request_source(need, ...) when
+    no source covers what you need, and open_question(question, ...) for an
+    unresolved analytical question. These PROPOSE; they do not assert truth.
+
+rules:
+  - "Never propose a fact without derived_from lineage — an uncited write is refused."
+  - "Propose only what your gathered evidence supports; do not write speculation as fact."
+
+governor:
+  budget_account: propose_facts
+  max_invocations_per_hour: 60
+  api_rate_per_minute: 10

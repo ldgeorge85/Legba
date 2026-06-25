@@ -1,0 +1,5 @@
+# Persistent state for the dapr-scheduler container (etcd data dir).
+# Created + chowned by the dapr-scheduler-init init job; survives
+# `docker compose --profile dapr restart dapr-scheduler` so registered
+# Dapr Reminders are durable.
+dapr-scheduler-data/

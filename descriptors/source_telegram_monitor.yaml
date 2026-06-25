@@ -1,0 +1,165 @@
+# S-2 — keyed SourceDescriptor: source.telegram.org_channels
+# (kind: telegram_channel — the handler's registered kind string; the
+# task-tracker shorthand "telegram" maps here).
+#
+# Telegram channel monitor via Telethon (MTProto user-API). Handler:
+# src/legba/data/sources/telegram.py (TelegramChannelSourceHandler, config
+# schema TelegramChannelSourceConfig). One Signal per channel message;
+# media is described (type/mime/size) but NEVER downloaded by the handler.
+#
+# CHANNEL POLICY: the channels below are NEUTRAL EXAMPLES — official
+# organization channels (UN agencies / WHO), chosen here by hand. They are
+# NOT a curated monitoring list; never copy a third-party channel list
+# into this file. Operators replace/extend the set per deployment and MUST
+# verify each handle resolves to the organization's official channel
+# before flipping this descriptor active (handles are claimable; an
+# unverified handle ingests an impostor's content).
+#
+# RUNTIME IMAGE NOTE: telethon is NOT in the base runtime image
+# (docker/Dockerfile.runtime drops it). Deploying this kind needs an image
+# built with `pip install 'legba[telegram]'`; without it the handler's lazy
+# import fails loud at configure time.
+#
+# KEYED — activation gating (S-2 convention):
+#   * identity.state is DRAFT — bulk registration creates no live actor
+#     (runtime/dapr_host.py skips draft/configured descriptors).
+#   * THREE vault refs: api_id + api_hash (from https://my.telegram.org)
+#     and a base64 Telethon session blob generated OUT-OF-BAND by running
+#     telethon_auth.py against a real Telegram account. The handler
+#     resolves all three in on_configure via SourceContext.secrets_resolve
+#     → CredentialVault.resolve (src/legba/data/registry/credentials.py),
+#     which raises MissingSecretError when any is absent — configure/
+#     activation fails loud before any network connection.
+#
+# OPERATOR FLIP (to go live):
+#   1. Create API credentials at https://my.telegram.org, generate the
+#      session blob with telethon_auth.py, then store all three:
+#        POST {registry}/api/v1/registry/vault/secrets  for each of
+#             source.telegram.api_id / source.telegram.api_hash /
+#             source.telegram.session
+#      (or set TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_SESSION_B64
+#       in .env and run scripts/bringup_vault_load.py).
+#   2. Deploy a runtime image with the legba[telegram] extra installed.
+#   3. Verify/replace config.channels below.
+#   4. Register/refresh this descriptor, then transition:
+#        POST {registry}/api/v1/registry/descriptors/source/source.telegram.org_channels/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+
+identity:
+  id: source.telegram.org_channels
+  name: Telegram — Curated OSINT Channels (state / media / independent / IGO)
+  kind: telegram_channel
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # KEYED — operator flips after vault load
+  owner: s2_keyed_sources
+  created: "2026-06-09T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [social, messaging, official, humanitarian, health, global]
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 120
+  jitter_seconds: 60
+
+config:
+  api_id_secret:
+    factory_kind: secret
+    raw: "source.telegram.api_id"
+  api_hash_secret:
+    factory_kind: secret
+    raw: "source.telegram.api_hash"
+  session_secret:
+    factory_kind: secret
+    raw: "source.telegram.session"
+  # Curated + verified 2026-06-15 (Telegram blue-check badge + each org's own
+  # domain/social account confirmed the handle). GROUPED BY CATEGORY so the
+  # state / media / independent / IGO split is explicit; every emitted Signal
+  # also carries payload.channel.username, so the originating channel — and
+  # thus its category below — is visible downstream. STATE-MESSAGING sources
+  # (TASS / MFARussia / Irna) are PRIMARY-SOURCE / propaganda inputs, NOT
+  # neutral fact — weight accordingly. '@' prefixes are stripped at resolve.
+  channels:
+    factory_kind: list
+    item_kind: text
+    raw:
+      # --- STATE: government institutions + state-funded media ---
+      - "tassagency_en"            # TASS — Russian state news agency
+      - "MFARussia"                # Russian Ministry of Foreign Affairs
+      - "V_Zelenskiy_official"     # President of Ukraine (Zelenskyy)
+      - "IsraelMFA"                # Israel Ministry of Foreign Affairs
+      - "minrexcuba"               # Cuba Ministry of Foreign Affairs
+      - "shmirziyoyev"             # President of Uzbekistan
+      - "France24_en"             # France 24 — French state-funded broadcaster
+      - "trtworld"                 # TRT World — Turkish state broadcaster
+      - "Irna_en"                  # IRNA — Iranian state news agency
+      # --- MEDIA: independent commercial / mainstream ---
+      - "bloomberg"                # Bloomberg
+      - "guardian"                 # The Guardian
+      - "hindustantimes"           # Hindustan Times
+      - "KyivIndependent_official" # The Kyiv Independent
+      - "TheTimesOfIsrael2022"     # The Times of Israel
+      # --- IGO: intergovernmental organisations ---
+      - "europeancommission"       # European Commission (EU)
+      - "NATOpoRusski"             # NATO — Russian-language service
+      - "UNIFIL_Lebanon"           # UNIFIL — UN peacekeeping (Lebanon)
+      - "ohchr_roca"               # OHCHR — UN Human Rights (Central Asia)
+      # --- INDEPENDENT: investigative / OSINT ---
+      - "bellingcat_en"            # Bellingcat
+      - "meduzalive"               # Meduza (Russian independent, exiled)
+      - "istories_media"           # iStories — Important Stories (investigative)
+      - "mediazzzona"              # Mediazona (Russian independent)
+      - "dvbtvnews"                # DVB — Democratic Voice of Burma
+      - "malaysiakini"             # Malaysiakini
+      - "rferl"                    # Radio Free Europe / Radio Liberty
+  lookback_hours:
+    factory_kind: number
+    raw: 12
+  # Bare boolean (no factory wrapper — the unwrap path passes scalars
+  # through untouched): media described, never downloaded, stays off.
+  include_media: false
+  per_channel_message_limit:
+    factory_kind: number
+    raw: 50
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # channel+message_id canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: fact_extractor          # Piece 2 — (subject,predicate,value) facts from NER entities at ingest
+      config:
+        backend: relation           # reuse NER entities + /extract fallback (no 8B endpoint needed)
+        emit_graph_edges: false     # facts-first; AGE nexus edges off for now
+        max_facts_per_signal: 30
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps:
+  vault_secrets:
+    - source.telegram.api_id
+    - source.telegram.api_hash
+    - source.telegram.session
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

@@ -1,0 +1,33 @@
+# Docker build context exclusions for the legba python images.
+# Keeps build context small + protects secrets from accidental embed.
+.git
+.gitignore
+.dockerignore
+.env
+.env.*
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+*.egg-info
+build
+dist
+node_modules
+legba-ui-v3
+legba-models
+backups
+logs
+docs/screenshots
+docs/archive
+docs/feedback
+*.png
+*.jpg
+tests
+plans
+deploy/dapr-scheduler-data

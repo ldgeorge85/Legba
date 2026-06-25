@@ -1,0 +1,216 @@
+# P-17 — new-model inline_target analyst: country_assessor.
+#
+# The platform-wide situational-awareness analyst for the G20 country targets.
+# kind: inline_target.  Scoped by a subscription.targets.predicate that matches
+# the G20 country targets by their `g20` scope tag — ONE analyst, correctly
+# scoped, NOT one brazil-scoped analyst fanning out across every country
+# (the live duplicate-findings bug this re-register fixes).
+#
+# Agency: grants the `media_processing` + `incident_response` seed packs via
+# `action_packs` (NOT the retired tools_whitelist).  Effective capability is
+# analyst.action_packs ∩ target.allowed_action_packs ∩ pack.applicability —
+# the G20 targets allow both packs (target_country_g20.allowed_action_packs).
+
+identity:
+  id: country_assessor
+  name: G20 Country Situational-Awareness Assessor
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p17_reregister
+
+subscription:
+  targets:
+    # Scope by the `g20` tag — matches every country_g20_* target's scope.
+    # has_tag is valid on the analyst.subscription surface.
+    predicate: 'has_tag("g20")'
+    data_types: [signal]
+    time_window: 24h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  prompt_module: "legba.runtime.analyst_method:_DEFAULT_SYSTEM"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1536
+  budget_tokens_per_day: 3000000
+  # A3 cadence-vs-budget tuning. The budget retry policy is left at the
+  # default `pause_until_next_window`: if the per-analyst cap is ever
+  # projected to be crossed (e.g. an unusually signal-dense day), the
+  # actor pauses THIS analyst until the next UTC bucket rather than
+  # demoting to the paid Anthropic fallback (the `primary` is the
+  # self-hosted gpt-oss-120b; there is no cheap `fallback` LLM wired here,
+  # and demote-to-paid would defeat the purpose of a budget guard). The
+  # cadence below is sized so this pause is the safety net, not the norm.
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # ── A3: cadence sized so per-tick LLM volume × ticks/day ≤ daily budget ──
+  #
+  # A2 made the per-(analyst, target) cadence runs CONCURRENT (the primary
+  # actor fans out one worker run per matched target, bounded-concurrent at
+  # _FANOUT_CHUNK=5). This analyst is scoped by has_tag("g20") → it fans out
+  # to 19 country targets PER TICK. Concurrency means a whole tick's worth of
+  # LLM calls can land inside one budget bucket near-simultaneously, so the
+  # budget math is per-TICK volume × ticks/day, not a trickle.
+  #
+  # Per-run tokens (one llm_planner call, gpt-oss-120b):
+  #   * input  = system prompt (~120 tok) + signal slice. The slice is
+  #              capped at LIMIT 50 signals (_read_substrate_slice), each
+  #              truncated to ~600 chars (title 200 + snippet 400 + prov).
+  #              50 × 600 ≈ 30 000 chars ≈ 7 500 tok worst case; a typical
+  #              single-country 24h slice is 20–30 signals ≈ 3 000–4 500 tok.
+  #   * output = max_tokens 1536 cap (a JSON finding is usually 300–800 tok).
+  #   → worst case ≈ 7 600 + 1 536 ≈ 9 100 tok/run; realistic ≈ 4 800 tok/run.
+  #
+  # Per-tick volume (19 targets, all fired each tick):
+  #   * worst case ≈ 19 × 9 100  ≈ 173 000 tok/tick
+  #   * realistic  ≈ 19 × 4 800  ≈  91 000 tok/tick
+  #
+  # Budget = 400 000 tok/day. Solve for ticks/day:
+  #   * worst case : 400 000 / 173 000 ≈ 2.3 ticks/day
+  #   * realistic  : 400 000 /  91 000 ≈ 4.4 ticks/day
+  #
+  # Choose 4 ticks/day (every 6h, "0 */6 * * *"):
+  #   * realistic : 4 × 91 000 = 364 000 ≤ 400 000  → SAFE, ~9% headroom.
+  #   * worst case: 4 × 173 000 = 692 000 — over, but the per-analyst cap
+  #     + cooldown are the safety net: precall_check pauses the analyst for
+  #     the rest of the bucket once 400k is projected, and EVERY country was
+  #     already visited on each of the prior ticks, so none is starved (a
+  #     dense-signal day still yields ≥2 full G20 sweeps).
+  # The old "*/10 * * * *" (144 ticks/day) implied 13.1M tok/day at the
+  # realistic rate — 33× over budget. It only "worked" because the cap
+  # demoted/paused after the first ~3 ticks, starving the other 141.
+  fallback_schedule: "0 */6 * * *"
+  # Per-(analyst, target) cooldown — keyed by target_filter in the actor, so
+  # a busy country can't monopolise the fan-out and a quiet one isn't starved
+  # (dapr_actors stamps cooldown_by_target[<target>] after each run). MUST stay
+  # below the cadence interval (21600s): stamped at run-completion, a cooldown
+  # == the interval lands past the next scheduled fire and silently halves each
+  # country's cadence (6h→12h). 5h50m keeps a 10-min margin while still
+  # absorbing a re-trigger inside the window (coalesced source burst) so it
+  # can't spend a second per-country LLM call. (Runtime also applies a
+  # cadence-cooldown slack as a belt-and-braces guard.)
+  cooldown_seconds: 21000
+
+# Tier-1 knowledge grounding (L-241). This G20 country assessor fans out one
+# run per country target; with grounding.enabled the deps-builder PREPENDS a
+# dated "AUTHORITATIVE CURRENT CONTEXT" preamble built from the CURRENT
+# authoritative substrate facts (seed/curated, temporal-honesty-gated) about
+# the target country's geo + the named entities in its signal slice — e.g. the
+# country's CURRENT head of state + bloc memberships — so a stale-cutoff model
+# can't assume a prior officeholder. Token-capped at max_facts.
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  # substrate = the ground-truth facts/nexuses block; situations = the SEPARATE
+  # "ASSESSED SITUATIONS" block — the country's own ongoing clustered frames
+  # (category = this target id), analysis-derived, never grounded as fact.
+  # graph_structure = the SEPARATE "ASSESSED STRUCTURE" block — the knowledge
+  # graph's interesting structures (tense actors / brokers / proxy chains) from
+  # the structural_balance + graph_mining metrics; analysis-derived, fenced off
+  # from ground truth. The consume-side of "use the graph in analysis".
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+# Agency grants — the seed packs from P-11 (NOT tools_whitelist).
+action_packs:
+  - pack_id: media_processing
+  - pack_id: incident_response
+  - pack_id: escalate_finding
+
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: intelligence.g20_country_assessment
+  # L-195 — export each country FINDING as a STIX 2.1 bundle (report SDO +
+  # cited-entity identities/locations + derived-from relationships). The
+  # runtime invokes stix_bundle.emit with the live payload (dapr_actors
+  # _emit_output_bindings). Primary sink: NATS legba.outputs.stix.<target_id>;
+  # the file sink is for inspection/audit inside the runtime container.
+  - kind: stix_bundle
+    config:
+      tlp: amber
+      file_sink: "/tmp/legba_stix/{target_id}-{output_id}.json"
+      # export-interop — outbound TAXII 2.1 push. OPT-IN: uncomment + set a
+      # real server_url to push each bundle to an upstream TAXII collection's
+      # add-objects endpoint
+      # ({server_url}/{api_root}/collections/{collection_id}/objects/). The
+      # push is best-effort (degrade-not-drop): it runs after the durable
+      # NATS/file sinks and never blocks the finding. Left commented because
+      # no live TAXII server is provisioned (docs/SEAMS.md seam 10) — an
+      # un-provisioned/half-configured taxii binding refuses loudly
+      # (TaxiiServerNotConfiguredError) rather than silently dropping.
+      # taxii:
+      #   server_url: "https://taxii.example.org"   # https (or http loopback)
+      #   api_root: "taxii2"
+      #   collection_id: ""                          # default: legba_target_<id>_collection
+      #   auth_kind: "basic"                         # none | basic | bearer
+      #   username: "legba"
+      #   password: "@vault:taxii_password"          # vault-resolved secret
+      #   # token: "@vault:taxii_bearer"             # for auth_kind: bearer
+  # L-197 — operator alerting. The runtime invokes alert.emit with the LIVE
+  # finding (dapr_actors _emit_output_bindings); alert.emit coerces the
+  # FindingPayload into an AlertPayload, severity-gated by config below, then
+  # fans out on the severity ladder (NATS always; Pushover at medium+; XMPP/
+  # Matrix at high+ if the extras are installed). Only findings that clear
+  # min_severity page — sub-threshold findings stay in the substrate. This is
+  # what closes the audit's alert_sink_deliveries=0 gap: a high-severity G20
+  # situational finding now reaches the alert sinks + writes a delivery row.
+  # Severity is read from the finding's data.severity if the assessor stamped
+  # one, else derived from the finding's confidence (0.9+→critical, 0.75+→high).
+  - kind: alert
+    config:
+      min_severity: high
+      surfaces:
+        # NATS is always-on by the severity ladder; named here for clarity.
+        - name: nats
+          mode: default
+        # Pushover opt-in for high+ findings (honours the live sink creds).
+        # NOTE: quote the bareword — PyYAML (YAML 1.1) parses unquoted `on`/`off`
+        # as booleans True/False, which fail OutputSurface.mode's
+        # Literal["on","off","default"] and crash alert.emit before any
+        # alert_sink_deliveries row is written (K-1 root cause).
+        - name: pushover
+          mode: "on"
+          min_severity: high
+
+# L-105 §3 / L-175 eval block — the rubric country_critic grades this analyst's
+# findings against. REQUIRED for the critic→optimizer eval loop to produce
+# critiques; without it the critic hard-fails ("no eval.rubric"). The judge
+# (country_critic, Anthropic Opus) differs from this analyst's model
+# (gpt-oss-120b), so the L-105 heterogeneity guard passes with
+# allow_self_correlated:false. Scoped to country situational assessments.
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "factuality",
+       "weight": 0.4,
+       "description": "Are named entities, places, dates, and quantitative claims in the assessment verifiable against the cited evidence/signals? Penalize unsupported or hallucinated specifics."},
+      {"name": "completeness",
+       "weight": 0.3,
+       "description": "Does the assessment cover the situation scope: key actors, drivers/causes, geographic specificity, time horizon, and plausible downstream impacts?"},
+      {"name": "severity_calibration",
+       "weight": 0.3,
+       "description": "Does the stated confidence match the strength of the cited evidence? Penalize both overconfidence and under-confidence."}
+    ], "scale": "0.0-1.0"}
+  # 2026-06-22: true because the critic now runs on the SAME core plane as
+  # this analyst (operator: Anthropic reserved for consult/deep_consult). This
+  # makes the self-correlation EXPLICIT/audited rather than slipping past the
+  # heterogeneity guard. TO REVERT: set false here AND point country_critic's
+  # method.llm.primary back to llm.anthropic.opus_4_7.
+  allow_self_correlated: true

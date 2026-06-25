@@ -1,0 +1,180 @@
+# L-200 — Discovery descriptor: materialise N country targets via L-181.
+#
+# Per legba_topology_redesign.md §5.2 + legba_discovery.md, this is the
+# *discovery half* of the L2 abstraction: the country_list_discovery
+# kind emits one CandidateTarget per ISO 3166-1 row, the relabel chain
+# rewrites the candidate's raw label_set into per-country bindings, and
+# the registry materialisation loop (L-181 / L-182) writes the resulting
+# bodies into target_descriptors with provenance pointer
+# `discovered_from = "discovery_geopolitical_countries"`.
+#
+# Per-country body shape after relabel:
+#   identity.id          = country_geopolitical_<iso2_lower>
+#   identity.inherits    = ["template_country"]
+#   scope.geo            = ["<iso2>"]
+#   scope.languages      = ["<bcp-47-1>", "<bcp-47-2>", …, "en"]
+#   scope.tags           = ["geopolitical", "news"]
+#
+# Operator clone-and-narrow pattern: copy this file, change identity.id,
+# set discovery.list_source's filter_predicate to (e.g.)
+# `country.region == 'Africa'` to materialise only African countries.
+#
+# Schema-level constraints honoured here:
+#   * abstraction_level=L2   — DiscoveryBlock requires L2 or L3.
+#   * state=configured        — template-style; the materialised L1
+#                                instances are the ones that go active.
+#   * inherits=[template_country]
+#                              — declares the L2 template lineage so the
+#                                registry's discovery materialiser knows
+#                                which template body to merge candidates
+#                                against. The relabel chain *re-asserts*
+#                                this on each materialised instance.
+#   * sources is empty        — materialised instances inherit sources
+#                                from template_country; the discovery
+#                                descriptor itself never runs ingest.
+
+identity:
+  id: discovery_geopolitical_countries
+  name: "Geopolitical Per-Country Discovery"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"      # placeholder — registry stamps real hash
+  abstraction_level: L2
+  inherits:
+    - template_country
+  state: configured
+  owner: legba_geopolitical
+  created: "2026-05-21T00:00:00Z"
+
+scope:
+  # Scope on the *discovery* descriptor is a placeholder; the relabel
+  # chain rewrites these per-candidate when each L1 instance materialises.
+  geo: ["XX"]
+  languages: ["en"]
+  entity_classes:
+    - country
+    - organization
+    - person
+    - location
+    - military_unit
+    - political_party
+    - armed_group
+    - international_org
+    - corporation
+    - media_outlet
+    - event_series
+    - concept
+    - commodity
+    - infrastructure
+  relationship_types:
+    - AlliedWith
+    - HostileTo
+    - MemberOf
+    - LeaderOf
+    - SuppliesWeaponsTo
+    - TradesWith
+    - BordersWith
+    - SignatoryTo
+    - SanctionsAgainst
+    - OccupiedBy
+    - SubsidiaryOf
+    - PartnersWith
+    - CompetesWith
+    - DiplomaticRelationsWith
+    - MilitaryPresenceIn
+  time_horizon_days: 90
+  predicate: null
+
+discovery:
+  kind: country_list_discovery
+  # The 249-row substrate snapshot from migration 0019. Operators wanting
+  # a narrower scope clone this file and switch to inline:<json> or set
+  # filter_predicate.
+  list_source: iso_3166
+  emit_per_match: true
+  relabel:
+    # 1. Copy iso2 → scope.geo[0]. set_list wraps the scalar into a
+    #    one-element list so scope.geo is the canonical list shape.
+    - source_labels: [country_iso2]
+      target_label: scope.geo
+      action: set_list
+
+    # 2. Lookup BCP-47 locale list from iso2, fallback to the candidate's
+    #    own language list (set by the discovery handler from the
+    #    iso_countries.languages JSONB column).
+    - source_labels: [country_iso2, country_languages]
+      target_label: scope.languages
+      action: lookup_languages
+
+    # 3. Ensure English coverage on every country target — analyst LLM
+    #    prompts default to en, so an en fallback is the safe global tail.
+    - source_labels: [scope.languages]
+      target_label: scope.languages
+      action: merge_list
+      extend_with: [en]
+
+    # 4. Materialised target id template: country_geopolitical_<iso2_lower>.
+    #    The pattern matches the TargetId regex (^[a-z][a-z0-9_]*$).
+    #    Writes to identity.id (dotted path; the relabel evaluator's
+    #    _write_label descends into nested dicts).
+    - source_labels: [country_iso2]
+      target_label: identity.id
+      action: format
+      replacement: "country_geopolitical_{{ country_iso2 | lower }}"
+
+    # 5. Re-assert template lineage on the materialised body. The schema
+    #    constraint `identity.inherits: list[TargetId] (max_length=8)`
+    #    plus the TargetId regex (^[a-z][a-z0-9_]*$) means each entry
+    #    must be a plain identifier — template_country qualifies.
+    #
+    #    The discovery descriptor's own identity.inherits also carries
+    #    [template_country]; this rule re-asserts it on the
+    #    *materialised* per-country bodies so they don't depend on the
+    #    registry's parent-merge step having run yet.
+    #
+    #    merge_list starts from the existing identity.inherits label
+    #    (empty if the candidate body didn't set one) and appends
+    #    template_country, deduplicated.
+    - source_labels: [country_iso2]   # bound for parity; merge_list reads
+                                      # extend_with, not source_labels[0].
+      target_label: identity.inherits
+      action: merge_list
+      extend_with: [template_country]
+
+    # 6. Carry the legacy domain tag forward. operating_principles +
+    #    seed_goal from configs/domains/geopolitical.yaml don't have a
+    #    direct schema home on TargetScope; tags is a label-set-only
+    #    field consumed by the runtime's subscription router and the
+    #    UI's domain-filter dropdown. The L2 → L1 merge step strips
+    #    keys that aren't in TargetDescriptor's schema, so this lands
+    #    in the registry-side discovery_state row as label metadata.
+    - source_labels: [country_iso2]
+      target_label: tags
+      action: merge_list
+      extend_with: [geopolitical, news]
+
+    # 7. Drop the Antarctic-region rows. Antarctica + Bouvet Island +
+    #    South Georgia carry the region='Antarctica' tag in the iso_3166
+    #    seed; they have no permanent population and no news feeds,
+    #    so the country_list_discovery candidate is emitted but the
+    #    relabel chain filters it out before materialisation.
+    - source_labels: [country_region]
+      action: drop
+      predicate: "country_region == 'Antarctica'"
+
+  # Resync policy: default disappearance ratio (0.30) is appropriate
+  # here — the iso_3166 list is rock-stable (UN secretariat updates
+  # only on country recognition/dissolution, which is a years-scale
+  # event). A >30% drop in a single cycle is almost certainly a
+  # corrupted substrate snapshot, not a real geopolitical event, so
+  # alert_and_pause is the right anomaly response.
+
+sources: []        # see notes above: instances inherit from template_country.
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []
+
+analyst: null      # inherited from template_country at materialisation time.
+
+outputs: []        # inherited from template_country at materialisation time.

@@ -1,0 +1,55 @@
+# proposed_edge_governance — graduate the `proposed_edges` queue (P3-1).
+#
+# A `deterministic`-kind META analyst (the graph_mining / nexus_decay precedent).
+# The handler is built at
+# legba.data.analysts.deterministic_handlers.proposed_edge_governance and wired
+# into SUB_HANDLERS, but — like graph_mining before its descriptor — NOTHING
+# bound it, so the `proposed_edges` firehose stayed 100% pending / 0 promoted.
+#
+# Phase D wiring: each tick PROMOTES pending edges that clear `promote_min_
+# confidence` (~4+ co-occurrences) into neutral `CoOccursWith` (polarity 0)
+# nexuses via the live write_nexus path (Phase-B predicate normalization applies
+# inside _insert_nexus), flips them to status='promoted', and REJECTS thin+stale
+# pending edges (status='rejected'). Signed/typed reification stays the LLM
+# relationship_reifier's job — governance only graduates the well-corroborated
+# skeleton out of the queue. Pure Python, no LLM, no token budget. Conservative
+# defaults: a fresh under-corroborated pair is never prematurely rejected.
+
+identity:
+  id: proposed_edge_governance
+  name: Proposed-Edge Governance (promote → nexus / reject thin+stale)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: phase_d_governance
+
+subscription:
+  # META analyst: one global sweep per tick over the proposed_edges queue via
+  # deps.pg_pool (the graph_mining / situation_clustering precedent); no
+  # per-target signal slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: proposed_edge_governance
+  # No LLM block, no token budget — pure Python over proposed_edges + nexuses.
+
+cadence:
+  # OFFSET after graph_mining (":52") so the cycle's freshly-mined edges are
+  # considered. Runs at :57, twice daily.
+  fallback_schedule: "57 */12 * * *"
+  cooldown_seconds: 39600        # 11h
+
+outputs: []

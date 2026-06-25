@@ -1,1578 +1,730 @@
-# Legba Code Map
+# CODE_MAP
 
-**Generated:** 2026-03-25
-**Total Python files:** 176
-**Total lines of Python:** ~30,900
+A navigational map of the Legba codebase: where each concern lives, how to
+add things, and the key entry points. Legba is a **source-first** analysis &
+knowledge-fusion platform — automated coalescing, operator-managed discovery & promotion;
+declarative descriptors (sources / targets / analysts)
+over a shared substrate, turned into running Dapr virtual actors that read and
+write that substrate.
+
+For *what* the system does and *why*, read `ARCHITECTURE.md` (the source-first
+model) and `ACQUISITION.md`. For running it, read `RUNBOOK.md`. This file is
+purely "where is the code".
+
+The authoritative declared-seam list is `docs/SEAMS.md`. Where a module is
+**built-but-unwired** (real code, no live caller / no live descriptor) or has a
+known **code↔schema drift**, this map says so inline — don't infer "done" from
+"present".
 
 ---
 
-## 1. Complete File Listing
+## 0. Package responsibility index
+
+The fastest way to find a thing. One row per major package: its single
+responsibility, the file you start from, and what lives there. **Built-but-
+unwired** and **absent** markers are load-bearing — they distinguish "the code
+exists" from "the live system uses it".
+
+### `src/legba/data/` — declarative model + substrate
+
+| Package | Responsibility (one line) | Start file | What lives here |
+|---|---|---|---|
+| `data/schemas/` | The descriptor types (strict, content-hashed pydantic) | `source.py` | `SourceDescriptor`/`Subscription`/`SourceRef` (`source.py`), `TargetDescriptor`+polymorphic `TargetScope` (`target.py`), `AnalystDescriptor`+open `AnalystKind`+optional `GroundingBlock` (`analyst.py`), `ActionPack`/`PackGovernor` (`action_pack.py`), `StackComponentDescriptor` (`stack.py`), lifecycle FSM (`lifecycle.py`), shared property types (`properties.py`), vocabulary shapes (`vocabulary.py`), version/content-hash helpers (`versioning.py`) |
+| `data/registry/` | Control plane: descriptor registry, vault, HTTP/WS API | `server.py` | content-hashed instance registry + Ed25519 audit + DLQ + NATS events (`descriptor.py`, `audit.py`, `signing.py`, `dlq.py`, `events.py`/`streams.py`/`emitter.py`), XSalsa20-Poly1305 credential vault (`credentials.py`), stack registry (`stack.py`), the `legba-registry` FastAPI app + routers (`server.py` + `api.py`/`v3_api.py`/`substrate_reads_api.py`/`lineage_api.py`/`entities_api.py`/`runtime_telemetry_api.py`/`budget_api.py`/`source_credibility_api.py`/`consult_api.py`), discovery/version conversion (`discovered_materializer.py`, `conversion.py`) |
+| `data/sources/` | Source-kind acquisition handler library | `_contract.py` | the handler Protocol + `Signal` (`_contract.py`/`_protocols.py`), the **per-source baseline pipeline** (`baseline.py`), 14 kind-handler modules (`rss.py`, `gdelt.py`, `acled.py`, `mediacloud.py`, `opensanctions.py`, `common_crawl.py`, `intelmq.py`, `firecrawl.py`, `scraper.py`, `telegram.py`, `discord.py`, `geojson.py`, `json_api.py`, `generic_webhook.py`+`webhook_router.py`), outbound provisioning (`provision.py`), egress helper (`_egress.py`) |
+| `data/filters/` | In-flight enrichment / transform handlers over a `Signal` | `_contract.py` | `StreamHandler` Protocol (`_contract.py`), baseline enrichers (`language_detect.py`, `geocode.py`, `ner.py`, `classify.py`, `source_credibility.py`), ingest dedup tiers 1–2 (`ingest_dedupe.py`, `dedupe.py`), SLM-backed refiners that call the model service (`slm_classification_refine.py`, `slm_entity_resolve.py`, `slm_relationship_validate.py`) |
+| `data/analysts/` | Analyst-kind implementations (one module per kind) | `__init__.py` | kind modules discovered via `discover_analyst_kinds()` (`__init__.py`): `inline_target.py`, `cross_target_raw.py`, `meta_findings_synthesizer.py`, `cross_analyst_correlator.py`, `relationship_reifier.py` (META — co-mention pairs → signed typed nexuses, 8B LLM), `competing_hypotheses.py` (META ACH — evidence×diagnosticity matrix is LLM-scored + ±2 transitions; outcome-resolution + calibration now FIRE against the EXOGENOUS `resolved_outcome` column, migration 0038 — subsequent-facts/operator outcome, self-consistency-flagged when only status-transition), `deterministic.py`, `predictor.py`, `critic.py`, `optimizer.py` (GEPA — see §3.5), `consult_on_demand.py`; deterministic impls in `deterministic_handlers/` (`entity_resolution.py` (+ `_entity_canon.py`), `cross_source_dedup.py` (BOUNDED per-run scan — skips already-canonicalised content-hash groups in the DB + caps at `max_groups_per_run`=500), `cross_source_coalesce.py` (substrate-wide cross-source semantic/temporal LINKER, off-by-default — SEAM #19), `finding_supersession.py`, `situation_clustering.py`, `thematic_proposal.py` (Phase-5 — detects thematic non-geo situation frames + PROPOSES them), `hypothesis_lifecycle.py`, `graph_mining.py`, `proposed_edge_governance.py` (Phase D — promotes pending `proposed_edges` into neutral `CoOccursWith` nexuses), `_graph_metrics_sink.py`, `anomaly_detection.py`, `fact_decay.py`, `calibration_tracking.py`, `integrity_sweep.py`, `entity_gc.py`, `adversarial_signals.py`, `structural_balance.py`, `nexus_decay.py`); action-pack agency plane in `agency/` (`agency.py` hard gate, `governor.py`, `resolution.py`, `binding.py`, `substrate_read.py`, `tools.py`, `events.py`) |
+| `data/provenance/` | Output-kind payloads, write helpers, receipts, budget, DLQ | `kinds.py` | the 10-member `OutputKind` enum + `KIND_REGISTRY` (`kinds.py`, now incl. `FACT` + `NEXUS`), per-kind pydantic payloads (`models.py`, incl. `FactPayload`/`NexusPayload`), the analyst-output writers (`writes.py`, `_core.py` — incl. `write_fact`/`write_nexus` + `supersede_prior_facts`/`supersede_prior_nexuses`, `source_type`/`seed_batch_id` threading), receipt-chain hashing + verify (`receipts.py`/`_core.py`, `verify.py`), durable checkpointer (`checkpointer.py`), budget accounting (`budget.py`), output DLQ (`dlq.py`) |
+| `data/outputs/` | Output-kind emit handlers (analyst payloads → operator surfaces) | `_contract.py` | the `AlertEmitter`/emit Protocol + `discover_output_kinds()` (`_contract.py`/`__init__.py`), `substrate.py` (typed write-back facade), `nats_stream.py`, `webhook.py`, `alert.py`, `ui_panel.py`, `mcp_tool.py`, `a2a_skill.py`, `stix_bundle.py` (STIX 2.1) |
+| substrate adapters (`data/` root) | One typed port per backing store + bootstrap | `config.py` | `postgres.py` (asyncpg + AGE codec), `nats.py` (JetStream, signal subject grammar), `qdrant.py`, `redis.py`, env-driven config (`config.py`), migration runner (`migrate.py`), vocabulary seed/query (`vocabulary.py`), substrate smoke check (`smoke.py`, owns `RETIRED_TABLES`) |
+| `data/migrations/` | SQL schema (applied in order) | `0001_baseline.sql` | **Flattened baseline + forward chain.** `0001_baseline.sql` (commit `06bab95`) collapsed the former 30-step chain into one file — extensions + AGE graph (9 vertex / 14 edge labels) + all 40 relational tables + seed data (incl. the former-0031 source-credibility `tier`/`state_affiliation` columns + seeded credibility rows). The data-analysis arc then re-opened the forward chain, now `0032`…`0046` (head = **0046**): `0032_facts_decay_columns.sql` (facts `valid_until`/`superseded_by`/`confidence_components`), `0033_nexuses.sql` (reified `nexuses` table), `0034_seed_batches.sql` (curated-seed batch ledger), `0035_entity_profiles_composite_key.sql`, `0036_signals_retention.sql`, `0037_age_output_label.sql`, `0038_hypotheses_resolved_outcome.sql` (the EXOGENOUS ACH outcome column), `0039_consult_sessions.sql`, then the DQ-sweep tail `0040`…`0046`: situations first-class + temporal repair (`0040`/`0041_situations_valid_from_repair.sql`/`0042_situations_target_id_backfill.sql`), `0043_ingestion_conf1_backfill.sql` + `0044_purge_ingestion_leader_junk.sql` (conf-1.0 sentinel cleanup), `0045_backfill_demonym_nexuses.sql` (NER demonym→country), `0046_source_poll_outcomes.sql` (the `source_poll_outcomes` non-productive-poll provenance table). There is no `0014`. The runner (`migrate.py`) globs `*.sql` in order |
+| `data/predicates/` | Starlark predicate DSL (subscription / matching residual) | `compiler.py` | compile-once-on-register → LRU `CompiledPredicate` (`compiler.py`), in-sandbox evaluator (`evaluator.py`), per-surface helper catalog (`helpers.py`), compile/eval errors (`errors.py`) |
+| `data/stack/` | Provider adapters resolved through the stack registry | (per family) | `llm/` (`anthropic.py`, `vllm.py`, `openai.py`, `base.py`, `pricing.py`), `embedding/`, `vector_store/qdrant.py`, `nats/jetstream.py`, `nlp_service/client.py`, `postgres/age.py`, `proxy/` |
+| `data/discovery/` | Descriptor discovery pipeline (external lists/queries → descriptors) | `registry.py` | discovery kinds (`country_list_discovery.py`, `query_source_discovery.py`, `file_sd_discovery.py`, `static.py`), materializers (`materializer.py`, `source_materializer.py`), `autowire.py`, `relabel.py`, `deps_resolver.py`, `disappearance.py`, `source_validate.py` |
+| `data/seed/` | Curated baseline seeding (datasets → stamped facts/nexuses) | `_base.py` | `SeedSource` protocol + `SeedFact`/`SeedEntity`/`SeedNexus` payloads + `SeedContext` (`_base.py`), `SeedDriver` (`run_seed_source`: fetch→map→resolve entities→`write_fact`/`write_nexus` stamped `source_type='seed'`+`seed_batch_id`→record `seed_batches`) (`_driver.py`), `ADAPTERS` registry `get_adapter`/`list_adapters` (`__init__.py`, wiring **four** adapters), the `adapters/` adapter set (`world_baseline.py` curated-YAML leaders→facts + alliances→signed nexuses + a country-subject `head of state` office fact; `wikidata_leaders.py` SPARQL current heads of state/government → `LeaderOf` + country-subject `head of state` facts + `MemberOf` signed nexuses, with `wbgetentities` bare-QID label resolution (enwiki-sitelink fallback — resolves `Q22686`→"Donald Trump"); `acled_conflict.py` conflict backfill; `sipri_arms_transfers.py` arms-transfer — REGISTERED but **never seeded**, 0 rows). Datasets in `seeds/` |
+| `data/jobs/`, `data/tools/`, `data/conversions/` | Job envelopes / analyst-callable tools / version upgraders | — | `jobs/` (`envelope.py`, `media.py`, `store.py`), `tools/` (`mnemosyne_trust_query.py`), `conversions/` (`target_v2_to_v3.py`, …) |
+
+### `src/legba/runtime/` — execution
+
+| Package | Responsibility (one line) | Start file | What lives here |
+|---|---|---|---|
+| `runtime/` (host + actors) | Turn descriptors into running Dapr actors | `dapr_host.py` | the `legba-runtime-dapr` FastAPI host + plane bring-up + deps resolvers (`dapr_host.py`), production actor classes `TargetActor`/`AnalystActor` (`dapr_actors.py`), `SourceActor`+`SourceCore` acquisition (`source_actor.py`), cadence/cron helpers (`dapr_cron.py`), the four-plane assembler (`source_first_runtime.py`) |
+| `runtime/` (reconcile) | Converge running actors to the registry | `reconcile.py` | informer → work-queue → pure reconcilers → executor (`reconcile.py`), NATS event informer (`nats_informer.py`), lifecycle FSM (`lifecycle.py`), `ActorStateStore`/`ActorStateRecord` (`state.py`), desired-state reads (`registry_client.py`) |
+| `runtime/subscription/` | Source→target fan-out + subscription seam | `engine.py` | `SubscriptionEngine` resolve/enforce/plan/bind (`engine.py`), `SourceRef` resolution (`sourceref.py`), open/allowlist/grant policy (`policy.py`), coarse-subject planning (`subjects.py`), two-stage exact match SQL `WHERE`+Starlark residual (`filter.py`), replay (`backfill.py`) |
+| `runtime/triggers/` | Coalescing trigger plane | `engine.py` | `TriggerEngine` over `Coalescer` — dirty-marks (analyst,target) and fires on cadence / accumulation / severity gate clamped by cooldown (`engine.py`, `coalescer.py`), run dispatch (`dispatch.py`), policy + durable trigger state (`policy.py`, `state.py`) |
+| `runtime/jobs/` | NATS work-queue + competing-consumer workers | `queue.py` | `JobQueue` (`queue.py`), `JobWorkerPool` (`worker.py`), `dispatch.py`, `process_media.py` handler, model-service media client (`media_client.py`) |
+| `runtime/dapr_workflow/` | The optimizer's multi-hour durable GEPA loop | `worker.py` | GEPA algorithm + workflow-I/O dataclasses + in-process fallback client (`gepa.py`), deterministic orchestrator + activities (`workflow.py`), `WorkflowRuntime` registrar + `legba-dapr-workflow-worker` entry (`worker.py`), dispatch client (`client.py`), the `LegbaProviderLM` dspy adapter that **never** uses litellm (`dspy_lm.py`) |
+| `runtime/` (wiring & factories) | Build per-actor deps + construct ports | `analyst_deps_builder.py` | per-kind analyst deps + run-method dispatch (`analyst_deps_builder.py`, incl. `_build_grounding_hook`, `analyst_method.py`, `deps.py`), Tier-1 knowledge grounding (`grounding.py` — `SubstrateGroundingResolver` + `collect_grounding_candidates` + `build_grounding_preamble`), port factories (`source_factory.py`, `embedding_factory.py`, `qdrant_factory.py`, `nlp_client_factory.py`, `receipt_chain_factory.py`), enrichment pipeline (`pipeline.py`), budget enforcement (`budget.py`), substrate read port (`substrate_query_port.py`), audit/checkpoint wiring (`audit_checkpointer_wiring.py`) |
+
+### `legba-ui-v3/src/` — the SPA
+
+| Package | Responsibility (one line) | Start file | What lives here |
+|---|---|---|---|
+| app shell | Bootstrap + routing + auth | `App.tsx` | `App.tsx`/`main.tsx` shell, JWT chain (`auth/jwt.ts`), client state (`state/`) |
+| `lib/` | API client + live-tail + per-view models | `api.ts` | registry client (`api.ts`), WS/live-tail (`ws.ts`, `useLiveTail.ts`), starter descriptors, per-view models (`graphModel`, `findingsViews`, `alertModel`, `geoPoints`, `timelinePoints`, …) |
+| `panel-registry/` + `components/` | Dynamic panel registry + shared chrome | `registry.ts` | panel registry/loader (`registry.ts`, `loader.ts`, `useRegistry.ts`), unified selection store (`state/selection.ts`), the Inspector (`components/inspector/` — `InspectorPanel.tsx` + `RecordLink.tsx` + `useInspectorDetail.ts`), shared components (`CommandPalette.tsx` record-jump palette, `Sidebar.tsx` workspace switcher + demoted menu, DescriptorBuilder/Editor, ScopePicker, StatusBar, PanelChrome) |
+| `panels/` | The legacy/workbench panel set (now demoted) | (per area) | `source/`, `target/`, `analyst/`, `registry/`, `system/` panel areas + `dashboard/Dynamic.tsx`; `_DeferredStub.tsx` is the not-yet-built placeholder |
+| `v4/` | The "Three Rooms" v4 shell (current front door) | `RoomStub.tsx` | `world/` (Leaflet world map + KPIs + time scrubber + live feed), `flow/` (NiFi-style canvas-as-view-over-registry with live telemetry + wiring modal), `why/` (provenance trail + lineage/entity graphs + world-assessment), `case/` (case board/rail), shared `components/` |
+
+> **Quick "where do I add X" → §6.**
+
+---
+
+## 0a. Corrections / honesty notes (read before trusting older docs)
+
+These override anything in older docs or comments that implies otherwise. Each
+is traceable to code:
+
+- **`OutputKind.FACT` and `write_fact` NOW EXIST** (the data-analysis arc — this
+  reverses the older "no FACT / no write_fact" note). `OutputKind` now has **10**
+  members — the original seven (`FINDING`, `SITUATION`, `HYPOTHESIS`,
+  `PREDICTION`, `ALERT`, `META_FINDING`, `CRITIQUE`) plus `FACT`, `NEXUS`, and
+  `PROMPT_MODULE_CANDIDATE` (`data/provenance/kinds.py:69-87`). `provenance/writes.py`
+  now exposes `write_fact` (`:385`) and `write_nexus` (`:416`) plus
+  `supersede_prior_facts` (`:658`) / `supersede_prior_nexuses` (`:822`); both
+  write helpers thread `source_type` / `seed_batch_id` (`:128-129`/`:460-461`) so
+  curated-seed rows are stamped and selectively superseded apart from agent-
+  authored ones. Facts are now created through the output subsystem (by
+  `fact_extractor` enrichment + the seed driver), not only `UPDATE`d by
+  `fact_decay`.
+- **`facts` decay columns NOW EXIST** (`migrations/0032_facts_decay_columns.sql`
+  added `valid_until` / `superseded_by` / `confidence_components`), reversing the
+  older code↔schema-drift note — `fact_decay`'s temporal-expiry and
+  confidence-decay branches run against real columns now.
+- **`meta_findings_synthesizer` / `cross_analyst_correlator` are now REGISTERED**
+  (this reverses the older "built-but-unregistered" note): the bring-up set
+  instantiates them as `analyst_meta_synthesizer.yaml` /
+  `analyst_cross_correlator.yaml` (`scripts/bringup_register_analysts.py:58-59`),
+  alongside `relationship_reifier`, `competing_hypotheses`, and the
+  `structural_balance` / `graph_mining` / `nexus_decay` / `calibration_tracking` /
+  `fact_decay` deterministic handlers. `cross_target_raw` remains
+  built-but-unregistered (the kind module exists and the deps-builder dispatches
+  it, but no live descriptor instantiates it). Present + dispatchable ≠ running.
+- **`nexuses` table is BACK (reified).** The earlier "RETIRED" note is reversed:
+  `0033_nexuses.sql` re-creates a `nexuses` table for the reified signed/typed
+  relationship edges produced by `relationship_reifier` and consumed by
+  `structural_balance` / `graph_mining` / `nexus_decay`. (`smoke.py`'s
+  `RETIRED_TABLES` no longer asserts its absence.) Ignore older "nexuses is
+  retired / AGE-edges-only" references.
+- **STIX emit is wired** (recently — commit `cb621b8`). The analyst run path
+  dispatches emit-capable output kinds via `_emit_output_bindings`
+  (`dapr_actors.py:2142`/`:2419`), discovered through `discover_output_kinds()`
+  (`:2401`); `stix_bundle.emit` produces a STIX 2.1 bundle. (TAXII *upload*
+  remains a documented stub — see `stix_bundle.py`.) Older "BUILT-BUT-UNWIRED"
+  notes on STIX predate this wiring.
+- **Tier-1 knowledge grounding EXISTS and is LIVE** (the stale-cutoff fix). A new
+  `runtime/grounding.py` (`SubstrateGroundingResolver` + `build_grounding_preamble`),
+  an opt-in `GroundingBlock` descriptor field (`data/schemas/analyst.py:522`,
+  default off), the `inline_target` **GROUND** phase (`:592-612`), and the
+  `analyst_deps_builder._build_grounding_hook` gate inject a dated "AUTHORITATIVE
+  CURRENT CONTEXT" preamble — built from the CURRENT seed/curated substrate facts
+  — into the `world_assessor` / `country_assessor` LLM prompt. The `valid_until`
+  field now exists on `FactPayload`/`NexusPayload`, so the seed/supersession path
+  is temporally honest end-to-end (reverses the older "valid_until dropped" note
+  in §2.14). The ACH calibration leg also now FIRES against the exogenous
+  `resolved_outcome` column (migration 0038) — reverses the older "NOT yet
+  firing" note in §0/§2.7.
+
+---
+
+## 1. Top-level layout
 
 ```
-src/legba/
-  __init__.py
-
-  shared/
-    __init__.py
-    config.py                        (322 lines) — All configuration from env vars
-    crypto.py                        (94 lines)  — Ed25519 signing for heartbeat
-    schemas/
-      __init__.py                    (37 lines)  — Re-exports all schema types
-      comms.py                       (89 lines)  — Inbox/Outbox/NATS message schemas
-      cycle.py                       (58 lines)  — Challenge/CycleResponse/CycleState
-      entity_profiles.py             (147 lines) — EntityProfile, Assertion, EntityType
-      signals.py                     (118 lines) — Signal, SignalCategory, create_signal (was events.py)
-      derived_events.py              (85 lines)  — DerivedEvent, EventType, EventSeverity, SignalEventLink
-      goals.py                       (159 lines) — Goal hierarchy: Goal, Milestone, GoalType (standing/investigative), situation/hypothesis links
-      memory.py                      (93 lines)  — Episode, Fact, Entity, Relationship
-      modifications.py               (115 lines) — Self-modification tracking schemas
-      sources.py                     (131 lines) — Source registry with trust metadata
-      tools.py                       (74 lines)  — ToolDefinition, ToolCall, ToolResult
-      hypotheses.py                  (55 lines)  — Hypothesis, HypothesisStatus, DiagnosticEvidence (ACH)
-      situations.py                  — Situation, SituationStatus (tracked narrative groupings)
-      watchlist.py                   — WatchItem, WatchTrigger (keyword/entity alert definitions)
-      cognitive.py                   (179 lines) — ConfidenceComponents, EvidenceItem, EventLifecycleExtension (cognitive arch schemas)
-    confidence.py                    (160 lines) — Composite confidence formula (gatekeeper: gate * modifier, pure functions)
-    contradictions.py                (213 lines) — Contradiction detection between facts (predicate incompatibility + value conflict)
-    lifecycle.py                     (201 lines) — Event lifecycle state machine (EMERGING → DEVELOPING → ACTIVE → EVOLVING → RESOLVED → REACTIVATED)
-    graph_events.py                  (630 lines) — Event-as-vertex graph ops for Apache AGE (upsert event vertex, link entity to event, causal/temporal edges)
-    watchlist_eval.py                (244 lines) — Structured watchlist query evaluation (entity/location/severity/category matching, pure functions)
-    situation_severity.py            (172 lines) — Situation severity aggregation from linked events (pure functions)
-    adversarial_context.py           (132 lines) — Adversarial flag summary for ANALYSIS phase prompt injection
-    schema_extensions.py             (169 lines) — Idempotent ALTER TABLE statements for cognitive architecture columns (confidence_components, evidence_set, lifecycle_status, provenance)
-    escalation.py                    (114 lines) — Escalation scoring: pure function scoring event clusters for portfolio promotion (ignore/monitor/situation/full_portfolio)
-    task_backlog.py                  (278 lines) — Task backlog: Redis sorted set operations, 9 task types, goal-driven priority queue, cycle-type routing
-    portfolio.py                     (554 lines) — Portfolio view builder: 7-section structured query for EVOLVE context (goals, situations, hypotheses, watchlists, predictions, coverage gaps, task backlog)
-    priority.py                      (456 lines) — Priority stack: composite situation ranking (velocity, goal overlap, watchlist density, recency, structural instability boost), JDL Level 3
-    config_store.py                  (337 lines) — Versioned config store: Postgres-backed prompt/guidance/mission config with version history and rollback
-    structural_balance.py            (219 lines) — Structural balance analysis: AlliedWith/HostileTo signed triads, unbalanced triad detection, JDL Level 2
-    graph_entropy.py                 (143 lines) — Graph entropy: information-theoretic diversity of relationship type distribution
-    relationship_history.py          (67 lines)  — Relationship transition history: immutable edge change records to TimescaleDB
-    token_budget.py                  (56 lines)  — Rolling 24h token budget for escalation LLM provider (Redis sorted set)
-
-  agent/
-    __init__.py
-    main.py                          (49 lines)  — Entry point: asyncio.run(run_cycle())
-    log.py                           (149 lines) — Structured JSON logging (CycleLogger)
-    cycle.py                         (~588 lines) — Orchestrator: 13 phase mixins (plan/act merged into cycle.py), CYCLE_TYPE worker mode, dynamic CURATE promotion
-
-    phases/
-      __init__.py                    (25 lines)  — Interval constants (Tier 1: 10,15,30; Tier 2 coprime: 4,7,9)
-      wake.py                        (387 lines) — WakeMixin: init, connections, tool registration
-      orient.py                      (212 lines) — OrientMixin: context from all memory layers
-      reflect.py                     (181 lines) — ReflectMixin: structured extraction, fact/graph storage
-      narrate.py                     (178 lines) — NarrateMixin: journal entries, consolidation, archival
-      persist.py                     (362 lines) — PersistMixin: save state, liveness check, heartbeat
-      introspect.py                  (319 lines) — IntrospectMixin: deep review, analysis reports
-      research.py                    (157 lines) — ResearchMixin: entity enrichment, health summary
-      curate.py                      (166 lines) — CurateMixin: signal review, event creation, editorial judgment
-      survey.py                      (~220 lines) — SurveyMixin: analytical desk work, rate-limited http_request (replaces NORMAL)
-      synthesize.py                  (~275 lines) — SynthesizeMixin: deep-dive, situation briefs, thread rotation, hypothesis creation
-
-    llm/
-      __init__.py
-      format.py                      (137 lines) — Message formatting, Harmony stripping
-      provider.py                    (184 lines) — VLLMProvider: HTTP to vLLM
-      client.py                      (460 lines) — LLMClient + WorkingMemory + reason_with_tools
-      tool_parser.py                 (167 lines) — Parse {"actions":[...]} from LLM output
-      harmony_legacy.py              — Legacy harmony token handling (unused)
-      router.py                      (117 lines) — PromptRouter: per-prompt LLM provider routing (static overrides, escalation flags, default fallback)
-
-    memory/
-      __init__.py
-      manager.py                     (217 lines) — MemoryManager: unified interface
-      registers.py                   (143 lines) — RegisterStore: Redis key-value
-      episodic.py                    (302 lines) — EpisodicStore: Qdrant vector memory
-      structured.py                  (~600 lines)— StructuredStore: Postgres CRUD
-      graph.py                       (602 lines) — GraphStore: Apache AGE Cypher
-      opensearch.py                  (339 lines) — OpenSearchStore: full-text search
-
-    goals/
-      __init__.py
-      manager.py                     (182 lines) — GoalManager: CRUD + progress tracking
-
-    tools/
-      __init__.py
-      registry.py                    (174 lines) — ToolRegistry: definition + handler store
-      executor.py                    (74 lines)  — ToolExecutor: dispatch + logging
-      subagent.py                    (129 lines) — Sub-agent execution engine
-      builtins/
-        __init__.py
-        fs.py                        (174 lines) — fs_read, fs_write, fs_list
-        shell.py                     (81 lines)  — exec (shell command)
-        http.py                      (142 lines) — http_request (with trafilatura)
-        memory_tools.py              (268 lines) — memory_store, memory_query, memory_promote, memory_supersede
-        graph_tools.py               (437 lines) — graph_store, graph_query, graph_analyze
-        goal_tools.py                (288 lines) — goal_create, goal_list, goal_update, goal_decompose
-        nats_tools.py                (196 lines) — nats_publish, nats_subscribe, nats_create_stream, nats_queue_summary
-        opensearch_tools.py          (252 lines) — os_create_index, os_index, os_search, os_delete_index, os_list_indices
-        analytics_tools.py           (750 lines) — anomaly_detect, nlp_extract, forecast, graph_centrality
-        orchestration_tools.py       (189 lines) — workflow_define, workflow_trigger, workflow_status, workflow_list
-        feed_tools.py                (167 lines) — feed_parse (RSS/Atom with UA retry)
-        source_tools.py              (356 lines) — source_register, source_list, source_update, source_get
-        event_tools.py               (483 lines) — signal_store, signal_query, signal_search (was event_store/query/search)
-        derived_event_tools.py       (435 lines) — event_create, event_update, event_query, event_link_signal
-        entity_tools.py              (473 lines) — entity_profile, entity_inspect, entity_resolve
-        selfmod_tools.py             (110 lines) — code_test (syntax + import validation)
-        geo.py                       (177 lines) — Location normalization (pycountry + GeoNames)
-        situation_tools.py           (506 lines) — situation_create, situation_update, situation_list, situation_link_event; name dedup (word overlap Jaccard >= 0.5)
-        watchlist_tools.py           (329 lines) — watchlist_add, watchlist_list, watchlist_remove; term overlap dedup (Jaccard on entities+keywords >= 0.5)
-        config_tools.py              (148 lines) — config_read, config_update: versioned config store CRUD (EVOLVE tool set)
-
-    prompt/
-      __init__.py
-      templates.py                   (795 lines) — All prompt templates (system, plan, reflect, narrate, etc.)
-      assembler.py                   (649 lines) — PromptAssembler: builds [system, user] messages
-
-    selfmod/
-      __init__.py
-      engine.py                      (224 lines) — SelfModEngine: propose, apply, git commit
-      rollback.py                    (85 lines)  — RollbackManager: restore from snapshots
-
-    comms/
-      __init__.py
-      nats_client.py                 (405 lines) — LegbaNatsClient: NATS + JetStream
-      airflow_client.py              (321 lines) — AirflowClient: Airflow REST API
-
-  supervisor/
-    __init__.py
-    main.py                          (490 lines) — Supervisor: orchestrates agent lifecycle
-    comms.py                         (155 lines) — CommsManager: human <-> agent messaging
-    lifecycle.py                     (393 lines) — LifecycleManager: Docker container management
-    heartbeat.py                     (109 lines) — HeartbeatManager: challenge-response protocol
-    drain.py                         (71 lines)  — LogDrain: collect agent logs
-    audit.py                         (242 lines) — AuditIndexer: index logs to OpenSearch
-    cli.py                           (187 lines) — Operator CLI: send/read/status
-
-  ui/
-    __init__.py
-    app.py                           (188 lines) — FastAPI app: Jinja2 + htmx + Tailwind
-    messages.py                      (226 lines) — MessageStore (Redis) + UINatsClient
-    stores.py                        (294 lines) — StoreHolder: read-only store connections + Qdrant helpers
-    auth.py                          (176 lines) — JWT auth: HMAC-SHA256 tokens, 3 roles (admin/analyst/viewer), user CRUD, PBKDF2 password hashing
-    middleware.py                    (76 lines)  — Auth middleware: JWT cookie validation on /api/ routes, AUTH_ENABLED toggle
-    responses.py                     (41 lines)  — Standardized API error envelope (status, message, detail)
-    routes/
-      __init__.py
-      dashboard.py                   (71 lines)  — GET / stats dashboard
-      messages.py                    (103 lines) — GET/POST /messages
-      cycles.py                      (187 lines) — GET /cycles/{n}
-      events.py                      (176 lines) — CRUD /events: list, detail, delete, metadata edit
-      entities.py                    (195 lines) — CRUD /entities: list, detail, add/remove assertions
-      sources.py                     (198 lines) — CRUD /sources: list, detail, create, edit, delete, status
-      goals.py                       (83 lines)  — CRUD /goals: list, create, status, delete
-      graph.py                       (221 lines) — GET /graph (Cytoscape.js) + edge add/remove
-      journal.py                     (30 lines)  — GET /journal
-      reports.py                     (47 lines)  — GET /reports
-      facts.py                       (161 lines) — CRUD /facts: list, paginated rows, delete, inline edit
-      memory.py                      (87 lines)  — GET /memory + DELETE episodes from Qdrant
-      auth.py                        (100 lines) — POST /api/v2/auth/login, /logout, GET /me
-
-  ingestion/
-    __init__.py
-    __main__.py                      (5 lines)   — Entry point
-    config.py                        (50 lines)  — Ingestion-specific config
-    service.py                       (540 lines) — IngestionService: tick loop, batch entity linking
-    scheduler.py                     (130 lines) — Source fetch scheduling
-    fetcher.py                       (588 lines) — HTTP/RSS fetching with retry
-    normalizer.py                    (401 lines) — Content normalization pipeline
-    source_normalizers.py            (922 lines) — Per-source format normalizers
-    dedup.py                         (329 lines) — 4-tier signal dedup (GUID → source_url → vector cosine → Jaccard)
-    storage.py                       (498 lines) — Signal storage to Postgres + OpenSearch
-    cluster.py                       (531 lines) — SignalClusterer: deterministic signal-to-event clustering
-
-  maintenance/
-    __init__.py                      (10 lines)  — Package docstring
-    __main__.py                      (5 lines)   — Entry point: python -m legba.maintenance
-    config.py                        (67 lines)  — MaintenanceConfig: tick intervals, backing store configs, from_env()
-    service.py                       (495 lines) — MaintenanceService: main daemon, tick loop, task scheduler, health server
-    lifecycle.py                     (280 lines) — LifecycleManager: event lifecycle decay transitions, situation dormancy
-    entity_gc.py                     (271 lines) — EntityGarbageCollector: dormant entity marking, duplicate detection, orphan edge cleanup, source health
-    fact_decay.py                    (163 lines) — FactDecayManager: fact expiration (valid_until), confidence temporal decay
-    corroboration.py                 (159 lines) — CorroborationScorer: count independent sources per event, update corroboration scores
-    integrity.py                     (294 lines) — IntegrityVerifier: evidence chain verification, eval rubrics (event dedup, graph quality, source health)
-    metrics.py                       (205 lines) — MetricCollector: extended operational metrics to TimescaleDB for Grafana
-    situation_detect.py              (258 lines) — SituationDetector: automated situation proposals from event clusters (3+ events, shared region/category/entities)
-    adversarial.py                   (494 lines) — AdversarialDetector: source velocity spikes, semantic echo detection, provenance grouping
-    calibration.py                   (368 lines) — CalibrationTracker: claimed confidence vs actual outcomes, systematic bias detection
-    propagation.py                   (615 lines) — Reactive state propagation: 5 rules cascading state changes across portfolio (watch triggers, hypothesis shifts, situation escalation, event lifecycle, stale goals)
-    backfill.py                      — Startup backfill: creates event graph vertices in AGE from existing events table (runs once on daemon boot)
-
-  subconscious/
-    __init__.py                      (1 line)    — Package docstring
-    __main__.py                      (5 lines)   — Entry point: python -m legba.subconscious
-    config.py                        (87 lines)  — SubconsciousConfig: task intervals, SLM provider, uncertainty thresholds, from_env()
-    service.py                       (795 lines) — SubconsciousService: three concurrent loops (NATS consumer, timer, differential), health server
-    provider.py                      (354 lines) — BaseSLMProvider, VLLMSLMProvider, AnthropicSLMProvider: SLM abstraction with guided_json / tool_use
-    validation.py                    (177 lines) — Signal batch validation: fetch uncertain signals, SLM quality assessment, apply verdicts
-    classification.py                (182 lines) — Classification refinement: SLM tiebreaking for boundary cases where ML classifier is uncertain
-    entity_resolution.py             (240 lines) — Entity resolution: SLM-powered matching of ambiguous entities against existing profiles
-    differential.py                  (282 lines) — DifferentialAccumulator: tracks state changes between conscious cycles, writes JSON summary to Redis
-    prompts.py                       (223 lines) — SLM prompt templates: signal validation, classification, entity resolution, fact refresh, graph consistency
-    schemas.py                       (103 lines) — Pydantic models for SLM structured responses (SignalValidationVerdict, ClassificationVerdict, etc.)
-    situation_detect.py              (387 lines) — SLM-based situation detection: event cluster evaluation, narrative coherence assessment, Jaccard dedup, JDL Level 2
-
-scripts/
-  migrate_signals_events.sql         (131 lines) — DDL migration: events→signals, events_derived→events
-
-dags/
-  metrics_rollup.py                  — Airflow DAG: hourly/daily TimescaleDB metric aggregation
-  source_health.py                   — Airflow DAG: auto-pause dead sources (>20 consecutive failures)
-  decision_surfacing.py              — Airflow DAG: stale goals, dormant situations, merge candidates
-  eval_rubrics.py                    — Airflow DAG: automated quality checks (event dedup, graph, sources, entity links)
-
-docker/
-  maintenance.Dockerfile             — Maintenance daemon container (Python 3.12, no GPU)
-  subconscious.Dockerfile            — Subconscious service container (Python 3.12, no GPU, SLM via remote vLLM)
-
-docker-compose.cognitive.yml         — Overlay: maintenance + subconscious services (opt-in, merges with main compose)
-
-legba-models/
-  docker-compose.slm.yml             — SLM vLLM service: Llama 3.1 8B Instruct (port 8701, 45% GPU memory)
+src/legba/            Python package (the platform)
+legba-ui-v3/          React/TypeScript single-page UI
+legba-models/         AI-model service (vLLM LLM + bge-m3 embeddings + NLLB/spaCy NER)
+descriptors/          Example source/target/analyst/action-pack/discovery YAML
+scripts/              Bring-up registrars, seeders, backfills, smoke tests
+docker/               Dockerfiles (registry / runtime / mcp) + Caddyfile
+dapr/components/      Dapr component manifests (statestore, pubsub, secrets, config)
+docker-compose.yml    Full stack: substrate + Dapr + Legba services + UI + Caddy
+pyproject.toml        Package metadata + console scripts
+docs/                 Design & operations docs (this file lives here)
+tests/                Test suite
 ```
 
----
-
-## 2. Module-by-Module Documentation
-
-### 2.1 `src/legba/shared/` — Shared Configuration and Schemas
-
-#### `shared/config.py`
-**Purpose:** All configuration loaded from environment variables. Frozen dataclasses with `from_env()` class methods.
-
-**Key classes:**
-- `LLMConfig` — LLM endpoint, model name (default: `InnoGPT-1`), max_tokens, temperature, embedding model
-- `RedisConfig` — Redis connection (host, port, db, password)
-- `PostgresConfig` — Postgres connection with `.dsn` property
-- `QdrantConfig` — Qdrant vector DB connection
-- `NatsConfig` — NATS + JetStream URL and timeout
-- `OpenSearchConfig` — OpenSearch connection; also `from_audit_env()` for supervisor's isolated audit instance
-- `AirflowConfig` — Airflow REST API URL, credentials, DAGs path
-- `PathConfig` — Filesystem paths: seed_goal, workspace, agent_code, shared, logs; properties for inbox/outbox/challenge/response
-- `AgentConfig` — Tuning knobs: max_reasoning_steps (20), max_subagent_steps (10), memory_retrieval_limit (12), facts_retrieval_limit (20), max_context_tokens (120000), mission_review_interval (15), Qdrant collection names
-- `SupervisorConfig` — max_consecutive_failures (5), cycle_sleep (2s), heartbeat_timeout (300s)
-- `LegbaConfig` — Top-level aggregator of all sub-configs
-
-**External deps:** `python-dotenv`
-
-#### `shared/crypto.py`
-**Purpose:** Ed25519 signing/verification for supervisor-agent challenge-response and self-modification accountability.
-
-**Key functions:**
-- `hash_payload(payload)` — SHA-256 canonical JSON hash
-- `generate_keypair(private_path, public_path)` — Generate Ed25519 keypair
-- `load_signing_key(path)` / `load_verify_key(path)` — Load keys from files
-- `sign_message(key, message)` / `verify_message(key, sig, message)` — Sign/verify strings
-- `sign_challenge_response(key, nonce, cycle)` — Sign `nonce:cycle_number`
-- `verify_challenge_response(key, sig, nonce, cycle)` — Verify challenge response
-
-**External deps:** `PyNaCl` (nacl.signing, nacl.encoding)
-
-#### `shared/schemas/cycle.py`
-**Purpose:** Supervisor-agent protocol schemas.
-
-**Key classes:**
-- `Challenge` — Supervisor issues: cycle_number, nonce (UUID), timeout_seconds
-- `CycleResponse` — Agent returns: cycle_number, nonce, status (completed|error|partial), cycle_summary, actions_taken, signature
-- `CycleState` — In-process tracking: phase (wake|orient|reason|act|reflect|persist|idle), nonce, seed_goal, inbox_messages, tool_results, reasoning_steps
-
-**External deps:** `pydantic`
-
-#### `shared/schemas/goals.py`
-**Purpose:** Goal hierarchy: Seed Goal -> Meta Goals -> Goals -> Sub-goals -> Tasks. Extended with standing/investigative goal types for portfolio management.
-
-**Key classes:**
-- `GoalType` enum — meta_goal, goal, subgoal, task
-- `GoalPurpose` enum — standing (persistent, weights priority), investigative (time-bound, decomposes into tasks)
-- `GoalStatus` enum — active, paused, blocked, deferred, completed, abandoned
-- `GoalSource` enum — seed, agent, human, subgoal
-- `Milestone` — Weighted completion milestones
-- `Goal` — Full goal model: hierarchy (parent_id, child_ids), progress (progress_pct, milestones), dependencies (blocked_by, blocks), deferral (deferred_until_cycle, defer_reason), purpose (standing/investigative), linked_situation_ids, linked_hypothesis_ids
-- `GoalUpdate` — Partial update model
-- Factory functions: `create_goal()`, `create_subgoal()`, `create_task()`
-
-#### `shared/schemas/memory.py`
-**Purpose:** Memory data structures stored across layers.
-
-**Key classes:**
-- `EpisodeType` enum — action, observation, reasoning, cycle_summary, lesson, interaction
-- `Episode` — Episodic memory (Qdrant): content, significance (0-1), embedding (1024-dim), goal_id, tool_name, tags
-- `Fact` — Structured fact (Postgres): subject, predicate, value, confidence, superseded_by
-- `Entity` — Graph entity (AGE): name, entity_type, properties
-- `Relationship` — Directed graph edge: source_id, target_id, relation_type, properties
-
-#### `shared/schemas/signals.py` (was `events.py`)
-**Purpose:** Signal schemas — raw ingested material from external sources (RSS items, API responses, feed entries). Signals are the atomic unit of collection; events are derived from them.
-
-**Key classes:**
-- `SignalCategory` enum — conflict, political, economic, technology, health, environment, social, disaster, other
-- `EventCategory` — Backward-compat alias for `SignalCategory`
-- `Signal` — Full signal: title, summary, full_content, raw_content, event_timestamp, source_id/source_url, category, confidence, actors[], locations[], tags[], geo_countries[] (ISO alpha-2), geo_regions[], geo_coordinates[{name, lat, lon}], guid, language
-- `Event` — Backward-compat alias for `Signal`
-- `create_signal()` — Factory function
-- `create_event()` — Backward-compat alias for `create_signal()`
-
-#### `shared/schemas/derived_events.py`
-**Purpose:** Derived event schemas — real-world occurrences derived from one or more signals. Events are the primary analytical unit; reports, situations, and graph analysis operate on events, not raw signals.
-
-**Key classes:**
-- `EventType` enum — incident (discrete), development (ongoing), shift (state change), threshold (metric crossing)
-- `EventSeverity` enum — critical, high, medium, low, routine
-- `DerivedEvent` — Full event: title, summary, category (SignalCategory), event_type, severity, time_start/time_end (temporal window), locations[], geo_countries[], geo_coordinates[], actors[], tags[], confidence, signal_count, source_method ("auto"/"agent"/"manual"), source_cycle
-- `SignalEventLink` — Many-to-many junction: signal_id, event_id, relevance (0.0-1.0)
-
-#### `shared/schemas/entity_profiles.py`
-**Purpose:** Versioned, sourced entity profiles forming the "Persistent World Model."
-
-**Key classes:**
-- `EntityType` enum — 15 types: country, organization, person, location, military_unit, political_party, armed_group, international_org, corporation, media_outlet, event_series, concept, commodity, infrastructure, other
-- `Assertion` — Sourced claim: key, value, confidence, source_event_id, source_url, observed_at, superseded flag
-- `EntityProfile` — Versioned profile: canonical_name, entity_type, aliases, summary, sections (dict of Assertion lists), tags, completeness_score, event_link_count, version
-- `SignalEntityLink` — Junction table (was `EventEntityLink`): signal_id, entity_id, role (actor|location|target|mentioned), confidence
-
-**Key functions:**
-- `EntityProfile.compute_completeness()` — Heuristic score based on expected sections for entity type
-
-#### `shared/schemas/sources.py`
-**Purpose:** Source registry with multi-dimensional trust metadata.
-
-**Key classes:**
-- `SourceType` enum — rss, api, scrape, manual
-- `BiasLabel` enum — far_left through far_right
-- `OwnershipType` enum — state, corporate, nonprofit, public_broadcast, independent
-- `CoverageScope` enum — global, regional, national, local
-- `SourceStatus` enum — active, paused, error, retired
-- `Source` — Full model: trust dimensions (reliability, bias_label, ownership_type, geo_origin, language, timeliness, coverage_scope), operational state, reliability tracking (fetch_success_count, fetch_failure_count, events_produced_count, consecutive_failures)
-
-#### `shared/schemas/comms.py`
-**Purpose:** Human communication channel + NATS message schemas.
-
-**Key classes:**
-- `MessagePriority` enum — normal, urgent, directive
-- `InboxMessage` — Supervisor -> agent: content, priority, requires_response
-- `OutboxMessage` — Agent -> supervisor: content, in_reply_to, cycle_number
-- `Inbox` / `Outbox` — Container models (serialized to JSON files)
-- `NatsMessage` — Generic NATS data message: subject, payload, headers, sequence
-- `StreamInfo` — JetStream stream summary
-- `QueueSummary` — ORIENT context: human_pending, data_streams, total_data_messages
-
-#### `shared/schemas/tools.py`
-**Purpose:** Tool system schemas.
-
-**Key classes:**
-- `ToolParameter` — Parameter definition: name, type, description, required, default
-- `ToolDefinition` — Tool definition: name, description, parameters, return_type, builtin flag, source_file; `to_typescript()` renderer
-- `ToolCall` — Parsed invocation: tool_name, arguments, raw_text
-- `ToolResult` — Execution result: success, result, error, duration_ms
-
-#### `shared/schemas/modifications.py`
-**Purpose:** Self-modification tracking.
-
-**Key classes:**
-- `ModificationType` enum — code, prompt, tool, config
-- `ModificationStatus` enum — proposed, applied, failed, rolled_back
-- `CodeSnapshot` — Before/after file state: file_path, content, content_hash, line_count; `capture()` class method
-- `ModificationProposal` — Intent: file_path, rationale, expected_outcome, new_content, goal_id
-- `ModificationRecord` — Full audit record: before/after snapshots, applied_at, error, rolled_back_at
-- `RollbackResult` — success, rolled_back_records[], error
+The package splits along the architectural seam: `src/legba/data/` is the
+**declarative + substrate** half (schemas, registry, handler libraries, the
+substrate adapters, migrations) and `src/legba/runtime/` is the **execution**
+half (the Dapr actor host, the four runtime planes, reconcile loop).
 
 ---
 
-### 2.2 `src/legba/agent/main.py` — Agent Entry Point
-
-**Purpose:** Single-cycle entry point. The supervisor launches this for each cycle.
-
-**Key functions:**
-- `run_cycle()` — Creates `LegbaConfig.from_env()`, instantiates `AgentCycle(config)`, calls `cycle.run()`, returns exit code 0/1
-- `main()` — Entry point for `python -m legba.agent.main`. Wraps `run_cycle()` in `asyncio.run()`.
-
-**Internal deps:** `shared.config.LegbaConfig`, `agent.cycle.AgentCycle`
-
----
-
-### 2.3 `src/legba/agent/log.py` — Structured JSON Logging
-
-**Purpose:** Per-cycle structured JSON logging. Writes JSONL files to the log drain volume.
-
-**Key class: `CycleLogger`**
-- `__init__(log_dir, cycle_number)` — Creates cycle-specific log file
-- `update_cycle_number(n)` — Renames log file once real cycle number is known
-- `log(event, **data)` — General structured log entry
-- `log_llm_call(purpose, prompt, response, ...)` — Full LLM call with prompt/response
-- `log_tool_call(tool_name, arguments, result, ...)` — Tool execution
-- `log_phase(phase)` — Cycle phase transition
-- `log_error(error)` — Error with stderr output
-- `log_memory(operation, store)` — Memory operation
-- `log_self_mod(action, file_path)` — Self-modification event
-
----
-
-### 2.4 `src/legba/agent/cycle.py` — Core Agent Cycle (~588 lines)
-
-**Purpose:** The heart of Legba. Executes one complete cycle through all phases.
-
-**Key class: `AgentCycle`**
-
-**Constructor** wires together all subsystems:
-- `LLMClient`, `MemoryManager`, `GoalManager`, `ToolRegistry`, `ToolExecutor`
-- `SelfModEngine`, `PromptAssembler`, `LegbaNatsClient`, `OpenSearchStore`, `AirflowClient`
-
-**Constants:**
-- `REPORT_INTERVAL = 5` — Status report every 5 cycles
-- `INTROSPECTION_TOOLS` — frozenset of tools allowed during introspection
-
-**Phase methods (detailed below in Section 3):**
-- `run()` — Main entry: calls all phases, handles errors, runs cleanup
-- `_wake()` — Initialize all connections and services
-- `_orient()` — Gather context from all memory layers
-- `_plan()` — LLM decides what to do this cycle
-- `_reason_and_act()` — LLM reasoning loop with tool execution
-- `_reflect()` — Extract facts, entities, relationships from results
-- `_narrate()` — Write 1-3 journal entries
-- `_persist()` — Save everything, emit heartbeat
-- `_mission_review()` — Deep introspection with restricted tools
-- `_journal_consolidation()` — Consolidate journal entries into narrative
-- `_generate_analysis_report()` — Full "Current World Assessment"
-- `_validate_liveness()` — LLM echoes nonce:cycle_number
-- `_cleanup()` — Close all connections
-
-**Helper methods:**
-- `_is_introspection_cycle()` — cycle_number % mission_review_interval == 0
-- `_parse_reflection(text)` — Extract JSON with "cycle_summary" key from LLM output
-- `_store_reflection_facts()` — Store facts from reflection data
-- `_store_reflection_graph()` — Store entities/relationships with fuzzy dedup
-- `_parse_planned_tools(plan_text)` — Extract "Tools: a, b, c" from plan
-- `_check_stop_flag()` / `_send_ping()` / `_make_stop_checker()` — Graceful shutdown
-- `_register_builtin_tools()` — Wire all 19 builtin tool modules
-- `_register_note_to_self()` — Working memory notes
-- `_register_cycle_complete()` — Clean exit from tool loop
-- `_register_explain_tool()` — On-demand tool definition lookup
-- `_register_subagent()` — Spawn sub-agent tool
-
-**Internal deps:** Every agent module. This is the central orchestrator.
-
----
-
-### 2.5 `src/legba/agent/llm/` — LLM Subsystem
-
-#### `llm/format.py`
-**Purpose:** Message formatting and Harmony token stripping.
-
-**Key types/functions:**
-- `Message` — Dataclass: role (system|user|assistant), content
-- `strip_harmony_response(text)` — Remove GPT-OSS Harmony channel markers (`<|channel|>final<|message|>...`, `assistantfinal`, stray `<|...|>` tokens)
-- `to_chat_messages(messages)` — Combine all Messages into a single `{"role": "user", "content": ...}` dict (GPT-OSS doesn't handle system role reliably)
-- `format_tool_result(tool_name, result)` — Format as `[Tool Result: name]\nresult`
-- `format_tool_definitions(tools, only)` — JSON block with full params for `only` tools, name+description for rest
-- `format_tool_summary(tools)` — Compact name+description list for PLAN phase
-
-#### `llm/provider.py`
-**Purpose:** HTTP client for vLLM's OpenAI-compatible API.
-
-**Key class: `VLLMProvider`**
-- `__init__(api_base, api_key, model, timeout, temperature, top_p)` — Configures httpx client
-- `chat_complete(messages, max_tokens, temperature, ...)` — POST to `/chat/completions`
-  - Always sends `temperature: 1.0` (GPT-OSS requirement)
-  - Retries on 429/500/502/503 with exponential backoff (up to 3 retries)
-  - Strips Harmony markers from response via `strip_harmony_response()`
-- `close()` — Close httpx client
-
-**Key type: `LLMResponse`** — content, finish_reason, usage dict, raw_response
-
-**Key type: `LLMApiError`** — Non-retryable error with status_code, body, msg_count, total_chars
-
-**External deps:** `httpx`
-
-#### `llm/client.py`
-**Purpose:** High-level LLM client with tool call loop and context management.
-
-**Key class: `WorkingMemory`**
-- In-cycle scratchpad for observations, tool results, notes
-- `add_tool_result(step, tool_name, args_summary, result_summary)`
-- `add_note(note)`
-- `summary()` — Condensed text for re-grounding prompts
-- `full_text()` — Detailed text for REFLECT phase
-- Does NOT persist across cycles
-
-**Key class: `LLMClient`**
-- `__init__(config, logger, provider)` — Creates VLLMProvider + WorkingMemory
-- `complete(messages, purpose, max_tokens, temperature)` — Single completion with logging
-- `reason_with_tools(messages, tool_executor, purpose, max_steps, stop_check)` — The REASON-ACT loop:
-  1. Extracts system message (stays constant, contains tool defs + calling instructions)
-  2. Splits user message at `--- END CONTEXT ---` separator
-  3. Each step: sends [system, user] to LLM
-  4. Parses tool calls from response via `parse_tool_calls()`
-  5. Executes tools concurrently (max 4 concurrent, deduplicates identical calls)
-  6. Builds next step's user message via `_build_step_message()`
-  7. Sliding window: last 8 tool steps in full detail, older condensed to one-liners
-  8. On `cycle_complete` tool call: breaks out of loop
-  9. On step budget exhaustion: forces final response with `BUDGET_EXHAUSTED_PROMPT`
-  10. Returns (final_response, history_messages)
-- `generate_embedding(text)` — POST to `/embeddings` endpoint
-- `_build_step_message(base_context, tool_history, final_prompt)` — Constructs user message with tool history + working memory
-- `_format_tool_history(tool_history)` — Sliding window condensation
-
-**Constants:** `MAX_CONCURRENT_TOOLS = 4`, `SLIDING_WINDOW_SIZE = 8`, `CONDENSED_RESULT_MAX_CHARS = 2000`, `MAX_TOOL_RESULT_CHARS = 30000`
-
-**Internal deps:** `format.py`, `provider.py`, `tool_parser.py`, `prompt.templates`
-
-#### `llm/tool_parser.py`
-**Purpose:** Parse tool invocations from LLM output.
-
-**Key function: `parse_tool_calls(text) -> list[ToolCall]`**
-Three parsing strategies (tried in order):
-1. **Primary:** `{"actions": [{"tool": "name", "args": {...}}, ...]}` — single JSON wrapper
-2. **Fallback:** Bare `{"tool": "name", "args": {...}}` objects
-3. **Legacy:** `to=functions.NAME json{...}` format
-
-**Helper functions:**
-- `has_tool_call(text)` — Quick check for `"actions"`, `"tool"`, or `to=functions.`
-- `_extract_balanced_braces(text)` — Parse balanced `{...}` with string awareness
-- `_parse_json_safe(text)` — JSON parse with cleanup of `<|end|>` etc.; falls back to `ast.literal_eval` for Python dict literals
-- `_clean_tool_name(name)` — Strip merged "json" suffix
-- `_extract_tool_call(parsed, raw)` — Convert dict to ToolCall
-
----
-
-### 2.6 `src/legba/agent/memory/` — Memory Subsystem
-
-#### `memory/manager.py`
-**Purpose:** Unified interface across all memory layers.
-
-**Key class: `MemoryManager`**
-- **Owns:** `RegisterStore` (Redis), `EpisodicStore` (Qdrant), `StructuredStore` (Postgres), `GraphStore` (AGE)
-- `connect()` — Connect to all backends; each degrades gracefully
-- `close()` — Close all connections
-- `get_cycle_number()` / `increment_cycle()` — Cycle counter from Redis
-- `retrieve_context(query_embedding, limit, current_cycle)` — ORIENT phase retrieval:
-  - Registers (all keys from Redis)
-  - Episodes (semantic search across short-term + long-term with time decay)
-  - Goals (active goals from Postgres)
-  - Facts (merged: semantic Qdrant search + structured Postgres query + recent-cycle facts, deduped by subject, max 2 per subject)
-- `store_episode(episode)` — PERSIST: store to Qdrant short-term
-- `store_fact(fact, embedding)` — PERSIST: store to both Postgres + Qdrant semantic index
-- `save_goal(goal)` — Store goal to Postgres
-
-#### `memory/registers.py`
-**Purpose:** Redis-backed key-value store with in-memory fallback.
-
-**Key class: `RegisterStore`**
-- All keys prefixed with `legba:`
-- Falls back to in-memory dict if Redis unavailable
-- Operations: `get/set` (scalar), `incr/get_int` (counter), `set_flag/get_flag` (boolean), `set_json/get_json` (JSON), `get_all_registers` (bulk scan)
-
-**External deps:** `redis.asyncio`
-
-#### `memory/episodic.py`
-**Purpose:** Vector-based episodic memory using Qdrant.
-
-**Key class: `EpisodicStore`**
-- Three collections: `SHORT_TERM`, `LONG_TERM`, `FACTS` (all 1024-dim cosine)
-- `connect()` — Creates collections if they don't exist
-- `store_episode(episode, collection)` — Upsert point with payload (cycle_number, episode_type, content, significance, tags, metadata)
-- `search_similar(query_vector, collection, limit, min_score, filters)` — Vector search with optional payload filters
-- `search_both(query_vector, limit, decay_hours)` — Search across both collections with time-based relevance decay (exponential, half-life 168h = 1 week)
-- `promote_to_long_term(episode_id, vector, payload)` — Move from short-term to long-term (upsert + delete)
-- `store_fact_embedding(fact_id, text, embedding, ...)` — Store fact in FACTS collection
-- `search_facts(query_vector, limit)` — Semantic fact search (no time decay)
-- `remove_fact_embedding(fact_id)` — Delete superseded fact from index
-
-**External deps:** `qdrant-client`
-
-#### `memory/structured.py` (~600 lines)
-**Purpose:** PostgreSQL-backed store for goals, facts, sources, signals, events, entity profiles.
-
-**Key class: `StructuredStore`**
-- `connect()` — Creates asyncpg pool + runs `_ensure_tables()`
-- **Tables created:** goals, facts, modifications, sources, signals, events, signal_event_links, entity_profiles, entity_profile_versions, signal_entity_links, event_entity_links, situation_signals, situation_events
-- **Additive migrations:** Source reliability tracking columns (safe to re-run)
-
-**Goal operations:** `save_goal`, `get_goal`, `get_active_goals`, `get_all_goals`, `get_deferred_goals`
-**Fact operations:** `store_fact`, `query_facts(subject, limit)`, `query_facts_recent(current_cycle, lookback, limit)`, `supersede_fact(old_id, new_fact)`
-**Source operations:** `save_source`, `get_source`, `get_sources(status, source_type, limit)`, `find_source_by_url(url)`, `record_source_fetch(source_id, success, error, events_count)`, `increment_source_event_count(source_id)`
-**Signal operations:** `save_signal`, `get_signal`, `get_signals(limit, category, source_id)`, `check_signal_guid(guid)`, `query_signals(limit, category, source_id)`, `find_duplicate_signal(title, event_timestamp)`
-**Derived event operations:** `save_derived_event`, `get_derived_event`, `query_derived_events(category, event_type, severity, since, until, min_signal_count, source_method, limit)`, `link_signal_to_event(signal_id, event_id, relevance)`
-**Entity profile operations:** `save_entity_profile`, `get_entity_profile(id)`, `get_entity_profile_by_name(name)`, `search_entity_profiles(query, entity_type, limit)`, `save_signal_entity_link`, `get_signal_entity_links(signal_id)`
-
-**External deps:** `asyncpg`
-
-#### `memory/graph.py`
-**Purpose:** Apache AGE (graph extension for Postgres) with Cypher query support.
-
-**Key class: `GraphStore`**
-- Graph name: `legba_graph`
-- `connect()` — Creates AGE extension, pool with per-connection codec registration (LOAD 'age' + search_path), creates graph
-- `_cypher(conn, query, cols)` — Execute Cypher via `SELECT * FROM cypher(...)`
-- `_parse_agtype(val)` — Parse AGE text values (vertex, edge, path, string, number, etc.)
-- `_sanitize_label(raw)` — Convert to CamelCase Cypher label
-- `_escape(val)` — Escape for Cypher single-quoted literals
-
-**Entity operations:**
-- `upsert_entity(entity)` — Match-first, create-if-absent to prevent label-change duplicates
-- `find_entity(name)` — Case-insensitive exact match
-- `search_entities(query, entity_type, limit)` — Fuzzy name search with optional type filter
-
-**Relationship operations:**
-- `add_relationship(source_name, target_name, relation_type, properties, since, until)` — MERGE edge between named entities
-- `get_relationships(entity_name, direction, relation_type, limit)` — Get outgoing/incoming/both edges
-
-**Graph queries:**
-- `find_path(source, target, max_depth)` — Shortest path between entities
-- `query_subgraph(entity_name, depth, limit)` — N-hop neighborhood with edges
-- `execute_cypher(query)` — Raw Cypher execution with automatic column inference from RETURN clause
-
-**External deps:** `asyncpg`
-
-#### `memory/opensearch.py`
-**Purpose:** Async OpenSearch client for full-text search and aggregations.
-
-**Key class: `OpenSearchStore`**
-- `connect()` — Verifies connection, clears create-index blocks
-- **Index management:** `create_index`, `delete_index`, `list_indices`
-- **Document CRUD:** `index_document`, `bulk_index`, `get_document`, `delete_document`
-- **Search:** `search(index, query, size, sort, source)` — Returns `{hits, total, took_ms}`
-- **Aggregations:** `aggregate(index, aggs, query, size)` — Returns `{aggregations, took_ms}`
-
-**External deps:** `opensearch-py`
-
----
-
-### 2.7 `src/legba/agent/goals/manager.py` — Goal Management
-
-**Purpose:** CRUD operations for the goal hierarchy.
-
-**Key class: `GoalManager`**
-- `get_active_goals()` / `get_all_goals()` / `get_goal(id)`
-- `select_focus(goals)` — Highest priority (lowest number) active goal
-- `create_goal(description, goal_type, priority, source, parent_id, success_criteria)`
-- `decompose(parent, subtask_descriptions)` — Create sub-goals and update parent's child_ids
-- `update_progress(goal_id, progress_pct, summary)` — Update with timestamp
-- `complete_goal(goal_id, reason, summary)` — Set completed status
-- `abandon_goal(goal_id, reason)` — Set abandoned status
-- `defer_goal(goal_id, reason, revisit_after_cycles, current_cycle)` — Set deferred with revisit cycle
-- `get_deferred_goals(current_cycle)` — Get goals whose deferred_until_cycle has passed
-
-**Internal deps:** `StructuredStore`, `CycleLogger`
-
----
-
-### 2.8 `src/legba/agent/tools/` — Tool System
-
-#### `tools/registry.py`
-**Purpose:** Manages tool definitions and handlers (both builtin and dynamic).
-
-**Key class: `ToolRegistry`**
-- `register(definition, handler)` — Register a tool
-- `get_definition(name)` / `get_handler(name)` / `list_tools()`
-- `to_tool_data()` — Raw dicts for prompt rendering
-- `to_tool_definitions(only)` — Formatted block for LLM context (with optional filtering)
-- `to_tool_summary()` — Compact name+description for PLAN phase
-- `load_dynamic_tools()` — Scan `/agent/tools/*.json` for dynamic tool definitions; supports `shell` and `python` implementations
-
-#### `tools/executor.py`
-**Purpose:** Dispatches tool calls to handlers with logging.
-
-**Key class: `ToolExecutor`**
-- `execute(tool_name, arguments)` — Look up handler in registry, execute, log result/error. This is the callable passed to `LLMClient.reason_with_tools()`.
-
-#### `tools/subagent.py`
-**Purpose:** Sub-agent execution engine for the `spawn_subagent` tool.
-
-**Key function: `run_subagent(task, context, allowed_tools, max_steps, llm_client, registry, logger)`**
-- Creates fresh context with `SUBAGENT_SYSTEM_PROMPT` (reasoning: high, focused rules)
-- Builds [system, user] messages with filtered tool definitions
-- Runs `llm_client.reason_with_tools()` with a `filtered_executor` that restricts to allowed tools
-- Returns the sub-agent's final response text
-
----
-
-### 2.9 `src/legba/agent/tools/builtins/` — Built-in Tool Modules
-
-Each module exports a `register(registry, **deps)` function called by `cycle.py._register_builtin_tools()`.
-
-| Module | Tools | Purpose |
+## 2. `src/legba/data/` — declarative model + substrate
+
+### 2.1 `schemas/` — the descriptor types
+
+The Pydantic descriptor schemas (strict, `extra="forbid"`, content-hashable):
+
+| File | What |
+|---|---|
+| `source.py` | `SourceDescriptor` (acquisition unit), `SourceRef`, `Subscription`, `subscription_policy` |
+| `target.py` | `TargetDescriptor`, polymorphic `TargetScope` (Geo/Estate/Entity), `OutputBinding`, source-ref subscriptions |
+| `analyst.py` | `AnalystDescriptor`, the open `AnalystKind` taxonomy, coalescing/trigger config, `GroundingBlock` (optional `grounding` field — Tier-1 knowledge grounding, off by default) |
+| `action_pack.py` | `ActionPack` + `ActionPackRef` + `PackGovernor` (allow-listed capability bundles) |
+| `stack.py` | `StackComponentDescriptor` (substrate components + LLM providers) |
+| `lifecycle.py` | `LifecycleState` FSM + `AbstractionLevel` |
+| `properties.py` | shared property types (`Cron`, `FactoryValue`, …) |
+| `vocabulary.py` | vocabulary-entry shapes (entity classes, relationship types, analyst kinds) |
+| `versioning.py` | descriptor version / content-hash helpers |
+
+`AnalystKind` is an **open** taxonomy of built-in kinds (`inline_target`,
+`cross_target_raw`, `meta_findings_synthesizer`, `relationship_reifier`,
+`competing_hypotheses`, `deterministic`, `predictor`, `critic`, `optimizer`,
+`cross_analyst_correlator`, `consult_on_demand`) plus operator-registered kinds
+via the vocabulary registry.
+
+### 2.2 `registry/` — descriptor registry, vault, HTTP/WS API
+
+The control plane. `descriptor.py` is the content-hashed instance registry
+(Ed25519-signed audit log, DLQ on validation failure, NATS events); `stack.py`
++ `credentials.py` are the stack registry + XSalsa20-Poly1305 credential vault;
+`signing.py` / `audit.py` own the receipt/audit chains; `dlq.py` the
+dead-letter path; `events.py` / `streams.py` / `emitter.py` the NATS event
+surface; `vocabulary_cache.py` mirrors the vocabulary tables.
+
+The HTTP/WebSocket API is `server.py` (the `legba-registry` entry point, port
+8090) mounting several routers:
+
+| Router module | Mount prefix | Concern |
 |---|---|---|
-| `fs.py` | `fs_read`, `fs_write`, `fs_list` | Filesystem operations. `/agent` writes routed through SelfModEngine |
-| `shell.py` | `exec` | Shell command execution with timeout ceiling |
-| `http.py` | `http_request` | HTTP with trafilatura HTML extraction, within-cycle GET cache, browser UA retry on 403/405 |
-| `memory_tools.py` | `memory_store`, `memory_query`, `memory_promote`, `memory_supersede` | Explicit memory CRUD: store episodes/facts, semantic search, promote to long-term, supersede facts |
-| `graph_tools.py` | `graph_store`, `graph_query`, `graph_analyze` | Entity/relationship CRUD in AGE graph. `graph_query` uses named operations (top_connected, shared_connections, path, triangles, by_type, edge_types, isolated, recent_edges) instead of raw Cypher. Includes `RELATIONSHIP_ALIASES` (30+ canonical types with synonyms), `normalize_relationship_type()`, `_find_similar_entity()` for fuzzy dedup |
-| `goal_tools.py` | `goal_create`, `goal_list`, `goal_update`, `goal_decompose` | Goal hierarchy CRUD via GoalManager |
-| `nats_tools.py` | `nats_publish`, `nats_subscribe`, `nats_create_stream`, `nats_queue_summary` | NATS event bus operations |
-| `opensearch_tools.py` | `os_create_index`, `os_index`, `os_search`, `os_delete_index`, `os_list_indices` | OpenSearch document management and search |
-| `analytics_tools.py` | `anomaly_detect`, `nlp_extract`, `forecast`, `graph_centrality` | Statistical analysis (Isolation Forest, LOF), NLP (keyword extraction via YAKE), time-series forecasting, graph centrality (PageRank, betweenness, degree) |
-| `orchestration_tools.py` | `workflow_define`, `workflow_trigger`, `workflow_status`, `workflow_list` | Airflow DAG deployment, triggering, monitoring |
-| `feed_tools.py` | `feed_parse` | RSS/Atom feed parsing with feedparser, browser UA retry on 403/405, source reliability tracking via `record_source_fetch()` |
-| `source_tools.py` | `source_register`, `source_list`, `source_update`, `source_get` | Source registry CRUD with dedup (checks existing URL, limit 500), auto-pause at 5 consecutive failures |
-| `event_tools.py` | `signal_store`, `signal_query`, `signal_search` | Signal storage to Postgres + OpenSearch (was event_store/query/search). Auto geo-resolution via `geo.py`. 4-tier dedup. `increment_source_event_count` on store |
-| `derived_event_tools.py` | `event_create`, `event_update`, `event_query`, `event_link_signal` | Derived event CRUD. Agent-created events start at confidence 0.7. Link signals as evidence. Dedup: Jaccard title similarity check before create |
-| `entity_tools.py` | `entity_profile`, `entity_inspect`, `entity_resolve` | Entity profile CRUD in Postgres + AGE sync. Profile versioning. Event-entity linking |
-| `selfmod_tools.py` | `code_test` | Syntax check + import validation before self-modifications |
-| `hypothesis_tools.py` | `hypothesis_create`, `hypothesis_evaluate`, `hypothesis_list` | ACH: competing thesis/counter-thesis pairs with evidence tracking. Dedup: Jaccard thesis similarity >= 0.45 before create |
-| `situation_tools.py` | `situation_create`, `situation_update`, `situation_list`, `situation_link_event` | Situation CRUD: tracked narrative groupings for related events. Dedup: exact name + word-overlap Jaccard >= 0.5 before create |
-| `watchlist_tools.py` | `watchlist_add`, `watchlist_list`, `watchlist_remove` | Keyword/entity alert watches with trigger tracking. Dedup: exact name + term overlap Jaccard (entities+keywords) >= 0.5 before create |
-| `geo.py` | (internal, not a tool) | Location normalization: `resolve_locations(locations)` using pycountry + GeoNames cities15000 gazetteer. Returns `{countries, regions, coordinates}` |
+| `api.py` | `/api/v1/registry` | descriptor CRUD, sources, action-packs, stack, vault |
+| `v3_api.py` | `/api/v1/v3` | runtime actor rows + UI v3 views |
+| `substrate_reads_api.py` | `/api/v1` | read-through substrate queries for UI panels |
+| `lineage_api.py` | `/api/v1` | provenance / derived-from lineage |
+| `entities_api.py` | `/api/v1` | entity knowledge-graph reads |
+| `runtime_telemetry_api.py` | `/api/v1` | actor health / runtime telemetry |
+| `budget_api.py` | `/api/v1/budget` | budget envelope reads |
+| `source_credibility_api.py` | `/api/v1` | source-credibility reads |
+| `consult_api.py` | `/api/v1` | on-demand consult (proxies the consult analyst actor via daprd) |
 
-**Additionally registered in `cycle.py` (not in builtin modules):**
-- `note_to_self` — Write to WorkingMemory within this cycle
-- `cycle_complete` — Signal clean exit from tool loop (intercepted in client.py)
-- `explain_tool` — Get full parameter details for any tool on demand
-- `spawn_subagent` — Delegate work to a sub-agent with its own context window
+`discovered_materializer.py` + `conversion.py` support discovery and
+descriptor-version conversion. `health.py` is the liveness surface.
 
-**Total registered tools: 72+** (66 builtin + 2 config + 4 inline cycle tools)
+### 2.3 Substrate adapters (`data/` root modules)
+
+One module per backing store, each a thin typed port:
+`postgres.py` (+ `stack/postgres/age.py` for Apache AGE graph),
+`qdrant.py` (vectors), `redis.py`,
+`nats.py` (JetStream: `SIGNAL_STREAM_NAME = "legba_signals"`, subject grammar
+`legba.signals.<tenant>.<source_token>.<modality>.<event_class>`).
+`config.py` is process config; `migrate.py` applies migrations;
+`vocabulary.py` seeds/queries vocabularies; `smoke.py` is a substrate smoke
+check.
+
+### 2.4 `migrations/` — schema
+
+**Flattened to one baseline.** Commit `06bab95` collapsed the former 30-step
+`0001`…`0031` chain into a single `0001_baseline.sql` (clean-slate release — no
+live instances to upgrade). It was derived by `pg_dump --column-inserts` of a
+fresh full-chain migrate, with the Apache AGE graph setup (`create_graph` /
+`create_vlabel` / `create_elabel`, which `pg_dump` cannot reproduce) carried
+verbatim from the former `0004` (see the header comment at
+`0001_baseline.sql:1-9`). So the single file now builds the extensions + the AGE
+graph (9 vertex / 14 edge labels) + all 40 relational tables + seed data —
+including everything the historical chain added: the source-first
+signal/subscription tables (former `0024`), the coalescing trigger state (former
+`0028`, `trigger_state` at `0001_baseline.sql:851`), the entity-graph tables
+(former `0029`), and the source-credibility `tier` + `state_affiliation` columns
++ seed rows (former `0031`, `source_credibility` at `:759`).
+**The forward chain re-opened after the baseline** for the data-analysis arc:
+`0032_facts_decay_columns.sql` (facts `valid_until` / `superseded_by` /
+`confidence_components` — reversing the former code↔schema drift),
+`0033_nexuses.sql` (re-lands a first-class reified `nexuses` table; the former
+`0030` drop is moot), `0034_seed_batches.sql` (the curated-seed batch ledger),
+then `0035_entity_profiles_composite_key.sql`, `0036_signals_retention.sql`,
+`0037_age_output_label.sql`, `0038_hypotheses_resolved_outcome.sql` (the
+exogenous ACH `resolved_outcome` column that lets calibration grade against new
+evidence rather than itself), and `0039_consult_sessions.sql`. The DQ-sweep then
+extended the chain to **head `0046`**: `0040`/`0041_situations_valid_from_repair.sql`
+/ `0042_situations_target_id_backfill.sql` (situations as first-class objects +
+temporal repair), `0043_ingestion_conf1_backfill.sql` +
+`0044_purge_ingestion_leader_junk.sql` (the conf-1.0-sentinel cleanup),
+`0045_backfill_demonym_nexuses.sql` (NER demonym→country), and
+`0046_source_poll_outcomes.sql` (the `source_poll_outcomes` non-productive-poll
+provenance table). The chain has no `0014`.
+The runner
+(`migrate.py`) globs `*.sql` in order; cold-start from empty volumes is one-shot.
+The historical 30-step chain remains in git; add a migration by dropping the
+next-numbered `.sql` here (see §5).
+
+### 2.5 `sources/` — source-kind handler library
+
+Acquisition handlers. `_contract.py` / `_protocols.py` define the handler
+Protocol (`pull` / `health_check` / lifecycle hooks + the `Signal` it yields)
+— no ABC inheritance, so external packages register kinds without importing a
+base class. `baseline.py` is the **per-source baseline pipeline** (runs once
+per signal: language/geo/entity enrichment + media-tier branching). Handlers:
+`rss.py`, `gdelt.py`, `acled.py`, `mediacloud.py`, `opensanctions.py`,
+`common_crawl.py`, `intelmq.py`, `firecrawl.py`, `scraper.py` (+ `scrapers/`),
+`telegram.py`, `discord.py`, `geojson.py` (model-free `structured` /
+`application/geo+json` modality), `json_api.py` (generic cursor-driven polled
+JSON/CSV API kind — url-template windows + JSONPath-lite extraction + vault
+auth), `generic_webhook.py` + `webhook_router.py`
+(shared inbound push router). `provision.py` owns idempotent outbound
+upstream-watch provisioning.
+
+### 2.6 `filters/` — enrichment-kind handler library
+
+In-flight enrichment / transforms over a `Signal`. `_contract.py` is the
+`StreamHandler` Protocol. Baseline enrichers: `language_detect.py`,
+`geocode.py`, `ner.py`, `classify.py`, `dedupe.py`, `ingest_dedupe.py`
+(source-side dedup tiers 1–2, applied by `SourceCore`), `source_credibility.py`.
+`fact_extractor.py` is the fact-extraction enrichment stage — turns the hosted
+NLP stack's GLiREL relation triples (`jackboyla/glirel-large-v0`, which emit
+REAL per-relation confidence scores, NOT a synthetic 1.0 — live facts span
+0.75/0.80/0.92/0.95) (or the 8B provider plane) into `FACT` outputs, stamps
+`valid_from` event-time, applies a real ingestion confidence (a 0.75 fallback,
+`_INGESTION_DEFAULT_CONFIDENCE`, for a missing score),
+rejects NER-junk triples (`_is_junk_triple` — numeric/date/unit endpoints) plus
+the opt-in `reject_quantity_endpoints` gate, dedupes identical triples, and
+normalizes the predicate to the canonical lowercase-spaced vocabulary form
+(`vocabulary.normalize_predicate`, shared with the `write_fact`/`write_nexus`
+paths). (In-repo `src/*.py` comments that still say "REBEL" are STALE — the
+deployed relation backend is GLiREL; the code-comment cleanup + a
+conf-1.0-sentinel-vs-GLiREL-real-scores reconciliation are a tracked code
+follow-up, not yet done.) SLM-backed refiners (call the model
+service): `slm_classification_refine.py`, `slm_entity_resolve.py`,
+`slm_relationship_validate.py`.
+
+### 2.7 `analysts/` — analyst-kind implementations
+
+One module per built-in analyst kind: `inline_target.py`, `cross_target_raw.py`,
+`meta_findings_synthesizer.py`, `relationship_reifier.py` (META — types
+co-mentioned entity pairs from `proposed_edges` into signed typed `nexuses`,
+8B LLM, never litellm), `competing_hypotheses.py` (META ACH — competing
+hypotheses + LLM-scored evidence×diagnosticity matrix + ±2 transitions; the
+outcome-resolution/calibration leg now FIRES against the EXOGENOUS
+`resolved_outcome` column (migration 0038) — the outcome is stamped against
+subsequent facts or an operator label, and `calibration_tracking` flags the
+Brier `self_consistency_only` when every resolved row came only from a
+status-transition; see ANALYSIS §7.4-7.5),
+`deterministic.py`, `predictor.py`, `critic.py`, `optimizer.py` (GEPA loop — see
+§3.5), `cross_analyst_correlator.py`, `consult_on_demand.py`.
+`deterministic_handlers/` holds the deterministic analyst impls (e.g.
+`entity_resolution.py` (+ `_entity_canon.py` — `canonicalize_entity` surface-form
+alias/gazetteer merge + NER type correction, Phase C), `cross_source_dedup.py`
+(BOUNDED per-run scan — `cross_source_dedup.py:193-194` skips
+already-canonicalised content-hash groups in the DB and `:90`/`:501` caps at
+`max_groups_per_run`=500, so the backlog drains across cadences inside the
+actor-invoke budget), `cross_source_coalesce.py`
+(off-by-default substrate-wide cross-source semantic/temporal linker — SEAM #19),
+`finding_supersession.py`, `situation_clustering.py`, `thematic_proposal.py`
+(Phase-5 — detects thematic non-geo situation frames + PROPOSES them for
+promotion), `hypothesis_lifecycle.py`, `structural_balance.py`,
+`graph_mining.py`, `nexus_decay.py`, `calibration_tracking.py`, `fact_decay.py`,
+`proposed_edge_governance.py` (Phase D — promote/reject the `proposed_edges` queue),
+`_graph_metrics_sink.py` (Phase D — `write_graph_metric` helper),
+`anomaly_detection.py`, …). `agency/` is the **action-pack
+agency plane**: `agency.py` (`run_pack_tool` hard gate), `governor.py`
+(per-pack governor + budget), `resolution.py` (capability resolution
+`analyst.action_packs ∩ target.allowed_action_packs ∩ pack.applicability`),
+`tools.py`, `substrate_read.py` (the consult kind's governed read tools),
+`binding.py` (the per-analyst production on-ramp — `AgencyToolBinding` +
+`EscalationBinding`), `events.py`.
+
+### 2.8 `outputs/` — output-kind handler library
+
+Analyst-emitted payloads fanned to operator surfaces. `_contract.py` is the
+`AlertEmitter`/emit Protocol; `discover_output_kinds()` (`__init__.py`) is the
+registry the actor run path dispatches against. Kinds: `substrate.py` (typed
+write-back facade over `provenance/writes.py`), `nats_stream.py`, `webhook.py`,
+`alert.py` + `alert_sinks/` (`matrix.py`, `nats.py`, `pushover.py`, `xmpp.py`),
+`ui_panel.py`, `mcp_tool.py`, `a2a_skill.py`, `stix_bundle.py`. The
+`stix_bundle.emit` STIX 2.1 path is **wired** — the run path calls
+`_emit_output_bindings` (`runtime/dapr_actors.py:2142`/`:2419`) which discovers
+emit-capable kinds and dispatches them; TAXII *upload* remains a documented stub.
+
+### 2.9 `provenance/` — derived-from + receipts + budget
+
+`models.py` / `kinds.py` the `OutputKind` enum (10 members) + per-kind payloads
+(finding / situation / hypothesis / prediction / alert / meta_finding / critique
+/ **fact** (`FactPayload`) / **nexus** (`NexusPayload`) / prompt_module_candidate),
+`_core.py` + `writes.py` the provenance writers (full `derived_from` chains; one
+`write_*` per kind — incl. `write_fact` / `write_nexus` + `supersede_prior_facts`
+/ `supersede_prior_nexuses`, both threading `source_type` / `seed_batch_id` so
+curated-seed rows are stamped and superseded apart from agent-authored ones — see
+§0a), `receipts.py` per-analyst SHA-256 hash-chained receipt chain, `verify.py`
+chain verification, `checkpointer.py` durable checkpoints, `budget.py` budget
+accounting, `dlq.py` provenance dead-letter.
+
+### 2.10 `discovery/` — descriptor discovery pipeline
+
+Turns external lists/queries into materialized descriptors:
+`country_list_discovery.py`, `query_source_discovery.py`,
+`file_sd_discovery.py`, `static.py` (discovery kinds); `materializer.py` /
+`source_materializer.py` (emit descriptors), `autowire.py`, `relabel.py`,
+`deps_resolver.py`, `disappearance.py`, `source_validate.py`,
+`source_contract.py`, `registry.py`. (Several operator-facing discovery UIs are
+future seams — see §7.)
+
+### 2.11 `predicates/` — Starlark predicate DSL
+
+The subscription / matching residual language. `compiler.py` compiles-once-on-
+register into an LRU-cached `CompiledPredicate` (rejects statements — single
+Starlark expression only); `evaluator.py` runs it in-sandbox; `helpers.py` the
+helper catalog; `errors.py` compile/eval errors.
+
+### 2.12 `stack/` — provider adapters resolved through the stack registry
+
+`llm/` (`anthropic.py`, `vllm.py`, `openai.py`, `base.py`, `pricing.py`),
+`embedding/`, `vector_store/qdrant.py`, `nats/jetstream.py`,
+`nlp_service/client.py` (the model-service NER / translation client),
+`postgres/age.py` (graph), `proxy/` (`bright_data.py`, `local_none.py`).
+
+### 2.13 `jobs/`, `tools/`, `conversions/`
+
+`jobs/` — async-job envelopes + store (`envelope.py`, `media.py`, `store.py`).
+`tools/` — analyst-callable external tools (`mnemosyne_trust_query.py`).
+`conversions/` — descriptor-version upgraders (`target_v2_to_v3.py`, …).
+
+### 2.14 `seed/` — curated baseline seeding
+
+Seeds the substrate with curated baseline facts/nexuses (the cold-start
+knowledge floor). `_base.py` defines the `SeedSource` protocol + the
+`SeedFact` / `SeedEntity` / `SeedNexus` payloads + `SeedContext`. `_driver.py`'s
+`SeedDriver.run_seed_source` runs the pipeline: fetch → map → resolve entities →
+write via `provenance.write_fact` / `write_nexus` (stamped `source_type='seed'`
++ a `seed_batch_id`) → record the batch in `seed_batches`. `__init__.py` is the
+`ADAPTERS` registry (`get_adapter` / `list_adapters`), now wiring **four**
+adapters under `adapters/`:
+
+- `world_baseline.py` — the curated-YAML adapter (G20 leaders → facts,
+  NATO/EU/BRICS/GCC alliances → signed nexuses) reading `seeds/world_baseline.yaml`.
+- `wikidata_leaders.py` — a Wikidata SPARQL leaders adapter (current heads of
+  state/government → subject=leader `LeaderOf` facts + a supersession-correct
+  **country-subject** `head of state` office fact keyed on the country, plus
+  `member of` P463 → `MemberOf` signed +1 nexuses). `_resolve_bare_qid_labels`
+  (post-SPARQL) does ONE batched `wbgetentities` Action-API call to resolve any
+  bare-`Qxxxx` label the SPARQL label service left unlabelled, preferring
+  `labels.en.value` and FALLING BACK to the `sitelinks.enwiki.title` (the
+  fallback that resolves the en-label-less Trump `Q22686` → "Donald Trump"); an
+  unresolvable QID is left bare and dropped (never emitted as a `Qxxxx` value).
+- `acled_conflict.py` — an ACLED conflict backfill adapter.
+- `sipri_arms_transfers.py` — a SIPRI arms-transfer adapter. **Registered but
+  never actually seeded** — it is wired into `ADAPTERS` (so "deployed" means
+  code-wired only), but no batch has run it and it has 0 rows.
+
+CLI: `scripts/seed.py` (`--list` / `--source` / `--dry-run`).
+
+> **Honesty notes (updated — both prior gaps now closed).** `valid_until` is
+> **threaded end-to-end now**: `FactPayload` / `NexusPayload`
+> (`provenance/models.py:329`/`:371`) carry a `valid_until` field and `_driver.py`
+> passes it (`:366-367`/`:409-410`), so an adapter's parsed term-end is persisted
+> rather than dropped. (A seed row is still also superseded by a *differing* live
+> observation; what remains absent is a background sweep that expires a row purely
+> on its stored end date — but the current-facts read gate already excludes it
+> once `valid_until` passes.) The `seed_batches` ledger is **now idempotent at
+> the ledger level** too: `_driver.py` hashes the payload set (`_content_hash`,
+> `:76`) into the manifest and dedupes the batch row on
+> `(source, kind, manifest->>'content_hash')` (`:286-300`), so re-running a
+> curated source UPDATEs the prior batch row instead of recording a duplicate —
+> the ledger no longer overstates writes on re-run.
 
 ---
 
-### 2.10 `src/legba/agent/prompt/` — Prompt System
+## 3. `src/legba/runtime/` — execution
 
-#### `prompt/templates.py` (795 lines)
-**Purpose:** All prompt templates. The agent can modify these via self-modification.
+The Dapr actor host and the four runtime planes. Entry point: `dapr_host.py`.
 
-**Key templates:**
-- `CONTEXT_DATA_SEPARATOR` / `CONTEXT_END_SEPARATOR` — Bracket data sections in user message
-- `SYSTEM_PROMPT` — Identity ("You ARE the loa"), cycle number, behavioral rules, output format (`{"actions": [...]}`)
-- `TOOL_CALLING_INSTRUCTIONS` — JSON format spec, concurrent calls, cycle_complete usage
-- `BOOTSTRAP_PROMPT_ADDON` — Extra guidance for first 5 cycles
-- `MEMORY_MANAGEMENT_GUIDANCE` — significance >= 0.6 promotes, use memory_supersede
-- `EFFICIENCY_GUIDANCE` — Avoid redundant tool calls, use spawn_subagent
-- `ANALYTICS_GUIDANCE` — Use analytics tools on collected data
-- `ORCHESTRATION_GUIDANCE` — Airflow DAG patterns (conditional on airflow.available)
-- `SA_GUIDANCE` — Source attribution, event extraction, feed_parse with source_id, 30 canonical relationship types, entity tagging categories
-- `ENTITY_GUIDANCE` — Entity profile management, sections, completeness
-- `GOAL_CONTEXT_TEMPLATE` — Format seed goal + active goals
-- `MEMORY_CONTEXT_TEMPLATE` — Format episodes + facts
-- `INBOX_TEMPLATE` — Format operator messages
-- `PLAN_PROMPT` — Planning instructions: focus, tool selection, efficiency
-- `CYCLE_REQUEST` — Reason phase task with plan + working memory
-- `REPORTING_REMINDER` — Periodic status report prompt
-- `REFLECT_PROMPT` — JSON extraction: cycle_summary, facts_learned, entities_discovered, relationships, goal_progress, self_assessment, next_cycle_suggestion, significance, memories_to_promote
-- `LIVENESS_PROMPT` — Echo `nonce:cycle_number`
-- `BUDGET_EXHAUSTED_PROMPT` — Force final response after max steps
-- `MISSION_REVIEW_PROMPT` — Deep introspection task
-- `NARRATE_PROMPT` — Journal entry generation (1-3 entries, anti-repetition)
-- `JOURNAL_CONSOLIDATION_PROMPT` — Merge entries into narrative
-- `ANALYSIS_REPORT_PROMPT` — Data-grounded "Current World Assessment" with anti-fabrication rules
+### 3.1 Actor host & actors
 
-#### `prompt/assembler.py` (649 lines)
-**Purpose:** Builds [system, user] message lists for each cycle phase.
+- `dapr_host.py` — the **`legba-runtime-dapr` process**. FastAPI app (default
+  port 6090) that daprd routes `ActorProxy` invocations to; owns Dapr Actor
+  wiring, substrate bring-up, and reconcile-loop attach.
+- `dapr_actors.py` — the production actor classes `TargetActor` and
+  `AnalystActor` (inherit `dapr.actor.Actor`, persist via the Postgres
+  `legba-actor-state` component, use Dapr Reminders for cadence). Actor id
+  scheme: `kind::descriptor_id::content_hash[:16]`. `TargetActor` is the
+  passive subscriber identity the fan-out plane delivers to (it does not pull
+  sources itself).
+- `source_actor.py` — `SourceActor` + the directly-testable `SourceCore`. Owns
+  **acquisition**: poll (Dapr Reminder) or push (webhook router) → run the
+  per-source baseline → `write_canonical_signal` → publish to
+  `legba.signals.<tenant>.<source>.<modality>.<event_class>` (the in-memory
+  Signal is also stamped with the source tenant so the published envelope
+  matches the row + subject + binding). One ingest per source regardless of
+  consumer count. It also backfills `signals.source_credibility` at write time
+  via a host lookup against the `source_credibility` table
+  (`lookup_source_credibility`, `:340`, applied at `:406-408`) — the column was
+  previously 100% NULL because the `source_credibility` pipeline filter only runs
+  for descriptors that bind it, and the live descriptors don't.
+- `dapr_cron.py` — cadence / cron helpers for actor scheduling.
 
-**Key class: `PromptAssembler`**
-- `__init__(tool_data, tool_summary, bootstrap_threshold, max_context_tokens, report_interval, world_briefing, airflow_available)`
+### 3.2 Reconcile loop
 
-**Assembly methods:**
-- `assemble_plan_prompt(...)` — System (identity + tool summary) + User (world briefing, goals, memories, graph, inbox, queue, journal, reflection_forward, plan request)
-- `assemble_reason_prompt(...)` — Instructions-first pattern:
-  - System = identity + rules + guidance + tool defs (filtered by planned_tools) + calling format
-  - User = `--- CONTEXT DATA ---` / goals / memories / graph / inbox / queue / reflection / `--- END CONTEXT ---` / task
-  - Budget enforcement: truncates memories and goals if total exceeds max_context_tokens
-- `assemble_introspection_prompt(...)` — Like reason but with restricted tool set
-- `assemble_reflect_prompt(...)` — Plan + working memory + results -> JSON extraction
-- `assemble_narrate_prompt(...)` — Cycle summary + journal context -> journal entries
-- `assemble_journal_consolidation_prompt(...)` — Entries + previous consolidation -> narrative
-- `assemble_analysis_report_prompt(...)` — Graph, relationships, profiles, events -> assessment
-- `assemble_liveness_prompt(...)` — Simple echo service
-- `assemble_mission_review_prompt(...)` — Strategic review (legacy, replaced by introspection)
+- `reconcile.py` — informer (NATS `descriptor.>` events + periodic resync) →
+  work queue → pure per-kind reconcilers `(observed, desired)`→`ReconcileAction`
+  → executor (the only mutator). `nats_informer.py` is the event informer;
+  `lifecycle.py` the lifecycle FSM; `state.py` the `ActorStateStore` /
+  `ActorStateRecord`; `registry_client.py` reads desired state.
 
-**Helper methods:**
-- `_build_system_text(cycle_number, context_tokens, include_tools, planned_tools)` — Concatenates: SYSTEM_PROMPT + BOOTSTRAP + MEMORY_MANAGEMENT + EFFICIENCY + ANALYTICS + [ORCHESTRATION] + SA + ENTITY + [tool defs + calling instructions]
-- `_format_goals(seed_goal, active_goals, tracker, cycle)` — Goals with per-goal work tracking and stall detection
-- `_format_memories(context)` — Episodes + facts
-- `_format_queue_summary(summary)` — NATS stream info
-- `_format_inbox(messages)` — Priority-tagged operator messages
+### 3.3 The four planes
 
----
+`source_first_runtime.py` assembles the planes the host boots on top of the
+substrate + reconcile loop:
 
-### 2.11 `src/legba/agent/selfmod/` — Self-Modification
+1. **Acquisition** — `source_actor.py` + `sources/baseline.py` +
+   `subscription/` (fan-out).
+2. **Analysis** — `TargetActor` / `AnalystActor` subscribers + `triggers/`
+   (coalescing) + `analysts/agency/` (action-pack agency + governor) +
+   `budget.py`.
+3. **Async jobs** — `jobs/` (NATS work-queue + competing-consumer workers).
+4. **Substrate** — the `data/` adapters (§2.3).
 
-#### `selfmod/engine.py`
-**Purpose:** Propose, apply, and git-track modifications to agent code.
+`subscription/` (fan-out + subscription seam):
+- `engine.py` `SubscriptionEngine` — resolves a target's `SourceRef`s, enforces
+  `subscription_policy`, binds one per-target aggregated JetStream consumer.
+- `sourceref.py` resolution, `policy.py` (open / allowlist / grant),
+  `subjects.py` coarse-subject planning, `filter.py` exact match (SQL `WHERE` +
+  Starlark residual), `backfill.py` replay.
 
-**Key class: `SelfModEngine`**
-- `initialize()` — Set up git repo on `/agent` if not exists
-- `propose_and_apply(file_path, new_content, rationale, expected_outcome, ...)` — Captures before-snapshot, writes file, captures after-snapshot, git commits
-- `rollback_last()` — Restore most recent modification from before-snapshot
-- `modifications_this_cycle` — List of ModificationRecord for this cycle
+`triggers/` (coalescing trigger plane):
+- `engine.py` `TriggerEngine` over `coalescer.py` `Coalescer` — marks
+  (analyst, target) pairs dirty and fires on cadence / accumulation threshold /
+  severity gate (clamped by cooldown). `dispatch.py` dispatches the analyst run;
+  `policy.py`, `state.py` (durable trigger state).
 
-#### `selfmod/rollback.py`
-**Purpose:** Restore files from stored before-snapshots.
+`jobs/` (runtime job plane):
+- `queue.py` `JobQueue`, `worker.py` `JobWorkerPool` (competing consumers),
+  `dispatch.py`, `process_media.py` handler, `media_client.py` (model-
+  service media client). Derived signals from jobs re-enter the fan-out path.
 
-**Key class: `RollbackManager`**
-- `rollback(record)` — Single modification rollback
-- `rollback_all(records)` — Cascade rollback in reverse order
+### 3.4 Wiring & factories
 
----
+`deps.py` / `analyst_deps_builder.py` build per-actor dependency bundles;
+`source_factory.py` / `embedding_factory.py` / `qdrant_factory.py` /
+`nlp_client_factory.py` / `receipt_chain_factory.py` construct ports;
+`pipeline.py` the enrichment pipeline; `analyst_method.py` the analyst run
+method; `budget.py` budget enforcement; `substrate_query_port.py` the
+substrate read port; `audit_checkpointer_wiring.py` audit / checkpoint
+wiring. (The orphaned `lineage.py` / `scheduling.py` modules were deleted by
+C-3 — zero callers; lineage reads live in the registry `lineage_api`, cadence
+in the Dapr reminder plumbing.)
 
-### 2.12 `src/legba/agent/comms/` — External Communications
+`grounding.py` is the **Tier-1 knowledge-grounding** module (analysis-time
+current-world-state injection — the stale-cutoff fix): `SubstrateGroundingResolver`
+reads the CURRENT authoritative facts/nexuses (the temporal-honesty gate
+`superseded_by IS NULL AND (valid_until IS NULL OR valid_until > now())`,
+preferring `source_type IN ('seed','curated')`, and excluding bare-QID values in
+both SQL and a Python backstop); `collect_grounding_candidates` pulls candidate
+names from the in-memory slice + the run's `target_id` (no DB);
+`build_grounding_preamble` renders a dated "AUTHORITATIVE CURRENT CONTEXT (as of
+`<today>`)" block. `analyst_deps_builder._build_grounding_hook` constructs the
+per-run hook only when the descriptor sets `grounding.enabled: true` AND a
+`pg_pool` is available (off otherwise; `vector:world_context` sources no-op as a
+declared Tier-2 follow-up). The `inline_target` runner's **GROUND** phase
+(`data/analysts/inline_target.py:592-612`) prepends the preamble to the LLM user
+prompt (degrade-not-drop). The opt-in schema field is `GroundingBlock`
+(`data/schemas/analyst.py:522`, `AnalystDescriptor.grounding`); opted IN on
+`descriptors/analyst_world_assessor.yaml` + `analyst_country_assessor.yaml`.
 
-#### `comms/nats_client.py`
-**Purpose:** NATS + JetStream client for event bus and human communication.
+### 3.5 `dapr_workflow/` — the optimizer GEPA loop
 
-**Key class: `LegbaNatsClient`**
-- **Human comms:** `publish_human_inbound/outbound`, `drain_human_inbound/outbound` — Replace file-based inbox/outbox
-- **Data pub/sub:** `publish(subject, payload, headers)`, `subscribe_recent(subject, limit, stream)` — JetStream with core NATS fallback
-- **Stream management:** `create_stream(name, subjects, max_msgs, max_bytes, max_age)`, `list_streams()`
-- **ORIENT context:** `queue_summary()` — Returns QueueSummary with human_pending and data_streams
-
-**Constants:** `HUMAN_STREAM = "LEGBA_HUMAN"`, `HUMAN_INBOUND = "legba.human.inbound"`, `HUMAN_OUTBOUND = "legba.human.outbound"`
-
-**External deps:** `nats-py`
-
-#### `comms/airflow_client.py`
-**Purpose:** Async Airflow REST API client.
-
-**Key class: `AirflowClient`**
-- `connect()` — Verify health endpoint
-- **DAG file deployment:** `deploy_dag(dag_id, dag_code)` — Write Python file to shared dags volume; `remove_dag_file(dag_id)`
-- **DAG queries:** `list_dags(limit)`, `get_dag(dag_id)`
-- **DAG control:** `trigger_dag(dag_id, conf, logical_date)`, `pause_dag(dag_id, paused)`
-- **Run queries:** `list_dag_runs(dag_id, limit)`, `get_dag_run(dag_id, dag_run_id)`
-- **Task queries:** `list_task_instances(dag_id, dag_run_id)`
-
-**External deps:** `httpx`
-
----
-
-### 2.13 `src/legba/supervisor/` — Supervisor
-
-#### `supervisor/main.py` (490 lines)
-**Purpose:** Main supervisor process. Orchestrates the agent lifecycle loop.
-
-**Key class: `Supervisor`**
-- Manages: `HeartbeatManager`, `CommsManager`, `LifecycleManager`, `AuditIndexer`, `LogDrain`, `LegbaNatsClient`
-- Main loop: issue challenge -> launch agent container -> wait for completion -> validate heartbeat -> collect logs -> handle comms -> repeat
-- Connects to Redis for cycle counting, NATS for messaging, audit OpenSearch for log indexing
-
-#### `supervisor/lifecycle.py` (393 lines)
-**Purpose:** Manages the agent Docker container.
-
-**Key class: `LifecycleManager`**
-- `launch_cycle(challenge, timeout)` — docker compose run with timeout
-- **Graceful shutdown:** writes `stop_flag.json` to shared volume at soft timeout; agent pings back, gets extension (up to 2 extensions, EXTENSION_FACTOR 0.5)
-- **Monitoring:** polls container status at POLL_INTERVAL (2s)
-
-**Key type: `CycleResult`** — success, duration, exit_code, error
-
-#### `supervisor/heartbeat.py`
-**Purpose:** Challenge-response protocol for LLM liveness verification.
-
-**Key class: `HeartbeatManager`**
-- `issue_challenge(cycle_number, timeout)` — Generate 8-char hex nonce, write to `/shared/challenge.json`
-- `validate_response()` — Read `/shared/response.json`, verify nonce matches
-- Tracks consecutive failures
-
-#### `supervisor/comms.py`
-**Purpose:** Human-agent messaging.
-
-**Key class: `CommsManager`**
-- Primary transport: NATS JetStream (durable)
-- Fallback: file-based inbox.json/outbox.json
-- `send_message(content, priority, requires_response)` — Publish to inbound
-- `read_responses()` — Drain outbound
-
-#### `supervisor/drain.py`
-**Purpose:** Collect and archive agent logs from the shared volume.
-
-**Key class: `LogDrain`**
-- `get_cycle_logs(cycle_number)` — Get JSONL files for a cycle
-- `get_recent_logs(limit)` — Most recent log files
-- `archive_cycle(cycle_number)` — Move to archive directory
-
-#### `supervisor/audit.py` (242 lines)
-**Purpose:** Index cycle logs into a dedicated (agent-inaccessible) OpenSearch instance.
-
-**Key class: `AuditIndexer`**
-- Uses httpx directly (not opensearch-py) for lightweight deps
-- Monthly indices: `legba-audit-YYYY.MM`
-- `index_cycle_logs(cycle_number, logs)` — Bulk index log entries
-- Separate from agent's data OpenSearch (isolation by env var omission)
-
-**External deps:** `httpx`
-
-#### `supervisor/cli.py`
-**Purpose:** Operator CLI for sending messages and reading responses.
-
-**Commands:**
-- `send "message"` — Send normal/urgent/directive message
-- `read` — Read agent responses
-- `status` — Show current cycle status
+The optimizer analyst's multi-hour, durable GEPA evolutionary loop runs as a
+**Dapr Workflow** on the daprd sidecar (the `legba-dapr-workflow-worker`
+process — `worker.py:main`). `gepa.py` the GEPA algorithm itself + the
+workflow-I/O dataclasses + the in-process fallback client (moved here from
+the retired `runtime/temporal/` package by C-3 — that dir is now an empty
+leftover, no `.py` modules), `workflow.py` the
+deterministic workflow, `worker.py` the `WorkflowRuntime` registering it,
+`client.py` the dispatch client. The optimizer analyst
+(`analysts/optimizer.py`) dispatches into it; when no workflow runtime is
+reachable it degrades to the in-process GEPA loop.
 
 ---
 
-### 2.14 `src/legba/ui/` — Operator Console
+## 4. UI — `legba-ui-v3/`
 
-#### `ui/app.py`
-**Purpose:** FastAPI application with Jinja2 + htmx + Tailwind CSS.
+A Vite + React + TypeScript SPA (Tailwind, dockview panels). Build artifacts in
+`dist/`; served by Caddy in compose (`legba-ui-build` builds the SPA,
+`legba-caddy` serves it + reverse-proxies the registry API).
 
-- Lifespan: connects StoreHolder, MessageStore, UINatsClient
-- Registers all route modules
-- Template filters: markdown rendering, time formatting
+```
+src/
+  App.tsx, main.tsx        app shell + bootstrap
+  auth/jwt.ts              JWT auth chain
+  state/                   client state — selection.ts (unified record-selection store)
+  lib/                     api.ts (registry client), ws.ts/useLiveTail.ts (live tail),
+                           starter-descriptors.ts, and per-view models (graphModel,
+                           findingsViews, alertModel, geoPoints, timelinePoints, …)
+  panel-registry/          dynamic panel registry + loader (registry.ts, loader.ts, useRegistry.ts)
+  components/              CommandPalette.tsx (record-jump palette), Sidebar.tsx (workspace
+                           switcher + demoted menu), inspector/ (InspectorPanel.tsx +
+                           RecordLink.tsx + useInspectorDetail.ts — the unified Inspector),
+                           DescriptorBuilder/Editor, ScopePicker, StarterPicker,
+                           StatusBar, PanelChrome
+  panels/
+    source/                SourceRegistry, SourceDetail, FanoutExplorer, SubscriptionBuilder
+    target/                Overview, Signals, Findings, Situations, Hypotheses, Claims,
+                           Graph, Map, Timeline, Sources
+    analyst/               Runs, Critiques, Forecasts, CrossTarget, Outputs
+    registry/              Targets, Analysts, Stack, Wirings, Mutations
+    system/                Findings, Entities, EntityGraph, Lineage, Search, Pulse, Runtime,
+                           Streams/StreamLag, Budget, Optimizer/OptimizerDiff, Eval/EvalScorecard,
+                           Consult, AuditChain, DeadLetter, GovernorEvents, AlertCenter,
+                           ActorHealth, ReportExport, TargetsRoster, TenantView, Users
+    dashboard/Dynamic.tsx  registration-driven dynamic dashboard
+    _DeferredStub.tsx      placeholder for not-yet-built panels (future-seam UIs)
+```
 
-#### `ui/messages.py`
-**Purpose:** Message infrastructure.
+**Panel tiers (present-but-hidden is a load-bearing distinction).**
+`panel-registry/registry.ts` `def()` returns a machine-readable `tier: 'live'`
+by default; two sets then reclassify in one place:
 
-**Key classes:**
-- `MessageStore` — Redis sorted-set wrapper for conversation history (ZSET by timestamp)
-- `UINatsClient` — Lightweight NATS wrapper for UI publish/pull with durable consumer
+- `PREVIEW_KINDS` flips `tier = 'preview'` (guarded-preview / honest-pending
+  backend, e.g. `system.backfill`'s honest-501, `system.optimizer.diff`,
+  client-only `system.search` / `alert_center` / `report_export` /
+  `tenant_view`).
+- `HIDDEN_KINDS` flips `hidden = true` so a panel stays in `PANEL_REGISTRY`
+  (layouts referencing it by id still resolve) but drops out of the sidebar /
+  singleton list. **These panels are present-but-hidden, NOT file-deleted** —
+  the §6 redesign + #90 Wave A consolidation HID them (`system.pulse`,
+  `system.eval`, `registry.discovery`, `system.targets.roster`, `v4.case`,
+  `v4.assessment`, `system.runtime`, `system.tenant_view`, …), they were not
+  removed from the tree. The one genuinely deleted panel is `v4.feed`.
 
-#### `ui/stores.py`
-**Purpose:** Read-only store connections for the UI.
+**`system.findings` is the single unified "Live Feed"** (`SystemFindings`):
+a merged findings + signals view (`/findings` + `/signals`, two NATS tails
+`analyst.*.finding` + `legba.signals.>`, controls: Live on/off + Source
+All/Findings/Signals + Cluster). It SUBSUMED the former `v4/world` live-feed
+rail — the dedicated `LiveFeed.tsx` / `FeedPanel.tsx` components were removed
+(not just hidden) and `v4.feed` deleted from the registry.
 
-**Key class: `StoreHolder`**
-- Owns: `StructuredStore`, `GraphStore`, `RegisterStore`, `OpenSearchStore`
-- Count helpers: `count_entities()`, `count_events()`, `count_sources()`, `count_goals()`, `count_relationships()`
+UI overview: `docs/UI.md`. Co-located
+`*.test.ts(x)` files are the Vitest suite.
 
-#### UI Routes:
-| Route | Path | Purpose |
+---
+
+## 5. Entry points, infra, scripts
+
+### Console scripts (`pyproject.toml [project.scripts]`)
+
+| Script | Target | Role |
 |---|---|---|
-| `dashboard.py` | `GET /` | Stats dashboard (cycle, entities, events, sources, goals, relationships) |
-| `messages.py` | `GET/POST /messages` | Bidirectional operator-agent messaging with NATS polling |
-| `cycles.py` | `GET /cycles` | Cycle monitor with log viewer |
-| `events.py` | `GET /events` | Event explorer with OpenSearch full-text search + category filter |
-| `entities.py` | `GET /entities` | Entity browser with type filter |
-| `sources.py` | `GET /sources` | Source registry browser with status/type filter |
-| `goals.py` | `GET /goals` | Goal tree view |
-| `graph.py` | `GET /graph` | Graph visualization using vis.js (nodes colored by type) |
-| `journal.py` | `GET /journal` | Legba's consolidated journal narrative |
-| `reports.py` | `GET /reports` | Analysis report history |
+| `legba-registry` | `legba.data.registry.server:main` | registry HTTP/WS API (port 8090) |
+| `legba-runtime-dapr` | `legba.runtime.dapr_host:main` | Dapr actor host (port 6090) |
+| `legba-dapr-workflow-worker` | `legba.runtime.dapr_workflow.worker:main` | optimizer GEPA workflow worker |
+| `legba-mcp` | `legba.ui.mcp_server:main` | MCP server surface |
+
+Migrations are applied via `python -m legba.data.migrate` (see `migrate.py`).
+
+### Docker / Dapr
+
+- `docker-compose.yml` — substrate (redis, postgres, qdrant, nats), Dapr (`dapr-placement`, `dapr-scheduler`,
+  `dapr-sidecar`), the Legba services (`legba-registry`, `legba-runtime-dapr`,
+  `legba-dapr-workflow-worker`, `legba-mcp`), `legba-ui-build`, `legba-caddy`.
+- `docker/` — `Dockerfile.registry`, `Dockerfile.runtime`, `Dockerfile.mcp`,
+  `Caddyfile`.
+- `dapr/components/` — `statestore.yaml` (Postgres actor state), `pubsub.yaml`,
+  `secretstore.yaml`, `configuration.yaml`.
+
+### `descriptors/` — example / seed YAML
+
+Sources (`source_bbc_world.yaml`, `source_dw_world.yaml`,
+`source_aljazeera_world.yaml`), targets (G20 `target_country_g20.yaml` +
+per-country news targets, `target_india_energy_infra.yaml`), analysts
+(`analyst_country_assessor.yaml`, `analyst_country_critic.yaml`,
+`analyst_entity_resolution.yaml`, `analyst_cross_source_dedup.yaml`, the
+data-analysis-arc set `analyst_relationship_reifier.yaml`,
+`analyst_competing_hypotheses.yaml`, `analyst_structural_balance.yaml`,
+`analyst_graph_mining.yaml`, `analyst_nexus_decay.yaml`,
+`analyst_calibration_tracking.yaml`, `analyst_fact_decay.yaml`,
+optimizer / predictor / consult variants), action-packs (`action_pack_*.yaml`),
+discovery (`discovery_geopolitical_g20.yaml`,
+`discovery_geopolitical_countries.yaml`), templates (`template_country*.yaml`).
+
+### `scripts/` — bring-up & ops
+
+`bringup_register_*.py` register descriptors into a running registry (stack,
+sources, analysts, action-packs, G20 country targets + discovery, entity
+resolution, …); `bringup_register_analysts.py` registers the live analyst set
+(`hypothesis_lifecycle` is RETIRED from that set — the file is kept, but
+`competing_hypotheses` supersedes it; the data-analysis-arc analysts +
+`country_predictor` are registered here instead). **`bringup_register_source_catalog.py`
+is the load-bearing source-registration path** — a 46-entry `CatalogEntry` tuple
+(43 `rss` + 3 `geojson`) registered *directly* into `source_descriptors` (owner
+`s1_catalog`): NWS (`source.nws.active_alerts`), NASA EONET, USGS quakes,
+WHO/CDC/HRW, ~43 RSS feeds, etc. So the live source set is the
+**`source_descriptors` DB rows**, NOT just the operator-pinned
+`descriptors/source_*.yaml` — `ls descriptors/` undercounts. The full
+catalog table (with the three-tier 3 / 46 / 49 scope model) lives in
+`docs/SOURCES.md`. (A `CatalogEntry`'s
+`enrich_text` flag selects the geojson enrichment chain: `[language_detect,
+ner_multilingual, geocode]` when true vs geocode-only when false.)
+`bringup_source_first_host.py`
+boots the source-first host; `bringup_vault_load.py` loads vault secrets.
+`seed.py` is the **curated-baseline seeding CLI** (`--list` / `--source` /
+`--dry-run`, drives `data/seed/`). Other seeders (`seed_data.py`,
+`seed_sources.py`, `seed_predictor_signals.py`, `quick_start.py`), backfills
+(`backfill/`, `backfill_entity_graph.py`), trigger drivers
+(`trigger_multi_country_runs.py`), smoke (`spike_smoke.py`, `run_tests*.sh`),
+purges (`purge_proposed_situations.py`).
 
 ---
 
-### 2.15 `src/legba/ingestion/` — Ingestion Service
+## 6. Where to add a thing
 
-Deterministic (no LLM) service that runs independently of the agent cycle. Fetches sources on schedule, normalizes content, deduplicates, stores signals, and clusters them into events.
-
-#### `ingestion/service.py` (540 lines)
-**Purpose:** Main ingestion tick loop. Runs every ~60s: fetch due sources, normalize, deduplicate, store signals, batch entity linking via spaCy NER, run clustering every 20 minutes.
-
-#### `ingestion/dedup.py` (329 lines)
-**Purpose:** 4-tier signal deduplication. GUID fast-path, source_url match, vector cosine similarity, Jaccard title similarity with source suffix/prefix stripping.
-
-**Key functions:**
-- `check_duplicate(signal, pool)` — Returns True if duplicate
-- `_title_words(title)` — Tokenize + lowercase + strip stop words
-- `_jaccard(a, b)` — Jaccard similarity between two sets
-- `_strip_source_suffixes(title)` — Remove " - Reuters", "BBC News: " etc. before comparison
-
-#### `ingestion/cluster.py` (531 lines)
-**Purpose:** Deterministic signal-to-event clustering engine. Groups related signals into derived events using entity overlap, title similarity, temporal proximity, and category matching.
-
-**Key class: `SignalClusterer`**
-- `__init__(pool)` — Takes asyncpg pool
-- `cluster(window_hours=6, max_signals=500)` — One clustering pass: fetch unclustered signals, extract features, score pairwise similarity, single-linkage clustering (threshold 0.4), create/merge events
-- `_fetch_unclustered(window_hours, limit)` — SQL: signals with no signal_event_links entry, excluding 'other' category
-- `_handle_cluster(feats)` — Multi-signal cluster: find merge target or create new event
-- `_find_merge_target(actors, locations, time_start, time_end, category)` — Entity overlap >= 0.3 against existing events
-- `_reinforce_event(existing, feats, ...)` — Bump signal_count, extend time_end, increase confidence (cap 0.8)
-- `_create_event_from_cluster(feats, ...)` — New event: title from highest-confidence signal, modal category, mean confidence capped at 0.6
-- `_create_singleton_event(feat)` — 1:1 event for structured sources (NWS, USGS, GDACS, etc.)
-
-**Key functions:**
-- `_similarity(a_entities, b_entities, a_words, b_words, a_ts, b_ts, a_cat, b_cat)` — Composite: entity overlap 0.3 + title Jaccard 0.3 + temporal proximity 0.2 + category match 0.2
-- `_single_linkage_cluster(n, sim_fn, threshold)` — Union-Find based single-linkage
-
-**Constants:** `_CLUSTER_THRESHOLD = 0.4`, `_AUTO_CONFIDENCE_CAP = 0.6`, `_REINFORCED_CONFIDENCE_CAP = 0.8`, `_STRUCTURED_SOURCES` (NWS, USGS, GDACS, NASA EONET, EMSC, IFRC, ACLED)
-
-#### `ingestion/storage.py` (498 lines)
-**Purpose:** Signal storage to Postgres + OpenSearch. Handles geo-resolution, entity extraction.
-
-#### `ingestion/fetcher.py` (588 lines)
-**Purpose:** HTTP/RSS fetching with retry, browser UA fallback, timeout handling.
-
-#### `ingestion/normalizer.py` (401 lines)
-**Purpose:** Content normalization pipeline: HTML stripping, encoding fix, truncation.
-
-#### `ingestion/source_normalizers.py` (922 lines)
-**Purpose:** Per-source format normalizers for structured APIs (USGS, GDACS, NASA EONET, etc.).
-
----
-
-### 2.16 `src/legba/agent/phases/curate.py` — CURATE Phase
-
-**Purpose:** Intelligence curation phase that replaces ACQUIRE when the ingestion service is active. The agent reviews unclustered signals, refines auto-created events, and enriches entity profiles with editorial judgment.
-
-**Key class: `CurateMixin`**
-- `_curate()` — Main curate phase: build context (unclustered signals + low-confidence events + trending events + data overview), assemble prompt with CURATE_TOOLS, run tool loop with filtered executor
-- `_build_curate_context()` — SQL queries for: unclustered signals (top 20 by confidence), auto-created events with signal_count <= 2 (top 15), trending events (signal_count > 2, top 5), total counts
-
-**CURATE_TOOLS available:** `signal_query`, `signal_search`, `event_create`, `event_update`, `event_query`, `event_link_signal`, `entity_profile`, `entity_inspect`, `entity_resolve`, `graph_store`, `graph_query`, `memory_query`, `note_to_self`, `explain_tool`, `cycle_complete`
-
----
-
-### 2.17 `scripts/migrate_signals_events.sql` — Database Migration
-
-**Purpose:** DDL migration for the signals/events refactor. Renames `events` -> `signals`, `events_derived` -> `events`, renames junction tables and foreign keys accordingly.
-
-**Key operations:**
-1. `events` table renamed to `signals` (raw ingested material)
-2. `events_derived` table renamed to `events` (derived real-world occurrences)
-3. `event_entity_links` renamed to `signal_entity_links` (column `event_id` -> `signal_id`)
-4. New `event_entity_links` table created for derived events
-5. `situation_events` renamed to `situation_signals` (column `event_id` -> `signal_id`)
-6. New `situation_events` table created for derived events
-7. `watch_triggers.event_id` renamed to `signal_id`, new `event_id` column added
-8. All indexes renamed for clarity
-
----
-
-### 2.18 `dags/` — Airflow DAGs
-
-Four DAGs deployed to the shared Airflow dags volume. Run on fixed schedules, independent of the agent cycle.
-
-| DAG File | DAG ID | Schedule | Purpose |
-|----------|--------|----------|---------|
-| `metrics_rollup.py` | `metrics_rollup` | `@hourly` | Roll raw TimescaleDB metrics into hourly/daily aggregates for Grafana |
-| `source_health.py` | `source_health` | Every 6h | Auto-pause sources with >20 consecutive failures; report utilization stats |
-| `decision_surfacing.py` | `decision_surfacing` | Every 12h | Identify stale goals (>7 days), dormant situations, merge candidates |
-| `eval_rubrics.py` | `eval_rubrics` | Every 8h | Quality evaluation: event dedup rate, graph quality (RelatedTo%, isolated%), zero-signal sources, entity link density |
-
-All DAGs connect directly to Postgres (`legba` DB) and/or TimescaleDB (`legba_metrics` DB) via `psycopg2`. Eval results are written to the TimescaleDB `metrics` table with dimension `eval` for Grafana visualization.
-
-DAGs can also be deployed at runtime by the agent via the `workflow_define` orchestration tool, which writes Python files to the shared dags volume.
-
----
-
-### 2.19 `src/legba/shared/` — New Shared Modules (Cognitive Architecture)
-
-#### `shared/confidence.py`
-**Purpose:** Pure functions for computing composite signal confidence scores using a gatekeeper formula. No database access.
-
-**Key function:**
-- `compute_confidence(source_reliability, classification_confidence, temporal_freshness, corroboration, specificity)` — Returns `Gate * Modifier` where Gate = source_reliability * classification_confidence, Modifier = weighted sum of freshness (0.4), corroboration (0.35), specificity (0.25). Weights configurable via env vars.
-
-#### `shared/contradictions.py`
-**Purpose:** Pure functions for detecting contradictory facts among stored knowledge. Uses the 30 canonical relationship predicates.
-
-**Key structures:**
-- `CONTRADICTORY_PREDICATES` — Dict mapping each predicate to a frozenset of semantically incompatible predicates (e.g., `AlliedWith` contradicts `HostileTo`, `SanctionedBy`). Symmetric.
-- `detect_contradictions(new_fact, existing_facts)` — Returns list of contradicted fact IDs with reasoning.
-
-#### `shared/lifecycle.py`
-**Purpose:** Event lifecycle state machine — pure functions, no database access.
-
-**Key types/functions:**
-- `EventLifecycleStatus` enum — `EMERGING`, `DEVELOPING`, `ACTIVE`, `EVOLVING`, `RESOLVED`, `REACTIVATED`
-- `evaluate_transition(event_dict)` — Evaluates transition rules against event state, returns new status or None. Rules: EMERGING→DEVELOPING (signal_count >= 3), DEVELOPING→ACTIVE (signal_count >= 5 + confidence >= 0.6), ACTIVE→EVOLVING (velocity > 2.0), decay to RESOLVED based on inactivity windows, RESOLVED→REACTIVATED on new signal.
-
-#### `shared/graph_events.py`
-**Purpose:** Event-as-vertex graph operations for Apache AGE. Provides Cypher query builders for managing events as first-class graph vertices alongside entities.
-
-**Key functions:**
-- `upsert_event_vertex(pool, graph, event_id, title, category, lifecycle_status)` — Create/update event vertex
-- `link_entity_to_event(pool, graph, entity_name, event_title, role, confidence)` — INVOLVED_IN edge
-- `event_actors_query(pool, graph, event_title)` — Query entities involved in an event
-- Causal, hierarchical, and temporal edge helpers between events
-
-#### `shared/watchlist_eval.py`
-**Purpose:** Structured watchlist query evaluation — pure functions for matching events against watchlist criteria (entity, location, severity, category). Used by the ingestion clusterer and agent tools.
-
-#### `shared/situation_severity.py`
-**Purpose:** Situation severity aggregation from linked events — pure functions. Computes peak severity, active event ratio, escalation trend, and composite intensity score.
-
-#### `shared/adversarial_context.py`
-**Purpose:** Queries recent adversarial flags from signal JSONB data and formats a summary string for injection into ANALYSIS cycle prompts. Lightweight SQL aggregation, no LLM.
-
-#### `shared/schema_extensions.py`
-**Purpose:** Idempotent `ALTER TABLE` / `CREATE INDEX` statements for extending existing tables with cognitive architecture columns (`confidence_components`, `evidence_set`, `lifecycle_status`, `provenance`, `contradiction_of`). All statements use `IF NOT EXISTS` for safe re-runs.
-
-#### `shared/schemas/cognitive.py`
-**Purpose:** Pydantic models for the cognitive architecture extensions.
-
-**Key classes:**
-- `ConfidenceComponents` — Individual components feeding the composite confidence formula (source_reliability, classification_confidence, temporal_freshness, corroboration, specificity)
-- `EvidenceItem` — A single piece of evidence supporting a fact (signal_id/event_id, relationship, confidence, observed_at)
-
----
-
-### 2.20 `src/legba/maintenance/` — Maintenance Daemon (Unconscious Layer)
-
-Deterministic background maintenance service. No LLM. Runs continuously on a configurable tick interval (default 60s), performing scheduled housekeeping tasks via modulo scheduling.
-
-#### `maintenance/config.py`
-**Purpose:** `MaintenanceConfig` dataclass with tick intervals for all 9 tasks, backing store configs, and `from_env()` factory.
-
-#### `maintenance/service.py`
-**Purpose:** `MaintenanceService` orchestrator — connects to all backing stores (Postgres, Redis, OpenSearch, Qdrant, NATS, TimescaleDB), runs the tick loop with modulo-based task scheduling, exposes a health/metrics HTTP endpoint.
-
-#### `maintenance/lifecycle.py`
-**Purpose:** `LifecycleManager` — event lifecycle decay (state machine transitions based on signal activity and temporal rules) and situation dormancy (situations with no recent events marked dormant).
-
-#### `maintenance/entity_gc.py`
-**Purpose:** `EntityGarbageCollector` — marks entities with zero signal references in 30 days as DORMANT, detects duplicate entity candidates (fuzzy name matching), cleans orphan graph edges, auto-pauses sources with excessive consecutive failures.
-
-#### `maintenance/fact_decay.py`
-**Purpose:** `FactDecayManager` — expires facts past their `valid_until` date, applies confidence decay to facts that haven't been refreshed recently.
-
-#### `maintenance/corroboration.py`
-**Purpose:** `CorroborationScorer` — for recently clustered events, counts distinct source_ids among linked signals and updates the event's corroboration component in confidence_components JSONB.
-
-#### `maintenance/integrity.py`
-**Purpose:** `IntegrityVerifier` — verifies evidence chains (events trace to signals, facts have evidence), runs eval rubrics (event dedup rate, graph quality, source health, entity link density), writes results to TimescaleDB.
-
-#### `maintenance/metrics.py`
-**Purpose:** `MetricCollector` — collects extended operational metrics (entity completeness distribution, fact confidence histogram, hypothesis balance, situation intensity, source quality scores) and writes to TimescaleDB for Grafana dashboards.
-
-#### `maintenance/situation_detect.py`
-**Purpose:** `SituationDetector` — proposes new situations from event clusters. Criteria: 3+ events in the same region + category within 7 days, sharing 2+ entities, no existing situation already covers them.
-
-#### `maintenance/adversarial.py`
-**Purpose:** `AdversarialDetector` — three heuristic methods for detecting coordinated inauthentic behavior: (1) source cluster velocity spikes on an entity, (2) semantic echo detection (suspiciously similar signals from "independent" sources via Jaccard), (3) source provenance grouping (correlated publishing from shared-provenance sources). Flags written to signal JSONB and metrics to TimescaleDB.
-
-#### `maintenance/calibration.py`
-**Purpose:** `CalibrationTracker` — when hypotheses are CONFIRMED or REFUTED, records claimed confidence at creation vs actual outcome. Computes confidence discrimination metric to detect systematic over/under-confidence.
-
-#### `maintenance/backfill.py`
-**Purpose:** Startup backfill module — creates event graph vertices in Apache AGE from the existing `events` table. Runs once on maintenance daemon boot to ensure all events have corresponding graph nodes. Idempotent (skips already-existing vertices).
-
----
-
-### 2.21 `src/legba/subconscious/` — Subconscious Service (SLM-Powered Validation)
-
-Async service running alongside the conscious agent, using a side-channel SLM (Llama 3.1 8B via vLLM) for continuous validation and enrichment. Three concurrent loops.
-
-#### `subconscious/config.py`
-**Purpose:** `SubconsciousConfig` dataclass with task intervals, SLM provider settings (model, temperature, timeout), uncertainty thresholds, batch sizes, and `from_env()` factory.
-
-#### `subconscious/service.py`
-**Purpose:** `SubconsciousService` orchestrator — runs three concurrent async loops: NATS consumer (triggered work), timer loop (periodic tasks), differential accumulator (state change tracking). Connects to Postgres, Redis, NATS, and the SLM provider.
-
-#### `subconscious/provider.py`
-**Purpose:** SLM provider abstraction. `BaseSLMProvider` ABC with two implementations: `VLLMSLMProvider` (OpenAI-compatible API with `guided_json` for constrained decoding) and `AnthropicSLMProvider` (`tool_use` for structured output). Both return parsed dicts from SLM JSON output.
-
-#### `subconscious/validation.py`
-**Purpose:** Signal batch validation — fetches uncertain signals (confidence between low/high thresholds), sends to SLM for quality assessment (specificity, internal consistency, cross-signal contradiction), applies adjusted confidence verdicts to Postgres.
-
-#### `subconscious/classification.py`
-**Purpose:** Classification refinement — handles boundary cases where the ingestion ML classifier is uncertain between top categories. The SLM provides semantic tiebreaking.
-
-#### `subconscious/entity_resolution.py`
-**Purpose:** Entity resolution — resolves ambiguous entity extractions by querying the SLM to match extracted names against existing entity profiles in Postgres.
-
-#### `subconscious/differential.py`
-**Purpose:** `DifferentialAccumulator` — tracks state changes between conscious agent cycles. Accumulates: new signals per situation, event lifecycle transitions, entity anomalies, fact changes, hypothesis evidence changes, watchlist matches. Writes JSON summary to Redis key `legba:subconscious:differential` every 5 minutes.
-
-#### `subconscious/prompts.py`
-**Purpose:** SLM prompt templates for all validation tasks. Each includes a system instruction, expected JSON output schema, and slot markers for dynamic content.
-
-#### `subconscious/schemas.py`
-**Purpose:** Pydantic models for SLM structured responses: `SignalValidationVerdict`, `ClassificationVerdict`, `EntityResolutionVerdict`, `FactRefreshVerdict`, `RelationshipVerdict`. Used for both response parsing and `guided_json` constrained decoding.
-
-#### `subconscious/situation_detect.py`
-**Purpose:** SLM-based situation detection (JDL Level 2). Replaces the mechanical entity-concatenation approach in the maintenance daemon. Queries events from last 48h grouped by (category, primary_region), filters to clusters with 8+ events, asks the SLM to evaluate narrative coherence, deduplicates against existing situations via Jaccard similarity on name, inserts passing clusters as proposed situations.
-
----
-
-### 2.22 `src/legba/shared/` — Priority Stack and Temporal Graph
-
-#### `shared/priority.py`
-**Purpose:** Priority stack (JDL Level 3) — ranks active situations by composite score. Four components: event velocity (0.3), goal overlap (0.25), watchlist trigger density (0.25), recency penalty (0.2), plus optional structural instability boost (capped at 0.10) from unbalanced triads. Adaptive staleness thresholds vary by severity.
-
-#### `shared/config_store.py`
-**Purpose:** Versioned config store backed by Postgres `config_versions` table. Stores prompt templates, world briefing, mission config, and guidance addons as versioned text records. Each update creates a new version; supports rollback to any previous version. Keys defined in `CONFIG_KEYS` list.
-
-#### `shared/structural_balance.py`
-**Purpose:** Structural balance analysis (JDL Level 2) on the knowledge graph. Computes balance score from AlliedWith (+) / HostileTo (-) triads. Unbalanced triads (friend-of-friend-is-enemy) predict relationship realignment.
-
-#### `shared/graph_entropy.py`
-**Purpose:** Information-theoretic entropy of the knowledge graph's relationship type distribution. Higher entropy = more diverse relationship landscape. Entropy spikes indicate structural reorganization.
-
-#### `shared/relationship_history.py`
-**Purpose:** Immutable transition records for every graph edge create/update/delete, written to TimescaleDB via the existing MetricsClient infrastructure. Enables temporal reconstruction and trend analysis.
-
-#### `shared/token_budget.py`
-**Purpose:** Rolling 24h token budget for the escalation LLM provider. Tracks usage in Redis sorted set. Hard stops escalation when budget exceeded. Archives daily totals to TimescaleDB.
-
----
-
-### 2.23 `src/legba/agent/llm/router.py` — Prompt Router
-
-**Purpose:** Per-prompt LLM provider routing. Routes individual prompts to different providers based on static overrides (config-driven, per prompt name), escalation flags (agent-requested or deterministic), and default provider fallback. Sits between the prompt assembler and the LLM client.
-
-**Key class: `PromptRouter`**
-- `__init__(default_provider, escalation_provider, config)` — Configures routing with static overrides from config
-- `route(prompt_name)` — Returns the provider to use for the given prompt
-- `escalate()` / `de_escalate()` — Intra-cycle escalation flag control
-
----
-
-### 2.24 `src/legba/agent/tools/builtins/config_tools.py` — Config Tools
-
-**Purpose:** Agent-facing tools for the versioned config store. Provides `config_read` and `config_update` for inspecting and modifying prompt templates, guidance text, and mission config. Registered in the EVOLVE tool set only — replaces `fs_write` for prompt self-modification.
-
-**Tools:** `config_read(key)`, `config_update(key, value, notes)`
-
----
-
-### 2.25 `src/legba/ui/` — Auth and Middleware
-
-#### `ui/auth.py`
-**Purpose:** JWT authentication with HMAC-SHA256 (no external dependency). 3 roles: admin (full access), analyst (read/write), viewer (read-only). User CRUD against Postgres `users` table, PBKDF2 password hashing.
-
-**Key functions:** `create_token(user_id, role)`, `verify_token(token)`, `authenticate_user(username, password)`, `create_user(username, password, role)`
-
-#### `ui/middleware.py`
-**Purpose:** Starlette auth middleware. Checks JWT cookie on `/api/` routes when `AUTH_ENABLED=true`. Skips auth entirely when disabled (backward compatible). Auth endpoints and health checks are always exempt.
-
-#### `ui/responses.py`
-**Purpose:** Standardized API error envelope (`{error: {status, message, detail}}`). Used across all API endpoints for consistent error formatting.
-
-#### `ui/routes/auth.py`
-**Purpose:** Auth API routes — `POST /api/v2/auth/login` (returns JWT in HttpOnly cookie, 24h TTL), `POST /api/v2/auth/logout` (clears cookie), `GET /api/v2/auth/me` (returns current user from token).
-
----
-
-## 3. Normal Cycle Function Call Flow
-
-```
-main.py:main()
-  asyncio.run(run_cycle())
-    config = LegbaConfig.from_env()
-    cycle = AgentCycle(config)
-    cycle.run()
-
-AgentCycle.run():
-  _wake()
-    Read /shared/challenge.json -> cycle_number, nonce
-    Load seed_goal from /seed_goal/goal.txt
-    Load world_briefing.txt (bootstrap only)
-    MemoryManager.connect() -> Redis, Qdrant, Postgres, AGE
-    LLMClient(config.llm, logger)
-    GoalManager(structured, logger)
-    SelfModEngine(agent_code_path, logger).initialize()
-    LegbaNatsClient.connect()
-    OpenSearchStore.connect()
-    AirflowClient(config)
-    ToolRegistry + _register_builtin_tools() + load_dynamic_tools()
-    ToolExecutor(registry, logger)
-    PromptAssembler(tool_data, ...)
-    AirflowClient.connect()
-    Drain inbox (NATS first, file fallback)
-
-  _orient()
-    Load active goals from GoalManager
-    Generate query embedding from seed_goal + top goal
-    MemoryManager.retrieve_context() -> episodes, facts, goals, registers
-    LegbaNatsClient.queue_summary()
-    Build graph inventory (entity type counts, relationship counts, unknowns warning)
-    Source health stats (utilization %)
-    Load reflection_forward from previous cycle
-    Load goal_work_tracker
-    Load journal context (consolidation + recent entries)
-
-  _plan()
-    PromptAssembler.assemble_plan_prompt(all context)
-    LLMClient.complete(plan_messages, purpose="plan")
-    Parse "Tools: a, b, c" line -> _planned_tools
-
-  _reason_and_act()
-    PromptAssembler.assemble_reason_prompt(context + plan + planned_tools)
-    LLMClient.reason_with_tools(messages, executor.execute, max_steps=20)
-      Loop up to 20 steps:
-        LLMClient.complete([system, user]) -> raw response
-        tool_parser.parse_tool_calls(raw) -> list[ToolCall]
-        If no tool calls -> final response, break
-        If cycle_complete -> break
-        Execute tools concurrently (max 4)
-        Add to tool_history + working_memory
-        Build next step's user message (sliding window)
-      If budget exhausted -> force final response
-    Count actions_taken from tool result messages
-
-  _reflect()
-    PromptAssembler.assemble_reflect_prompt(plan, working_memory, results)
-    LLMClient.complete(reflect_messages, purpose="reflect")
-    _parse_reflection() -> extract JSON with cycle_summary
-    _store_reflection_facts() -> Fact objects to Postgres + Qdrant
-    _store_reflection_graph() -> entities/relationships to AGE with fuzzy dedup
-
-  _narrate()
-    PromptAssembler.assemble_narrate_prompt(cycle_summary, journal_context)
-    LLMClient.complete(narrate_messages, purpose="narrate")
-    Parse JSON array of strings -> 1-3 journal entries
-    _store_journal_entries() -> append to Redis journal data
-
-  _persist()
-    Update goal progress from reflection_data
-    Auto-complete goals at 100% progress_pct
-    Update goal_work_tracker
-    Compute work pattern (collecting/deepening/analyzing/mixed)
-    Count stale goals (no progress >1hr)
-    Store reflection_forward for next cycle
-    Auto-promote reflection-flagged memories
-    Auto-promote high-significance (>=0.6) short-term memories
-    Store cycle episode to Qdrant
-    Generate outbox responses for inbox messages
-    Add status report on reporting cycles (every 5)
-    Write outbox (NATS first, file fallback)
-    _validate_liveness() -> LLM echoes nonce:cycle_number
-    Build CycleResponse
-    Write /shared/response.json
-
-  _cleanup()
-    Close: Airflow, OpenSearch, NATS, LLM, Memory
-```
-
----
-
-## 4. Introspection Cycle Function Call Flow (Every 15 Cycles)
-
-```
-AgentCycle.run():
-  _wake()          (same as normal)
-  _orient()        (same as normal)
-
-  --- Introspection branch (_is_introspection_cycle() == True) ---
-
-  _mission_review()
-    Load reflection_forward + deferred_goals
-    PromptAssembler.assemble_introspection_prompt(
-      allowed_tools=INTROSPECTION_TOOLS  # graph_query, memory_query, entity_inspect, etc.
-    )
-    Create filtered executor (blocks non-introspection tools)
-    LLMClient.reason_with_tools(review_messages, introspection_executor)
-    Extract findings from working memory
-    Prepend to reflection_forward
-
-  _reflect()       (same as normal)
-
-  _narrate()       (same as normal)
-
-  _journal_consolidation()
-    Load all raw journal entries from Redis
-    PromptAssembler.assemble_journal_consolidation_prompt(entries, previous_consolidation)
-    LLMClient.complete() -> new consolidated narrative
-    Store consolidation, clear raw entries
-
-  _generate_analysis_report()
-    Query actual data from all stores:
-      - Key relationships from AGE (LeaderOf, HostileTo, AlliedWith, etc.)
-      - Entity profiles with summaries from Postgres
-      - Recent events from OpenSearch (fallback: Postgres)
-      - Coverage regions from graph
-      - Current journal narrative
-    PromptAssembler.assemble_analysis_report_prompt(all data)
-    LLMClient.complete() -> report content
-    Store to Redis (latest_report + report_history)
-    Add to outbox as ANALYSIS REPORT message
-
-  _persist()       (same as normal)
-```
-
-**INTROSPECTION_TOOLS allowed set:**
-`graph_query`, `graph_store`, `graph_analyze`, `memory_query`, `memory_store`, `memory_promote`, `memory_supersede`, `entity_inspect`, `entity_profile`, `os_search`, `note_to_self`, `explain_tool`, `goal_update`, `goal_create`, `cycle_complete`
-
----
-
-## 4b. CURATE Cycle Function Call Flow (Every 3 Cycles, When Ingestion Active)
-
-Replaces ACQUIRE when the ingestion service is running. The agent applies editorial judgment to raw signals and auto-created events rather than doing its own source fetching.
-
-```
-AgentCycle.run():
-  _wake()          (same as normal)
-  _orient()        (same as normal)
-
-  --- Curate branch (ingestion active, cycle_number % 3 == 0) ---
-
-  _curate()
-    _build_curate_context()
-      ├── SQL: Unclustered signals (no event link, not junk, top 20 by confidence)
-      ├── SQL: Auto-created events with signal_count <= 2 (top 15)
-      ├── SQL: Trending events with signal_count > 2 (top 5)
-      └── SQL: Total signals, events, unlinked count
-
-    PromptAssembler.assemble_curate_prompt(
-      curate_context=...,
-      allowed_tools=CURATE_TOOLS
-    )
-    Create filtered executor (blocks non-curate tools)
-    LLMClient.reason_with_tools(curate_messages, curate_executor)
-
-  _reflect()       (same as normal)
-  _narrate()       (same as normal)
-  _persist()       (same as normal)
-```
-
-**CURATE_TOOLS allowed set:**
-`signal_query`, `signal_search`, `event_create`, `event_update`, `event_query`, `event_link_signal`, `entity_profile`, `entity_inspect`, `entity_resolve`, `graph_store`, `graph_query`, `memory_query`, `note_to_self`, `explain_tool`, `cycle_complete`
-
----
-
-## 5. LLM Call Flow
-
-```
-cycle.py (any phase)
-  |
-  v
-assembler.py:assemble_*_prompt(...)
-  Build [Message(role="system", ...), Message(role="user", ...)]
-  System = identity + rules + guidance + tool defs + calling format
-  User = context data bracketed by separators + task request
-  |
-  v
-client.py:LLMClient.complete(messages, purpose)
-  |
-  v
-format.py:to_chat_messages(messages)
-  Combine all messages into single {"role": "user", "content": combined}
-  (GPT-OSS doesn't handle system role reliably)
-  |
-  v
-provider.py:VLLMProvider.chat_complete(chat_msgs)
-  POST /v1/chat/completions
-  {
-    "model": "InnoGPT-1",
-    "messages": [{"role": "user", "content": combined}],
-    "temperature": 1.0,
-    "stream": false
-  }
-  Retry on 429/500/502/503 with exponential backoff (max 3)
-  |
-  v
-vLLM server (GPT-OSS 120B MoE, 128k context)
-  |
-  v
-provider.py: parse response
-  format.py:strip_harmony_response(raw_content) -> clean content
-  Return LLMResponse(content, finish_reason, usage)
-  |
-  v
-client.py: log full call via CycleLogger
-  Return LLMResponse to caller
-```
-
-**For REASON+ACT loops (reason_with_tools):**
-```
-client.py:reason_with_tools(messages, tool_executor, max_steps=20)
-  Extract system_msg (constant across steps)
-  Split user content at "--- END CONTEXT ---"
-  |
-  v
-  Loop (step 1..20):
-    Build [system_msg, user_msg] for this step
-      Step 1: original messages as-is
-      Step 2+: base_context + tool_history (sliding window) + working_memory + act instruction
-    |
-    LLMClient.complete([system, user]) -> response
-    |
-    tool_parser.py:parse_tool_calls(response.content) -> list[ToolCall]
-      Strategy 1: {"actions": [...]} wrapper
-      Strategy 2: bare {"tool": ...} objects
-      Strategy 3: legacy to=functions.NAME format
-    |
-    If no tool calls -> return (response, history)
-    If cycle_complete -> break
-    |
-    Execute tools concurrently (max 4):
-      asyncio.gather(*[tool_executor(tc.tool_name, tc.arguments) for tc in tool_calls])
-    |
-    Add to tool_history, working_memory, history_messages
-    |
-    Continue loop
-  |
-  If budget exhausted:
-    Force final response with BUDGET_EXHAUSTED_PROMPT
-    Return (forced_response, history)
-```
-
----
-
-## 6. External Dependencies
-
-| Category | Package | Used By |
+| Goal | Add here | Then |
 |---|---|---|
-| HTTP | `httpx` | provider.py, http.py, airflow_client.py, audit.py |
-| Async Redis | `redis[asyncio]` | registers.py, messages.py |
-| Postgres | `asyncpg` | structured.py, graph.py |
-| Vector DB | `qdrant-client` | episodic.py |
-| NATS | `nats-py` | nats_client.py |
-| OpenSearch | `opensearch-py` | opensearch.py |
-| RSS | `feedparser` | feed_tools.py |
-| HTML extract | `trafilatura` | http.py, feed_tools.py |
-| Crypto | `PyNaCl` | crypto.py |
-| Data | `pydantic` | all schemas |
-| Country lookup | `pycountry` | geo.py |
-| NLP | `yake` | analytics_tools.py |
-| NLP | `spacy` | ingestion/service.py (NER for entity extraction) |
-| ML | `scikit-learn`, `numpy` | analytics_tools.py |
-| Config | `python-dotenv` | config.py |
-| Web framework | `FastAPI`, `uvicorn`, `jinja2` | ui/ |
+| **A new source kind** | a handler module in `data/sources/` implementing the `_contract.py` Protocol | register the kind; write a `SourceDescriptor` (see `descriptors/source_*.yaml`) |
+| **A new analyst kind** | a module in `data/analysts/` (or a handler in `analysts/deterministic_handlers/` for deterministic); add the value to `AnalystKind` (or register via vocabulary) | wire the run path in `runtime/analyst_method.py` / `analyst_deps_builder.py` |
+| **A new filter / enricher** | a handler in `data/filters/` implementing `_contract.py` `StreamHandler` | reference it from a source's `pipeline` |
+| **A new output sink** | a handler in `data/outputs/` implementing `_contract.py` `AlertEmitter` (+ a sub-sink in `alert_sinks/` if it's an alert surface) | bind it via a target/analyst `OutputBinding` |
+| **A migration** | the next-numbered `data/migrations/NNNN_*.sql` | apply with `python -m legba.data.migrate` |
+| **A predicate helper** | `data/predicates/helpers.py` | usable in source-selector / subscription Starlark |
+| **A stack/provider adapter** | a module under `data/stack/<family>/` | register a `StackComponentDescriptor` |
+| **A discovery kind** | a module in `data/discovery/` + a materializer | write a `discovery_*.yaml` |
+| **A curated seed source** | an adapter in `data/seed/adapters/` implementing `_base.py` `SeedSource` + a dataset under `seeds/` | register it in `data/seed/__init__.py` `ADAPTERS`; run `scripts/seed.py --source <name>` |
+| **A UI panel** | a `.tsx` under `legba-ui-v3/src/panels/<area>/` | register it in `panel-registry/` |
 
 ---
 
-## 7. Data Flow Summary
+## 7. Future seams (present in the tree, not yet load-bearing)
 
-```
-                    +---------+
-                    |  vLLM   |
-                    |GPT-OSS  |
-                    +----+----+
-                         ^
-                         | HTTP /v1/chat/completions
-                    +----+----+
-        +---------->| Agent   |<----------+
-        |           | Cycle   |           |
-        |           +----+----+           |
-        |                |                |
-   +----+----+    +------+------+   +-----+-----+
-   | Qdrant  |    |  Postgres   |   | OpenSearch |
-   | (vector)|    | (structured)|   | (fulltext) |
-   |         |    |   + AGE     |   |            |
-   +---------+    | (graph ext) |   +-----------+
-                  +------+------+
-                         |
-               +---------+---------+
-               |  Signal/Event     |
-               |  Two-Tier Model   |
-               |                   |
-               | signals (raw)     |
-               |   ↓ clustering    |
-               | events (derived)  |
-               |   ↓ signal_event  |
-               |     _links (M:N)  |
-               +-------------------+
+These exist as stubs / thin handlers or pending wirings; don't mistake them for
+live features. The authoritative declared-seam list is `docs/SEAMS.md`.
 
-        |                |                |
-   +----+----+    +------+------+   +-----+-----+
-   |  Redis  |    |    NATS     |   |  Airflow  |
-   |(registers|   | (event bus) |   |(4 DAGs:   |
-   | +journal)|   +-------------+   | rollup,   |
-   +---------+                      | health,   |
-                                    | surfacing,|
-                                    | eval)     |
-                                    +-----------+
+- **Media extraction models** — the `process_media` job plane is real
+  end-to-end (lands the derived signal, re-publishes it into fan-out with
+  inherited geo/tags); with no `LEGBA_MEDIA_API_URL` configured the path
+  refuses loud (`runtime/jobs/media_client.py` raises) — the extraction
+  *service* is the seam, not the plumbing.
+- ~~Analyst-side agency invocation~~ — **CLOSED (A-3)**: the agency hard-gate
+  (`data/analysts/agency/agency.py` `Agency.run_pack_tool`) is invoked in
+  production by two built-in paths — consult routes its ReAct tool calls
+  through the governed `substrate_read` pack
+  (`data/analysts/agency/substrate_read.py`), and the actor run path fires the
+  `escalate_finding` pack when a finding crosses the gate (the production
+  on-ramp is `data/analysts/agency/binding.py`). Live-proven at the 2026-06-10
+  cutover (escalate invocations + governor allow events + channel emit).
+- **Backend routes behind shipped panels** — these are now **LIVE**:
+  `GET /registry/governor_events` (`data/registry/api.py:1898`, queries the
+  `governor_events` table), `GET /v3/eval/scorecard` (`v3_api.py:685`), and the
+  optimizer prompt-diff `GET /v3/optimizer/candidates/{id}/diff` (`v3_api.py:519`,
+  built entirely from substrate, no dspy import). The one deliberate exception is
+  `POST /registry/targets/{id}/backfill` — an **honest 501** (`api.py:1952`,
+  status_code=501 — refuses loud, never a silent 404; the `Backfiller` backend
+  exists in `runtime/subscription/backfill.py` but the registry-plane trigger is
+  intentionally not exposed).
+- **Non-text UI renderers** — the modality→renderer registry is keyed, but the
+  MapLibre renderer for `structured`/geo+json and the audio/video/image players
+  are badged placeholders.
+- **Situation clustering at scale** — `finding_supersession` ships as a
+  deterministic analyst that links near-dups; auto-clustering them into
+  feed-level situations is not yet enforced.
 
-   +-----------+        +-----------+
-   |Supervisor |------->|   Agent   |
-   |           |<-------| Container |
-   +-----------+        +-----------+
-   (challenge/          (response.json
-    response)            logs, outbox)
+Live, in case other notes suggest otherwise: reactive LLM-analyst
+trigger dispatch (`runtime/triggers/` fires LLM analysts on the coalescing
+accumulation/severity gates, not only on cadence); source-side dedup tiers 1–2
+(`data/filters/ingest_dedupe.py`, applied by `runtime/source_actor.py`
+`SourceCore` from the descriptor's `pipeline.ingestion_filters`); the
+subscription-policy-locking / discovery-pipeline / action-pack-grant /
+backfill-replay operator panels (real `legba-ui-v3` panels, no longer
+`_DeferredStub`); and the per-pack governor caps live-enforced over
+`action_pack_invocations` at the agency entry point.
 
-   +-----------+        +-----------+
-   |    UI     |        | Ingestion |
-   | (read-only|        | Service   |
-   |  console) |        | (no LLM)  |
-   +-----------+        +-----------+
-   FastAPI + htmx       Fetch → Dedup → Signal
-   Reads all stores     Cluster → Event (every 20m)
-```
+---
 
-### Database Tables (Post-Migration)
-
-| Table | Purpose |
-|-------|---------|
-| `signals` | Raw ingested material (was `events`) |
-| `events` | Derived real-world occurrences (was `events_derived`) |
-| `signal_event_links` | Many-to-many: signals evidencing events |
-| `signal_entity_links` | Signal-entity junction (was `event_entity_links`) |
-| `event_entity_links` | Event-entity junction (new, for derived events) |
-| `entity_profiles` | Versioned entity profiles |
-| `entity_profile_versions` | Profile version history |
-| `situations` | Tracked situations |
-| `situation_signals` | Situation-signal junction (was `situation_events`) |
-| `situation_events` | Situation-event junction (new, for derived events) |
-| `watch_triggers` | Alert triggers: `signal_id` + `event_id` columns |
-| `goals` | Goal hierarchy |
-| `facts` | Structured facts |
-| `modifications` | Self-modification audit trail |
-| `sources` | Source registry with trust metadata |
+See also: `ARCHITECTURE.md`, `DESIGN.md`, `ACQUISITION.md`, `ANALYSIS.md`,
+`AI_MODELS.md`, `RUNBOOK.md`, `UI.md`.

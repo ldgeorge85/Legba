@@ -1,247 +1,420 @@
-# AI Models in Legba
+# AI Models
 
-Legba uses seven distinct AI models across four services for inference, embedding, NLP enrichment, and continuous validation. None run inside the Legba containers — all are accessed over HTTP.
+Legba is a source-first platform for automated analysis & knowledge fusion. Two classes of AI model carry
+its acquisition and analysis work, and **none of them run inside the Legba
+containers** — every model is reached over HTTP against out-of-process
+model-serving hosts, with credentials and endpoints resolved through the stack
+registry and credential vault (see `ARCHITECTURE.md`, `ACQUISITION.md`).
 
-## Model Inventory
+The two classes are:
 
-| Model | Type | Size | Hardware | Endpoint | Used By |
-|-------|------|------|----------|----------|---------|
-| GPT-OSS 120B (InnoGPT-1) | Causal LLM | 120B params | 2x A6000 48GB (tensor parallel) | ``<vllm-endpoint>/v1`` | Agent, Consultation |
-| embedding-inno1 | Text embedding | — | Tesla T4 (shared GPU 0) | Same base URL, `/v1/embeddings` | Agent memory, Ingestion |
-| NLLB-200-distilled-600M | Translation | 600M params | Tesla T4 (shared GPU 0) | ``<models-endpoint>`` | Ingestion |
-| DeBERTa-v3 zero-shot | Classification | ~184M params | Tesla T4 (shared GPU 0) | Same as above | Ingestion |
-| GLiREL-large | Relation extraction | ~350M params | Tesla T4 (shared GPU 0) | Same as above | Ingestion |
-| T5-small | Summarization | 60M params | Tesla T4 (shared GPU 0) | Same as above | Ingestion |
-| Llama 3.1 8B (Q5_K_M) | SLM | 8B params (quantized) | GPU 1 on ai1 | ``<slm-endpoint>/v1`` | Subconscious service |
-| spaCy (en_core_web_trf) | NER | — | CPU | In-process | Ingestion (entity linking) |
+1. **Baseline NLP enrichment** — small, deterministic transformer models
+   (translation, zero-shot classification, relation extraction,
+   summarization) served by the `legba-models` service. A `SourceActor`
+   uses these once per signal, at acquisition time, to enrich the single
+   canonical signal before it fans out.
+2. **LLM providers + embeddings** — a self-hosted vLLM LLM (gpt-oss-120b,
+   served under a deployment-configured model alias set via
+   `LEGBA_LLM_MODEL_NAME`), an OpenAI-compatible embeddings model
+   (`BAAI/bge-m3`), and optional hosted providers (Anthropic, OpenAI).
+   `AnalystActor`s and the consult engine reach these through provider
+   handlers bound to stack-component descriptors.
 
-## 1. Main LLM — GPT-OSS 120B
+This split matches the platform's planes (see `DESIGN.md`): the **acquisition
+plane** uses the baseline NLP models; the **analysis plane** uses the LLM
+providers and embeddings.
 
-The agent's reasoning engine. Served by vLLM with tensor parallelism across two A6000 GPUs.
+---
 
-| Parameter | Value |
-|-----------|-------|
-| Model name | `InnoGPT-1` |
-| Endpoint | `/v1/chat/completions` (OpenAI-compatible) |
-| Temperature | `1.0` (hardcoded — GPT-OSS requires 1.0) |
-| Top-p | `0.9` |
-| Context window | 128k tokens (`LLM_MAX_CONTEXT_TOKENS`) |
-| Max output tokens | 16,384 (`LLM_MAX_TOKENS`); not sent in payload by default (server manages budget) |
-| Timeout | 180s |
-| Throughput | ~42 tokens/sec, ~5.3 cycles/hour |
-| Retries | 3 with exponential backoff on 429/500/502/503 |
+## 1. The hosted `legba-models` NLP service
 
-**Call pattern:** Single-turn. Every LLM call sends one user message (system + user combined by `format.py`). No multi-turn conversation. Each step rebuilds the user message with accumulated tool results via a sliding window (last 8 tool interactions in full, older condensed to one-line summaries).
+`legba-models` is a FastAPI service on a GPU host (GPU 0, Tesla T4 16 GB) that
+fronts four small transformer models behind a single HTTP surface. It does
+deterministic NLP enrichment — there is no LLM in this service.
 
-**Reasoning directive:** Prompts include `reasoning: high` in content, handled by the prompt assembler/templates. The model uses Harmony response format — output may contain channel markers like `<|channel|>final<|message|>...<|end|>` which are stripped by `strip_harmony_response()` before parsing.
+| Endpoint | Method | Model | HuggingFace ID | Purpose |
+|----------|--------|-------|----------------|---------|
+| `/translate` | POST | NLLB-200-distilled-600M | `facebook/nllb-200-distilled-600M` | Translate non-English text → English |
+| `/classify`  | POST | DeBERTa-v3 zero-shot | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | Zero-shot topic classification |
+| `/extract`   | POST | GLiREL-large | `jackboyla/glirel-large-v0` | Zero-shot relation extraction (S-P-O triples) |
+| `/summarize` | POST | T5-small | `google-t5/t5-small` | One-line multi-text summary |
+| `/health`    | GET  | — | — | Service + GPU-memory status |
 
-**Key files:**
-- `src/legba/agent/llm/provider.py` — VLLMProvider, the HTTP client
-- `src/legba/agent/llm/client.py` — LLMClient, sliding window, tool loop
-- `src/legba/agent/llm/format.py` — Harmony stripping, message formatting
+Total VRAM is ~3.9 GB. The full request/response contract for each endpoint
+lives in `legba-models/USAGE.md`.
 
-## 2. Embedding Model — embedding-inno1
+### Access
 
-Generates 1024-dimensional vectors for semantic search and memory retrieval.
+- **External:** `https://nlp.example.internal`, HTTP Basic Auth over
+  HTTPS.
+- **Internal:** `http://legba-models:8700` from any container on the `fastchat`
+  Docker network, no auth.
 
-| Parameter | Value |
-|-----------|-------|
-| Model name | `embedding-inno1` |
-| Endpoint | `/v1/embeddings` (OpenAI-compatible) |
-| Dimensions | 1024 |
-| Timeout | 30s |
-| Hardware | Tesla T4, GPU 0 (shared with models service + Whisper) |
+The service is registered as the `nlp.local.legba_models` stack component
+(schema `legba/stack/nlp_service/1.0.0`; see
+`scripts/bringup_register_stack.py`). Its config holds the endpoint, the four
+endpoint paths, the health path, a `timeout_seconds` (default 60), and two
+vault-backed secrets — `api_user` and `api_pass` — for the external Basic-Auth
+path.
 
-**Used in two places:**
+### How the runtime reaches it
 
-1. **Agent episodic memory** — `LLMClient.generate_embedding()` embeds episode summaries and facts for Qdrant storage/retrieval. Called during `remember_episode`, `store_fact`, `recall_similar`, and `update_fact` tool invocations.
+Filter/enrichment handlers in the acquisition pipeline bind to this component
+via a `Property.StackRef("nlp.local.legba_models")`. The runtime resolves
+the StackRef, reads the config, decrypts the credentials from the vault, and
+hands the handler an `NlpServiceClient`
+(`src/legba/data/stack/nlp_service/client.py`).
 
-2. **Ingestion signal embeddings** — `ingestion/service.py` creates its own embedding HTTP client at startup. Embeds signal title + first 512 chars of summary, upserts to a `signals` Qdrant collection for semantic dedup and search.
+`NlpServiceClient` is an async `httpx` client with one method per endpoint —
+`translate()`, `classify()`, `extract()`, `summarize()`, `health()`. It uses
+Basic Auth when `api_user`/`api_pass` are supplied and skips it for the
+internal no-auth path. Failures are typed:
 
-Both paths hit the same `/v1/embeddings` endpoint. The embedding endpoint is separate from the LLM endpoint only if `EMBEDDING_API_BASE` is set; otherwise it falls back to `OPENAI_BASE_URL`.
+- **`NlpServiceUnavailable`** — network error / 5xx / non-401 4xx / non-JSON
+  body. The acquisition-plane filter handlers convert this into a no-op
+  pass-through: the signal flows downstream un-enriched and the handler's
+  health flips to `degraded`.
+- **`NlpServiceAuthError`** — HTTP 401, a distinct signal because operator
+  action (vault rotation) is required.
 
-## 3. GPU Models Service
+This graceful degradation means a `legba-models` outage slows enrichment but
+never stalls the pipeline.
 
-Four small transformer models running on a single Tesla T4 via a FastAPI service (`legba-models`). Used exclusively by the ingestion pipeline for deterministic NLP enrichment — no LLM involved.
+### Where each endpoint is used
 
-| Endpoint | Model | HuggingFace ID | Purpose | Latency | VRAM |
-|----------|-------|----------------|---------|---------|------|
-| `POST /translate` | NLLB-200-distilled-600M | `facebook/nllb-200-distilled-600M` | Non-English signal translation | ~650ms | ~1.2GB |
-| `POST /classify` | DeBERTa-v3 zero-shot | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | Signal category classification | ~190ms | ~500MB |
-| `POST /extract` | GLiREL-large | `jackboyla/glirel-large-v0` | Subject-predicate-object triple extraction | ~800ms | ~1.5GB |
-| `POST /summarize` | T5-small | `google-t5/t5-small` | Cluster title summarization | ~600ms | ~250MB |
+- **`/extract` — entity + relation enrichment.** The multilingual NER filter
+  (`src/legba/data/filters/ner.py`) posts the signal's text to `/extract`, walks
+  the returned subject-predicate-object triples, and maps each subject/object
+  candidate to Legba's closed 9-value `entity_class` taxonomy (label-keyword
+  heuristic, since GLiREL returns free-text entities without typed labels). GLiREL
+  emits a **real per-relation confidence score** per extracted triple (live facts
+  span ~0.75 / 0.80 / 0.92 / 0.95, not a synthetic constant), so relation
+  confidence is genuine model output rather than a fixed sentinel. It
+  annotates `signal.payload["entities"]`; classes outside the registry's
+  vocabulary are dropped. These entities feed the indexed `entity_classes`
+  column the subscription/fan-out layer pushes down to SQL, and the entity
+  knowledge-graph that the `entity_resolution` analyst keeps current.
+- **`/classify`** — zero-shot topic classification against a built-in
+  9-category default set (`conflict`, `political`, `economic`, `health`,
+  `environment`, `technology`, `disaster`, `social`, `sports`) or operator-
+  supplied labels (`src/legba/data/filters/classify.py`).
+- **`/translate`** — translates a non-English signal to English so downstream
+  NER/classification/LLM steps see one language. Supported source languages:
+  `ar`, `fa`, `he`, `ru`, `en`, `zh`, `fr`, `es`, `de`, `uk`, `tr`. All text
+  inputs are truncated to 512 tokens at the model.
+- **`/summarize`** — exposed by the NLP service but has **no production caller**
+  today (situation / cluster titles are plain string operations, not model-
+  summarized). Kept available for future use.
 
-Total VRAM: ~3.9GB of 16GB. First call after startup is ~2s (model warmup).
+> **Note on language detection.** Per-signal language detection is **not** a
+> hosted-model call. It runs in-process in the language-detect filter
+> (`src/legba/data/filters/language_detect.py`) via `langdetect` (default) or
+> `lingua` — sub-millisecond, no model download, no network round-trip. Only
+> *translation* of a detected non-English signal hits the hosted NLLB model.
 
-**Client:** `src/legba/ingestion/models_client.py` — `ModelsClient` class with graceful degradation. If the service is unavailable, ingestion falls back to regex classification and raw titles. Health checks run periodically.
+---
 
-**Access:** Internal containers use `http://legba-models:8700` (no auth) on the `fastchat` Docker network. External access requires HTTP Basic Auth over HTTPS.
+## 2. LLM providers
 
-**Supported translation languages:** ar, fa, he, ru, en, zh, fr, es, de, uk, tr.
+Legba speaks to three LLM provider families through a common handler base. Each
+provider is a stack-component descriptor; the runtime instantiates the matching
+handler, resolves the API key from the vault, and binds it to the analyst (or
+consult engine) that declared it.
 
-**Input truncation:** All text inputs truncated to 512 tokens at the model level. The client truncates to 1000-2000 chars before sending.
+### The provider handlers
 
-## 4. Subconscious SLM — Llama 3.1 8B
+All three concrete handlers subclass `LLMProviderHandler`
+(`src/legba/data/stack/llm/base.py`) and expose a single unified surface —
+`chat_complete()` / `stream_complete()` returning `LLMResponse` /
+`LLMUsage` / `LLMToolCall`. Analyst handlers author tool specs once in the
+OpenAI Chat-Completions JSON-Schema shape; each provider translates to its
+native wire shape. The registry of handlers is
+`LLM_HANDLERS` in `src/legba/data/stack/llm/__init__.py`.
 
-The subconscious service uses a small language model for continuous validation and enrichment between conscious agent cycles. Runs as a quantized (Q5_K_M) Llama 3.1 8B Instruct served via vLLM on a dedicated GPU.
+| Subprovider | Handler | Wire API | Auth | Notes |
+|-------------|---------|----------|------|-------|
+| `vllm` | `VLLMProviderHandler` (`vllm.py`) | `POST /v1/chat/completions` (OpenAI-compatible) | Bearer | Self-hosted gpt-oss-120b; zero-cost price table; coalesces vLLM multi-choice (reasoning + final) output. |
+| `anthropic` | `AnthropicProviderHandler` (`anthropic.py`) | `POST /v1/messages` | `x-api-key` | Hoists system role to top-level `system`; required `max_tokens`; maps extended-thinking + cache tokens into `LLMUsage`. |
+| `openai` | `OpenAIProviderHandler` (`openai.py`) | `POST /v1/chat/completions` | Bearer | Routes reasoning models (`gpt-5`, `o*`) to `max_completion_tokens` + `reasoning_effort`. |
 
-| Parameter | Value |
-|-----------|-------|
-| Model | Llama 3.1 8B Instruct (Q5_K_M quantization) |
-| Hardware | GPU 1 on ai1 |
-| Throughput | ~40 tokens/sec |
-| Temperature | 0.1 (deterministic validation) |
-| Endpoint | `/v1/chat/completions` (OpenAI-compatible) |
-| Structured output | `guided_json` (vLLM constrained decoding) |
+Shared base behavior:
 
-**Tasks:** Signal quality assessment, entity resolution, classification refinement, fact corroboration, graph consistency checks, relationship validation. Runs three concurrent async loops (NATS consumer, timer, differential accumulator).
+- **Retry/backoff** on `429`/`500`/`502`/`503`/`529` (honors `retry-after`),
+  up to 3 retries; `TransientLLMFailure` vs `HardLLMFailure` classification so
+  the runtime retries the right cases.
+- **Lean health check** — TCP reachability of the endpoint host + vault key
+  resolution only. The handler never burns paid (or self-hosted GPU) tokens on
+  a poll; the next real `chat_complete` is the liveness probe.
+- **Cost + budget hooks** — `LLMUsage` carries prompt/completion/reasoning/
+  cache token counts, and `estimate_cost()` derives a USD estimate from a
+  per-subprovider `PRICE_TABLE` (`pricing.py`). The self-hosted vLLM table is
+  empty (zero list price) but tokens are still counted for budget envelopes.
+  Anthropic/OpenAI tables carry list prices keyed by model-family prefix.
 
-**Key file:** `src/legba/subconscious/service.py`
+### Registered providers
 
-## 5. spaCy NER — en_core_web_trf
+`scripts/bringup_register_stack.py` registers these LLM stack components
+(schema `legba/stack/llm_provider/1.0.0`):
 
-The ingestion pipeline uses spaCy's transformer-based NER model for deterministic entity extraction from signals. Runs in-process on CPU within the ingestion container — no external endpoint.
+| Component id | Endpoint | Model | Tier |
+|--------------|----------|-------|------|
+| `llm.primary.openai_compat` | `https://llm.example.internal` | `gpt-oss-120b` | primary |
+| `llm.anthropic.opus_4_7` | `https://api.anthropic.com` | `claude-opus-4-8` | consult/deep plane |
 
-**Used for:** Batch entity linking during ingestion. Extracts person, organization, location, and other named entities from signal text, linking them to existing entity profiles in Postgres.
+The `LLMProviderConfig` (`src/legba/data/schemas/stack.py`) holds
+`api_endpoint`, a vault `api_key` secret, `model_name`, `max_tokens`, and
+`timeout_seconds`. Endpoints store the **base host only** — the handler's
+`_chat_endpoint_path()` prepends the provider-specific path (`/v1/...`), and
+the base client defensively strips a trailing `/v1` so both `https://host` and
+`https://host/v1` configs resolve correctly.
 
-## 6. Hybrid LLM Routing (Prepped, Dormant)
+### Resolution: descriptor → handler
 
-Infrastructure exists to route specific cycle types to an alternate LLM provider (e.g., Anthropic Claude for ANALYSIS/INTROSPECTION, GPT-OSS for everything else). Not currently active in production.
+An analyst descriptor names its LLM via `method.llm.primary`, a StackRef to a
+registered component. At analyst-actor activation
+(`src/legba/runtime/analyst_deps_builder.py`):
 
-**How it works:**
+1. `build_llm_handler_from_stack_component()` fetches the
+   `/stack/{component_id}` row and re-parses the config into
+   `LLMProviderConfig`.
+2. `infer_llm_subprovider()` picks the handler class. There is no
+   `subprovider` field on the config; the subprovider is derived from the
+   component id and endpoint host, most-specific first: a `.anthropic.` /
+   `llm.anthropic*` id → `anthropic`; an `.openai_compat` suffix → `vllm`; a
+   `.openai.` / `llm.openai*` id → `openai`; then by endpoint hostname
+   (`api.anthropic.com` → `anthropic`, `api.openai.com` → `openai`); otherwise
+   **fall back to `vllm`** (the dominant self-hosted, OpenAI-compatible case).
+3. The handler class is looked up in `LLM_HANDLERS`, instantiated, and
+   `on_configure`'d (resolves the vault secret, fetches the model list).
+   `on_activate` — opening the HTTP pool — is left to the actor's lifecycle.
 
-1. `LLMConfig.for_cycle_type()` reads `LLM_PROVIDER_MAP` env var (JSON dict mapping cycle type to provider name).
-2. In the WAKE phase (`src/legba/agent/phases/wake.py`), after determining the cycle type, calls `for_cycle_type()`. If a mapping exists, constructs an alternate `LLMConfig` from `LLM_ALT_*` env vars.
-3. The alternate config is used to create the `LLMClient` for that cycle.
+This is the registry-resolved per-kind routing: a deterministic analyst can be
+pointed at the self-hosted gpt-oss-120b while a high-value analyst is pointed at a
+hosted Claude/GPT model, purely by which component its descriptor references —
+no code change. Today's live topology routes the LLM-bearing analysts at the
+self-hosted `llm.primary.openai_compat` endpoint.
 
-**AnthropicProvider** (`src/legba/agent/llm/anthropic_provider.py`) is fully implemented:
-- Uses `/v1/messages` with proper system role separation
-- `max_tokens` required (default 16,384)
-- `x-api-key` header authentication
-- Normalizes Anthropic's `input_tokens`/`output_tokens` and `stop_reason` to match VLLMProvider's interface
-- Default model: `claude-sonnet-4-20250514`, temperature 0.7
-- No Harmony token handling needed
+**Plane split (live policy, 2026-06).** The hosted Anthropic plane
+(`claude-opus-4-8`) is reserved for the **consult / deep-consult** kinds only.
+The **critic and every other analyst** run on the core OpenAI-compatible plane
+(`llm.primary.openai_compat`); the critic runs there with
+`allow_self_correlated=true` (it is no longer a cross-provider check). The core
+plane sends **no `max_tokens`** — output length is left to the model's own budget
+— while the prompt **input** is bounded by `LEGBA_LLM_INPUT_TOKEN_BUDGET`
+(default `32000`). This heterogeneity boundary keeps consult/deep on a distinct
+provider from the rest of the analysis plane.
 
-**Example activation** (not currently set):
-```
-LLM_PROVIDER_MAP={"ANALYSIS": "anthropic", "INTROSPECTION": "anthropic"}
-LLM_ALT_API_BASE=https://api.anthropic.com
-LLM_ALT_API_KEY=&lt;api-key&gt;
-LLM_ALT_MODEL=claude-sonnet-4-20250514
-LLM_ALT_TEMPERATURE=0.7
-```
+Whatever model an analyst is bound to carries a **training cutoff**. For
+assessments that turn on current world state, that stale prior is corrected not by
+the model but by **substrate knowledge grounding** — current facts (sourced from
+Wikidata) injected into the prompt at analysis time. See §6 for why this sits
+where it does relative to the model.
 
-**Cost note:** An 18-cycle test with Claude Sonnet showed ~$900/day token cost. Not viable for continuous personal use; the hybrid approach would selectively use Claude only for high-value cycle types.
+---
 
-## 7. Consultation Engine
+## 3. Embeddings
 
-The operator-facing "Working" interface (`/consult`) uses its own LLM config, independent of the agent.
+Embeddings come from the same vLLM box via its OpenAI-compatible
+`/v1/embeddings` route, serving the `BAAI/bge-m3` model (1024-dim). It is a
+separate, smaller model from the LLM but shares the host and the same vault key.
 
-| Parameter | Default | Env Var |
-|-----------|---------|---------|
-| Provider | `anthropic` | `CONSULT_LLM_PROVIDER` |
-| Model | `claude-sonnet-4-20250514` | `CONSULT_MODEL` |
-| Temperature | `0.7` | `CONSULT_TEMPERATURE` |
-| Timeout | `300s` | `CONSULT_TIMEOUT` |
-| API Key | (from .env) | `CONSULT_API_KEY` |
+It is registered as the `embed.primary.openai_compat` stack component
+(schema `legba/stack/embedding/1.0.0`) with endpoint
+`https://llm.example.internal`, `model_name: bge-m3` (set via
+`LEGBA_EMBED_MODEL_NAME`), `dim: 1024`, `normalize`, and `batch_size`.
 
-The consultation engine reuses both `VLLMProvider` and `AnthropicProvider` but keeps its own conversation management (Redis sessions, 1-hour TTL, max 10 tool steps per exchange). It has access to Legba's knowledge stores via a subset of tools (event search, entity lookup, graph queries, etc.).
+The runtime builds a `HostedEmbeddingClient`
+(`src/legba/runtime/embedding_factory.py`) from that component:
+`build_embedding_service_from_stack_component()` fetches the row, parses
+`EmbeddingServiceConfig`, resolves the (optional) api_key, and returns a client
+satisfying the `EmbeddingService` Protocol — `async def embed(text) ->
+list[float]`. The wire call is
+`POST {endpoint}/v1/embeddings` with `{"model": ..., "input": text}` and a
+Bearer header; the response's `data[0].embedding` vector is returned.
 
-**Key file:** `src/legba/ui/consult.py`
+**Where embeddings are used:**
 
-## 8. Configuration Reference
+- **Dedup, semantic tier (Tier 3).** The four-tier dedupe filter
+  (`src/legba/data/filters/dedupe.py`) embeds a candidate signal's title +
+  summary and cosine-searches a per-target Qdrant collection (default
+  threshold 0.92). It runs only when Tiers 1–2 (URL hash, content hash) miss,
+  and only when an embedder + Qdrant are wired — operators can opt a target
+  down to cheap-only tiers, which also skips creating the per-target Qdrant
+  collection.
+- **Consult `vector_search`.** The consult engine declares a `vector_search`
+  tool for semantic search over signal embeddings, but it is a **declared seam**
+  (`docs/SEAMS.md`): no production deps wire a vector store into the consult
+  analyst today, so the tool is not live — it is the landing zone for
+  embedding-backed retrieval when a vector store is wired in.
 
-### Primary LLM (Agent)
+> **Future seam.** A vector-search path over the substrate's signal embeddings
+> is the natural home for additional embedding-backed retrieval; the embedding
+> client and `dim` contract are stable, so new consumers wrap the same client.
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `LLM_PROVIDER` | `vllm` | Provider type: `vllm` or `anthropic` |
-| `OPENAI_BASE_URL` | `http://localhost:8000/v1` | vLLM API base URL |
-| `OPENAI_API_KEY` | (empty) | API key for vLLM endpoint |
-| `OPENAI_MODEL` | `InnoGPT-1` | Model name passed in requests |
-| `LLM_TEMPERATURE` | `1.0` | Sampling temperature (overridden to 1.0 in provider for GPT-OSS) |
-| `LLM_TOP_P` | `0.9` | Top-p sampling |
-| `LLM_MAX_TOKENS` | `4096` | Max output tokens (env default; code default 16,384) |
-| `LLM_MAX_CONTEXT_TOKENS` | `128000` | Context window size |
-| `LLM_TIMEOUT` | `180` | Request timeout in seconds |
+---
 
-### Embedding
+## 4. The consult engine
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `EMBEDDING_API_BASE` | (falls back to `OPENAI_BASE_URL`) | Embedding endpoint base URL |
-| `EMBEDDING_API_KEY` | (falls back to `OPENAI_API_KEY`) | Embedding endpoint API key |
-| `MEMORY_EMBEDDING_MODEL` | `embedding-inno1` | Embedding model name |
-| `MEMORY_VECTOR_DIMENSIONS` | `1024` | Vector dimensions |
+The consult engine is the on-demand ReAct analyst kind `consult_on_demand`
+(`src/legba/data/analysts/consult_on_demand.py`). Unlike scheduled analysts it
+has **no cadence** — it is dispatched on demand via an A2A skill
+(`intelligence.consult_on_demand`), an MCP tool (`legba_consult`), or an
+operator panel, each carrying a free-form `question` plus an optional
+`scope_predicate`.
 
-### GPU Models Service (Ingestion)
+It runs a single-turn ReAct loop, capped at `MAX_TOOL_ROUNDS = 6` rounds plus
+one forced final-synthesis turn:
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `MODELS_API_URL` | (empty) | Models service base URL |
-| `MODELS_API_USER` | (empty) | Basic auth username |
-| `MODELS_API_PASS` | (empty) | Basic auth password |
+1. **Plan** — render the system prompt + tool whitelist + the operator's
+   question.
+2. **Round** — the LLM emits strict JSON: either a tool call
+   (`{"tool": ..., "args": ...}`) or a final answer
+   (`{"final": true, "answer": ..., "uncertainty": ..., "cited_refs": [...],
+   "unanswered_aspects": [...]}`).
+3. **Act** — a requested tool is dispatched against the substrate and its JSON
+   result appended to the conversation.
+4. **Loop** — back to Round, up to the cap, after which a final turn is forced
+   with the tools withheld so the operator always gets a structured answer.
 
-### Hybrid Routing (Dormant)
+The tool whitelist is eight read-only substrate primitives, **seven live today**:
+`search_signals`, `query_facts`, `inspect_entity`, plus the four agency read
+tools `query_nexuses`, `query_hypotheses`, `get_timeline`, and `compare_targets`
+— and `vector_search`, the eighth, embedding-backed tool above, which is a
+**designed seam pending vector-store wiring** (it dispatches only when a vector
+store is wired, otherwise it is not live). The kind is a *read* over the
+substrate — write-back tools are deliberately excluded.
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `LLM_PROVIDER_MAP` | (empty) | JSON dict: `{"CYCLE_TYPE": "provider"}` |
-| `LLM_ALT_API_BASE` | (falls back to main) | Alternate provider base URL |
-| `LLM_ALT_API_KEY` | (falls back to main) | Alternate provider API key |
-| `LLM_ALT_MODEL` | (falls back to main) | Alternate provider model |
-| `LLM_ALT_MAX_TOKENS` | (falls back to main) | Alternate max tokens |
-| `LLM_ALT_TEMPERATURE` | `0.7` | Alternate temperature |
-| `LLM_ALT_TIMEOUT` | (falls back to main) | Alternate timeout |
+The LLM is resolved exactly like any other analyst — through `method.llm.primary`
+→ a stack component → a provider handler — so the consult engine inherits the
+same provider routing, vault auth, retry, and budget accounting as the rest of
+the analysis plane. The result is a structured `ConsultResponsePayload` (answer,
+uncertainty, cited substrate refs, unanswered aspects), wrapped as a
+`FindingPayload` so it carries into the substrate through the standard finding
+write path with full provenance.
 
-### Consultation
+---
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `CONSULT_LLM_PROVIDER` | (falls back to main `LLM_PROVIDER`) | Consultation provider |
-| `CONSULT_API_BASE` | (falls back to main) | Consultation API base |
-| `CONSULT_API_KEY` | (falls back to main) | Consultation API key |
-| `CONSULT_MODEL` | (falls back to main) | Consultation model |
-| `CONSULT_MAX_TOKENS` | (falls back to main) | Consultation max tokens |
-| `CONSULT_TEMPERATURE` | (falls back to main) | Consultation temperature |
-| `CONSULT_TIMEOUT` | (falls back to main) | Consultation timeout |
+## 5. Media extraction (future seam)
 
-## 9. Architecture Diagram
+The acquisition baseline (`src/legba/data/sources/baseline.py`) has an
+**eager media tier** that dispatches by signal modality to a `MediaExtractor`.
+The plumbing (modality routing → extractor → derived signal re-entering the
+fan-out with inherited geo/tags) is complete and tested, but it is a **declared
+seam** (`docs/SEAMS.md`): with no real extraction endpoint configured
+(`LEGBA_MEDIA_API_URL`), the path **refuses activation loudly** rather than
+fabricating output — the former passthrough/echo example extractors were removed
+outright (A-2 / the no-stub rule). The production extractors — hosted Whisper
+(audio transcription), VLM (image/video captioning), and OCR — register against
+the same `MediaExtractor` protocol and hosted-HTTP pattern as the NLP filters
+above when endpoints come online. The async `process_media` job envelope exists
+for the on-demand, analyst-driven tier. See `DESIGN.md` for the three media
+tiers (reference / eager / on-demand).
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         &lt;gpu-host&gt;                     │
-│                                                                     │
-│  GPU 2+3 (2x A6000 48GB)          GPU 0 (Tesla T4 16GB)           │
-│  ┌──────────────────────┐          ┌─────────────────────────────┐  │
-│  │  vLLM (tensor parallel)│         │ embedding-inno1 (~1.3GB)   │  │
-│  │  Model: InnoGPT-1     │         │ legba-models (~3.9GB)      │  │
-│  │  /v1/chat/completions  │         │  ├─ NLLB-200 (translate)   │  │
-│  │  /v1/embeddings        │         │  ├─ DeBERTa-v3 (classify)  │  │
-│  └────────┬───────────────┘         │  ├─ GLiREL-large (extract)  │  │
-│           │                         │  └─ T5-small (summarize)   │  │
-│           │                         └──────┬──────────────────────┘  │
-└───────────┼────────────────────────────────┼────────────────────────┘
-            │                                │
-    ┌───────┼────────────────────────────────┼───────────────┐
-    │       │       Legba Containers         │               │
-    │       │                                │               │
-    │  ┌────▼─────────────┐            ┌─────▼────────────┐  │
-    │  │  Agent            │            │  Ingestion        │  │
-    │  │  ├─ LLM calls ────┼──► vLLM    │  ├─ translate ───┼──► models
-    │  │  ├─ embeddings ───┼──► embed   │  ├─ classify ────┼──► models
-    │  │  └─ tool loop     │            │  ├─ extract ─────┼──► models
-    │  └───────────────────┘            │  ├─ summarize ───┼──► models
-    │                                   │  └─ embeddings ──┼──► embed
-    │  ┌───────────────────┐            └──────────────────┘  │
-    │  │  UI / Consult     │                                  │
-    │  │  └─ LLM calls ────┼──► vLLM or Anthropic API        │
-    │  └───────────────────┘                                  │
-    └─────────────────────────────────────────────────────────┘
-```
+**Deployable service (D2 PREP).** A deployable `legba-media/` service now ships
+(the sibling of `legba-models/`): a FastAPI app exposing the exact
+`/transcribe` `/caption` `/ocr` `/detect` `/health` contract the runtime media
+client POSTs to, with a `media` compose profile and env wiring (set
+`LEGBA_MEDIA_API_URL=http://legba-media:8800`). It is built to be **deployed +
+tested easily**, but the live model is held as the stated seam: with no model
+backend wired (`app/main.load_backends()` ships empty) every extraction endpoint
+returns **HTTP 503** — `process_media` keeps refusing loudly, no fabricated row
+lands. Wiring a real Whisper/VLM/OCR backend flips a kind from 503 to live with
+no other change. See `legba-media/USAGE.md`.
 
-**Agent** uses vLLM for all reasoning (single-turn chat completions) and vLLM's embedding endpoint for episodic memory vectors.
+---
 
-**Ingestion** uses the GPU models service for deterministic NLP enrichment (no LLM) and the embedding endpoint for signal vectors in Qdrant. All models-service calls degrade gracefully.
+## 6. Knowledge grounding — mitigating the model's training cutoff
 
-**Consultation** defaults to Anthropic Claude Sonnet but is configurable to use vLLM via env vars.
+Every LLM in the analysis plane carries a **training cutoff**: a date past which it
+has no knowledge. For most analyst work that is fine — the model reasons over the
+signal slice it is handed, which is fresh. But for an assessment that turns on
+*current world state* — who currently holds an office, which alliances are in force,
+the present state of an ongoing conflict — the model has to fall back on its prior,
+and that prior can be stale and wrong. The live failure that motivated the fix: the
+country/world assessor called the **current** US president a "former" president,
+because the bound model's training data predates the 2024 election, and the signal
+slice (recent headlines) rarely restates a standing background fact like "X is the
+head of state." The model had no in-context correction, so it confidently asserted
+the stale answer.
+
+This is **not** fixed by swapping or fine-tuning the model — every model has *some*
+cutoff, and the live topology routes the LLM-bearing analysts at the self-hosted
+`gpt-oss-120b` (§2), whose cutoff is fixed. Instead, Legba **injects current facts
+from the substrate at analysis time** as **Tier-1 grounding**: the platform's own
+temporal `facts` (`valid_from` / `valid_until` / `superseded_by`) and signed
+`nexuses` — sourced from **Wikidata** (the live `wikidata_leaders` seed adapter) and
+the curated `world_baseline` adapter — are the authoritative current-world-state
+store, and an opt-in **grounding** step injects the relevant current facts into the
+prompt before the LLM call, framed to the model as "AUTHORITATIVE CURRENT CONTEXT …
+treat as ground truth over any prior knowledge." That framing is the in-prompt
+instruction to the model, not a platform truth-claim: the substrate facts are only as
+current as the last seed run, and the **vector-backed Tier-2 free-text background is a
+designed future seam, not yet wired** (caveat 3 below). **Status (2026-06): Tier-1
+structured grounding is live and opted-in on `world_assessor` / `country_assessor`;
+Tier-2 vector `world_context` is designed-not-built.**
+
+Why this is the right place to explain it relative to the model:
+
+- **Grounding corrects whatever cutoff the bound model has.** Because the correction
+  is supplied at call time from the substrate, it is model-agnostic — point an
+  analyst at a different LLM (or the same model a year later) and the grounding still
+  hands it today's officeholders. The model is the reasoning engine; the substrate is
+  the up-to-date factual context.
+- **The ground truth stays auditable and is not the model's invention.** What gets
+  injected is curated/seed `facts` rows with full provenance and temporal honesty
+  (only rows where `superseded_by IS NULL AND (valid_until IS NULL OR valid_until >
+  now())`, preferring `seed`/`curated` source), not free-text the model produced.
+  Wikidata is the upstream source of record for the leader/alliance facts.
+- **It degrades, never gates.** Grounding is an enrichment: a substrate read failure
+  (or a thin slice that resolves nothing) leaves the prompt untouched and the run
+  proceeds un-grounded. It is opt-in per analyst (`world_assessor` /
+  `country_assessor` today) and token-capped.
+
+**Honest caveats.** (1) **Self-consistency, not provider knowledge** — grounding
+fixes the *current-facts* gap, not every reasoning error; the injected facts are only
+as current as the last seed run. (2) **Bare-QID skip** — when Wikidata's label
+service can't resolve an entity (the live case is Q22686 / Donald Trump, which has no
+English label), the seed adapter resolves it via a `wbgetentities` label lookup with
+an enwiki-sitelink fallback, and the resolver *skips any value that is still a bare
+`Qxxxx`* so the model is never handed an unreadable id. (3) **Tier 2 is a future
+seam** — a vector `world_context` collection for free-text background the structured
+facts can't carry is designed and pre-declarable on the descriptor
+(`sources: [..., vector:world_context]`) but **not wired**; it needs the
+embedder-through-port (L-114), so today only the structured `substrate` source acts.
+
+The mechanism (the `GroundingBlock` descriptor field, the `SubstrateGroundingResolver`,
+the `inline_target` GROUND phase, the seed adapters) is described in `DESIGN.md` §3.4
+and `ANALYSIS.md` §7.9.
+
+---
+
+## Configuration reference
+
+All AI-model wiring is declarative stack-component config, registered by
+`scripts/bringup_register_stack.py` and resolved at runtime through the registry
++ vault. There are no AI-model env vars in the runtime path — secrets are vault
+ids, endpoints are config fields.
+
+| Stack component | Schema | What it serves |
+|-----------------|--------|----------------|
+| `llm.primary.openai_compat` | `legba/stack/llm_provider/1.0.0` | Self-hosted gpt-oss-120b LLM (vLLM, OpenAI-compatible) |
+| `llm.anthropic.opus_4_7` | `legba/stack/llm_provider/1.0.0` | Anthropic Claude `claude-sonnet-4-6` (hosted; consult/deep plane only) |
+| `embed.primary.openai_compat` | `legba/stack/embedding/1.0.0` | `bge-m3` embeddings (vLLM `/v1/embeddings`, 1024-dim) |
+| `nlp.local.legba_models` | `legba/stack/nlp_service/1.0.0` | `legba-models` translate / classify / extract / summarize |
+
+| Vault secret id | Used by |
+|-----------------|---------|
+| `llm.primary.api_key` | gpt-oss-120b LLM **and** `bge-m3` embeddings (shared box) |
+| `llm.anthropic.api_key` | Anthropic provider |
+| `nlp.local.legba_models.api_user` / `.api_pass` | `legba-models` Basic Auth (external path) |
+
+---
+
+## See also
+
+- `ARCHITECTURE.md` — stack registry, credential vault, and the substrate
+  (Qdrant for embeddings, Postgres/AGE for the entity graph).
+- `ACQUISITION.md` — the acquisition plane and where the baseline NLP models
+  sit in per-signal enrichment.
+- `DESIGN.md` — the four planes and where models sit.
+- `legba-models/USAGE.md` — the full `legba-models` HTTP API contract.
