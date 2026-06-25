@@ -268,6 +268,28 @@ def _estimate_tokens(text: str) -> int:
     return (len(text) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
 
 
+def _produced_at_sort_key(value: Any) -> str:
+    """Comparison-safe sort key for a row's ``produced_at``.
+
+    Slice rows carry ``produced_at`` as a ``datetime`` (DB rows), a ``str``
+    (JSON payloads), or NULL/absent. A bare ``... or ""`` key mixes ``datetime``
+    with ``str`` and raises ``TypeError: '<' not supported between instances of
+    'datetime.datetime' and 'str'`` on the FIRST NULL/str row in an
+    otherwise-datetime slice — which hard-froze world_assessor + country_assessor
+    (the run died before writing a trace, so they looked dormant, not failing).
+    Coerce every value to a string: strings never raise on comparison and
+    ISO-8601 sorts chronologically, so the recency order is preserved and the
+    sort can never hard-fail. Absent → "" (sorts oldest/last under
+    ``reverse=True``), matching the prior intent.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    iso = getattr(value, "isoformat", None)
+    return iso() if callable(iso) else str(value)
+
+
 def _orient(
     inputs: list[Mapping[str, Any]],
     target_id: str | None,
@@ -287,7 +309,9 @@ def _orient(
     Returns the list of signal UUIDs in ``derived_from`` order so the
     NARRATE phase can attach provenance.
     """
-    ordered = sorted(inputs, key=lambda r: r.get("produced_at") or "", reverse=True)
+    ordered = sorted(
+        inputs, key=lambda r: _produced_at_sort_key(r.get("produced_at")), reverse=True
+    )
 
     budget = _input_token_budget()
     trimmed: list[Mapping[str, Any]] = []

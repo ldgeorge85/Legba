@@ -192,9 +192,17 @@ def _orient(
     contributes to the prompt because the LLM doesn't need the UUID. The
     lineage walker tolerates partial ``derived_from`` lists.
     """
-    # Newest-first; None timestamps sort last.
-    def _sort_key(row: Mapping[str, Any]) -> Any:
-        return row.get("produced_at") or ""
+    # Newest-first; None timestamps sort last. Coerce produced_at to a string so
+    # a NULL/str value can never collide with datetime rows under `<` — the
+    # heterogeneous-key TypeError that hard-froze the inline_target assessors.
+    def _sort_key(row: Mapping[str, Any]) -> str:
+        v = row.get("produced_at")
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v
+        iso = getattr(v, "isoformat", None)
+        return iso() if callable(iso) else str(v)
 
     ordered = sorted(inputs, key=_sort_key, reverse=True)
     trimmed = list(ordered[:MAX_INPUT_FINDINGS])

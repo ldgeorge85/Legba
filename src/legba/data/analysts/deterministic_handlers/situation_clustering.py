@@ -81,7 +81,21 @@ def _target_for_category(category: str, fallback: str | None) -> str | None:
 
 def _latest(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Deterministic latest member: newest produced_at, then largest id."""
-    return max(rows, key=lambda r: (r.get("produced_at") or _EPOCH, str(r.get("id"))))
+    def _key(r: dict[str, Any]) -> tuple[str, str]:
+        # Coerce produced_at to a string so a str/NULL value never collides with
+        # datetime rows under `<` (the heterogeneous-key TypeError). "" sorts
+        # oldest, so a missing timestamp is never chosen as the max.
+        v = r.get("produced_at")
+        if v is None:
+            pa = ""
+        elif isinstance(v, str):
+            pa = v
+        else:
+            iso = getattr(v, "isoformat", None)
+            pa = iso() if callable(iso) else str(v)
+        return (pa, str(r.get("id")))
+
+    return max(rows, key=_key)
 
 
 def _situation_name(rows: list[dict[str, Any]], sig: str) -> str:
