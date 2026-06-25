@@ -104,6 +104,19 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
 )
 
 
+# ``journal_assessor`` is the first EXTENSION analyst kind (NOT a member of the
+# closed ``AnalystKind`` enum). The descriptor REGISTRY seeds the kind-name
+# validator (``ANALYST_KIND_REGISTRY``) from ``vocabulary_entries`` at start(),
+# but the RUNTIME process parses descriptors locally (the deps-resolver's
+# ``AnalystDescriptor.model_validate``) and never syncs vocab — so the kind must
+# be registered in-code. This package is imported at runtime boot (before any
+# reconcile/activation), so registering the name here makes ``model_validate``
+# accept it everywhere the analyst package loads. Idempotent; built-ins no-op.
+from ..schemas.analyst import register_analyst_kind as _register_analyst_kind
+
+_register_analyst_kind("journal_assessor")
+
+
 def discover_analyst_kinds() -> dict[str, KindHandler]:
     """Walk the package, import every kind module, return a registry.
 
