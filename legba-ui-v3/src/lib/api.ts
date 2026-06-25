@@ -331,3 +331,78 @@ export async function loadConsultSession(
     `/consult/sessions/${encodeURIComponent(sessionId)}`,
   )
 }
+
+// ---------------------------------------------------------------------------
+// Journal (JOURNAL_ASSESSOR_PLAN §9 / Wave 3) — the reflective voice's read
+// surface. The open consolidation + recent entries, each cited ref already
+// resolved server-side to its (kind, title) so a per-claim provenance chip can
+// deep-link via `selectRow(kind, id, label)` without a second round-trip.
+// Mirrors `src/legba/data/registry/journal_api.py`.
+// ---------------------------------------------------------------------------
+
+/** A cited substrate UUID resolved to its kind + label (chip deep-link target).
+ *  `kind='unknown'` when the id resolves in no substrate table (superseded /
+ *  pruned ref) — the chip still renders; the citation is never hidden (§9). */
+export interface JournalRef {
+  id: string
+  kind: string
+  title?: string | null
+}
+
+/** One cited claim — a span of the entry bound to its resolved refs (§3.6).
+ *  `kind` is the CLAIM kind ('fact' | 'perspective'), not a substrate kind. A
+ *  `[needs_citation]`-prefixed `text_span` is an uncited factual assertion that
+ *  slipped the REFLECT flag — rendered in the unverified-perspective style,
+ *  NEVER hidden (§4.5). */
+export interface JournalClaim {
+  text_span: string
+  kind: 'fact' | 'perspective' | string
+  refs: JournalRef[]
+}
+
+/** One `journal_entries` row hydrated for the panel. */
+export interface JournalEntry {
+  id: string
+  entry_kind: 'entry' | 'consolidation' | string
+  title: string
+  body: string
+  claims: JournalClaim[]
+  cited_substrate_refs: JournalRef[]
+  honesty_flags: string[]
+  period_start: string
+  period_end: string
+  produced_at: string
+  analyst_id: string | null
+  analyst_version: string | null
+}
+
+/** The substrate-derived calibration posture for the §10 honesty banner —
+ *  keyed off the live calibration metric, NOT a self-reported payload field. */
+export interface JournalCalibration {
+  available: boolean
+  forecast_unproven: boolean
+  calibration_thin: boolean
+  brier_skill_score: number | null
+  exogenous_sample_size: number | null
+  forecast_acute_sample_size: number | null
+  forecast_acute_status: string | null
+  produced_at: string | null
+}
+
+/** `GET /journal` body. Mirrors `JournalOut`. */
+export interface JournalResponse {
+  consolidation: JournalEntry | null
+  entries: JournalEntry[]
+  next_cursor: string | null
+  calibration: JournalCalibration
+}
+
+export async function fetchJournal(
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<JournalResponse> {
+  const params = new URLSearchParams()
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  if (opts.cursor) params.set('cursor', opts.cursor)
+  const qs = params.toString()
+  return apiGet<JournalResponse>(`/journal${qs ? `?${qs}` : ''}`)
+}
