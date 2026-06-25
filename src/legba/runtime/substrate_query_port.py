@@ -1795,6 +1795,694 @@ class PostgresQdrantSubstrateQueryPort:
             "refs": refs,
         }
 
+    # ==================================================================
+    # JOURNAL SELF-INSTRUMENT readers (Journal Assessor Wave 1, plan §5).
+    #
+    # The journal is the ONE analyst pointed at the whole organism INCLUDING
+    # ITSELF. These reads expose its own instruments — recent assessments, the
+    # graph's shape (graph_mining / structural_balance), critic scores,
+    # calibration (incl. the SEGREGATED brier_forecast_acute), what fired vs went
+    # quiet, source health, governor/budget pressure, and what changed since the
+    # last entry — so a self-narrative can be grounded in REAL metrics, not
+    # mythologised. Each returns ``{... , "refs": [...]}`` (refs = substrate UUIDs
+    # the journal may cite; the metric tables that carry no row UUID — graph_metrics
+    # / calibration aggregates / budget rollups — return ``refs: []`` and are cited
+    # by the journal as observations rather than chip-linked rows). All temporal
+    # reads gate to "currently true" rows (the journal physically cannot re-assert
+    # retired state). HONESTY (plan §10): calibration reports the unproven posture
+    # straight from the substrate; the journal's deterministic honesty post-step
+    # reads these same numbers.
+    # ==================================================================
+
+    async def get_assessments(
+        self,
+        *,
+        analyst_id: str | None = None,
+        target_id: str | None = None,
+        since_hours: int | None = 48,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Recent per-target / global ASSESSMENTS — the platform's own findings
+        from ``country_assessor`` + ``world_assessor`` (plan §5).
+
+        Distinct from ``list_findings`` only by intent: the journal narrates OVER
+        the assessors' conclusions, so this read defaults to the two assessor
+        analysts and folds the critic's ``overall_score`` in the same way
+        (``effective_confidence = min(confidence, critic_score)``). With no
+        ``analyst_id`` it returns BOTH country_assessor + world_assessor rows so
+        the journal sees the whole assessment surface in one call. Open rows only
+        (``superseded_by IS NULL``).
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        clauses: list[str] = ["f.kind = 'finding'", "f.superseded_by IS NULL"]
+        params: list[Any] = []
+        if analyst_id is not None:
+            params.append(analyst_id)
+            clauses.append(f"f.analyst_id = ${len(params)}")
+        else:
+            # Default to the two assessor analysts (the journal's reflection
+            # surface) rather than every finding-producer.
+            clauses.append(
+                "f.analyst_id = ANY(ARRAY['country_assessor','world_assessor'])"
+            )
+        if target_id is not None:
+            params.append(target_id)
+            clauses.append(f"f.target_id = ${len(params)}")
+        if since_hours is not None:
+            params.append(
+                datetime.now(timezone.utc) - timedelta(hours=int(since_hours))
+            )
+            clauses.append(f"f.produced_at >= ${len(params)}")
+        params.append(clamped_limit)
+        sql = (
+            "SELECT f.id, f.title, f.body, f.confidence, f.severity, "
+            "       f.target_id, f.analyst_id, f.produced_at, "
+            "       c.critic_score AS critic_score "
+            "FROM analyst_outputs f "
+            "LEFT JOIN LATERAL ( "
+            "  SELECT (cr.data->>'overall_score')::real AS critic_score "
+            "  FROM analyst_outputs cr "
+            "  WHERE cr.kind = 'critique' "
+            "    AND cr.data->>'analyzed_output_id' = f.id::text "
+            "    AND cr.data->>'overall_score' IS NOT NULL "
+            "  ORDER BY cr.produced_at DESC, cr.id DESC LIMIT 1 "
+            ") c ON TRUE "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY f.produced_at DESC, f.id DESC "
+            f"LIMIT ${len(params)}"
+        )
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql, *params)
+        rows: list[dict[str, Any]] = []
+        refs: list[str] = []
+        for r in records:
+            refs.append(str(r["id"]))
+            confidence = float(r["confidence"]) if r["confidence"] is not None else None
+            cs = r["critic_score"]
+            critic_score = float(cs) if cs is not None else None
+            effective = (
+                min(confidence, critic_score)
+                if (confidence is not None and critic_score is not None)
+                else confidence
+            )
+            rows.append({
+                "id": str(r["id"]),
+                "title": r["title"],
+                "body": (r["body"] or "")[:2000],
+                "confidence": confidence,
+                "critic_score": critic_score,
+                "effective_confidence": effective,
+                "severity": r["severity"],
+                "target_id": r["target_id"],
+                "analyst_id": r["analyst_id"],
+                "produced_at": r["produced_at"].isoformat()
+                    if isinstance(r["produced_at"], datetime) else None,
+            })
+        return {"rows": rows, "refs": refs, "count": len(rows)}
+
+    async def get_graph_structure(
+        self,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """The knowledge graph's SHAPE — the latest ``graph_mining`` metrics
+        (communities + modularity + top centrality) (plan §5).
+
+        Reads the freshest ``graph_mining`` row from ``graph_metrics`` (the
+        deterministic miner persists one per run). The journal narrates the
+        graph's structure — how clustered the world is, who is central, where the
+        brokers sit. Aggregate metric (no per-row UUID), so ``refs`` is empty: the
+        journal cites it as an observation about its own graph instrument, not a
+        chip-linked substrate row.
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        sql = (
+            "SELECT payload, computed_at FROM graph_metrics "
+            "WHERE metric_kind = 'graph_mining' "
+            "ORDER BY computed_at DESC LIMIT 1"
+        )
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(sql)
+        if row is None:
+            return {
+                "available": False,
+                "reason": "no graph_mining metric computed yet",
+                "refs": [],
+            }
+        payload = row["payload"]
+        payload = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        top_centrality = payload.get("top_centrality") or {}
+        # Clamp the centrality slice the journal sees (already capped to ~25
+        # nodes upstream, but bound it here too).
+        if isinstance(top_centrality, dict):
+            top_centrality = dict(list(top_centrality.items())[:clamped_limit])
+        interesting = payload.get("interesting") or []
+        if isinstance(interesting, list):
+            interesting = interesting[:clamped_limit]
+        return {
+            "available": True,
+            "computed_at": row["computed_at"].isoformat()
+                if isinstance(row["computed_at"], datetime) else None,
+            "community_count": payload.get("community_count"),
+            "modularity": payload.get("modularity"),
+            "node_count": payload.get("node_count"),
+            "edge_count": payload.get("edge_count"),
+            "proxy_chain_count": payload.get("proxy_chain_count"),
+            "top_centrality": top_centrality,
+            "interesting": interesting,
+            "refs": [],
+        }
+
+    async def get_structural_balance(
+        self,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """The graph's TENSION — the latest ``structural_balance`` unstable
+        (Heider-imbalanced ++− / --- ) triads + frustration map (plan §5).
+
+        Reads the freshest ``structural_balance`` row from ``graph_metrics``. An
+        unstable signed triad (sign-product negative) predicts realignment
+        pressure — a PREDICTION of tension, not a settled fact (the journal must
+        narrate it as such, per the self-anatomy MAP). Aggregate metric, so
+        ``refs`` is empty.
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        sql = (
+            "SELECT payload, computed_at FROM graph_metrics "
+            "WHERE metric_kind = 'structural_balance' "
+            "ORDER BY computed_at DESC LIMIT 1"
+        )
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(sql)
+        if row is None:
+            return {
+                "available": False,
+                "reason": "no structural_balance metric computed yet",
+                "refs": [],
+            }
+        payload = row["payload"]
+        payload = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        unstable = payload.get("unbalanced_triads") or []
+        if isinstance(unstable, list):
+            unstable = unstable[:clamped_limit]
+        frustration = payload.get("frustration") or {}
+        if isinstance(frustration, dict):
+            frustration = dict(
+                sorted(frustration.items(), key=lambda kv: kv[1], reverse=True)[
+                    :clamped_limit
+                ]
+            )
+        interesting = payload.get("interesting") or []
+        if isinstance(interesting, list):
+            interesting = interesting[:clamped_limit]
+        return {
+            "available": True,
+            "computed_at": row["computed_at"].isoformat()
+                if isinstance(row["computed_at"], datetime) else None,
+            "balance_ratio": payload.get("balance_ratio"),
+            "balanced_count": payload.get("balanced_count"),
+            "unbalanced_count": payload.get("unbalanced_count"),
+            "unstable_triads": unstable,
+            "frustration": frustration,
+            "interesting": interesting,
+            "note": (
+                "an unstable (sign-product negative) triad predicts realignment "
+                "pressure — a prediction of tension, NOT a settled fact"
+            ),
+            "refs": [],
+        }
+
+    async def get_critic_scores(
+        self,
+        *,
+        analyst_id: str | None = None,
+        since_hours: int | None = 168,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """The platform's OWN critic scores over recent outputs (plan §5).
+
+        Reads recent ``kind='critique'`` rows from ``analyst_outputs`` (the live
+        critique stream). HONESTY (self-anatomy MAP): the critic's ``overall_score``
+        is structurally IGNORED on the live path today — reading the score is
+        honest reflection, NOT a closed loop. ``analyst_id`` filters to critiques
+        OF a given analyst's outputs (``data->>'analyzed_analyst_id'``).
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        clauses: list[str] = ["kind = 'critique'"]
+        params: list[Any] = []
+        if analyst_id is not None:
+            params.append(analyst_id)
+            clauses.append(f"data->>'analyzed_analyst_id' = ${len(params)}")
+        if since_hours is not None:
+            params.append(
+                datetime.now(timezone.utc) - timedelta(hours=int(since_hours))
+            )
+            clauses.append(f"produced_at >= ${len(params)}")
+        params.append(clamped_limit)
+        sql = (
+            "SELECT id, analyst_id, produced_at, data "
+            "FROM analyst_outputs "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY produced_at DESC, id DESC "
+            f"LIMIT ${len(params)}"
+        )
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql, *params)
+        rows: list[dict[str, Any]] = []
+        refs: list[str] = []
+        scores_seen: list[float] = []
+        for r in records:
+            refs.append(str(r["id"]))
+            raw = r["data"]
+            data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            overall = data.get("overall_score")
+            if isinstance(overall, (int, float)):
+                scores_seen.append(float(overall))
+            rows.append({
+                "id": str(r["id"]),
+                "judge_analyst_id": r["analyst_id"],
+                "analyzed_analyst_id": data.get("analyzed_analyst_id"),
+                "analyzed_output_id": data.get("analyzed_output_id"),
+                "overall_score": overall,
+                "scores": data.get("scores") or {},
+                "revision_delta": (
+                    (str(data.get("revision_delta"))[:1000])
+                    if data.get("revision_delta") else None
+                ),
+                "produced_at": r["produced_at"].isoformat()
+                    if isinstance(r["produced_at"], datetime) else None,
+            })
+        mean_score = (
+            round(sum(scores_seen) / len(scores_seen), 4) if scores_seen else None
+        )
+        return {
+            "rows": rows,
+            "refs": refs,
+            "count": len(rows),
+            "mean_overall_score": mean_score,
+            "actuation_note": (
+                "the critic's overall_score is structurally IGNORED on the live "
+                "path today (NON-ACTUATING) — reading it is reflection, not a "
+                "closed loop"
+            ),
+        }
+
+    async def get_calibration(self) -> dict[str, Any]:
+        """The platform's CALIBRATION posture — the latest ``kind='calibration'``
+        finding, with the SEGREGATED acute-forecast pilot reported HONESTLY
+        (plan §5 / §10).
+
+        Reads the freshest calibration finding from ``analyst_outputs``. The
+        headline ``brier`` is EXOGENOUS-only (the only number that measures
+        calibration against reality); the acute-forecast pilot lives in its OWN
+        keys (``brier_forecast_acute`` / ``brier_skill_score`` / sample size /
+        ready / degenerate / status) and is NEVER pooled into the headline. This
+        is the read the journal's deterministic honesty post-step (§10) keys off:
+        the forecast leg is UNPROVEN until ``forecast_acute_ready`` AND NOT
+        ``forecast_acute_degenerate`` AND ``brier_skill_score > 0``.
+        """
+        sql = (
+            "SELECT id, produced_at, data FROM analyst_outputs "
+            "WHERE kind = 'calibration' "
+            "ORDER BY produced_at DESC, id DESC LIMIT 1"
+        )
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(sql)
+        if row is None:
+            return {
+                "available": False,
+                "reason": "no calibration finding computed yet",
+                "forecast_unproven": True,
+                "calibration_thin": True,
+                "refs": [],
+            }
+        raw = row["data"]
+        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        bss = data.get("brier_skill_score")
+        ready = bool(data.get("forecast_acute_ready"))
+        degenerate = bool(data.get("forecast_acute_degenerate"))
+        # The honesty verdict, computed deterministically from the substrate (NOT
+        # self-reported): the forecast leg counts as PROVEN only if it is ready,
+        # non-degenerate, and has earned positive skill.
+        forecast_proven = (
+            ready and not degenerate and isinstance(bss, (int, float)) and bss > 0.0
+        )
+        exo_n = data.get("exogenous_sample_size")
+        calibration_thin = not isinstance(exo_n, int) or exo_n < 5
+        return {
+            "available": True,
+            "id": str(row["id"]),
+            "produced_at": row["produced_at"].isoformat()
+                if isinstance(row["produced_at"], datetime) else None,
+            # Headline calibration (exogenous-only).
+            "brier": data.get("brier"),
+            "brier_exogenous": data.get("brier_exogenous"),
+            "exogenous_sample_size": exo_n,
+            "sample_size": data.get("sample_size"),
+            "insufficient_exogenous": data.get("insufficient_exogenous"),
+            "self_consistency_only": data.get("self_consistency_only"),
+            # Segregated acute-forecast pilot (n<30, reported honestly).
+            "brier_forecast_acute": data.get("brier_forecast_acute"),
+            "brier_forecast_acute_raw": data.get("brier_forecast_acute_raw"),
+            "brier_climatology": data.get("brier_climatology"),
+            "brier_skill_score": bss,
+            "forecast_acute_sample_size": data.get("forecast_acute_sample_size"),
+            "forecast_acute_ready": ready,
+            "forecast_acute_degenerate": degenerate,
+            "forecast_acute_status": data.get("forecast_acute_status"),
+            # The deterministic honesty verdict — the journal's §10 post-step
+            # reads these directly so it can flag the unproven legs even if the
+            # narrative omits them.
+            "forecast_unproven": not forecast_proven,
+            "calibration_thin": calibration_thin,
+            "refs": [str(row["id"])],
+        }
+
+    async def get_run_health(
+        self,
+        *,
+        analyst_id: str | None = None,
+        quiet_hours: int = 24,
+        limit: int = 40,
+    ) -> dict[str, Any]:
+        """What FIRED vs went QUIET — the dead-analyst self-diagnosis (plan §5).
+
+        Rolls up ``analyst_traces`` to the LAST run per analyst (most-recent
+        ``run_started_at``), with its status, whether it carried an error_payload,
+        and how many hours ago it ran. Analysts whose last run is older than
+        ``quiet_hours`` are flagged ``quiet=True`` — the journal's recreation of
+        the pre-pivot bright spot (the agent diagnosing its own dormancy), now from
+        real receipts. ``analyst_id`` narrows to one analyst's recent run history.
+        ``refs`` is empty (a trace is keyed by run_id, not a citeable substrate
+        row the chip walk resolves).
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        now = datetime.now(timezone.utc)
+        if analyst_id is not None:
+            # One analyst's recent run history.
+            sql = (
+                "SELECT run_id, analyst_id, status, cadence_trigger, "
+                "       run_started_at, run_ended_at, "
+                "       (error_payload IS NOT NULL) AS had_error "
+                "FROM analyst_traces WHERE analyst_id = $1 "
+                "ORDER BY run_started_at DESC LIMIT $2"
+            )
+            async with self._pool.acquire() as conn:
+                records = await conn.fetch(sql, analyst_id, clamped_limit)
+        else:
+            # The LAST run per analyst (DISTINCT ON the freshest start).
+            sql = (
+                "SELECT DISTINCT ON (analyst_id) "
+                "       run_id, analyst_id, status, cadence_trigger, "
+                "       run_started_at, run_ended_at, "
+                "       (error_payload IS NOT NULL) AS had_error "
+                "FROM analyst_traces "
+                "ORDER BY analyst_id, run_started_at DESC LIMIT $1"
+            )
+            async with self._pool.acquire() as conn:
+                records = await conn.fetch(sql, clamped_limit)
+        rows: list[dict[str, Any]] = []
+        quiet: list[str] = []
+        for r in records:
+            started = r["run_started_at"]
+            hours_ago: float | None = None
+            if isinstance(started, datetime):
+                hours_ago = round((now - started).total_seconds() / 3600.0, 1)
+            is_quiet = hours_ago is None or hours_ago > quiet_hours
+            if is_quiet and analyst_id is None and r["analyst_id"]:
+                quiet.append(r["analyst_id"])
+            rows.append({
+                "analyst_id": r["analyst_id"],
+                "run_id": str(r["run_id"]) if r["run_id"] is not None else None,
+                "status": r["status"],
+                "had_error": bool(r["had_error"]),
+                "cadence_trigger": r["cadence_trigger"],
+                "last_run_at": started.isoformat()
+                    if isinstance(started, datetime) else None,
+                "hours_ago": hours_ago,
+                "quiet": is_quiet,
+            })
+        return {
+            "rows": rows,
+            "refs": [],
+            "count": len(rows),
+            "quiet_analysts": sorted(set(quiet)),
+            "quiet_threshold_hours": quiet_hours,
+        }
+
+    async def get_source_health(
+        self,
+        *,
+        silent_only: bool = False,
+        silent_hours: int = 48,
+        limit: int = 40,
+    ) -> dict[str, Any]:
+        """Source-poll HEALTH — which feeds are quiet or erroring (plan §5).
+
+        Joins each head source descriptor to its most-recent ``signals`` time and
+        its most-recent ``source_poll_outcomes`` row (migration 0046: only silent
+        / failed polls are logged, so a NULL outcome with fresh signals = healthy).
+        Lets the journal tell "no coverage on X" apart from "a quiet feed" and
+        narrate the platform's intake honestly. ``refs`` is empty (source rows are
+        descriptors, not chip-linked substrate rows).
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        sql = (
+            "SELECT s.descriptor_id AS source_id, "
+            "       s.body->'identity'->>'name' AS name, s.state, "
+            "       sig.last_signal_at, po.outcome AS last_poll_outcome, "
+            "       po.health_state AS last_health_state, "
+            "       po.occurred_at AS last_poll_at "
+            "FROM source_descriptors s "
+            "LEFT JOIN LATERAL ( "
+            "  SELECT max(fetched_at) AS last_signal_at FROM signals "
+            "  WHERE source_id = s.descriptor_id "
+            ") sig ON TRUE "
+            "LEFT JOIN LATERAL ( "
+            "  SELECT outcome, health_state, occurred_at FROM source_poll_outcomes "
+            "  WHERE source_id = s.descriptor_id "
+            "  ORDER BY occurred_at DESC LIMIT 1 "
+            ") po ON TRUE "
+            "WHERE s.is_head = TRUE AND s.state = 'active' "
+            "ORDER BY sig.last_signal_at ASC NULLS FIRST "
+            f"LIMIT {clamped_limit}"
+        )
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql)
+        now = datetime.now(timezone.utc)
+        rows: list[dict[str, Any]] = []
+        silent_count = 0
+        error_count = 0
+        for r in records:
+            lsa = r["last_signal_at"]
+            silent_h: float | None = None
+            if isinstance(lsa, datetime):
+                silent_h = round((now - lsa).total_seconds() / 3600.0, 1)
+            is_silent = silent_h is None or silent_h >= silent_hours
+            if r["last_poll_outcome"] == "error":
+                error_count += 1
+            if is_silent:
+                silent_count += 1
+            if silent_only and not is_silent:
+                continue
+            rows.append({
+                "source_id": r["source_id"],
+                "name": r["name"],
+                "state": r["state"],
+                "last_signal_at": lsa.isoformat() if isinstance(lsa, datetime) else None,
+                "silent_hours": silent_h,
+                "last_poll_outcome": r["last_poll_outcome"],
+                "last_health_state": r["last_health_state"],
+            })
+        return {
+            "rows": rows,
+            "refs": [],
+            "count": len(rows),
+            "silent_count": silent_count,
+            "error_count": error_count,
+            "silent_threshold_hours": silent_hours,
+        }
+
+    async def get_budget_status(
+        self,
+        *,
+        analyst_id: str | None = None,
+        demotion_lookback_hours: int = 168,
+        limit: int = 40,
+    ) -> dict[str, Any]:
+        """Governor / BUDGET pressure — today's per-analyst token consumption +
+        recent governor demotions/pauses (plan §5).
+
+        Reads today's ``budget_ledger`` bucket (per-analyst tokens / runs / cost)
+        and the recent ``budget_demotion_events`` (a demotion = a per-analyst or
+        global cap hit forced a fallback). A governor PAUSE is a budget/rate cap,
+        NOT an analytic finding (the journal must narrate it as plumbing, per the
+        MAP). ``refs`` is empty (these are rollup rows, not citeable substrate).
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        ledger_clauses: list[str] = ["bucket = CURRENT_DATE"]
+        ledger_params: list[Any] = []
+        if analyst_id is not None:
+            ledger_params.append(analyst_id)
+            ledger_clauses.append(f"analyst_id = ${len(ledger_params)}")
+        ledger_params.append(clamped_limit)
+        ledger_sql = (
+            "SELECT analyst_id, "
+            "       sum(tokens_used) AS tokens_used, sum(runs) AS runs, "
+            "       sum(cost_usd) AS cost_usd "
+            f"FROM budget_ledger WHERE {' AND '.join(ledger_clauses)} "
+            "GROUP BY analyst_id "
+            "ORDER BY tokens_used DESC "
+            f"LIMIT ${len(ledger_params)}"
+        )
+        demo_clauses: list[str] = []
+        demo_params: list[Any] = []
+        demo_params.append(
+            datetime.now(timezone.utc) - timedelta(hours=int(demotion_lookback_hours))
+        )
+        demo_clauses.append(f"occurred_at >= ${len(demo_params)}")
+        if analyst_id is not None:
+            demo_params.append(analyst_id)
+            demo_clauses.append(f"analyst_id = ${len(demo_params)}")
+        demo_params.append(clamped_limit)
+        demo_sql = (
+            "SELECT analyst_id, cause, tokens_used_at_demote, tokens_cap_at_demote, "
+            "       primary_llm, fallback_llm, occurred_at "
+            f"FROM budget_demotion_events WHERE {' AND '.join(demo_clauses)} "
+            "ORDER BY occurred_at DESC "
+            f"LIMIT ${len(demo_params)}"
+        )
+        async with self._pool.acquire() as conn:
+            ledger_records = await conn.fetch(ledger_sql, *ledger_params)
+            demo_records = await conn.fetch(demo_sql, *demo_params)
+        consumption: list[dict[str, Any]] = []
+        for r in ledger_records:
+            consumption.append({
+                "analyst_id": r["analyst_id"],
+                "tokens_used": int(r["tokens_used"] or 0),
+                "runs": int(r["runs"] or 0),
+                "cost_usd": float(r["cost_usd"] or 0.0),
+            })
+        demotions: list[dict[str, Any]] = []
+        for r in demo_records:
+            demotions.append({
+                "analyst_id": r["analyst_id"],
+                "cause": r["cause"],
+                "tokens_used_at_demote": r["tokens_used_at_demote"],
+                "tokens_cap_at_demote": r["tokens_cap_at_demote"],
+                "primary_llm": r["primary_llm"],
+                "fallback_llm": r["fallback_llm"],
+                "occurred_at": r["occurred_at"].isoformat()
+                    if isinstance(r["occurred_at"], datetime) else None,
+            })
+        return {
+            "today_consumption": consumption,
+            "recent_demotions": demotions,
+            "demotion_count": len(demotions),
+            "refs": [],
+            "note": (
+                "a governor demotion/pause is a budget/rate cap hit, NOT an "
+                "analytic finding"
+            ),
+        }
+
+    async def get_journal_delta(
+        self,
+        *,
+        since: str | None = None,
+        limit: int = 30,
+    ) -> dict[str, Any]:
+        """What CHANGED since the journal's last entry (plan §5 / §4.10).
+
+        Returns the journal's own prior entry (the most recent ``entry``) + the
+        current open consolidation (the "inner landscape") so the journal opens a
+        run knowing where it left off (the surviving attentional-continuity thread,
+        §7.5), AND a lightweight delta of substrate activity since ``since`` (an
+        ISO8601 timestamp — defaults to the prior entry's ``period_end``): counts
+        of new findings / situations / nexuses, so the journal sees at a glance
+        what the platform metabolized this window. ``refs`` carries the prior
+        entry + consolidation ids (the journal's own continuity, which it MAY cite
+        — they are journal rows, off-chain, but they are real ids).
+        """
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        async with self._pool.acquire() as conn:
+            prior_entry = await conn.fetchrow(
+                "SELECT id, title, body, period_start, period_end, produced_at "
+                "FROM journal_entries WHERE entry_kind = 'entry' "
+                "ORDER BY period_end DESC, produced_at DESC LIMIT 1"
+            )
+            consolidation = await conn.fetchrow(
+                "SELECT id, title, body, period_start, period_end, produced_at "
+                "FROM journal_entries "
+                "WHERE entry_kind = 'consolidation' "
+                "  AND valid_until IS NULL AND superseded_by IS NULL "
+                "ORDER BY produced_at DESC LIMIT 1"
+            )
+            # Resolve the delta window.
+            since_dt: datetime | None = None
+            if since:
+                try:
+                    since_dt = datetime.fromisoformat(str(since))
+                    if since_dt.tzinfo is None:
+                        since_dt = since_dt.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    since_dt = None
+            if since_dt is None and prior_entry is not None:
+                since_dt = prior_entry["period_end"]
+            if since_dt is None:
+                since_dt = datetime.now(timezone.utc) - timedelta(hours=24)
+            new_findings = await conn.fetchval(
+                "SELECT count(*) FROM analyst_outputs "
+                "WHERE kind = 'finding' AND superseded_by IS NULL "
+                "  AND produced_at >= $1",
+                since_dt,
+            )
+            new_situations = await conn.fetchval(
+                "SELECT count(*) FROM situations "
+                "WHERE superseded_by IS NULL AND updated_at >= $1",
+                since_dt,
+            )
+            new_nexuses = await conn.fetchval(
+                "SELECT count(*) FROM nexuses "
+                "WHERE valid_until IS NULL AND superseded_by IS NULL "
+                "  AND produced_at >= $1",
+                since_dt,
+            )
+
+        def _entry_dict(r: Any) -> dict[str, Any] | None:
+            if r is None:
+                return None
+            return {
+                "id": str(r["id"]),
+                "title": r["title"],
+                "body": (r["body"] or "")[:4000],
+                "period_start": r["period_start"].isoformat()
+                    if isinstance(r["period_start"], datetime) else None,
+                "period_end": r["period_end"].isoformat()
+                    if isinstance(r["period_end"], datetime) else None,
+                "produced_at": r["produced_at"].isoformat()
+                    if isinstance(r["produced_at"], datetime) else None,
+            }
+
+        refs: list[str] = []
+        if prior_entry is not None:
+            refs.append(str(prior_entry["id"]))
+        if consolidation is not None:
+            refs.append(str(consolidation["id"]))
+        _ = clamped_limit  # delta is a count rollup; limit reserved for future row lists
+        return {
+            "prior_entry": _entry_dict(prior_entry),
+            "current_consolidation": _entry_dict(consolidation),
+            "since": since_dt.isoformat() if isinstance(since_dt, datetime) else None,
+            "delta": {
+                "new_findings": int(new_findings or 0),
+                "new_situations": int(new_situations or 0),
+                "new_nexuses": int(new_nexuses or 0),
+            },
+            "refs": refs,
+        }
+
     # ------------------------------------------------------------------
     # vector_search_by_embedding
     #

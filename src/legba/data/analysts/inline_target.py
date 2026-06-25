@@ -837,6 +837,7 @@ async def _gather(
     steps: list[dict[str, Any]],
     tool_bindings: Mapping[str, Any] | None = None,
     gather_system: str | None = None,
+    extra_read_tools: tuple[str, ...] = (),
 ) -> tuple[str, dict[str, int], list[UUID], list[dict[str, Any]]]:
     """Run the bounded GATHER tool-call loop, returning the enrichment.
 
@@ -886,6 +887,15 @@ async def _gather(
             gather_steps.append(step)
             return "", aggregate_usage, refs, gather_steps
 
+    # A NEW llm_planner kind (the journal_assessor, plan §5/§4.9) reaches its
+    # OWN read tools through this loop. Those tools are NOT in inline_target's
+    # _GATHER_READ_TOOLS (they are journal_read-pack-specific instruments), so
+    # the caller passes them in ``extra_read_tools`` — they are then BOTH
+    # recognized as valid tool names AND routed through the read ``binding``
+    # (the journal_read binding, which Agency.run_pack_tool governs against the
+    # journal_read pack). Empty for inline_target → byte-for-byte unchanged.
+    read_tools = set(_GATHER_READ_TOOLS) | set(extra_read_tools)
+    recognized_tools = set(_GATHER_TOOLS) | set(extra_read_tools)
     max_rounds = max(1, min(_GATHER_ROUNDS_CEILING, deps.max_rounds))
     deadline = (
         time.monotonic()
@@ -952,7 +962,7 @@ async def _gather(
 
         tool_name = str(parsed.get("tool") or "")
         tool_args = parsed.get("args") or {}
-        if not isinstance(tool_args, Mapping) or tool_name not in _GATHER_TOOLS:
+        if not isinstance(tool_args, Mapping) or tool_name not in recognized_tools:
             # Neither a recognized tool nor done — nudge once, then move on.
             step = {
                 "phase": "gather",
@@ -980,7 +990,7 @@ async def _gather(
         # as an unbound no-op (folded back to the planner), never dispatched
         # through the substrate_read binding (where run_pack_tool would block it
         # as unknown_tool anyway) — keep the cause explicit.
-        if tool_name in _GATHER_READ_TOOLS:
+        if tool_name in read_tools:
             routed = binding
         else:
             routed = tool_bindings.get(tool_name)

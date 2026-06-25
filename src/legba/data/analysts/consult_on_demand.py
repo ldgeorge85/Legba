@@ -354,6 +354,66 @@ class SubstrateQueryPort(Protocol):
         silent_hours: int = 48,
     ) -> dict[str, Any]: ...
 
+    # Journal self-instrument readers (Journal Assessor Wave 1, plan §5). The
+    # journal narrates over the whole organism INCLUDING ITSELF: recent
+    # assessments, the graph's shape + tension, critic scores, calibration (incl.
+    # the segregated acute-forecast pilot), what fired vs went quiet, source
+    # health, governor pressure, and what changed since its last entry. These are
+    # on the Protocol so the journal_read pack's handlers type-check against it.
+    async def get_assessments(
+        self,
+        *,
+        analyst_id: str | None = None,
+        target_id: str | None = None,
+        since_hours: int | None = 48,
+        limit: int = 20,
+    ) -> dict[str, Any]: ...
+
+    async def get_graph_structure(self, *, limit: int = 20) -> dict[str, Any]: ...
+
+    async def get_structural_balance(self, *, limit: int = 20) -> dict[str, Any]: ...
+
+    async def get_critic_scores(
+        self,
+        *,
+        analyst_id: str | None = None,
+        since_hours: int | None = 168,
+        limit: int = 20,
+    ) -> dict[str, Any]: ...
+
+    async def get_calibration(self) -> dict[str, Any]: ...
+
+    async def get_run_health(
+        self,
+        *,
+        analyst_id: str | None = None,
+        quiet_hours: int = 24,
+        limit: int = 40,
+    ) -> dict[str, Any]: ...
+
+    async def get_source_health(
+        self,
+        *,
+        silent_only: bool = False,
+        silent_hours: int = 48,
+        limit: int = 40,
+    ) -> dict[str, Any]: ...
+
+    async def get_budget_status(
+        self,
+        *,
+        analyst_id: str | None = None,
+        demotion_lookback_hours: int = 168,
+        limit: int = 40,
+    ) -> dict[str, Any]: ...
+
+    async def get_journal_delta(
+        self,
+        *,
+        since: str | None = None,
+        limit: int = 30,
+    ) -> dict[str, Any]: ...
+
 
 # ---------------------------------------------------------------------------
 # Result envelope
