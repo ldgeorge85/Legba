@@ -388,6 +388,14 @@ _ANALYST_DEPS_RESOLVER: _AnalystDepsResolver | None = None
 
 _DEPS_FALLBACK_ENV = "LEGBA_DEPS_FALLBACK_ENABLED"
 
+#: §4.9 — the in-actor GATHER kinds whose per-run binding is re-pointed to the
+#: target (inline_target) or self-allowed for the META path (journal_assessor).
+#: Was a hard-coded `== "inline_target"` check at the re-point site; this set is
+#: the generalization. Kept in lock-step with dapr_host._GATHER_KINDS.
+_GATHER_BINDING_KINDS: frozenset[str] = frozenset(
+    {"inline_target", "journal_assessor"}
+)
+
 #: Opt-in flag for the AGE :DerivedFrom output-lineage mirror (D3). OFF by
 #: default — the relational derived_from[] array + recursive-CTE lineage is the
 #: source of truth; the graph edge is enrichment, and the per-write MERGE is
@@ -1816,9 +1824,15 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 # (else `run_pack_tool` denies and folds the block back into the
                 # loop — a good, loud no-op). Budget is implicitly gated: the
                 # precall_check above already returned `ok` to reach here.
+                # §4.9 — the GATHER binding re-point was hard-gated on
+                # `== "inline_target"`. Generalize to the in-actor GATHER kind set
+                # so journal_assessor's journal_read binding is also re-pointed
+                # (its META target_filter=None path self-allows its pack — see
+                # _gather_binding_for_target).
                 if (
                     deps_bundle.gather_binding is not None
-                    and deps_bundle.descriptor.identity.kind == "inline_target"
+                    and deps_bundle.descriptor.identity.kind
+                    in _GATHER_BINDING_KINDS
                 ):
                     options["agency_binding"] = await _gather_binding_for_target(
                         conn,

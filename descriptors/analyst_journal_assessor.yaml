@@ -1,0 +1,96 @@
+# journal_assessor — Legba's first-person reflective voice (plan §4.6).
+#
+# The 11th OutputKind's producer: the ONE analyst pointed at the whole organism,
+# including itself. It reads what the other analysts concluded and narrates a
+# coherent point of view OVER all of it, emitting exactly one JournalPayload
+# (entry) into the dedicated journal_entries table — OFF the fact/finding/nexus
+# chain (§3.1). It must NEVER write a fact/nexus/finding.
+#
+# ── kind = journal_assessor (NEW; NOT inline_target) ──────────────────────
+# A NEW kind because its method narrates a voice-bearing continuity entry rather
+# than synthesizing a finding. Reusing inline_target is rejected: it hardcodes
+# OUTPUT_KIND = FINDING / emits FindingPayload, violating §3.1. The kind module
+# (legba.data.analysts.journal_assessor) sets OUTPUT_KIND = OutputKind.JOURNAL.
+#
+# ── ENGINE = in-actor llm_planner, NOT deep_consult (§4.1) ─────────────────
+# method.kind = llm_planner (the in-actor GATHER envelope), NOT the deep_consult
+# Dapr workflow — that path rides the known-broken long-activity round-trip (task
+# #86) and hardcodes a FINDING output.
+#
+# ── single GLOBAL run (META, target_filter=None) ──────────────────────────
+# No `subscription.targets` block → ONE global run per cadence tick (mirrors
+# world_assessor). The default META slice (recent global signals, 24h) primes the
+# reflection; the agent investigates the platform's own findings via the
+# journal_read GATHER pack.
+#
+# ── Wave 0 ────────────────────────────────────────────────────────────────
+# ENTRY tier only (no consolidation yet — that is the journal_consolidator
+# descriptor, Wave 2). action_pack = journal_read (ONE reused tool, list_findings).
+
+identity:
+  id: journal_assessor
+  name: Journal — First-Person Reflective Voice
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: journal_assessor             # NEW kind; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: journal_revival
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick
+  # (target_filter=None). Mirrors world_assessor / integrity_sweep.
+  other_analysts: []
+  substrate:
+    direct_queries: false            # reads via the journal_read pack, governed
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  # COLON form ('module:ATTR') — the runtime resolver only resolves 'module:attr';
+  # a dotted 'pkg.mod.v1' form silently falls back to the kind default system
+  # prompt (losing the entire persona). The journal builder also loads this
+  # module itself as a belt-and-braces guard (§4.2).
+  prompt_module: "legba.prompts.journal_assessor:JOURNAL_SYSTEM"   # persona + MAP + voice
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.deep_consult           # Anthropic plane (Opus 4.8) — the deep meta voice
+      expected_family: llm_provider
+    # Opus 4.8 deprecates temperature → the handler drops it for the
+    # claude-opus-4-8 prefix; we still declare a default for non-Opus stacks.
+    max_tokens: 4096                  # the entry body is longer than a finding
+  budget_tokens_per_day: 2000000     # §11 — a twice-daily deep meta agent is costly
+  gather:
+    max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling = 6;
+                                      # a higher request is silently clamped — §11)
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "0 0,12 * * *"  # every 12h, on the hour (entry tier)
+  cooldown_seconds: 42000            # 11h40m — BELOW the 43200s interval (the trap, §11)
+
+grounding:
+  enabled: true
+  scope: [slice_entities]            # no single target geo (global, like world_assessor)
+  sources: [substrate, situations, graph_structure]
+  static_candidates: [Iran, United States, Israel, Russia, Ukraine, China, Gaza]
+  max_facts: 30
+
+# The journal must be granted ONLY the journal_read pack (§7.6 grant invariant) —
+# this is the grant-layer backstop for the never-write-a-fact invariant: with
+# only a read pack granted, the analyst is structurally NOT effective for any pack
+# whose tools call write_fact / write_nexus / write_hypothesis.
+action_packs:
+  - pack_id: journal_read
+
+outputs: []                          # JournalPayload lands in journal_entries via
+                                     # OUTPUT_KIND.JOURNAL; no a2a/webhook binding in v1

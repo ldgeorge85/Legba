@@ -270,6 +270,17 @@ async def build_analyst_run_method(
         trio = _build_deep_consult(
             descriptor, handler, deep_consult_client=deep_consult_client,
         )
+    elif kind == "journal_assessor":
+        # The journal runs on the in-actor llm_planner envelope (NOT deep_consult
+        # — plan §4.1). It reuses the inline_target deps shape + GATHER loop but
+        # emits a JournalPayload (off-chain). The GATHER binding (for the
+        # journal_read pack) is wired by the host's §4.9-generalized gate and
+        # threaded through the same `inline_target_agency_binding` channel.
+        trio = await _build_journal_assessor(
+            descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool,
+            agency_binding=inline_target_agency_binding,
+            budget_precheck=inline_target_budget_precheck,
+        )
     else:
         # Defensive — discover_analyst_kinds returned a kind we didn't
         # switch on. Happens only when a new kind lands without a
@@ -413,6 +424,80 @@ async def _build_inline_target(
         budget_precheck=budget_precheck,
     )
     return runner, None, handler.output_kind
+
+
+async def _build_journal_assessor(
+    descriptor: AnalystDescriptor,
+    handler: KindHandler,
+    resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
+    *,
+    pg_pool: "asyncpg.Pool | None" = None,
+    agency_binding: Any | None = None,
+    budget_precheck: Callable[[], Awaitable[bool]] | None = None,
+) -> tuple[Callable[..., Any], Any | None, OutputKind]:
+    """journal_assessor — Legba's first-person reflective voice (plan §4.8).
+
+    The journal runs on the in-actor llm_planner envelope (NOT the deep_consult
+    Dapr workflow — §4.1). It reuses the ``InlineTargetDeps`` bundle + the GATHER
+    loop, but dispatches its OWN ``run_method`` (3-arg) which emits a
+    ``JournalPayload`` off-chain. Returns the trio
+    ``(run_method, InlineTargetDeps, OutputKind.JOURNAL)``.
+
+    THE HEADLINE FIX (§4.2): the journal's system prompt is the JOURNAL persona
+    (legba.prompts.journal_assessor:JOURNAL_SYSTEM) threaded VERBATIM — it is
+    NEVER wrapped by ``_tradecraft.with_preamble`` / ``with_preamble_if_absent``
+    (the JSON-only / BLUF / estimative anti-voice). That wrapping is what would
+    quietly kill the voice; we author the journal-specific narrate contract
+    inside JOURNAL_SYSTEM instead.
+    """
+    from ..data.analysts.inline_target import InlineTargetDeps
+
+    llm = await resolve_llm()
+    max_tokens = _read_method_llm_option(descriptor, "max_tokens", default=4096)
+    temperature = _read_method_llm_option(descriptor, "temperature", default=0.2)
+    gather = getattr(descriptor.method, "gather", None)
+    max_rounds = int(getattr(gather, "max_rounds", 1) or 1) if gather is not None else 1
+    invoke_timeout_seconds = float(
+        getattr(descriptor.method, "timeout_seconds", 180) or 180
+    )
+    # Resolve the journal persona system prompt. DELIBERATELY NOT wrapped by
+    # with_preamble — that is the §4.2 headline fix. Unset/unresolvable → None →
+    # the run_method falls back to the kind default (which it loads itself).
+    system_prompt = _resolve_prompt_module(
+        getattr(descriptor.method, "prompt_module", None)
+    )
+    if system_prompt is None:
+        # Belt-and-braces: load the persona directly so a misconfigured
+        # prompt_module never silently strips the entire voice (§4.2 caution).
+        try:
+            from legba.prompts.journal_assessor import JOURNAL_SYSTEM
+            system_prompt = JOURNAL_SYSTEM
+        except Exception:  # pragma: no cover — import guard
+            system_prompt = None
+    # The journal may still opt into Tier-1 grounding (it's a META analyst over
+    # the global slice) — the GROUND preamble corrects stale-cutoff drift before
+    # it narrates (§4.5 point 3). Off (None) unless the descriptor opts in.
+    grounding_hook = _build_grounding_hook(descriptor, pg_pool=pg_pool)
+    if agency_binding is not None:
+        logger.info(
+            "analyst_deps_builder.journal_assessor.gather_enabled analyst=%r "
+            "max_rounds=%d invoke_timeout_s=%.0f — journal_read pack is "
+            "EFFECTIVE; the GATHER phase is engaged",
+            descriptor.identity.id, max_rounds, invoke_timeout_seconds,
+        )
+    kind_deps = InlineTargetDeps(
+        llm=llm,
+        max_tokens=int(max_tokens),
+        temperature=float(temperature),
+        system_prompt=system_prompt,
+        grounding_hook=grounding_hook,
+        agency_binding=agency_binding,
+        max_rounds=max_rounds,
+        invoke_timeout_seconds=invoke_timeout_seconds,
+        budget_precheck=budget_precheck,
+    )
+    # handler.run_method is the journal's 3-arg run_method (inputs, options, deps).
+    return handler.run_method, kind_deps, handler.output_kind
 
 
 def _build_grounding_hook(
