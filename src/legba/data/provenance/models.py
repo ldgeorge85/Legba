@@ -341,6 +341,65 @@ class FactPayload(BaseModel):
     kind_marker: Literal["fact"] = "fact"
 
 
+class JournalClaim(BaseModel):
+    """Per-claim citation binding (plan §3.6).
+
+    A flat row-level ``cited_substrate_refs`` cannot tell the UI which sentence
+    each ref backs, so the "every claim a chip" promise would degrade to a
+    footnote pile. The body carries inline ``[[ref:<uuid>]]`` markers the UI
+    resolves to chips at the cited span; this sidecar lets the UI bind chips to
+    spans without re-parsing markdown.
+
+    ``kind='perspective'`` claims may carry ZERO refs (wonder / inference, not a
+    factual assertion — §4.5). ``kind='fact'`` claims carry ≥1 ref OR an explicit
+    speculation marker (the writer flags an uncited factual span; it is never
+    auto-deleted — voice-preservation is the tie-breaker).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text_span: str = Field(min_length=1, max_length=8192)
+    refs: list[UUID] = Field(default_factory=list)
+    kind: Literal["fact", "perspective"] = "fact"
+
+
+class JournalPayload(BaseModel):
+    """The journal's one output payload — an ``entry`` or a ``consolidation``
+    (plan §3.2 / §8). Lands in the dedicated ``journal_entries`` table, OFF the
+    fact/finding/nexus chain (§3.1). NOT a fact source.
+
+    ``extra='forbid'`` (mirrors the dedicated-table kinds' contract for a stable
+    payload shape — changing the shape later is a migration, so it is pinned now,
+    §3.6). The temporal-supersession columns (``valid_from``/``valid_until``/
+    ``superseded_by``) are stamped by ``_insert_journal_entry`` +
+    ``supersede_prior_consolidation``, NOT carried on the payload (mirrors how
+    facts/nexuses stamp their lifecycle).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The discriminator. Entries are pure append; only consolidations supersede.
+    entry_kind: Literal["entry", "consolidation"] = "entry"
+    title: str = Field(min_length=1, max_length=2048)
+    # The narrative (markdown, with inline [[ref:<uuid>]] citation markers).
+    body: str = Field(default="", max_length=65536)
+    # Per-claim ref binding (§3.6) — the chip-to-span source of truth.
+    claims: list[JournalClaim] = Field(default_factory=list)
+    # Flat union of every ref cited anywhere in the body — query convenience;
+    # the BINDING lives in ``claims``.
+    cited_substrate_refs: list[UUID] = Field(default_factory=list)
+    # The window the entry reflects on.
+    period_start: datetime
+    period_end: datetime
+    # consolidation → prior consolidation; NULL for entries AND for the
+    # first-ever consolidation (the bootstrap case, §8).
+    supersedes: UUID | None = None
+    # Forced DETERMINISTICALLY by a non-LLM post-step (§10) — never trusted as
+    # agent-self-reported. Empty in Wave 0 (the deterministic post-step is Wave 1).
+    honesty_flags: list[str] = Field(default_factory=list)
+    kind_marker: Literal["journal"] = "journal"
+
+
 class NexusPayload(BaseModel):
     """Mirrors the hot columns on the ``nexuses`` table (PIECE A — reified
     typed relationship).

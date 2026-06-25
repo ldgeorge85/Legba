@@ -617,6 +617,15 @@ GroundingHook = Callable[
 ]
 
 
+# PER-PHASE LLM SPLIT — the gpt-oss "Reasoning: high" directive. vLLM does NOT
+# honor a ``reasoning_effort`` wire arg (vllm.py:106,:129); gpt-oss takes this
+# directive injected into the system/message content. It is prepended to the
+# GATHER system prompt ONLY when ``deps.gather_reasoning_high`` is set (the
+# journal's InnoGPT gather plane), so the heavy investigation rounds think hard
+# while the Opus voice calls — which never carry the gather suffix — are unpolluted.
+_REASONING_HIGH_DIRECTIVE = "Reasoning: high"
+
+
 # S5 — GATHER phase tuning.
 #
 # Default ONE round (vs consult's 6): the cadence assessors run under the P-1
@@ -797,6 +806,22 @@ class InlineTargetDeps:
     max_tokens: int = 1024
     temperature: float = 0.2
     system_prompt: str = _SYSTEM_PROMPT
+    # PER-PHASE LLM SPLIT (journal §4.1). Optional SECOND handler for the VOICE
+    # phases (the journal's field-notes seam + NARRATE). ``None`` → every phase
+    # uses the single primary ``llm`` handler — the BYTE-FOR-BYTE back-compat
+    # path for every other analyst (no descriptor sets ``method.llm.narrate``).
+    # When set (journal_assessor / journal_consolidator wire
+    # ``method.llm.narrate.raw`` to the Opus plane), the heavy GATHER loop stays
+    # on ``llm`` (InnoGPT / vLLM, reasoning=high) while the voice phases route to
+    # ``llm_narrate`` (Opus) via :meth:`narrate_llm`. The narrate handler may carry
+    # its OWN output cap — see ``narrate_max_tokens`` — because the Anthropic plane
+    # caps OUTPUT with max_tokens whereas the vLLM plane serves its own budget.
+    llm_narrate: LLMHandlerLike | None = None
+    # Optional OUTPUT cap for the narrate (Opus) phases. ``None`` → reuse
+    # ``max_tokens``. On the Anthropic plane max_tokens IS the output cap, so the
+    # journal sets a larger narrate cap (entry 16384 / consolidation 24576) than
+    # the inert gather cap.
+    narrate_max_tokens: int | None = None
     # Optional Tier-1 grounding hook (see GroundingHook). ``None`` → no
     # grounding injection (the default for every non-opted-in analyst).
     grounding_hook: GroundingHook | None = None
@@ -820,6 +845,34 @@ class InlineTargetDeps:
     # Optional budget-headroom precheck (see BudgetPrecheck). None → no
     # precheck; GATHER engages whenever a binding is present.
     budget_precheck: BudgetPrecheck | None = None
+    # PER-PHASE LLM SPLIT — inject the gpt-oss ``Reasoning: high`` directive into
+    # the GATHER system prompt ONLY (the heavy InnoGPT/vLLM investigation rounds).
+    # Default False → the gather suffix is byte-for-byte unchanged for every
+    # assessor + the Opus voice calls. The journal sets it True so the InnoGPT
+    # gather thinks hard; the Opus field-notes/NARRATE calls are NOT polluted
+    # because they never pass through the gather suffix. ``reasoning_effort`` is
+    # NOT a vLLM wire arg — gpt-oss takes a ``Reasoning: high`` content directive
+    # (see vllm.py:106,:129), so the CALLER (here) injects it into the prompt.
+    gather_reasoning_high: bool = False
+
+    def narrate_llm(self) -> LLMHandlerLike:
+        """The handler for the VOICE phases (field-notes + NARRATE).
+
+        Falls back to the primary ``llm`` when no second handler is wired —
+        the zero-regression path for every analyst that doesn't split (no
+        descriptor sets ``method.llm.narrate``). When ``llm_narrate`` IS set
+        (the journal's Opus plane) the voice routes there while GATHER stays on
+        ``llm`` (InnoGPT).
+        """
+        return self.llm_narrate or self.llm
+
+    def narrate_tokens(self) -> int:
+        """The OUTPUT-token cap for the narrate phases.
+
+        ``narrate_max_tokens`` when set (the Anthropic plane caps OUTPUT, so the
+        journal raises it past the inert gather cap), else ``max_tokens``.
+        """
+        return self.narrate_max_tokens if self.narrate_max_tokens is not None else self.max_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -837,6 +890,8 @@ async def _gather(
     steps: list[dict[str, Any]],
     tool_bindings: Mapping[str, Any] | None = None,
     gather_system: str | None = None,
+    extra_read_tools: tuple[str, ...] = (),
+    extra_write_tools: tuple[str, ...] = (),
 ) -> tuple[str, dict[str, int], list[UUID], list[dict[str, Any]]]:
     """Run the bounded GATHER tool-call loop, returning the enrichment.
 
@@ -886,6 +941,24 @@ async def _gather(
             gather_steps.append(step)
             return "", aggregate_usage, refs, gather_steps
 
+    # A NEW llm_planner kind (the journal_assessor, plan §5/§4.9) reaches its
+    # OWN read tools through this loop. Those tools are NOT in inline_target's
+    # _GATHER_READ_TOOLS (they are journal_read-pack-specific instruments), so
+    # the caller passes them in ``extra_read_tools`` — they are then BOTH
+    # recognized as valid tool names AND routed through the read ``binding``
+    # (the journal_read binding, which Agency.run_pack_tool governs against the
+    # journal_read pack). Empty for inline_target → byte-for-byte unchanged.
+    #
+    # ``extra_write_tools`` (plan §7 / Wave 4 — the journal_propose pack) carries
+    # the journal's OWN write/propose tool names. They are recognized as valid
+    # tool names but — unlike read tools — are NOT added to ``read_tools``, so
+    # they route through their per-tool binding in ``tool_bindings`` (the
+    # journal_propose binding, carrying the per-run WritebackContext) exactly like
+    # the generic propose_facts write tools, NEVER through the read binding.
+    read_tools = set(_GATHER_READ_TOOLS) | set(extra_read_tools)
+    recognized_tools = (
+        set(_GATHER_TOOLS) | set(extra_read_tools) | set(extra_write_tools)
+    )
     max_rounds = max(1, min(_GATHER_ROUNDS_CEILING, deps.max_rounds))
     deadline = (
         time.monotonic()
@@ -897,6 +970,13 @@ async def _gather(
     # web/write guidance from the bound packs' descriptors); fall back to the
     # read-only suffix when not supplied (back-compat: read-only assessors).
     gather_system = deps.system_prompt + (gather_system or _GATHER_SYSTEM_SUFFIX)
+    # PER-PHASE LLM SPLIT — prepend the gpt-oss "Reasoning: high" directive to the
+    # GATHER system prompt ONLY when this deps opted in (the journal's InnoGPT
+    # gather plane). Default off → byte-for-byte unchanged for every assessor;
+    # the Opus field-notes/NARRATE calls never reach this code path so they are
+    # NEVER polluted with the directive.
+    if deps.gather_reasoning_high:
+        gather_system = f"{_REASONING_HIGH_DIRECTIVE}\n\n{gather_system}"
     tool_bindings = tool_bindings or {}
     messages: list[Mapping[str, Any]] = [
         {"role": "user", "content": user_prompt}
@@ -952,7 +1032,7 @@ async def _gather(
 
         tool_name = str(parsed.get("tool") or "")
         tool_args = parsed.get("args") or {}
-        if not isinstance(tool_args, Mapping) or tool_name not in _GATHER_TOOLS:
+        if not isinstance(tool_args, Mapping) or tool_name not in recognized_tools:
             # Neither a recognized tool nor done — nudge once, then move on.
             step = {
                 "phase": "gather",
@@ -980,7 +1060,7 @@ async def _gather(
         # as an unbound no-op (folded back to the planner), never dispatched
         # through the substrate_read binding (where run_pack_tool would block it
         # as unknown_tool anyway) — keep the cause explicit.
-        if tool_name in _GATHER_READ_TOOLS:
+        if tool_name in read_tools:
             routed = binding
         else:
             routed = tool_bindings.get(tool_name)
@@ -1325,17 +1405,25 @@ class InlineTargetRunner:
         max_rounds: int = _GATHER_DEFAULT_ROUNDS,
         invoke_timeout_seconds: float | None = None,
         budget_precheck: BudgetPrecheck | None = None,
+        # PER-PHASE LLM SPLIT — default-off so the legacy inline_target runner is
+        # byte-for-byte unchanged (no narrate handler, no reasoning directive).
+        llm_narrate: LLMHandlerLike | None = None,
+        narrate_max_tokens: int | None = None,
+        gather_reasoning_high: bool = False,
     ) -> None:
         self._deps = InlineTargetDeps(
             llm=llm,
             max_tokens=max_tokens,
             temperature=temperature,
             system_prompt=system_prompt or _SYSTEM_PROMPT,
+            llm_narrate=llm_narrate,
+            narrate_max_tokens=narrate_max_tokens,
             grounding_hook=grounding_hook,
             agency_binding=agency_binding,
             max_rounds=max_rounds,
             invoke_timeout_seconds=invoke_timeout_seconds,
             budget_precheck=budget_precheck,
+            gather_reasoning_high=gather_reasoning_high,
         )
 
     async def __call__(
@@ -1359,6 +1447,7 @@ __all__ = [
     "PROMPT_MODULE_PATH",
     "READ_SLICE",
     "SCHEMA_VERSION",
+    "_REASONING_HIGH_DIRECTIVE",
     "build_prompt_module",
     "run_method",
 ]

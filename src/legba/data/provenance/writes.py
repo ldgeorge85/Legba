@@ -31,6 +31,7 @@ Phase 1.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Sequence
@@ -60,11 +61,15 @@ from .models import (
     FactPayload,
     FindingPayload,
     HypothesisPayload,
+    JournalPayload,
     MetaFindingPayload,
     NexusPayload,
     PredictionPayload,
     SituationPayload,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # Pluggable NATS publish — (subject, payload_bytes) → awaitable.
@@ -446,6 +451,46 @@ async def write_nexus(
     )
 
 
+async def write_journal(
+    conn: asyncpg.Connection,
+    *,
+    analyst_ctx: AnalystContext,
+    payload: JournalPayload | dict[str, Any],
+    derived_from: Sequence[UUID] = (),
+    **kwargs: Any,
+) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
+    """Write one ``journal`` row (entry | consolidation) to the dedicated
+    ``journal_entries`` table (plan §3.2 / §8).
+
+    Mirrors ``write_situation``/``write_nexus`` but with one hard difference:
+    the journal is a **direction-asymmetric lineage node** — it carries its
+    citations ONLY in the in-payload ``claims`` / ``cited_substrate_refs``, and
+    ``journal_entries.derived_from`` is written **empty** so a downstream
+    lineage walk FROM a fact/situation/nexus can NEVER surface the lyrical
+    journal row inside the very provenance graph the Why room renders as "the
+    chain" (§3.5). We therefore IGNORE any ``derived_from`` passed in and force
+    it empty — the off-chain invariant is not left to call-site discipline.
+
+    The journal must NEVER write a fact / nexus / finding / situation /
+    hypothesis (§3.1); this is the only write helper it is granted (and the
+    grant layer §7.6 enforces the rest).
+    """
+    if derived_from:
+        logger.warning(
+            "write_journal.derived_from_ignored analyst=%s n=%d — the journal "
+            "is off the chain; derived_from is forced empty (§3.5)",
+            analyst_ctx.analyst_id, len(tuple(derived_from)),
+        )
+    return await write_analyst_output(
+        conn,
+        analyst_ctx=analyst_ctx,
+        kind=OutputKind.JOURNAL,
+        output_payload=payload,
+        derived_from=[],  # OFF the chain — always empty (§3.5).
+        **kwargs,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Per-table INSERT routing
 # ---------------------------------------------------------------------------
@@ -519,6 +564,19 @@ async def _insert_for_spec(
             effective_schema_uri=effective_schema_uri,
             source_type=source_type,
             seed_batch_id=seed_batch_id,
+        )
+    elif table == "journal_entries":
+        # Consolidation supersession runs INSIDE this route (close-prior +
+        # insert-new are one logical step on the same conn). Entries are pure
+        # append. derived_from is forced empty here regardless of what was
+        # passed — the off-chain invariant (§3.5).
+        await _insert_journal_entry(
+            conn,
+            row_id=row_id,
+            payload=payload,
+            prov=prov,
+            produced_at=produced_at,
+            effective_schema_uri=effective_schema_uri,
         )
     else:
         raise NotImplementedError(
@@ -1095,6 +1153,156 @@ async def _insert_nexus(
         effective_source_type,
         seed_batch_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Journal — off-chain dedicated table (plan §3.2 / §8)
+# ---------------------------------------------------------------------------
+
+
+async def supersede_prior_consolidation(
+    conn: asyncpg.Connection,
+    *,
+    new_entry_id: UUID,
+    analyst_id: str | None,
+) -> UUID | None:
+    """Close the single open journal CONSOLIDATION, pointing it at
+    ``new_entry_id`` (plan §8 — mirrors :func:`supersede_prior_facts`).
+
+    The "current inner landscape" is the single open consolidation row
+    (``entry_kind='consolidation' AND valid_until IS NULL AND superseded_by IS
+    NULL``). A newer consolidation CLOSES the prior one (``valid_until = now()``
+    + ``superseded_by = <new id>``) rather than overwriting it, so history
+    accrues and you can ask "what did the journal believe, when."
+
+    Contract / safety:
+      * **bootstrap** — the FIRST consolidation supersedes nothing (no open row
+        → returns None, ``supersedes`` stays NULL). NULL ``supersedes`` is
+        allowed for ``entry_kind='consolidation'``.
+      * **single-open invariant** — ``SELECT … FOR UPDATE`` locks the open row
+        so a concurrent run blocks until this transaction commits; combined with
+        the ``uq_journal_single_open_consolidation`` partial-unique index, at
+        most one consolidation is ever open. A racing/replayed run that tries to
+        open a second while one is still open raises on the index rather than
+        double-opening.
+      * **idempotent under replay** — only a row still open is closed; a replay
+        after the prior is already closed closes nothing new (returns None) and
+        leaves the existing ``superseded_by`` pointer untouched.
+      * **same connection** — the caller runs this immediately before the insert
+        on the same ``conn`` so close + open are one logical step.
+
+    Returns the id of the consolidation that was closed, or ``None`` when there
+    was no open consolidation (the bootstrap case, or a replay).
+    """
+    # Lock the single open consolidation (if any) so a concurrent consolidation
+    # blocks here rather than both opening a second row.
+    row = await conn.fetchrow(
+        """
+        SELECT id
+          FROM journal_entries
+         WHERE entry_kind = 'consolidation'
+           AND valid_until IS NULL
+           AND superseded_by IS NULL
+           AND id <> $1
+         ORDER BY produced_at DESC
+         FOR UPDATE
+        """,
+        new_entry_id,
+    )
+    if row is None:
+        return None
+    prior_id: UUID = row["id"]
+    await conn.execute(
+        """
+        UPDATE journal_entries
+           SET valid_until   = now(),
+               superseded_by = $1,
+               updated_at    = now()
+         WHERE id = $2
+           AND valid_until IS NULL
+           AND superseded_by IS NULL
+        """,
+        new_entry_id,
+        prior_id,
+    )
+    return prior_id
+
+
+async def _insert_journal_entry(
+    conn: asyncpg.Connection,
+    *,
+    row_id: UUID,
+    payload: BaseModel,
+    prov: ProvenanceFields,
+    produced_at: datetime,
+    effective_schema_uri: str,
+) -> None:
+    """Insert one ``journal_entries`` row (entry | consolidation).
+
+    For a CONSOLIDATION, ``supersede_prior_consolidation`` runs FIRST (close the
+    prior open consolidation on the same conn) so the close + open are one
+    logical step; the ``supersedes`` column on the new row records which prior it
+    closed (NULL for the bootstrap first consolidation). ENTRIES are pure append
+    — no supersession.
+
+    ``derived_from`` is forced EMPTY here regardless of ``prov.derived_from`` —
+    the journal is the direction-asymmetric lineage node (§3.5). The citations
+    live only in ``claims`` / ``cited_substrate_refs``.
+    """
+    p = payload                                          # type: ignore[assignment]
+    entry_kind = getattr(p, "entry_kind", "entry")
+    claims = [c.model_dump(mode="json") if hasattr(c, "model_dump") else c
+              for c in (getattr(p, "claims", []) or [])]
+    cited_refs = list(getattr(p, "cited_substrate_refs", []) or [])
+    honesty_flags = list(getattr(p, "honesty_flags", []) or [])
+
+    supersedes: UUID | None = None
+    if entry_kind == "consolidation":
+        supersedes = await supersede_prior_consolidation(
+            conn,
+            new_entry_id=row_id,
+            analyst_id=prov.analyst_id,
+        )
+
+    await conn.execute(
+        """
+        INSERT INTO journal_entries (
+            id, entry_kind, title, body, claims, cited_substrate_refs,
+            period_start, period_end, honesty_flags,
+            superseded_by,
+            target_id, target_version, analyst_id, analyst_version,
+            produced_at, derived_from, schema_uri, run_id
+        ) VALUES (
+            $1, $2, $3, $4, $5::jsonb, $6,
+            $7, $8, $9,
+            $10,
+            $11, $12, $13, $14,
+            $15, $16, $17, $18
+        )
+        """,
+        row_id,
+        entry_kind,
+        getattr(p, "title", ""),
+        getattr(p, "body", ""),
+        json.dumps(claims, default=_json_default),
+        cited_refs,
+        getattr(p, "period_start", None),
+        getattr(p, "period_end", None),
+        honesty_flags,
+        # `superseded_by` on the NEW row is always NULL at insert (it is the
+        # newest open row); `supersedes` is recorded in the data/relation via the
+        # prior row's superseded_by pointer set above. We keep the new row open.
+        None,
+        prov.target_id,
+        prov.target_version,
+        prov.analyst_id,
+        prov.analyst_version,
+        produced_at,
+        [],  # OFF the chain — always empty (§3.5).
+        effective_schema_uri,
+        prov.run_id,
+    )
+    _ = supersedes  # recorded via the prior row's superseded_by pointer above
 
 
 # ---------------------------------------------------------------------------

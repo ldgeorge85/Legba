@@ -95,6 +95,46 @@ RECONCILABLE_LIFECYCLE_STATES: frozenset[str] = frozenset({"active", "paused", "
 # finally see reality (RETIRE/TRANSITION/ENSURE become reachable).
 
 
+# ---------------------------------------------------------------------------
+# §4.9 — GATHER-gate generalization. The agentic GATHER binding was hard-gated
+# on `kind == "inline_target"` + the hardcoded SUBSTRATE_READ_PACK_ID. These two
+# helpers generalize it to a capability check over the in-actor GATHER kind set +
+# the kind's declared read pack, so a NEW llm_planner kind (journal_assessor →
+# journal_read) gets its tools instead of silently running with none.
+# ---------------------------------------------------------------------------
+
+# The in-actor llm_planner kinds whose run_method drives a bounded GATHER loop.
+# inline_target is the original; journal_assessor (plan §4.8) reuses the same
+# GATHER machinery (inline_target._gather) on its own run_method. Membership
+# here — NOT an opt-in flag — is what makes the binding wire; the three-way
+# agency gate still decides whether each tool call is admitted at run time.
+_GATHER_KINDS: frozenset[str] = frozenset({"inline_target", "journal_assessor"})
+
+# Per-kind default READ pack the GATHER loop fetches. The descriptor must still
+# GRANT the pack via `action_packs` (the grant leg is checked separately) — this
+# only names WHICH read pack a given kind's GATHER loop reaches for.
+_GATHER_READ_PACK_BY_KIND: dict[str, str] = {
+    "journal_assessor": "journal_read",
+    # inline_target falls through to the SUBSTRATE_READ_PACK_ID default below.
+}
+
+
+def _gather_kind_engages(ad: Any) -> bool:
+    """True when this analyst is an in-actor GATHER kind (§4.9). The capability
+    check that replaced the hard-coded `kind == "inline_target"` gates."""
+    return getattr(ad.identity, "kind", None) in _GATHER_KINDS
+
+
+def _gather_read_pack_for(ad: Any, default_pack_id: str) -> str | None:
+    """The READ pack id this kind's GATHER loop fetches, or None when the kind is
+    not a GATHER kind. inline_target → ``default_pack_id`` (substrate_read);
+    journal_assessor → ``journal_read`` (§4.9)."""
+    kind = getattr(ad.identity, "kind", None)
+    if kind not in _GATHER_KINDS:
+        return None
+    return _GATHER_READ_PACK_BY_KIND.get(kind, default_pack_id)
+
+
 async def _write_observed_state(
     state_store: Any,
     action: Any,
@@ -1331,8 +1371,16 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             r.model_dump() if hasattr(r, "model_dump") else r
             for r in (ad.action_packs or [])
         ]
-        if ad.identity.kind == "inline_target" and _grants_include(
-            _inline_grant_dicts, SUBSTRATE_READ_PACK_ID
+        # §4.9 — the agentic GATHER binding was hard-gated on
+        # `kind == "inline_target"` + the hardcoded SUBSTRATE_READ_PACK_ID.
+        # Generalize to a CAPABILITY check (method.kind == llm_planner over the
+        # in-actor GATHER kind set) + the DESCRIPTOR's declared read pack, so a
+        # new llm_planner kind (journal_assessor → journal_read) gets its tools
+        # instead of silently running with none. `inline_target` keeps
+        # substrate_read as its default read pack (back-compat).
+        _gather_read_pack_id = _gather_read_pack_for(ad, SUBSTRATE_READ_PACK_ID)
+        if _gather_kind_engages(ad) and _gather_read_pack_id is not None and (
+            _grants_include(_inline_grant_dicts, _gather_read_pack_id)
         ):
             from ..data.analysts.agency.binding import (
                 AgencyToolBinding,
@@ -1344,16 +1392,17 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             g_agency = AGENCY_HOLDER.get("agency")
             g_base_ctx = AGENCY_HOLDER.get("tool_context")
             g_pack = await fetch_action_pack(
-                registry_client, SUBSTRATE_READ_PACK_ID
+                registry_client, _gather_read_pack_id
             )
             if g_agency is None or g_base_ctx is None or g_pack is None:
                 logger.error(
                     "analyst_deps_resolver.gather_unbindable actor_id=%s "
-                    "agency=%s ctx=%s pack=%s — the assessor grants "
-                    "substrate_read; register the pack "
+                    "kind=%s read_pack=%s agency=%s ctx=%s pack=%s — the "
+                    "assessor grants its read pack; register the pack "
                     "(bringup_register_action_packs) and bring up the agency "
                     "plane, or remove the grant",
-                    actor_id, g_agency is not None, g_base_ctx is not None,
+                    actor_id, ad.identity.kind, _gather_read_pack_id,
+                    g_agency is not None, g_base_ctx is not None,
                     g_pack is not None,
                 )
                 return None
@@ -1384,8 +1433,12 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         # FAIL-LOUD (return None) — the same silent-bypass guard the other legs
         # use. pg_pool is threaded onto each ToolContext so the write tools have
         # the connection source the WritebackContext needs (seam22-2).
+        # §4.9 — generalized to the GATHER kind set (was `== "inline_target"`).
+        # The journal_assessor is read-only in Wave 0 (it grants no web/write
+        # pack), so this inner loop is a no-op for it; the gate stays open for any
+        # llm_planner GATHER kind that DOES grant web_access/propose_facts later.
         gather_write_bindings: dict[str, Any] | None = None
-        if gather_binding is not None and ad.identity.kind == "inline_target":
+        if gather_binding is not None and _gather_kind_engages(ad):
             from ..data.analysts.agency.binding import (
                 AgencyToolBinding as _GWBinding,
                 fetch_action_pack as _gw_fetch,
@@ -1394,6 +1447,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             from ..data.analysts.agency.web_tools import (
                 WEB_ACCESS_PACK_ID,
                 WEB_ACCESS_TOOLS,
+            )
+            from ..data.analysts.agency.journal_propose import (
+                JOURNAL_PROPOSE_PACK_ID,
+                JOURNAL_PROPOSE_TOOLS,
             )
             from ..data.analysts.agency.write_tools import (
                 WRITE_PACK_ID,
@@ -1406,9 +1463,16 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             _bindings: dict[str, Any] = {}
             _web_fragments: list[str] | None = None
             _write_fragments: list[str] | None = None
+            # Each write/web pack the GATHER kind grants. journal_propose (plan §7
+            # / Wave 4) is a WRITE pack like propose_facts — each tool writes ONLY
+            # a pending journal_proposals row, so it needs the per-run
+            # WritebackContext injection (_is_write=True) exactly like propose_facts
+            # (the connection source + run identity; NO provenance writer). A pack
+            # the analyst does not grant is skipped (`_grants_include` below).
             for _pack_id, _tool_names, _is_write in (
                 (WEB_ACCESS_PACK_ID, WEB_ACCESS_TOOLS, False),
                 (WRITE_PACK_ID, WRITE_TOOLS, True),
+                (JOURNAL_PROPOSE_PACK_ID, JOURNAL_PROPOSE_TOOLS, True),
             ):
                 if not _grants_include(_inline_grant_dicts, _pack_id):
                     continue

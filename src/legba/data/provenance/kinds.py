@@ -22,6 +22,12 @@ Table-routing decisions for Phase 1:
 
   * ``situation``  → ``situations`` (dedicated table).
   * ``hypothesis`` → ``hypotheses`` (dedicated table).
+  * ``journal``    → ``journal_entries`` (dedicated table, migration 0048).
+    The 11th OutputKind — the first-person reflective voice. OFF the
+    fact/finding/nexus chain (NOT a fact source): a journal row is a
+    *perspective over* the provenance chain, never a *member of* it. It carries
+    an ALWAYS-EMPTY ``derived_from`` and is deliberately absent from the lineage
+    catalog so a downstream lineage walk can never surface it (plan §3.5).
   * ``prediction`` → ``analyst_outputs`` (source-first pivot, migration 0024
     DROPPED the dedicated ``predictions`` table; predictions now land as a
     normal generic-table row with ``kind='prediction'``).
@@ -46,6 +52,7 @@ from .models import (
     FactPayload,
     FindingPayload,
     HypothesisPayload,
+    JournalPayload,
     MetaFindingPayload,
     NexusPayload,
     PredictionPayload,
@@ -85,6 +92,13 @@ class OutputKind(str, Enum):
     # L-176 optimizer candidate prompt module.  Lands in the generic
     # `analyst_outputs` table; promotion to live is gated downstream.
     PROMPT_MODULE_CANDIDATE = "prompt_module_candidate"
+    # The 11th kind — Legba's first-person reflective voice (plan §3.2).
+    # Lands in the dedicated `journal_entries` table (migration 0048). Produced
+    # by the `journal_assessor` META analyst kind. OFF the fact/finding/nexus
+    # chain: it must NEVER write a fact/finding/nexus (§3.1). Direction-
+    # asymmetric lineage node — empty `derived_from`, excluded from the
+    # downstream lineage fan-out (§3.5).
+    JOURNAL = "journal"
 
 
 class _TraceOnly:
@@ -148,6 +162,8 @@ _NEXUS_URI         = "iglu:legba/nexus/jsonschema/1-0-0"
 _PROMPT_MODULE_CANDIDATE_URI = (
     "iglu:legba/prompt_module_candidate/jsonschema/1-0-0"
 )
+# Matches the DB default on `journal_entries.schema_uri` (0048_journal.sql).
+_JOURNAL_URI       = "iglu:legba/journal/jsonschema/1-0-0"
 
 
 KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
@@ -231,6 +247,15 @@ KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
         # not the analyst being optimized (the analyst_id placeholder is
         # the optimizer's own id at write time per write_analyst_output).
         nats_subject_pattern="analyst.{analyst_id}.prompt_module_candidate",
+    ),
+    OutputKind.JOURNAL: OutputKindSpec(
+        kind=OutputKind.JOURNAL,
+        table="journal_entries",                      # dedicated table — NOT analyst_outputs
+        payload_model=JournalPayload,
+        schema_uri=_JOURNAL_URI,
+        # META analyst: target_id is None → renders as `_`; the subject omits
+        # target_id, so the {target_id}-less pattern is correct (plan §3.4).
+        nats_subject_pattern="analyst.{analyst_id}.journal",
     ),
 }
 

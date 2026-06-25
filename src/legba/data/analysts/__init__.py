@@ -98,6 +98,9 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
     "deterministic",
     "critic",
     "optimizer",
+    # The 11th OutputKind's producer — Legba's first-person reflective voice
+    # (plan §4.8 leg 1). OUTPUT_KIND = OutputKind.JOURNAL, off-chain.
+    "journal_assessor",
 )
 
 
@@ -191,6 +194,7 @@ for _mod in (
     "predictor",
     "critic",
     "optimizer",
+    "journal_assessor",
 ):
     try:                                                        # pragma: no cover
         importlib.import_module(f"{__name__}.{_mod}")

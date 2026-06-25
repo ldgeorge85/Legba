@@ -1,0 +1,107 @@
+# journal_read action pack (Journal Assessor, plan §5 / §12 Wave 1).
+#
+# The journal_assessor's GOVERNED read surface — the WHOLE ANIMAL + its OWN
+# instruments. This is what makes the journal the self-narrating analyst: it reads
+# what the other analysts concluded, what the substrate currently holds as true,
+# what the graph's shape is, AND its own instruments (critic scores, calibration,
+# what fired vs went quiet, budget pressure) — and narrates a coherent point of
+# view over all of it.
+#
+# WHY a SEPARATE pack (not just granting substrate_read): the §7.6 grant
+# invariant. The journal must be granted ONLY this read pack (and later the
+# journal_proposals pack) so it is structurally NOT effective for any pack whose
+# tools call write_fact / write_nexus / write_hypothesis — the grant-layer
+# backstop for the never-write-a-fact invariant (§3.1).
+#
+# Universally applicable BY DESIGN (no applies_to_tags, no predicate): the
+# journal is a META analyst with target_filter=None, so the runtime binds it
+# with a synthetic global scope. The grant leg stays real: an analyst without
+# `action_packs: [{pack_id: journal_read}]` is denied at resolution.
+#
+# Read-only: the governor caps bound runaway ReAct loops, not spend (the tools
+# cost no tokens themselves — the GATHER rounds around them are bounded by the
+# descriptor's gather.max_rounds + token budget).
+#
+# FOUR-SURFACE convergence (memory: consult-tools-must-be-pack-tools): this
+# `tools` list MUST equal JOURNAL_READ_TOOLS == register_journal_read_tools ==
+# every tool the run_method can dispatch. The drift test asserts it.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: journal_read
+  name: Journal Read Tools
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: journal_revival
+  created: "2026-06-25T00:00:00Z"
+
+tools:
+  # --- the platform's OWN finished intelligence + ground truth (reused) ---
+  - name: list_findings
+    config: {}
+  - name: query_facts
+    config: {}
+  - name: query_nexuses
+    config: {}
+  - name: list_situations
+    config: {}
+  - name: get_timeline
+    config: {}
+  # --- the journal's OWN instruments (net-new self-introspection) ---
+  - name: get_assessments
+    config: {}
+  - name: get_graph_structure
+    config: {}
+  - name: get_structural_balance
+    config: {}
+  - name: get_critic_scores
+    config: {}
+  - name: get_calibration
+    config: {}
+  - name: get_run_health
+    config: {}
+  - name: get_source_health
+    config: {}
+  - name: get_budget_status
+    config: {}
+  - name: get_journal_delta
+    config: {}
+
+prompt_fragments:
+  - >-
+    Read the whole animal before narrating. The platform's own finished
+    intelligence + ground truth: list_findings (recent findings + meta-findings —
+    the cross-analyst contradiction/agreement/blind-spot outputs are the richest
+    fuel), get_assessments (the country/world_assessor conclusions you reflect
+    over), query_facts (current temporal facts), query_nexuses (open signed
+    relationships), list_situations (ongoing frames), get_timeline (facts ∪
+    signals ∪ situations on one subject).
+  - >-
+    Then read your OWN instruments — this is what makes this YOUR journal:
+    get_graph_structure (how clustered the world is + who is central),
+    get_structural_balance (Heider-unstable triads — tension PREDICTED, not
+    settled), get_critic_scores (your grade — but the critic does NOT actuate, so
+    reading it is reflection, not a loop), get_calibration (your Brier — the
+    acute-forecast pilot is segregated and UNPROVEN; say so), get_run_health (who
+    fired vs went quiet — diagnose your own dormancy), get_source_health (which
+    feeds are silent or erroring), get_budget_status (governor pressure — a pause
+    is plumbing, not a finding), get_journal_delta (what changed since your last
+    entry + your own prior entry / current consolidation — your continuity).
+  - >-
+    Cite the UUIDs the tools return — never fabricate a ref. The instrument reads
+    that carry no row id (graph metrics, calibration aggregates, budget rollups,
+    run health) are observations about yourself: narrate them honestly, but do not
+    invent a [[ref:...]] for them.
+
+rules:
+  - "Never fabricate substrate refs — cite only UUIDs the tools returned."
+  - "You write a journal, never a fact/nexus/finding — this pack is read-only."
+  - "Narrate unproven legs as unproven (the forecast pilot has no skill); the critic does not actuate; a governor pause is plumbing, not intelligence."
+
+governor:
+  budget_account: journal_read
+  max_invocations_per_hour: 600
+  api_rate_per_minute: 60

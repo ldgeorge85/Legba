@@ -1,0 +1,79 @@
+# journal_propose action pack (Journal Assessor, plan §7 / §12 Wave 4).
+#
+# THE PROPOSE-AND-GATE WRITE SURFACE — the journal's ONLY way to affect anything
+# beyond its own two direct writes (entries + consolidations). Every tool here
+# writes EXACTLY ONE thing: a `pending` row in the human-gated `journal_proposals`
+# queue. NEVER a live facts/nexuses/hypotheses/situations row, NEVER a descriptor
+# mutation. The journal SUGGESTS; a human CAUSES (§7.5). This structurally kills
+# the self-confirmation loop (the adversarial review's self-confirmed-forecast
+# class) — a human always sits between the journal's voice and any change.
+#
+# WHY A SEPARATE PACK (not widening journal_read): the §7.6 grant invariant. The
+# journal is granted ONLY read packs + this proposals pack — a pack whose tools
+# write EXCLUSIVELY to journal_proposals and call NO write_fact / write_nexus /
+# write_hypothesis. That keeps the analyst structurally NOT effective for any pack
+# that mutates the knowledge layer.
+#
+# WHY NOT propose_facts: that pack does the OPPOSITE (§7.2) — its propose_fact
+# INSERTs a LIVE facts row with no human in the loop. There is no review-queue
+# indirection in that tree to reuse, so this pack is NET-NEW.
+#
+# THE GATING PRECONDITION (asserted by test, not a comment): a propose_* call
+# writes ONLY a journal_proposals row. See tests/journal_w4/.
+#
+# Universally applicable BY DESIGN (no applies_to_tags, no predicate): the journal
+# is a META analyst with target_filter=None, so the runtime binds it with a
+# synthetic global scope and the META path self-allows the granted pack. The grant
+# leg stays real: an analyst without `action_packs: [{pack_id: journal_propose}]`
+# is denied at resolution.
+#
+# FOUR-SURFACE convergence (memory: consult-tools-must-be-pack-tools): this
+# `tools` list MUST equal JOURNAL_PROPOSE_TOOLS == register_journal_propose_tools
+# == every propose tool the run_method can dispatch. The drift test asserts it.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: journal_propose
+  name: Journal Propose (Human-Gated Agency)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: journal_revival
+  created: "2026-06-25T00:00:00Z"
+
+tools:
+  # correction + change prove the queue + accept/reject path FIRST (§7.5);
+  # self_revision (the highest-scrutiny class) ships LAST and is listed last.
+  - name: propose_correction
+    config: {}
+  - name: propose_change
+    config: {}
+  - name: propose_self_revision
+    config: {}
+
+prompt_fragments:
+  - >-
+    You may PROPOSE a change to the world — never make one directly. Three
+    proposal tools, each writing ONE pending row to the human-gated review queue:
+    propose_correction (a stale fact to supersede / an entity merge / a situation
+    correction), propose_change (a descriptor/config diff — e.g. "this analyst's
+    cadence looks halved"), propose_self_revision (a diff to your OWN instruction
+    prompt — the highest-scrutiny class; a human always decides).
+  - >-
+    Every proposal needs a 'rationale' (your in-voice "why I think this") and a
+    structured 'diff' (the actual proposed change as a JSON object). Cite the
+    substrate refs that warrant it in 'cited_substrate_refs' when you have them.
+    A proposal is a SUGGESTION: it changes nothing until a human accepts it. Do
+    NOT propose lightly — propose when you have a real, warranted reason.
+
+rules:
+  - "You PROPOSE; a human DISPOSES. A propose_* call writes ONLY a pending review-queue row — it never touches a live fact/nexus/hypothesis/situation/descriptor."
+  - "propose_self_revision is your highest-scrutiny tool: a diff to your own instructions is gated by a human, and a diff touching your grounding/honesty/anti-self-confirmation clauses is auto-rejected. Propose self-revision only with a clear, evidenced reason."
+  - "Never fabricate substrate refs — cite only UUIDs your read tools returned. A proposal with no warrant is just an opinion; warrant it."
+
+governor:
+  budget_account: journal_propose
+  max_invocations_per_hour: 60
+  api_rate_per_minute: 30

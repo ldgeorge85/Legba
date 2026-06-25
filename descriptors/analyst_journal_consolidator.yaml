@@ -1,0 +1,111 @@
+# journal_consolidator — the journal's SLOW consolidation tier (plan §4.7 / §12).
+#
+# The SECOND journal descriptor: the SAME analyst kind as the entry tier
+# (identity.kind: journal_assessor → OUTPUT_KIND = OutputKind.JOURNAL), with a
+# DISTINCT identity.id (journal_consolidator) and the slow daily beat. Where the
+# entry tier narrates the freshest window, the consolidator DISTILLS: it reads its
+# prior consolidation (the "current inner landscape") + recent entries via
+# get_journal_delta and folds them into ONE forward-carried narrative
+# (build-on-don't-repeat). It emits a JournalPayload with entry_kind='consolidation'
+# — the write path then fires supersede_prior_consolidation (close the prior open
+# consolidation, open this one). Still OFF the fact/finding/nexus chain (§3.1).
+#
+# ── tier = descriptor, NOT a mode flag (§4.7) ─────────────────────────────
+# "There is no mode=consolidation option on a single descriptor — the tier is the
+# descriptor." Both descriptors declare identity.kind: journal_assessor; the run_method
+# selects entry_kind purely from identity.id (journal_consolidator → consolidation).
+#
+# ── ENGINE = in-actor llm_planner, NOT deep_consult (§4.1) ─────────────────
+# Same envelope as the entry tier: the in-actor GATHER, NOT the deep_consult Dapr
+# workflow (broken long-activity round-trip, task #86; hardcoded FINDING output).
+#
+# ── single GLOBAL run (META, target_filter=None) ──────────────────────────
+# No `subscription.targets` block → ONE global run per cadence tick. The daily
+# tier hides death LONGEST, so it needs its OWN dead-analyst activation canary
+# (the 12h entry tier canary exercises a DIFFERENT id; this id needs its own).
+
+identity:
+  id: journal_consolidator
+  name: Journal — Consolidation (Inner Landscape)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: journal_assessor             # SAME kind as the entry tier; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: journal_revival
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick
+  # (target_filter=None). Mirrors world_assessor / the entry tier.
+  other_analysts: []
+  substrate:
+    direct_queries: false            # reads via the journal_read pack, governed
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  # COLON form ('module:ATTR') — the runtime resolver only resolves 'module:attr';
+  # a dotted form silently falls back to the kind default system prompt (losing
+  # the entire persona). The journal builder also loads this module itself as a
+  # belt-and-braces guard (§4.2). This is the CONSOLIDATION voice (§6.1).
+  prompt_module: "legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM"   # persona + MAP + consolidation task
+  # PER-PHASE LLM SPLIT (§4.1): the heavy GATHER investigation loop runs on
+  # InnoGPT (gpt-oss / vLLM, Reasoning:high — injected into the gather system
+  # prompt) while the VOICE (the field-notes seam + NARRATE) runs on Opus 4.8.
+  # gather = InnoGPT-high (cheap, deep tool-call rounds); voice = Opus (the deep
+  # meta narration). The deps builder reads method.llm.narrate.raw (optional —
+  # method.llm is an open dict, no schema change) and resolves a SECOND handler.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # InnoGPT (gpt-oss/vLLM) — the GATHER plane
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.deep_consult           # Anthropic plane (Opus 4.8) — the deep meta VOICE
+      expected_family: llm_provider
+    # Opus 4.8 deprecates temperature → the handler drops it for the
+    # claude-opus-4-8 prefix; we still declare a default for non-Opus stacks.
+    # max_tokens now governs ONLY the Opus narrate output (the InnoGPT gather
+    # plane serves its own vLLM budget — max_tokens is never sent to it).
+    max_tokens: 24576                 # the consolidation digest is LONGER than an entry (§4.7)
+  budget_tokens_per_day: 2000000     # §11 — a daily deep meta agent is costly
+  gather:
+    max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling = 6;
+                                      # a higher request is silently clamped — §11)
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "0 2 * * *"     # daily at 02:00 UTC (the slow consolidation beat, §4.7)
+  cooldown_seconds: 79200            # 22h — BELOW the 86400s daily interval (the trap, §11)
+
+grounding:
+  enabled: true
+  scope: [slice_entities]            # no single target geo (global, like the entry tier)
+  sources: [substrate, situations, graph_structure]
+  static_candidates: [Iran, United States, Israel, Russia, Ukraine, China, Gaza]
+  max_facts: 30
+
+# The journal is granted ONLY the journal_read pack + the journal_propose pack
+# (§7.6 grant invariant) — the grant-layer backstop for the never-write-a-fact
+# invariant: BOTH packs are non-write-fact (read tools, and propose tools that
+# write ONLY a pending journal_proposals row), so the analyst stays structurally
+# NOT effective for any pack whose tools call write_fact / write_nexus /
+# write_hypothesis. get_journal_delta in journal_read returns the prior
+# consolidation + recent entries (the build-on-don't-repeat read); journal_propose
+# (Wave 4) is the PROPOSE-AND-GATE write surface — the consolidator SUGGESTS a
+# correction/change/self-revision into the human-gated queue (§7.1 / §7.5).
+action_packs:
+  - pack_id: journal_read
+  - pack_id: journal_propose
+
+outputs: []                          # JournalPayload lands in journal_entries via
+                                     # OUTPUT_KIND.JOURNAL; no a2a/webhook binding in v1

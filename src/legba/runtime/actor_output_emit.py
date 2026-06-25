@@ -292,9 +292,15 @@ async def _gather_binding_for_target(
     visits many targets and only some allow the `substrate_read` pack. Mirrors
     the escalation hook's per-run re-pointing exactly: read the target's
     ``allowed_action_packs`` + scope from ``target_descriptors`` and return a
-    ``for_target``-ed copy. No target in context → empty allow-list → the
-    kind's GATHER tool calls deny at resolution (a loud no-op, never a silent
-    ungoverned read).
+    ``for_target``-ed copy.
+
+    META analyst path (``target_id=None`` — world_assessor / journal_assessor):
+    there is no target row to read an allow-list from, so the binding SELF-ALLOWS
+    its own pack under the GLOBAL scope (mirrors the consult META self-allow in
+    dapr_host — a self-allow for THIS pack only, the grant leg stays real). The
+    journal (§4.9) reaches this branch every run; without the self-allow its
+    journal_read GATHER calls would deny at the allow leg and the agentic loop
+    would silently run with no tools.
     """
     from ..data.analysts.agency.binding import GLOBAL_SCOPE
     from ..data.analysts.agency.resolution import scope_view_from_target
@@ -316,6 +322,12 @@ async def _gather_binding_for_target(
                     body = {}
             target_allows = list((body or {}).get("allowed_action_packs") or [])
             scope = scope_view_from_target(body or {})
+    else:
+        # META analyst (no target in context): self-allow this binding's own
+        # pack so the ALLOW leg passes under the global scope (§4.9).
+        from ..data.schemas.action_pack import ActionPackRef
+
+        target_allows = [ActionPackRef(pack_id=base.pack.identity.id)]
     if scope is None:
         scope = GLOBAL_SCOPE
     return base.for_target(scope=scope, target_allows=target_allows)
@@ -349,6 +361,7 @@ async def _gather_write_bindings_for_target(
     "web_fragments": [...]|None, "write_fragments": [...]|None}``.
     """
     from ..data.analysts.agency.binding import GLOBAL_SCOPE
+    from ..data.analysts.agency.journal_propose import JOURNAL_PROPOSE_PACK_ID
     from ..data.analysts.agency.resolution import scope_view_from_target
     from ..data.analysts.agency.tools import ToolContext, WritebackContext
     from ..data.analysts.agency.write_tools import WRITE_PACK_ID
@@ -374,7 +387,13 @@ async def _gather_write_bindings_for_target(
         scope = GLOBAL_SCOPE
 
     base_bindings: dict[str, Any] = base.get("bindings") or {}
-    write_pack_id = WRITE_PACK_ID
+    # The pack ids whose tools NEED the per-run WritebackContext (a connection
+    # source + the run identity). propose_facts writes live facts/hypotheses;
+    # journal_propose (plan §7 / Wave 4) writes a pending journal_proposals row.
+    # Both reach ctx.writeback; web_access does not. NOTE: journal_propose's
+    # writeback carries pg_pool + AnalystContext ONLY — it reaches NO provenance
+    # writer (its handlers run a single INSERT into journal_proposals).
+    writeback_pack_ids = frozenset({WRITE_PACK_ID, JOURNAL_PROPOSE_PACK_ID})
 
     # One per-run WritebackContext + AnalystContext shared by the write pack's
     # tools (they all stamp the same run identity). Built once per run, not per
@@ -400,7 +419,7 @@ async def _gather_write_bindings_for_target(
             bound = base_binding.for_target(
                 scope=scope, target_allows=target_allows
             )
-            if base_binding.pack.identity.id == write_pack_id:
+            if base_binding.pack.identity.id in writeback_pack_ids:
                 # Copy-on-write the ToolContext WITH the per-run writeback. The
                 # base ToolContext is shared across runs — clone its fields.
                 src_ctx = bound.tool_context

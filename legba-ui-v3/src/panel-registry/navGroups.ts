@@ -76,6 +76,10 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   'system.alert_center': 'monitor',
   'system.report_export': 'monitor',
   'system.pulse': 'monitor',
+  // The Journal is the navigable INDEX over the product / the narrative front
+  // door (JOURNAL_ASSESSOR_PLAN §9, UI Task #89) — Intelligence, not the
+  // system.* → Operate prefix fallback.
+  'system.journal': 'monitor',
 
   // --- Investigate: dig into the why ---
   'system.lineage': 'investigate',
