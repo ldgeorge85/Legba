@@ -119,6 +119,110 @@ def _journal_descriptor() -> AnalystDescriptor:
     )
 
 
+def _consolidator_descriptor() -> AnalystDescriptor:
+    """The REAL Wave 2 consolidation-tier descriptor, loaded from its YAML so the
+    on-disk file (id / kind / cadence / prompt_module) is what we bind. Mirrors
+    the bringup loader (`_load`): stamp a placeholder version, validate strict=False.
+    """
+    register_analyst_kind("journal_assessor")
+    body = yaml.safe_load(
+        (_DESCRIPTORS / "analyst_journal_consolidator.yaml").read_text()
+    )
+    body.setdefault("identity", {})["version"] = "0" * 16
+    return AnalystDescriptor.model_validate(body, strict=False)
+
+
+def test_consolidator_descriptor_is_same_kind_distinct_id_daily_cadence():
+    """Wave 2 §4.7 — the consolidation tier is the SAME kind, a DISTINCT id, with
+    the slow daily beat and the cooldown<interval trap honored (22h < 24h)."""
+    d = _consolidator_descriptor()
+    assert d.identity.id == "journal_consolidator"
+    assert d.identity.kind == "journal_assessor"  # SAME kind as the entry tier
+    assert d.method.prompt_module == (
+        "legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM"
+    )
+    # Daily cadence; cooldown STRICTLY below the 86400s interval (the §11 trap).
+    assert d.cadence.fallback_schedule == "0 2 * * *"
+    assert d.cadence.cooldown_seconds == 79200
+    assert d.cadence.cooldown_seconds < 86400
+    # Larger token budget than the 4096 entry tier (the digest is longer, §4.7).
+    assert int(d.method.llm["max_tokens"]) > 4096
+    # META: no targets block (global single run per tick).
+    assert not getattr(d.subscription, "targets", None)
+    # Grant invariant: ONLY the journal_read pack (§7.6).
+    assert [p.pack_id for p in d.action_packs] == ["journal_read"]
+
+
+@pytest.mark.asyncio
+async def test_consolidator_deps_build_canary_journal_kind_and_consolidation_voice():
+    """The consolidation tier's OWN activation canary (§12 Wave 2): a daily META
+    analyst that 404s / mis-binds dies SILENTLY for ~24h, so prove the bind path
+    for the `journal_consolidator` id specifically — it returns OutputKind.JOURNAL,
+    threads the InlineTargetDeps bundle, carries the CONSOLIDATION persona (NOT the
+    entry voice, NOT the JSON-only anti-voice), and surfaces READ_SLICE in the quint.
+    """
+    factory = AsyncMock(return_value=_StubLLM())
+    (
+        run_method,
+        kind_deps,
+        output_kind,
+        _receipt_chain,
+        read_slice,
+    ) = await build_analyst_run_method(
+        _consolidator_descriptor(),
+        deps=StandardDeps(pg_pool=None, nats_publish=None, secrets_resolve=_stub_secrets),
+        registry_client=AsyncMock(),
+        pg_pool=None,
+        llm_handler_factory=factory,
+    )
+    assert output_kind == OutputKind.JOURNAL
+    assert callable(run_method)
+    from legba.data.analysts.inline_target import InlineTargetDeps
+
+    assert isinstance(kind_deps, InlineTargetDeps)
+    # The CONSOLIDATION voice is threaded (consolidation-task framing present),
+    # still carrying the shared persona thesis, and NOT the JSON-only anti-voice.
+    sysp = kind_deps.system_prompt or ""
+    assert "BUILD ON, DON" in sysp                       # the consolidation task
+    assert "your inner voice" in sysp                    # the §6.1 consolidation message
+    assert "Poetry without evidence is noise" in sysp    # the shared persona thesis
+    assert "first character must be" not in sysp.lower() # NOT the anti-voice (§4.2)
+    assert kind_deps.max_rounds == 6
+    # The entry tier and consolidator share the kind module ⇒ the SAME run_method.
+    from legba.data.analysts.journal_assessor import run_method as journal_run_method
+
+    assert run_method is journal_run_method
+    # read_slice surfaces (None — the default META reader, like the entry tier).
+    assert read_slice is None
+
+
+def test_tier_selected_by_analyst_id_not_a_mode_flag():
+    """§4.7 — 'the tier is the descriptor.' The run_method derives entry_kind purely
+    from the running analyst id: the consolidator id distills a consolidation; every
+    other id appends an entry. No per-descriptor mode flag."""
+    from legba.data.analysts.journal_assessor import (
+        CONSOLIDATOR_ANALYST_ID,
+        _entry_kind_for_analyst,
+    )
+
+    assert CONSOLIDATOR_ANALYST_ID == "journal_consolidator"
+    assert _entry_kind_for_analyst("journal_consolidator") == "consolidation"
+    assert _entry_kind_for_analyst("journal_assessor") == "entry"
+    assert _entry_kind_for_analyst(None) == "entry"
+    assert _entry_kind_for_analyst("something_else") == "entry"
+
+
+def test_consolidator_prompt_reuses_entry_map_verbatim():
+    """The MAP rots; it must rot in ONE place (§6.2). The consolidator imports the
+    entry tier's persona + self-anatomy MAP verbatim, so a drift between tiers is
+    structurally impossible."""
+    from legba.prompts.journal_assessor import _PERSONA, _SELF_ANATOMY_MAP
+    from legba.prompts.journal_consolidator import CONSOLIDATOR_SYSTEM
+
+    assert _PERSONA in CONSOLIDATOR_SYSTEM
+    assert _SELF_ANATOMY_MAP in CONSOLIDATOR_SYSTEM
+
+
 @pytest.mark.asyncio
 async def test_journal_deps_build_returns_journal_kind_and_read_slice():
     factory = AsyncMock(return_value=_StubLLM())
