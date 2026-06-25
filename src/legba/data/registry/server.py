@@ -230,6 +230,13 @@ def create_app(
     from .lineage_api import build_lineage_router
     app.include_router(build_lineage_router(deps), prefix="/api/v1")
 
+    # Journal read surface (JOURNAL_ASSESSOR_PLAN §9 / Wave 3) — the open
+    # consolidation + recent entries, with every cited ref resolved to its
+    # (kind, title) for the panel's per-claim provenance chips. Read-only;
+    # off-chain (reads journal_entries directly, never the lineage catalog).
+    from .journal_api import build_journal_router
+    app.include_router(build_journal_router(deps), prefix="/api/v1")
+
     # Entity knowledge-graph read API — entity_profiles + signal_entity_links
     # + proposed_edges for the Entities / Entity-Graph / Entity-Detail panels.
     from .entities_api import build_entities_router
