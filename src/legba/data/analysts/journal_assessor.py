@@ -70,8 +70,32 @@ logger = logging.getLogger(__name__)
 
 KIND_NAME = "journal_assessor"
 SCHEMA_VERSION = "legba/analyst.journal_assessor/1-0-0"
-HANDLER_VERSION = "0.2.0"
+HANDLER_VERSION = "0.3.0"
 PROMPT_MODULE_PATH = "legba.prompts.journal_assessor:JOURNAL_SYSTEM"
+
+# Wave 2 (plan §4.7 / §12): the consolidation tier is the SAME kind
+# (``identity.kind: journal_assessor``) with a DISTINCT ``identity.id``
+# (``journal_consolidator``). "There is no ``mode=consolidation`` option on a
+# single descriptor — the tier is the descriptor." So this one ``run_method``
+# selects the journal ``entry_kind`` purely from the analyst id it is running as:
+# the consolidator id → ``consolidation`` (which makes the write path fire
+# ``supersede_prior_consolidation``); every other id → ``entry`` (pure append).
+CONSOLIDATOR_ANALYST_ID = "journal_consolidator"
+CONSOLIDATOR_PROMPT_MODULE_PATH = (
+    "legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM"
+)
+
+
+def _entry_kind_for_analyst(analyst_id: str | None) -> str:
+    """Select the journal ``entry_kind`` from the running analyst id (plan §4.7).
+
+    The consolidation tier shares the kind module with the entry tier; the
+    discriminator is the descriptor id, NOT a per-descriptor mode flag. The
+    consolidator id distills into a ``consolidation`` (supersession-carrying);
+    any other id (the entry tier ``journal_assessor``) appends an ``entry``.
+    """
+    return "consolidation" if analyst_id == CONSOLIDATOR_ANALYST_ID else "entry"
+
 
 # The 11th OutputKind — the host's analyst-output dispatcher writes a
 # ``journal_entries`` row (NOT a finding). This is what makes the kind off-chain.
@@ -509,13 +533,22 @@ async def run_method(
         deps = InlineTargetDeps(llm=deps)
 
     analyst_id = options.get("analyst_id")
+    # Wave 2 (§4.7): the tier is the descriptor — the consolidator id distills a
+    # ``consolidation`` (the write path then fires supersede_prior_consolidation);
+    # every other id appends an ``entry``. Pure-function of the analyst id; no
+    # per-descriptor mode flag.
+    entry_kind = _entry_kind_for_analyst(analyst_id)
+    is_consolidation = entry_kind == "consolidation"
     steps: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
-    # The window the entry reflects on. Wave 1: the default META 24h slice;
-    # get_journal_delta (in GATHER) tells the agent what changed since the last
-    # entry. A delta-priming READ_SLICE narrowing this window is a later refinement.
+    # The window the run reflects on. The entry tier reflects on the freshest
+    # 24h; the consolidation tier folds a wider running window (its daily beat)
+    # into the forward-carried inner landscape — get_journal_delta (in GATHER)
+    # tells it where it left off (the prior consolidation + recent entries). A
+    # delta-priming READ_SLICE narrowing this window is a later refinement.
     period_end = now
-    period_start = now - timedelta(hours=24)
+    period_start = now - timedelta(hours=24 if not is_consolidation else 24 * 7)
+    steps.append({"phase": "wake", "kind": "tier", "entry_kind": entry_kind})
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
 
     def _fold(u: Mapping[str, int]) -> None:
@@ -531,7 +564,11 @@ async def run_method(
         "kind": "render_prompt",
         "in_count": len(inputs),
         "prompt_chars": len(user_prompt),
-        "prompt_module": PROMPT_MODULE_PATH,
+        "prompt_module": (
+            CONSOLIDATOR_PROMPT_MODULE_PATH
+            if is_consolidation
+            else PROMPT_MODULE_PATH
+        ),
     })
 
     # --- GROUND (Tier-1 knowledge grounding, if the descriptor opted in) ---
@@ -603,11 +640,21 @@ async def run_method(
     # --- HONESTY (§10) — DETERMINISTIC honesty_flags forced from substrate ----
     honesty_flags = await _forced_honesty_flags(active_binding, steps=steps)
 
-    title = _derive_title(body, fallback="Journal entry")
+    title = _derive_title(
+        body,
+        fallback=(
+            "Journal consolidation" if is_consolidation else "Journal entry"
+        ),
+    )
+    # ``supersedes`` is NOT decided here — the write path closes the prior open
+    # consolidation on the SAME conn immediately before the insert and records the
+    # link via the prior row's superseded_by pointer (§8). We leave it None on the
+    # payload (the bootstrap-safe default) for BOTH tiers; supersede_prior_
+    # consolidation only fires when entry_kind == 'consolidation'.
     payload = JournalPayload(
-        entry_kind="entry",
+        entry_kind=entry_kind,
         title=title,
-        body=body or "(empty entry)",
+        body=body or ("(empty consolidation)" if is_consolidation else "(empty entry)"),
         claims=claims,
         cited_substrate_refs=cited_refs,
         period_start=period_start,
@@ -618,6 +665,7 @@ async def run_method(
     steps.append({
         "phase": "narrate",
         "kind": "coerce_journal",
+        "entry_kind": entry_kind,
         "body_chars": len(body),
         "claims": len(claims),
         "cited_refs": len(cited_refs),
@@ -644,4 +692,6 @@ __all__ = [
     "READ_SLICE",
     "run_method",
     "build_prompt_module",
+    "CONSOLIDATOR_ANALYST_ID",
+    "CONSOLIDATOR_PROMPT_MODULE_PATH",
 ]
