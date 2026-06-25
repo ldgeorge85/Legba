@@ -147,6 +147,10 @@ Altitude 0 = enriched signals, facts, entities (produced at ingest). Altitudes
 1-3 = findings, then situations/hypotheses/nexuses, then meta-findings (produced
 by Tier-2 cadence reasoning). "Extraction is always-on at ingest; reasoning is
 cadence-batched above it."
+*Note: the **journal** is the one cross-cutting layer that sits **across** this
+map rather than at a fixed altitude — every other meta-analyst cuts one slice; the
+journal narrates a first-person perspective **over** the whole chain. It is
+explicitly **not** a node in the lineage (see **Journal assessor**).*
 
 **Dapr virtual actor** — A stateful, per-descriptor object the runtime activates
 on demand.
@@ -309,13 +313,16 @@ accrues. An open-only partial-unique index keeps exactly one current row per
 *what is true now* and *what did we believe, when*.
 
 **OutputKind** — The fixed set of typed outputs an analyst can emit.
-The ~ten typed kinds (finding, situation, hypothesis, prediction, nexus, fact,
-critique, alert, prompt-module candidate…). A registry maps each kind to its
-table, pydantic payload model, schema URI, and NATS subject. `analyst_outputs` is
-the generic table for kinds without a dedicated table.
+The eleven typed kinds (finding, situation, hypothesis, prediction, alert,
+meta_finding, critique, fact, nexus, prompt-module candidate, **journal**). A
+registry maps each kind to its table, pydantic payload model, schema URI, and
+NATS subject. `analyst_outputs` is the generic table for kinds without a dedicated
+table.
 *Note: maintainer analysts write fact/nexus/entity straight into their substrate
 tables as a **side-write** (see TRACE_ONLY) rather than posting them to the
-findings feed.*
+findings feed. The 11th kind, **journal**, is the deliberate exception that lands
+in its own `journal_entries` table **off** the fact/finding/nexus chain — see
+**Journal (OutputKind)**.*
 
 **TRACE_ONLY / side-write** — An analyst run that writes its real result straight
 into the knowledge tables and records only an audit trace.
@@ -407,9 +414,54 @@ conclusions, not raw signals.
 An analyst with no single-target binding that runs once globally (on cadence) over
 other analysts' outputs or the whole graph, producing second-order findings
 (analysis-of-analysis), e.g. `cross_analyst_correlator` or the
-`relationship_reifier`.
+`relationship_reifier`. The **journal_assessor** is also a global META analyst, but
+the one that cuts **across** the whole flow rather than one slice — see **Journal
+assessor**.
 *Note: after any change to what an analyst reads, a no-target meta analyst must be
 live-forced to confirm it still runs — the e2e suite can miss meta-slice breakage.*
+
+**Journal assessor** — Legba's first-person reflective voice: the one analyst
+pointed at the whole organism (its own self / state / flow).
+A global META analyst (`journal_assessor`, `target_filter=None`) that, unlike every
+other meta-analyst — each of which cuts **one** slice — narrates a coherent point of
+view **across** the entire flow. *"Poetry without evidence is noise. Evidence
+without perspective is just a log file."* It runs the in-actor agentic `llm_planner`
+GATHER envelope (a single staged PLAN → GATHER → NARRATE arc, persona re-loaded every
+phase), **not** the deep-consult Dapr workflow. The investigation loop runs on the
+local gpt-oss / vLLM plane (`llm.primary.openai_compat`, a "Reasoning: high"
+directive injected into the gather prompt only); the **voice** (the in-voice
+field-notes and NARRATE synthesis) runs on the Anthropic plane, Opus 4.8
+(`llm.anthropic.opus_4_7`) — so Anthropic spend is just the bounded final synthesis
+while the deep loop is local. Two tiers, **one kind**: `journal_assessor` (entry,
+every 12h) and `journal_consolidator` (consolidation, daily 02:00 UTC — same
+`identity.kind`, distinct id; it distills its prior consolidation + recent entries
+into one forward-carried narrative and supersedes the prior open consolidation). It
+is an **extension** analyst kind (registered via `register_analyst_kind` /
+`vocabulary_entries`), not a member of the closed built-in `AnalystKind` enum. Status:
+**LIVE** — deployed and live-validated (a real off-chain entry, in-voice, with
+honesty-flags forced from substrate metrics).
+*Note: the journal is granted **only** the `journal_read` (14 read tools, incl. 9
+self-instruments) and `journal_propose` packs — both non-write-fact, the grant-layer
+backstop for the never-write-a-fact invariant. Its only un-gated effect is its **own
+continuity** (reading its last entry + current consolidation into its next run);
+everything else goes through **propose-and-gate** (see that entry).*
+
+**Journal (OutputKind)** — The 11th typed output: a journal entry / consolidation,
+landing in its own `journal_entries` table.
+`OutputKind.JOURNAL` (`schema_uri iglu:legba/journal/jsonschema/1-0-0`, payload
+`JournalPayload`) is the one kind that does **not** land in `analyst_outputs` — it
+goes to the dedicated `journal_entries` table (migration 0048). It is **off the
+fact/finding/nexus chain**: a journal row is a *perspective over* the provenance
+chain, never a *member of* it. It carries an **always-empty `derived_from`** and the
+table is deliberately absent from the lineage catalog, so a downstream lineage walk
+**can never surface a journal node**; it must never write a fact/finding/nexus (an
+invariant enforced by a gating test). When the lineage or a `derived_from` walk is
+enumerated, the journal is the explicit exception that is **not** a node in it.
+Citations live only in the row's `claims` / `cited_substrate_refs` (an up-only
+reference, not a lineage edge); `honesty_flags` are forced deterministically. The
+`entry_kind` column discriminates `entry` from `consolidation`; consolidations carry
+`valid_from` / `valid_until` / `superseded_by` and a partial-unique index enforces at
+most one open consolidation.
 
 **substrate slice / read slice** — The bounded window of substrate an analyst
 reads each run.
@@ -552,6 +604,25 @@ only where all three permissions overlap.
 A pack is *effective* only where the analyst's **grant**, the target's **allow**-list,
 and the pack's **applicability** predicate all overlap — enforced by the governor and
 defaulting fail-closed.
+
+**propose-and-gate / `journal_proposals`** — A human always sits between the
+**journal**'s voice and any change it wants to make.
+The journal writes only its own entries + consolidations directly; everything
+outward — a `correction`, a `change`, or a `self_revision` (including a
+`propose_self_revision` to its own instructions; protected sections auto-reject) —
+goes to the human-gated `journal_proposals` queue (a pending row, status `pending` →
+`accepted` / `rejected` / `archived`), **never** a live table. A human accepts or
+rejects; the accept path runs an idempotent per-kind apply worker. The journal's
+**only** un-gated effect is its own continuity — *"it can write its own next breath
+but cannot rewrite its own rules without the operator."* Surfaced over
+`GET /api/v1/journal_proposals` plus accept/reject endpoints; entries themselves are
+served at `GET /api/v1/journal` and rendered in the **Journal** UI panel
+(`system.journal`) with provenance chips that deep-link to the cited record.
+*Note: the `correction` and `self_revision` apply paths are tested end-to-end; the
+`change`-apply path is import-verified but not yet exercised against a live registry.
+The Journal panel was tsc-green and fully wired but pending its first real in-browser
+render at the time of writing. A critic + optimizer over the journal's own voice
+(Wave 5) is designed-not-built, gated on first building a critic actuator.*
 
 **governor** — The enforcer that caps each pack's usage and spend.
 The `PackGovernorEnforcer` applies per-pack invocation/rate/cost caps and the global

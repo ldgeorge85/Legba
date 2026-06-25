@@ -7,7 +7,7 @@
 # The repo (github.com/ldgeorge85/legba) is PUBLIC. Before any push this
 # scan exits NON-ZERO on anything that must not reach the public remote:
 #
-#   1. Prior-host CODENAME in tracked file content (skynet).
+#   1. Prior-host CODENAME in tracked file content (skynet / innogpt / innoscale).
 #   2. Operator DOMAIN in tracked file content (civislux).
 #   3. A tracked .env / secrets file (must stay gitignored).
 #   4. Private-key material (BEGIN ... PRIVATE KEY) in tracked content.
@@ -42,9 +42,13 @@ FOUND=0
 report() { echo "  HIT [$1] $2"; FOUND=1; }
 section() { echo ">> ${1}"; }
 
-# 1. Prior-host codename in tracked content.
-section "1. codename (skynet) in tracked content"
-if git grep -nI -i 'skynet' -- . ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' >/tmp/_ps_codename 2>/dev/null; then
+# 1. Prior-host codename(s) in tracked content. The LLM-host codenames
+#    (innogpt / innoscale) are scanned alongside skynet — all distinctive,
+#    zero false-positive risk. (ai1 is intentionally NOT auto-scanned: too
+#    short, real false-positive risk in identifiers/base64; it is already
+#    scrubbed and review catches any regression.)
+section "1. codename (skynet/innogpt/innoscale) in tracked content"
+if git grep -nI -iE 'skynet|innogpt|innoscale' -- . ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' >/tmp/_ps_codename 2>/dev/null; then
   while IFS= read -r line; do report codename "${line}"; done < /tmp/_ps_codename
 fi
 

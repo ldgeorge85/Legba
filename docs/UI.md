@@ -230,6 +230,62 @@ tile that headlines the whole panel set.
   not 82 panels). It ships in `personal` and `cis`, and is the right rail of the
   boot grid and the Monitoring / Investigation / Focus presets.
 
+### The Journal (reflective voice)
+
+- **Journal** (`system.journal`) — the read surface over the `journal_assessor`,
+  Legba's first-person reflective voice: the one analyst pointed at the whole
+  organism (its own self / state / flow), narrating a coherent point of view
+  *over* the rest of the system rather than cutting one slice of it. *"Poetry
+  without evidence is noise. Evidence without perspective is just a log file."*
+  Renders `GET /api/v1/journal` (`panels/system/Journal.tsx`) with three stacked
+  regions:
+  - **The current inner landscape** — the single open
+    `entry_kind='consolidation'` row rendered prominently at the top (the daily
+    consolidation tier distils prior entries into one forward-carried narrative).
+    With none yet, an empty-state note explains the consolidation opens once
+    enough entries accumulate.
+  - **Recent entries** — a scrollable stream of `entry_kind='entry'` cards below
+    it, cursor-paginated via a "load more" button (`next_cursor`), each card
+    showing its title, the period it reflects on, the markdown narrative (inline
+    `[[ref:uuid]]` markers stripped — the binding lives in the claims sidecar),
+    and per-entry honesty pills.
+  - **Per-claim provenance chips** — every `claims[].refs` ref renders as a
+    `ProvenanceChip` (the same chip The Why uses) bound to its specific cited
+    span, not a footnote pile. A chip click calls the shared `selectRow` (origin
+    `journal`) — opening the cited situation / assessment / nexus / fact in the
+    Inspector and brushing the other rooms. The walk is **UP-only**, from the
+    entry's in-payload refs; the journal is **off the lineage chain** (empty
+    `derived_from`, excluded from the lineage catalog), so a chip is the *only*
+    way to reach a journal row's citations and a downstream lineage walk never
+    surfaces the journal itself. An unresolved ref (superseded / pruned) still
+    renders as a slate `unknown` chip — the citation is never hidden.
+
+  The **unverified-perspective style** is the panel's grounding-honesty surface,
+  and the enforcement is the *visible distinction itself*, not an LLM stripper:
+  a `[needs_citation]`-prefixed `text_span` (an uncited factual assertion that
+  slipped the REFLECT flag) and a `kind="perspective"` claim (the voice / an
+  inference, not a cited fact) both render in a distinct dashed amber style with
+  an `uncited` / `perspective` badge — shown verbatim, never collapsed or hidden.
+  Above the stream sits the **honesty banner**, keyed off the substrate-derived
+  `calibration` verdict the route returns (the live metric, not a self-reported
+  field) and cross-checked against the open consolidation's stored
+  `honesty_flags`; it is never green-washed (the `forecast_unproven` /
+  `calibration_thin` legs are stated plainly, with BSS and sample sizes), and it
+  flags drift when the open consolidation omits a leg the live metric now
+  raises. Ships in `personal` and `cis`. (It was tsc-green + fully wired but
+  pending its first real in-browser render at the time of writing.)
+
+  The journal's outward changes — a correction, a `change`, or a `self_revision`
+  (including to its own instructions) — go to the **human-gated
+  `journal_proposals` queue**, never a live table; the backend serves
+  `GET /api/v1/journal_proposals` plus
+  `POST /api/v1/journal_proposals/{id}/{accept,reject}` (accept runs an
+  idempotent per-kind apply; a `self_revision` touching a protected section
+  auto-rejects). A dedicated operator **review surface** for that queue is **not
+  yet wired in the console** — the Mutations Queue panel (`registry.mutations`,
+  itself hidden by #90) covers GEPA / entity-merge / nexus proposals but not the
+  journal queue; the journal-proposals review panel is a tracked follow-up.
+
 ### v4 visual workspace
 
 The "three rooms" visual surface — World / Flow / Why — all selection-linked

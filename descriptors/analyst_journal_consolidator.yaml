@@ -56,15 +56,15 @@ method:
   # belt-and-braces guard (§4.2). This is the CONSOLIDATION voice (§6.1).
   prompt_module: "legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM"   # persona + MAP + consolidation task
   # PER-PHASE LLM SPLIT (§4.1): the heavy GATHER investigation loop runs on
-  # InnoGPT (gpt-oss / vLLM, Reasoning:high — injected into the gather system
+  # the gpt-oss / vLLM plane (Reasoning:high — injected into the gather system
   # prompt) while the VOICE (the field-notes seam + NARRATE) runs on Opus 4.8.
-  # gather = InnoGPT-high (cheap, deep tool-call rounds); voice = Opus (the deep
+  # gather = gpt-oss-high (cheap, deep tool-call rounds); voice = Opus (the deep
   # meta narration). The deps builder reads method.llm.narrate.raw (optional —
   # method.llm is an open dict, no schema change) and resolves a SECOND handler.
   llm:
     primary:
       factory_kind: stack_ref
-      raw: llm.primary.openai_compat  # InnoGPT (gpt-oss/vLLM) — the GATHER plane
+      raw: llm.primary.openai_compat  # the gpt-oss / vLLM plane — the GATHER plane
       expected_family: llm_provider
     narrate:
       factory_kind: stack_ref
@@ -72,8 +72,8 @@ method:
       expected_family: llm_provider
     # Opus 4.8 deprecates temperature → the handler drops it for the
     # claude-opus-4-8 prefix; we still declare a default for non-Opus stacks.
-    # max_tokens now governs ONLY the Opus narrate output (the InnoGPT gather
-    # plane serves its own vLLM budget — max_tokens is never sent to it).
+    # max_tokens now governs ONLY the Opus narrate output (the gpt-oss / vLLM
+    # gather plane serves its own vLLM budget — max_tokens is never sent to it).
     max_tokens: 24576                 # the consolidation digest is LONGER than an entry (§4.7)
   budget_tokens_per_day: 2000000     # §11 — a daily deep meta agent is costly
   gather:

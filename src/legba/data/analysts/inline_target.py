@@ -621,7 +621,7 @@ GroundingHook = Callable[
 # honor a ``reasoning_effort`` wire arg (vllm.py:106,:129); gpt-oss takes this
 # directive injected into the system/message content. It is prepended to the
 # GATHER system prompt ONLY when ``deps.gather_reasoning_high`` is set (the
-# journal's InnoGPT gather plane), so the heavy investigation rounds think hard
+# journal's gpt-oss/vLLM gather plane), so the heavy investigation rounds think hard
 # while the Opus voice calls — which never carry the gather suffix — are unpolluted.
 _REASONING_HIGH_DIRECTIVE = "Reasoning: high"
 
@@ -812,7 +812,7 @@ class InlineTargetDeps:
     # path for every other analyst (no descriptor sets ``method.llm.narrate``).
     # When set (journal_assessor / journal_consolidator wire
     # ``method.llm.narrate.raw`` to the Opus plane), the heavy GATHER loop stays
-    # on ``llm`` (InnoGPT / vLLM, reasoning=high) while the voice phases route to
+    # on ``llm`` (the gpt-oss / vLLM plane, reasoning=high) while the voice phases route to
     # ``llm_narrate`` (Opus) via :meth:`narrate_llm`. The narrate handler may carry
     # its OWN output cap — see ``narrate_max_tokens`` — because the Anthropic plane
     # caps OUTPUT with max_tokens whereas the vLLM plane serves its own budget.
@@ -846,9 +846,9 @@ class InlineTargetDeps:
     # precheck; GATHER engages whenever a binding is present.
     budget_precheck: BudgetPrecheck | None = None
     # PER-PHASE LLM SPLIT — inject the gpt-oss ``Reasoning: high`` directive into
-    # the GATHER system prompt ONLY (the heavy InnoGPT/vLLM investigation rounds).
+    # the GATHER system prompt ONLY (the heavy gpt-oss/vLLM investigation rounds).
     # Default False → the gather suffix is byte-for-byte unchanged for every
-    # assessor + the Opus voice calls. The journal sets it True so the InnoGPT
+    # assessor + the Opus voice calls. The journal sets it True so the gpt-oss/vLLM
     # gather thinks hard; the Opus field-notes/NARRATE calls are NOT polluted
     # because they never pass through the gather suffix. ``reasoning_effort`` is
     # NOT a vLLM wire arg — gpt-oss takes a ``Reasoning: high`` content directive
@@ -862,7 +862,7 @@ class InlineTargetDeps:
         the zero-regression path for every analyst that doesn't split (no
         descriptor sets ``method.llm.narrate``). When ``llm_narrate`` IS set
         (the journal's Opus plane) the voice routes there while GATHER stays on
-        ``llm`` (InnoGPT).
+        ``llm`` (the gpt-oss/vLLM plane).
         """
         return self.llm_narrate or self.llm
 
@@ -971,7 +971,7 @@ async def _gather(
     # read-only suffix when not supplied (back-compat: read-only assessors).
     gather_system = deps.system_prompt + (gather_system or _GATHER_SYSTEM_SUFFIX)
     # PER-PHASE LLM SPLIT — prepend the gpt-oss "Reasoning: high" directive to the
-    # GATHER system prompt ONLY when this deps opted in (the journal's InnoGPT
+    # GATHER system prompt ONLY when this deps opted in (the journal's gpt-oss/vLLM
     # gather plane). Default off → byte-for-byte unchanged for every assessor;
     # the Opus field-notes/NARRATE calls never reach this code path so they are
     # NEVER polluted with the directive.

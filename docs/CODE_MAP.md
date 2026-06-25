@@ -33,8 +33,8 @@ exists" from "the live system uses it".
 | `data/registry/` | Control plane: descriptor registry, vault, HTTP/WS API | `server.py` | content-hashed instance registry + Ed25519 audit + DLQ + NATS events (`descriptor.py`, `audit.py`, `signing.py`, `dlq.py`, `events.py`/`streams.py`/`emitter.py`), XSalsa20-Poly1305 credential vault (`credentials.py`), stack registry (`stack.py`), the `legba-registry` FastAPI app + routers (`server.py` + `api.py`/`v3_api.py`/`substrate_reads_api.py`/`lineage_api.py`/`entities_api.py`/`runtime_telemetry_api.py`/`budget_api.py`/`source_credibility_api.py`/`consult_api.py`), discovery/version conversion (`discovered_materializer.py`, `conversion.py`) |
 | `data/sources/` | Source-kind acquisition handler library | `_contract.py` | the handler Protocol + `Signal` (`_contract.py`/`_protocols.py`), the **per-source baseline pipeline** (`baseline.py`), 14 kind-handler modules (`rss.py`, `gdelt.py`, `acled.py`, `mediacloud.py`, `opensanctions.py`, `common_crawl.py`, `intelmq.py`, `firecrawl.py`, `scraper.py`, `telegram.py`, `discord.py`, `geojson.py`, `json_api.py`, `generic_webhook.py`+`webhook_router.py`), outbound provisioning (`provision.py`), egress helper (`_egress.py`) |
 | `data/filters/` | In-flight enrichment / transform handlers over a `Signal` | `_contract.py` | `StreamHandler` Protocol (`_contract.py`), baseline enrichers (`language_detect.py`, `geocode.py`, `ner.py`, `classify.py`, `source_credibility.py`), ingest dedup tiers 1–2 (`ingest_dedupe.py`, `dedupe.py`), SLM-backed refiners that call the model service (`slm_classification_refine.py`, `slm_entity_resolve.py`, `slm_relationship_validate.py`) |
-| `data/analysts/` | Analyst-kind implementations (one module per kind) | `__init__.py` | kind modules discovered via `discover_analyst_kinds()` (`__init__.py`): `inline_target.py`, `cross_target_raw.py`, `meta_findings_synthesizer.py`, `cross_analyst_correlator.py`, `relationship_reifier.py` (META — co-mention pairs → signed typed nexuses, 8B LLM), `competing_hypotheses.py` (META ACH — evidence×diagnosticity matrix is LLM-scored + ±2 transitions; outcome-resolution + calibration now FIRE against the EXOGENOUS `resolved_outcome` column, migration 0038 — subsequent-facts/operator outcome, self-consistency-flagged when only status-transition), `deterministic.py`, `predictor.py`, `critic.py`, `optimizer.py` (GEPA — see §3.5), `consult_on_demand.py`; deterministic impls in `deterministic_handlers/` (`entity_resolution.py` (+ `_entity_canon.py`), `cross_source_dedup.py` (BOUNDED per-run scan — skips already-canonicalised content-hash groups in the DB + caps at `max_groups_per_run`=500), `cross_source_coalesce.py` (substrate-wide cross-source semantic/temporal LINKER, off-by-default — SEAM #19), `finding_supersession.py`, `situation_clustering.py`, `thematic_proposal.py` (Phase-5 — detects thematic non-geo situation frames + PROPOSES them), `hypothesis_lifecycle.py`, `graph_mining.py`, `proposed_edge_governance.py` (Phase D — promotes pending `proposed_edges` into neutral `CoOccursWith` nexuses), `_graph_metrics_sink.py`, `anomaly_detection.py`, `fact_decay.py`, `calibration_tracking.py`, `integrity_sweep.py`, `entity_gc.py`, `adversarial_signals.py`, `structural_balance.py`, `nexus_decay.py`); action-pack agency plane in `agency/` (`agency.py` hard gate, `governor.py`, `resolution.py`, `binding.py`, `substrate_read.py`, `tools.py`, `events.py`) |
-| `data/provenance/` | Output-kind payloads, write helpers, receipts, budget, DLQ | `kinds.py` | the 10-member `OutputKind` enum + `KIND_REGISTRY` (`kinds.py`, now incl. `FACT` + `NEXUS`), per-kind pydantic payloads (`models.py`, incl. `FactPayload`/`NexusPayload`), the analyst-output writers (`writes.py`, `_core.py` — incl. `write_fact`/`write_nexus` + `supersede_prior_facts`/`supersede_prior_nexuses`, `source_type`/`seed_batch_id` threading), receipt-chain hashing + verify (`receipts.py`/`_core.py`, `verify.py`), durable checkpointer (`checkpointer.py`), budget accounting (`budget.py`), output DLQ (`dlq.py`) |
+| `data/analysts/` | Analyst-kind implementations (one module per kind) | `__init__.py` | kind modules discovered via `discover_analyst_kinds()` (`__init__.py`): `inline_target.py`, `cross_target_raw.py`, `meta_findings_synthesizer.py`, `cross_analyst_correlator.py`, `relationship_reifier.py` (META — co-mention pairs → signed typed nexuses, 8B LLM), `competing_hypotheses.py` (META ACH — evidence×diagnosticity matrix is LLM-scored + ±2 transitions; outcome-resolution + calibration now FIRE against the EXOGENOUS `resolved_outcome` column, migration 0038 — subsequent-facts/operator outcome, self-consistency-flagged when only status-transition), `deterministic.py`, `predictor.py`, `critic.py`, `optimizer.py` (GEPA — see §3.5), `consult_on_demand.py`, `journal_assessor.py` (the `journal` kind — Legba's first-person reflective voice, the ONE analyst pointed at the whole organism; OFF the fact/finding/nexus chain — see §2.7/§2.9); deterministic impls in `deterministic_handlers/` (`entity_resolution.py` (+ `_entity_canon.py`), `cross_source_dedup.py` (BOUNDED per-run scan — skips already-canonicalised content-hash groups in the DB + caps at `max_groups_per_run`=500), `cross_source_coalesce.py` (substrate-wide cross-source semantic/temporal LINKER, off-by-default — SEAM #19), `finding_supersession.py`, `situation_clustering.py`, `thematic_proposal.py` (Phase-5 — detects thematic non-geo situation frames + PROPOSES them), `hypothesis_lifecycle.py`, `graph_mining.py`, `proposed_edge_governance.py` (Phase D — promotes pending `proposed_edges` into neutral `CoOccursWith` nexuses), `_graph_metrics_sink.py`, `anomaly_detection.py`, `fact_decay.py`, `calibration_tracking.py`, `integrity_sweep.py`, `entity_gc.py`, `adversarial_signals.py`, `structural_balance.py`, `nexus_decay.py`); action-pack agency plane in `agency/` (`agency.py` hard gate, `governor.py`, `resolution.py`, `binding.py`, `substrate_read.py`, `tools.py`, `events.py`) |
+| `data/provenance/` | Output-kind payloads, write helpers, receipts, budget, DLQ | `kinds.py` | the 11-member `OutputKind` enum + `KIND_REGISTRY` (`kinds.py`, now incl. `FACT` + `NEXUS` + `JOURNAL` — the journal routes to its own `journal_entries` table, OFF the fact/finding/nexus chain), per-kind pydantic payloads (`models.py`, incl. `FactPayload`/`NexusPayload`/`JournalPayload`), the analyst-output writers (`writes.py`, `_core.py` — incl. `write_fact`/`write_nexus` + `supersede_prior_facts`/`supersede_prior_nexuses`, `source_type`/`seed_batch_id` threading), receipt-chain hashing + verify (`receipts.py`/`_core.py`, `verify.py`), durable checkpointer (`checkpointer.py`), budget accounting (`budget.py`), output DLQ (`dlq.py`) |
 | `data/outputs/` | Output-kind emit handlers (analyst payloads → operator surfaces) | `_contract.py` | the `AlertEmitter`/emit Protocol + `discover_output_kinds()` (`_contract.py`/`__init__.py`), `substrate.py` (typed write-back facade), `nats_stream.py`, `webhook.py`, `alert.py`, `ui_panel.py`, `mcp_tool.py`, `a2a_skill.py`, `stix_bundle.py` (STIX 2.1) |
 | substrate adapters (`data/` root) | One typed port per backing store + bootstrap | `config.py` | `postgres.py` (asyncpg + AGE codec), `nats.py` (JetStream, signal subject grammar), `qdrant.py`, `redis.py`, env-driven config (`config.py`), migration runner (`migrate.py`), vocabulary seed/query (`vocabulary.py`), substrate smoke check (`smoke.py`, owns `RETIRED_TABLES`) |
 | `data/migrations/` | SQL schema (applied in order) | `0001_baseline.sql` | **Flattened baseline + forward chain.** `0001_baseline.sql` (commit `06bab95`) collapsed the former 30-step chain into one file — extensions + AGE graph (9 vertex / 14 edge labels) + all 40 relational tables + seed data (incl. the former-0031 source-credibility `tier`/`state_affiliation` columns + seeded credibility rows). The data-analysis arc then re-opened the forward chain, now `0032`…`0046` (head = **0046**): `0032_facts_decay_columns.sql` (facts `valid_until`/`superseded_by`/`confidence_components`), `0033_nexuses.sql` (reified `nexuses` table), `0034_seed_batches.sql` (curated-seed batch ledger), `0035_entity_profiles_composite_key.sql`, `0036_signals_retention.sql`, `0037_age_output_label.sql`, `0038_hypotheses_resolved_outcome.sql` (the EXOGENOUS ACH outcome column), `0039_consult_sessions.sql`, then the DQ-sweep tail `0040`…`0046`: situations first-class + temporal repair (`0040`/`0041_situations_valid_from_repair.sql`/`0042_situations_target_id_backfill.sql`), `0043_ingestion_conf1_backfill.sql` + `0044_purge_ingestion_leader_junk.sql` (conf-1.0 sentinel cleanup), `0045_backfill_demonym_nexuses.sql` (NER demonym→country), `0046_source_poll_outcomes.sql` (the `source_poll_outcomes` non-productive-poll provenance table). There is no `0014`. The runner (`migrate.py`) globs `*.sql` in order |
@@ -76,10 +76,11 @@ These override anything in older docs or comments that implies otherwise. Each
 is traceable to code:
 
 - **`OutputKind.FACT` and `write_fact` NOW EXIST** (the data-analysis arc — this
-  reverses the older "no FACT / no write_fact" note). `OutputKind` now has **10**
+  reverses the older "no FACT / no write_fact" note). `OutputKind` now has **11**
   members — the original seven (`FINDING`, `SITUATION`, `HYPOTHESIS`,
-  `PREDICTION`, `ALERT`, `META_FINDING`, `CRITIQUE`) plus `FACT`, `NEXUS`, and
-  `PROMPT_MODULE_CANDIDATE` (`data/provenance/kinds.py:69-87`). `provenance/writes.py`
+  `PREDICTION`, `ALERT`, `META_FINDING`, `CRITIQUE`) plus `FACT`, `NEXUS`,
+  `PROMPT_MODULE_CANDIDATE`, and `JOURNAL` (`data/provenance/kinds.py:76-101`).
+  `provenance/writes.py`
   now exposes `write_fact` (`:385`) and `write_nexus` (`:416`) plus
   `supersede_prior_facts` (`:658`) / `supersede_prior_nexuses` (`:822`); both
   write helpers thread `source_type` / `seed_batch_id` (`:128-129`/`:460-461`) so
@@ -124,6 +125,24 @@ is traceable to code:
   in §2.14). The ACH calibration leg also now FIRES against the exogenous
   `resolved_outcome` column (migration 0038) — reverses the older "NOT yet
   firing" note in §0/§2.7.
+- **The `journal` kind EXISTS and is LIVE** (the 11th `OutputKind` — Legba's
+  first-person reflective voice). Unlike every other meta-analyst, which cuts ONE
+  slice, the journal cuts ACROSS the whole flow, narrating a coherent point of
+  view OVER the rest of the system ("Poetry without evidence is noise. Evidence
+  without perspective is just a log file."). It is **OFF the fact/finding/nexus
+  chain** — the single most important framing: a journal row is a *perspective
+  OVER* the provenance chain, never a *member of* it. It lands in a **dedicated
+  `journal_entries` table (migration 0048)**, NOT `analyst_outputs`; it carries an
+  ALWAYS-EMPTY `derived_from` and is deliberately ABSENT from the lineage catalog
+  (`lineage_api._SUBSTRATE_TABLES`), so a downstream lineage walk FROM a
+  fact/situation/nexus can NEVER surface a journal node. It must NEVER write a
+  fact/finding/nexus (grant-layer backstop: it is granted ONLY the read +
+  propose packs; chain-layer enforcement is gated by
+  `tests/data_pkg/test_journal_off_chain.py`). Do NOT place the journal inside the
+  signals → entities/facts → relations/nexuses → situations → assessments
+  lineage; it is a reflective layer ABOVE / ACROSS that chain (the exception that
+  is NOT a node in any `derived_from` walk). Impl: `data/analysts/journal_assessor.py`;
+  payload `JournalPayload` (`data/provenance/models.py`); see §2.7/§2.9.
 
 ---
 
@@ -172,7 +191,10 @@ The Pydantic descriptor schemas (strict, `extra="forbid"`, content-hashable):
 `cross_target_raw`, `meta_findings_synthesizer`, `relationship_reifier`,
 `competing_hypotheses`, `deterministic`, `predictor`, `critic`, `optimizer`,
 `cross_analyst_correlator`, `consult_on_demand`) plus operator-registered kinds
-via the vocabulary registry.
+via the vocabulary registry. The `journal_assessor` kind is one such
+**extension kind** — registered via `register_analyst_kind` + the
+`vocabulary_entries` family, NOT a member of the closed built-in enum (so the
+built-in count is unchanged) — see §2.7.
 
 ### 2.2 `registry/` — descriptor registry, vault, HTTP/WS API
 
@@ -197,6 +219,8 @@ The HTTP/WebSocket API is `server.py` (the `legba-registry` entry point, port
 | `budget_api.py` | `/api/v1/budget` | budget envelope reads |
 | `source_credibility_api.py` | `/api/v1` | source-credibility reads |
 | `consult_api.py` | `/api/v1` | on-demand consult (proxies the consult analyst actor via daprd) |
+| `journal_api.py` | `/api/v1` | journal entries read — `GET /api/v1/journal` (the reflective-voice feed) |
+| `journal_proposals_api.py` | `/api/v1` | journal proposal review queue — `GET /api/v1/journal_proposals` + `POST .../{id}/accept` / `.../{id}/reject` (human-gated) |
 
 `discovered_materializer.py` + `conversion.py` support discovery and
 descriptor-version conversion. `health.py` is the liveness surface.
@@ -300,7 +324,8 @@ subsequent facts or an operator label, and `calibration_tracking` flags the
 Brier `self_consistency_only` when every resolved row came only from a
 status-transition; see ANALYSIS §7.4-7.5),
 `deterministic.py`, `predictor.py`, `critic.py`, `optimizer.py` (GEPA loop — see
-§3.5), `cross_analyst_correlator.py`, `consult_on_demand.py`.
+§3.5), `cross_analyst_correlator.py`, `consult_on_demand.py`,
+`journal_assessor.py` (the `journal` kind — see below).
 `deterministic_handlers/` holds the deterministic analyst impls (e.g.
 `entity_resolution.py` (+ `_entity_canon.py` — `canonicalize_entity` surface-form
 alias/gazetteer merge + NER type correction, Phase C), `cross_source_dedup.py`
@@ -323,6 +348,64 @@ agency plane**: `agency.py` (`run_pack_tool` hard gate), `governor.py`
 `binding.py` (the per-analyst production on-ramp — `AgencyToolBinding` +
 `EscalationBinding`), `events.py`.
 
+**`journal_assessor.py` — the `journal` kind (Legba's first-person reflective
+voice).** The ONE analyst pointed at the whole organism (its own self / state /
+flow): every other meta-analyst cuts ONE slice, the journal cuts ACROSS the
+entire flow, narrating a coherent point of view OVER the rest of the system.
+It is an **extension kind** (registered via `register_analyst_kind` +
+the `vocabulary_entries` family, NOT a built-in `AnalystKind` enum member —
+`scripts/bringup_register_analysts.py`), and a **META analyst** — a single GLOBAL
+run per cadence tick (`target_filter=None`, like `world_assessor`). `OUTPUT_KIND
+= OutputKind.JOURNAL`; it is **OFF the fact/finding/nexus chain** (writes only its
+own `journal_entries` row — never a fact/finding/nexus; gated by
+`tests/data_pkg/test_journal_off_chain.py`; see §2.9 for the off-chain framing).
+The engine is `method.kind: llm_planner` — the **in-actor agentic GATHER**
+envelope (a one-soul staged arc PLAN → GATHER → NARRATE, the persona re-loaded
+every phase), NOT the `deep_consult` Dapr workflow (that path rides the broken
+long-activity round-trip — see §3.5 / SEAMS). The single `run_method` selects the
+`entry_kind` from the running analyst's `id`. **Two descriptors, ONE kind** (both
+declare `identity.kind: journal_assessor`):
+- `descriptors/analyst_journal_assessor.yaml` — the **entry tier** (every 12h,
+  `"0 0,12 * * *"`; `entry_kind='entry'`, pure append).
+- `descriptors/analyst_journal_consolidator.yaml` — the **consolidation tier**
+  (daily at 02:00 UTC, `"0 2 * * *"`); distils its prior consolidation + recent
+  entries into one forward-carried narrative, emits `entry_kind='consolidation'`,
+  and fires `supersede_prior_consolidation` (closes the prior open consolidation,
+  opens this one — at most one open consolidation, enforced by a partial-unique
+  index in 0048).
+**Per-phase LLM split.** The heavy GATHER investigation loop runs on the local
+gpt-oss / vLLM plane (`method.llm.primary` → the `llm.primary.openai_compat`
+stack component); the VOICE (the NARRATE synthesis) runs on the Anthropic plane,
+Opus 4.8 (`method.llm.narrate` → the `llm.anthropic.opus_4_7` stack component).
+The deps builder reads the optional `method.llm.narrate.raw` and resolves a
+second handler; analysts without `method.llm.narrate` fall back to the single
+primary handler byte-unchanged (`method.llm` is an open dict — no schema change).
+`narrate.max_tokens` (16384 entry / 24576 consolidation) governs only the Opus
+voice output; it is never sent to the vLLM gather (which uses its own server
+budget). `gather.max_rounds` = 6 (hard ceiling); `budget_tokens_per_day` =
+2,000,000; grounding enabled (slice_entities).
+**Prompts.** `legba.prompts.journal_assessor:JOURNAL_SYSTEM` (entry persona) +
+`legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM` (consolidation persona).
+**Packs + propose-and-gate (the never-write-a-fact hygiene invariant).** Granted
+ONLY two packs — `journal_read` (`descriptors/action_pack_journal_read.yaml`: 14
+read tools, incl. 9 net-new self-instruments — `get_assessments`,
+`get_graph_structure`, `get_structural_balance`, `get_critic_scores`,
+`get_calibration`, `get_run_health`, `get_source_health`, `get_budget_status`,
+`get_journal_delta`) and `journal_propose`
+(`descriptors/action_pack_journal_propose.yaml`). BOTH are non-write-fact — the
+grant-layer backstop for the off-chain invariant. The journal writes ONLY its own
+entries + consolidations directly; everything outward — a correction, a change,
+or a `self_revision` (incl. changes to its own instructions via
+`propose_self_revision`; protected sections auto-reject) — goes to the
+HUMAN-GATED `journal_proposals` queue, never a live table. A human accepts /
+rejects; the accept path runs an idempotent per-kind apply worker. Its only
+un-gated effect is its OWN continuity (it reads its own last entry + current
+consolidation into its next run). HONEST CAVEAT: the `change`-apply path is
+import-verified but NOT yet exercised against a live registry; the `correction` +
+`self_revision` apply paths ARE tested end-to-end. (A critic + an optimizer over
+the journal's own voice — Wave 5 — is designed-not-built, gated on first building
+a critic actuator.)
+
 ### 2.8 `outputs/` — output-kind handler library
 
 Analyst-emitted payloads fanned to operator surfaces. `_contract.py` is the
@@ -337,9 +420,10 @@ emit-capable kinds and dispatches them; TAXII *upload* remains a documented stub
 
 ### 2.9 `provenance/` — derived-from + receipts + budget
 
-`models.py` / `kinds.py` the `OutputKind` enum (10 members) + per-kind payloads
+`models.py` / `kinds.py` the `OutputKind` enum (11 members) + per-kind payloads
 (finding / situation / hypothesis / prediction / alert / meta_finding / critique
-/ **fact** (`FactPayload`) / **nexus** (`NexusPayload`) / prompt_module_candidate),
+/ **fact** (`FactPayload`) / **nexus** (`NexusPayload`) / prompt_module_candidate
+/ **journal** (`JournalPayload`)),
 `_core.py` + `writes.py` the provenance writers (full `derived_from` chains; one
 `write_*` per kind — incl. `write_fact` / `write_nexus` + `supersede_prior_facts`
 / `supersede_prior_nexuses`, both threading `source_type` / `seed_batch_id` so
@@ -347,6 +431,19 @@ curated-seed rows are stamped and superseded apart from agent-authored ones — 
 §0a), `receipts.py` per-analyst SHA-256 hash-chained receipt chain, `verify.py`
 chain verification, `checkpointer.py` durable checkpoints, `budget.py` budget
 accounting, `dlq.py` provenance dead-letter.
+
+> **The `journal` kind is the one OFF-chain exception** (`kinds.py:95-101`/`:251`).
+> Unlike every other kind, `OutputKind.JOURNAL` routes to its own dedicated
+> `journal_entries` table (migration 0048), NOT `analyst_outputs`, and a journal
+> row is a *perspective OVER* the provenance chain rather than a *member of* it:
+> it carries an ALWAYS-EMPTY `derived_from` and the table is deliberately ABSENT
+> from the lineage catalog (`registry/lineage_api.py` `_SUBSTRATE_TABLES`), so a
+> downstream `derived_from` walk from a fact/situation/nexus can NEVER surface a
+> journal node. Citations live ONLY in the row's `claims` / `cited_substrate_refs`
+> (an UP-only walk). The journal never produces a fact/finding/nexus — when a doc
+> enumerates the `signals → entities/facts → relations/nexuses → situations →
+> assessments` lineage, the journal is explicitly the reflective layer ABOVE that
+> chain, NOT a node in it. See §2.7 (`journal_assessor.py`).
 
 ### 2.10 `discovery/` — descriptor discovery pipeline
 
@@ -563,7 +660,11 @@ src/
     system/                Findings, Entities, EntityGraph, Lineage, Search, Pulse, Runtime,
                            Streams/StreamLag, Budget, Optimizer/OptimizerDiff, Eval/EvalScorecard,
                            Consult, AuditChain, DeadLetter, GovernorEvents, AlertCenter,
-                           ActorHealth, ReportExport, TargetsRoster, TenantView, Users
+                           ActorHealth, ReportExport, TargetsRoster, TenantView, Users,
+                           Journal (the reflective-voice feed — panel id `system.journal`,
+                           renders entries with provenance chips deep-linking the cited
+                           record + [needs_citation]/perspective spans; tsc-green + wired,
+                           first in-browser render pending)
     dashboard/Dynamic.tsx  registration-driven dynamic dashboard
     _DeferredStub.tsx      placeholder for not-yet-built panels (future-seam UIs)
 ```

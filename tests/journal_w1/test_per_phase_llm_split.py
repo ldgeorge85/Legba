@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Per-phase LLM split (journal §4.1): the heavy GATHER loop runs on the PRIMARY
-handler (InnoGPT / vLLM, Reasoning:high) while the VOICE (the field-notes seam +
+handler (the gpt-oss / vLLM plane, Reasoning:high) while the VOICE (the field-notes seam +
 NARRATE) runs on the SECOND handler (Opus).
 
 No DB — scripted LLM doubles + a fake governed binding. Covers:
 
   * deps-build dual-handler: with BOTH refs set, deps.llm resolves to the
-    InnoGPT/primary component and deps.narrate_llm() to the Opus/narrate
+    gpt-oss/primary component and deps.narrate_llm() to the Opus/narrate
     component — DIFFERENT handlers / DIFFERENT component ids.
   * fallback: with NO narrate ref, deps.narrate_llm() == deps.llm (zero-regression).
   * backward-compat: a normal inline_target analyst (no narrate ref) builds
@@ -140,7 +140,7 @@ class _IdHandler:
 
 @pytest.mark.asyncio
 async def test_deps_build_resolves_two_distinct_handlers():
-    """journal_assessor: BOTH refs set → deps.llm is the InnoGPT/primary component,
+    """journal_assessor: BOTH refs set → deps.llm is the gpt-oss/primary component,
     deps.narrate_llm() is the Opus/narrate component — DIFFERENT handlers + ids."""
     # The factory is keyed by component id (the production llm_handler_factory
     # contract), so it lets us prove the two refs resolved to two distinct planes.
@@ -154,7 +154,7 @@ async def test_deps_build_resolves_two_distinct_handlers():
         pg_pool=None,
         llm_handler_factory=factory,
     )
-    assert kind_deps.llm.component_id == "llm.primary.openai_compat"   # InnoGPT gather
+    assert kind_deps.llm.component_id == "llm.primary.openai_compat"   # gpt-oss gather
     assert kind_deps.llm_narrate is not None
     assert kind_deps.narrate_llm().component_id == "llm.anthropic.opus_4_7"  # Opus voice
     # DIFFERENT handlers.
@@ -255,7 +255,7 @@ async def test_gather_uses_primary_voice_uses_narrate_handler():
         "available": True, "forecast_unproven": True, "calibration_thin": True,
     }})
     # The PRIMARY (gather) plane only sees the GATHER round (1 call).
-    primary = _SpyLLM("innogpt-gather", ['{"done": true}'])
+    primary = _SpyLLM("gptoss-gather", ['{"done": true}'])
     # The NARRATE (voice) plane sees field-notes (1) + narrate (1) = 2 calls.
     narrate = _SpyLLM("opus-voice", [
         "Field notes in my own voice.",

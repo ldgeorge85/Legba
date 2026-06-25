@@ -218,6 +218,30 @@ allowlist lines.
 | **Resolution** | Closed by **#91** (`985db7e`): `src/legba/runtime/nlp_client_factory.py:LazyNlpClient` resolves the NLP / embedding / vector clients on FIRST use and **re-resolves on handler-build**, so a stack component seeded *after* boot is picked up **without a runtime restart** — the boot-time permanent-`None` is gone (+71-line factory, +130-line test). The documented bring-up ORDER + fail-loud boot signpost remain as belt-and-suspenders. _(Prior status: deferred as a reconcile-loop-driven architecture change; #91 delivered the lazy/self-healing equivalent.)_ |
 | **Guard rail** | NOT a stub — the missing client degrades loud, never fabricates enrichment. Boot logs `dapr_host.nlp_client.built component=nlp.local.legba_models` on success and `nlp_client.unavailable` when the component is absent; per-signal enrichment build refuses loud (`source_deps_resolver.enrichment_build_failed … requires an nlp_client_factory`). Operator recipe (seed BEFORE boot, or `--force-recreate` the runtime after seeding) is `docs/RUNBOOK.md` §0. |
 
+### 25. Journal `change`-proposal apply path not yet exercised against a live registry
+
+| | |
+|---|---|
+| **What** | The journal assessor (the 11th `OutputKind` — Legba's first-person reflective voice, LIVE) PROPOSES every outward effect into the human-gated `journal_proposals` queue; on operator accept, an idempotent per-kind apply worker (`src/legba/data/registry/journal_proposals_apply.py:apply_accepted_proposal`) runs the change through an EXISTING write/lifecycle path. The `correction` apply (`supersede_prior_facts`) and the `self_revision` apply (a PROMOTED `prompt_module_candidate` row the optimizer's `resolve_promoted_system_prompt` reads, with the §7.5(b) protected-section gate) are BUILT and tested END-TO-END against a real pool. The third kind — `change` (`_apply_change`: a descriptor/stack diff merged onto the current head and persisted via the registry's own `update` path, the same one `PUT /stack/{id}` / `PUT /descriptors/{family}/{id}` use) — is real, import-verified, and unit-smoke covered, but has **not yet been exercised against a live registry**. |
+| **Why deferred** | The `change` apply needs a populated registry head to fetch + deep-merge + re-stamp; the e2e accept/reject suite seeds Postgres but stubs the registry deps (`tests/journal_w4/test_accept_reject_lifecycle.py` — the docstring on `_DEPS_STUB` records exactly this: change apply "needs a registry, covered by import + unit smoke"). Wiring a live-registry fixture for the `change` leg is follow-up work; the apply code path itself is complete, not stubbed. |
+| **Guard rail** | NOT a stub — every apply path fails loud, none fabricate. `_apply_change` raises `ProposalApplyError` on an unknown op / a bad diff shape, and the accept endpoint rolls a failed apply forward to `archived` with the reason (it is never left dangling in `accepted`). The whole queue is the backstop: the journal can write ONLY its own `journal_entries` rows directly (off-chain, empty `derived_from`, excluded from the lineage catalog — it NEVER writes a fact/finding/nexus), so an unexercised `change` apply cannot leak any live mutation — a human must accept first, and the apply only ever runs the existing registry `update`. |
+
+### 26. Journal Wave 5 — critic + optimizer over the journal's own voice (designed-not-built)
+
+| | |
+|---|---|
+| **What** | Routing the journal's voice through a CRITIC (a grounding-fidelity-vs-perspective rubric) plus a GEPA optimizer over logged journal traces + the accept/reject decision log (`planning/JOURNAL_ASSESSOR_PLAN.md` §12 Wave 5). Today the journal's entries are LOGGED-AND-SCOREABLE but the voice is not yet looped through a score. |
+| **Why deferred** | Gated on first **building a critic actuator**. The critic is structurally NON-ACTUATING on the live path today — `overall_score` is computed but ignored (the adversarial-review finding, seam-adjacent to the broader "critic has no actuator" gap); "measured" means scoreable, not yet tuned. Scoring a moving target is also premature until the entry shape is stable. This is a designed direction item, not wave-scope code — no half-built critic/optimizer-over-voice path exists in-tree. |
+| **Guard rail** | Nothing to guard — there is no code path. The live journal runs its PLAN → GATHER → NARRATE arc and writes entries/consolidations; it is not wired to any critic-driven confidence adjustment, so nothing can silently claim the voice was vetted by a critic. The dependency (build a critic actuator first) is documented in `planning/JOURNAL_ASSESSOR_PLAN.md` §5 / §12. |
+
+### 27. Journal UI panel first in-browser render (UI track)
+
+| | |
+|---|---|
+| **What** | The `system.journal` Dockview panel (`legba-ui-v3/src/panel-registry/registry.ts`, `Component: SystemJournal`) renders journal entries with provenance chips deep-linking to the cited record and `[needs_citation]` / perspective spans in a distinct style, over `GET /api/v1/journal`; the operator review surface drives `GET /journal_proposals` + the accept/reject endpoints. The panel is tsc-green and fully wired. |
+| **Why deferred** | At the time of writing the panel was pending its first real in-browser render (the rendered-first eyeball loop, consistent with the broader UI track — `docs/UI_ROADMAP.md`). Not a code stub: the panel is built and registered; only the in-browser visual confirmation was outstanding. |
+| **Guard rail** | UI-side, no backend symbol involved (the stub scanner does not cover `legba-ui-v3/`). The panel reads only the real read routes; it fabricates nothing — an unrendered panel shows real (or empty) data, never a fabricated entry. |
+
 ---
 
 ## Audited identifiers that are NOT stubs

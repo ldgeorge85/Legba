@@ -31,11 +31,12 @@ Read left to right; every arrow is a substrate boundary, not a function call.
 
 ```
 SOURCE ──► canonical Signal ──► predicate fan-out ──► the (analyst,target) fire ──► typed Output
-          (Tier-1 inline       (coarse NATS subject    (cadence reminder OR        (10 OutputKinds →
+          (Tier-1 inline       (coarse NATS subject    (cadence reminder OR        (11 OutputKinds →
            enrich, once)        + SQL WHERE +           reactive coalescer,         facts / nexuses /
                                 Starlark residual)      one cooldown CAS)           situations /
                                                                                     hypotheses /
-                                                                                    analyst_outputs)
+                                                                                    analyst_outputs;
+                                                                                    journal off-chain)
 ```
 
 **SOURCE → canonical Signal.** A `SourceCore` actor pulls raw entries on a cadence
@@ -63,11 +64,13 @@ analyst fires on a gate, not per-signal.
 
 **The fire → typed Output.** The analyst reads its substrate slice, runs its method,
 and writes one typed output validated against its kind's pydantic model. There are
-**exactly ten** `OutputKind` values — `finding · situation · hypothesis · prediction
-· alert · meta_finding · critique · fact · nexus · prompt_module_candidate`
+**exactly eleven** `OutputKind` values — `finding · situation · hypothesis · prediction
+· alert · meta_finding · critique · fact · nexus · prompt_module_candidate · journal`
 (`data/provenance/kinds.py`) — routed by the universal write path to `situations` /
-`hypotheses` / the knowledge-layer `facts` / `nexuses` tables, or the generic
-`analyst_outputs` table. There is deliberately no `signal` kind. See `FLOWS.md`
+`hypotheses` / the knowledge-layer `facts` / `nexuses` tables, the dedicated
+`journal_entries` table, or the generic `analyst_outputs` table. The 11th kind,
+`journal`, sits **off-chain** — it is a perspective *over* the provenance chain, not a
+lineage member (see §8). There is deliberately no `signal` kind. See `FLOWS.md`
 Flow 2 (steps 10–13) and `ARCHITECTURE.md` §8.1.
 
 ---
@@ -195,12 +198,65 @@ Every stage above stamps lineage, and that is what makes the river auditable end
 end. A signal carries immutable acquisition provenance (source, fetch time,
 pipeline). Every analyst output stamps `derived_from` with the substrate UUIDs it
 read, so the lineage walker can backtrack a meta-finding → its first-order findings →
-their signals → each signal's acquisition record. Orthogonally, every analyst run
+their signals → each signal's acquisition record. The one exception is the `journal`
+kind (§8): it carries an **always-empty** `derived_from` and is deliberately absent
+from the lineage catalog, so a `derived_from` walk can never surface a journal node —
+it is a perspective *over* the chain, not a node in it. Orthogonally, every analyst run
 extends a per-analyst, tamper-evident **SHA-256 receipt chain** in `analyst_traces`
 (`receipt_hash`, `prev_receipt_hash`), following the analyst identity across
 descriptor versions. Together, `derived_from` (what it read) and the receipt chain
 (how it ran) let the system answer "why do we believe this?" at every altitude —
 the foundation of analytical accountability. See `ANALYSIS.md` §6.1 and §7.7.
+
+---
+
+## 8. The journal — the reflective layer *over* the river
+
+Every stage above is part of the chain. The `journal_assessor` is not: it is Legba's
+first-person reflective voice, the one analyst pointed at the **whole organism** —
+its own self, state, and flow — rather than at one slice of it. Where every other
+meta-analyst cuts a single slice (a country, the graph, the run health), the journal
+cuts *across* the entire flow and narrates a coherent point of view over it. Its
+thesis: *"Poetry without evidence is noise. Evidence without perspective is just a
+log file."*
+
+It is the 11th `OutputKind` (`journal`) and it is deliberately **off-chain**. A
+journal row is a *perspective over* the provenance chain, never a *member of* it:
+
+- It lands in the dedicated `journal_entries` table (migration 0048), **not**
+  `analyst_outputs` — and never the knowledge-layer `facts` / `nexuses` tables. It
+  must never write a fact / finding / nexus (a grant-layer backstop — it holds only
+  the read-only `journal_read` pack and the propose-only `journal_propose` pack — and
+  a gating test enforce this).
+- Its `derived_from` is **always empty**, and the table is deliberately absent from
+  the lineage catalog (`lineage_api._SUBSTRATE_TABLES`). A `derived_from` walk *from*
+  a fact / situation / nexus can therefore never surface a journal node (§7). Citations
+  live only in the row's `claims` / `cited_substrate_refs` (an up-only reference, not
+  a lineage edge), which the UI renders as provenance chips that deep-link to the cited
+  record. So the journal is **not** a stage in the
+  `signals → entities/facts → relations/nexuses → situations → assessments` lineage —
+  it is the reflective layer *above and across* it.
+
+It is a single **META** analyst kind, run globally once per cadence tick
+(`target_filter=None`, like `world_assessor`), under the in-actor `llm_planner`
+GATHER envelope (PLAN → GATHER → NARRATE) — **not** the `deep_consult` Dapr workflow.
+The heavy GATHER investigation loop runs on the core OpenAI-compatible plane
+(`llm.primary.openai_compat`, the local gpt-oss / vLLM plane); only the bounded final
+**voice** synthesis runs on the Anthropic plane (Opus 4.8, `llm.anthropic.opus_4_7`).
+Two descriptors share the one kind: an **entry** tier (`journal_assessor`, every 12h)
+and a **consolidation** tier (`journal_consolidator`, daily at 02:00 UTC) that distils
+its prior consolidation plus recent entries into one forward-carried narrative and
+supersedes the prior open consolidation. It is an **extension** analyst kind
+(registered via the vocabulary family, not a member of the closed built-in
+`AnalystKind` enum), so the count of built-in kinds is unchanged.
+
+Its only un-gated effect is its own continuity (each run reads its own last entry and
+current consolidation into the next). Everything outward — a correction, a change, or
+a self-revision, including a change to its own instructions — is **proposed** into the
+human-gated `journal_proposals` queue, never written to a live table; an operator
+accepts or rejects. It can write its own next breath, but it cannot rewrite its own
+rules without the operator. See `ANALYSIS.md` (the journal kind) and
+`ARCHITECTURE.md` §8.1.
 
 ---
 

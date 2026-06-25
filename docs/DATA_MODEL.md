@@ -23,10 +23,13 @@ SOURCE → SIGNAL (enriched inline) → fan-out (routing, not data)
 **Durable stores:** `signals`, `signal_aliases`, `facts`, `entity_profiles`
 (+`entity_profile_versions`), `nexuses`, `proposed_edges`, `graph_metrics`,
 `analyst_outputs`, `hypotheses`, `situations`, `analyst_traces`,
-`analyst_critiques`; the consult audit trail `consult_sessions` + `consult_turns`
-(0039); the control-plane `*_descriptors` (+ `descriptor_audit_log`); and the
-operational ledgers `budget_ledger`, `action_pack_invocations`, `governor_events`,
-`seed_batches`, `source_poll_outcomes` (0046), `output_dead_letter`.
+`analyst_critiques`; the **off-chain** journal stores `journal_entries` +
+`journal_proposals` (0048; the journal is a *perspective over* the provenance
+chain — see "The journal — off-chain by design"); the consult audit trail
+`consult_sessions` + `consult_turns` (0039); the control-plane `*_descriptors`
+(+ `descriptor_audit_log`); and the operational ledgers `budget_ledger`,
+`action_pack_invocations`, `governor_events`, `seed_batches`,
+`source_poll_outcomes` (0046), `output_dead_letter`.
 
 ## Per-tier table
 
@@ -49,12 +52,14 @@ operational ledgers `budget_ledger`, `action_pack_invocations`, `governor_events
 | **Situations** | `situations` (0020; 0040/0042 first-class) | `situation_clustering` materializes (atomic upsert on `(situation_signature, analyst_id)`); `thematic_proposal` proposes uncovered hot frames | **temporal-frame** — `valid_from`/`valid_until`/`superseded_by` (open while active/dormant, `valid_until` stamped on close); `target_id` populated. Persistent FRAMES + grounding source + the **events substitute** (no `events` table — events = signals + `get_timeline`; situations = the frames) |
 | **Analyst traces** | `analyst_traces` (0013) | `RuntimeReceiptChain.record` after outputs | **append-only**, SHA-256 hash-chained; one row per run (incl. TRACE_ONLY/failure) |
 | **Analyst critiques** | `analyst_critiques` | the critic, on CRITIQUE kind | **append-only** (1:1 per critic run) |
+| **Journal entries** (off-chain) | `journal_entries` (0048) | the `journal_assessor` META analyst kind via `write_analyst_output` (kind=`journal`) — **NOT** `analyst_outputs` | `entry` rows **append-only**; `consolidation` rows **supersession-versioned** (`valid_from`/`valid_until`/`superseded_by`, `supersede_prior_consolidation` closes the prior open consolidation; partial-unique index = **at most one open consolidation**). **Always-empty `derived_from`**; citations live only in `claims`/`cited_substrate_refs`; `honesty_flags` forced deterministically from substrate metrics. OFF the fact/finding/nexus chain |
+| **Journal proposals** (human-gated) | `journal_proposals` (0048) | the journal's `journal_propose` pack (Wave 4) — `proposal_kind` ∈ `self_revision`/`correction`/`change` | **append + status mutate-in-place** (`pending`→`accepted`/`rejected`/`archived`). The review **queue**, NEVER a live table — a human accept runs the per-kind apply worker; nothing the journal proposes touches another analyst or substrate without that accept |
 | **Op ledgers** | `budget_ledger`/`global_budget_envelope`/`action_pack_invocations` | budget/governor | **mutate-in-place** (upsert/backfill) |
 | **Op ledgers** | `governor_events`, `budget_demotion_events`, `seed_batches`, `descriptor_audit_log`, `audit_checkpoints` | governance/audit | **append-only** |
 | **Graph metrics** | `graph_metrics` (0033) | `structural_balance` / `graph_mining` via `_graph_metrics_sink.write_graph_metric` | **append-only** — signed-triad balance + centrality/community + proxy-chain sign-products land as queryable rows |
 | **Source poll outcomes** | `source_poll_outcomes` (0046) | `source_actor.pull_once` (NON-productive polls only — empty-fetch / error) | **append-only** — provenance for *why* a source went silent (the H5 cadence-watchdog lateral join); productive polls are self-evidencing via their `signals` rows and are NOT logged |
 | **Consult audit trail** | `consult_sessions` + `consult_turns` (0039) | the registry consult / deep-consult API (one session header per conversation/task; append-only turns) | session header **mutate-in-place** (title/status); `consult_turns` **append-only** (ReAct steps / tool_calls / cited_refs + optional deep `finding_id`) |
-| **Lineage** | `derived_from UUID[]` on substrate tables | write paths stamp at write | appended on dedup/merge |
+| **Lineage** | `derived_from UUID[]` on substrate tables | write paths stamp at write | appended on dedup/merge. **`journal_entries` is the deliberate exception** — its `derived_from` is always empty and the table is absent from the lineage catalog (`lineage_api._SUBSTRATE_TABLES`), so a downstream lineage walk can never surface a journal node |
 | **Outputs / emit** | `analyst_outputs` (+ `alert_sink_deliveries`); webhook/STIX/A2A/MCP/NATS sinks | `outputs/*.py` emit | substrate = **append-only**; emit = **ephemeral / side-table** |
 | **DLQ** | `output_dead_letter` (0007) | `route_to_output_dead_letter` | append + operator-resolution mutate |
 
@@ -90,6 +95,57 @@ their product is the side-write. **Every run** — output, side-write, TRACE_ONL
 or failure — leaves **exactly one** hash-chained `analyst_traces` row
 (`output_row_refs` empty when nothing was emitted).
 
+## The journal — off-chain by design
+
+The 11th `OutputKind` — `journal` — is the one row family that is **a
+perspective *over* the provenance chain, never a *member* of it.** It is
+Legba's first-person reflective voice: the one analyst (`journal_assessor`)
+pointed at the whole organism — its own self, state, and flow — narrating a
+coherent point of view across the rest of the system rather than cutting a
+single slice. *Poetry without evidence is noise. Evidence without perspective
+is just a log file.* Because it is an **extension** analyst kind
+(`register_analyst_kind` + the vocabulary family, not a member of the closed
+built-in `AnalystKind` enum), the count of built-in analyst kinds is unchanged
+— the journal sits on top as the `journal_assessor` extension kind.
+
+**It is NOT in the lineage.** A journal row lands in the dedicated
+`journal_entries` table (migration 0048, schema_uri
+`iglu:legba/journal/jsonschema/1-0-0`, `JournalPayload`) — **NOT**
+`analyst_outputs`. The off-chain invariant is enforced two ways: (1) at the
+**grant layer** — the analyst is granted only two **non-write-fact** packs
+(`journal_read`, 14 read tools incl. 9 self-instruments; `journal_propose`),
+so it has no path to a fact/finding/nexus write; and (2) at the **chain layer**
+— its `derived_from` is **always empty** and the table is deliberately absent
+from the lineage catalog (`lineage_api._SUBSTRATE_TABLES`), so the
+`signals → entities/facts → relations/nexuses → situations → assessments`
+derived_from walk can **never** surface a journal node. A gating test
+(`test_journal_off_chain.py`) holds the never-writes-a-fact line. Citations
+are carried *up-only* in `claims` / `cited_substrate_refs`, not as lineage
+edges; `honesty_flags` are forced deterministically from substrate metrics, and
+every row is part of the same hash-chained receipt machinery as the rest of the
+analysts.
+
+**Two tiers, one kind.** `entry_kind` discriminates `entry` (append-only, the
+12h field-notes tier) from `consolidation` (the daily distillation tier).
+A consolidation **supersession-versions** exactly like `facts`/`nexuses`:
+`supersede_prior_consolidation` closes the prior open row
+(`valid_until`/`superseded_by` stamped at the new id) **before** inserting the
+new one, and a partial-unique index guarantees **at most one open
+consolidation** (race/replay-safe). The journal's only un-gated effect is its
+own continuity — it reads its own last entry + current open consolidation into
+its next run.
+
+**Everything outward is human-gated.** The journal writes **only** its own
+entries + consolidations directly. A `correction`, a `change`, or a
+`self_revision` (including a proposed edit to its own instructions; protected
+sections auto-reject) goes to the `journal_proposals` queue — **never a live
+table**. A human accepts or rejects; only the accept path runs the idempotent
+per-kind apply worker. (Honest caveat: the `correction` and `self_revision`
+apply paths are tested end-to-end; the `change` apply path is import-verified
+but not yet exercised against a live registry.) Reads are served by
+`GET /api/v1/journal`; the review surface is `GET /api/v1/journal_proposals`
+plus the `/journal_proposals/{id}/accept` and `/reject` endpoints.
+
 ## Old → new vocabulary
 
 | Old | Now | Changed |
@@ -110,13 +166,17 @@ descriptors + audit log; the universal `derived_from[]` lineage column.
 ## Mutate-vs-append cheat-sheet
 
 - **Append-only:** `analyst_outputs`, `analyst_traces`, `analyst_critiques`,
-  `signal_aliases`, `entity_profile_versions`, the audit/governor/seed ledgers,
-  every `*_descriptors` version, `alert_sink_deliveries`.
+  `journal_entries` `entry` rows, `signal_aliases`, `entity_profile_versions`,
+  the audit/governor/seed ledgers, every `*_descriptors` version,
+  `alert_sink_deliveries`.
 - **Supersession-versioned (temporal):** `facts` (value change), `nexuses`
-  (polarity/label change) — new open row, old row closed; both decay open rows.
+  (polarity/label change), `journal_entries` `consolidation` rows
+  (a newer consolidation supersedes the prior open one) — new open row, old row
+  closed; `facts`/`nexuses` also decay open rows.
 - **Mutate-in-place:** `signals` enrichment + later merge re-update (the one
   non-append substrate table), `entity_profiles`, `proposed_edges`,
-  `hypotheses`/`situations` *status*, `budget_ledger`, `action_pack_invocations`,
+  `hypotheses`/`situations` *status*, `journal_proposals` *status*
+  (`pending`→`accepted`/`rejected`), `budget_ledger`, `action_pack_invocations`,
   `output_dead_letter` resolution.
 - **Ephemeral (no durable row):** subscription wiring, per-target JetStream
   consumers, the predicate match, NATS-stream output.

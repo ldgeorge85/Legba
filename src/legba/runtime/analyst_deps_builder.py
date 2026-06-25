@@ -204,7 +204,7 @@ async def build_analyst_run_method(
 
     # Build a closure the per-kind branches call when they need an LLM. The
     # by-id form lets a kind resolve a SECOND handler (the per-phase LLM split —
-    # journal §4.1: an Opus narrate handler alongside the InnoGPT primary).
+    # journal §4.1: an Opus narrate handler alongside the gpt-oss/vLLM primary).
     async def _resolve_llm_component(component_id: str) -> LLMProviderHandler:
         if llm_handler_factory is not None:
             return await llm_handler_factory(component_id)
@@ -460,13 +460,13 @@ async def _build_journal_assessor(
     inside JOURNAL_SYSTEM instead.
 
     PER-PHASE LLM SPLIT (§4.1): the heavy GATHER loop runs on the PRIMARY handler
-    (``method.llm.primary`` → InnoGPT / vLLM, ``Reasoning: high``) while the VOICE
+    (``method.llm.primary`` → the gpt-oss / vLLM plane, ``Reasoning: high``) while the VOICE
     (the field-notes seam + NARRATE) runs on the SECOND handler resolved from the
     OPTIONAL ``method.llm.narrate`` ref (→ Opus). When ``method.llm.narrate`` is
     absent (or no ``resolve_llm_component`` is supplied), ``llm_narrate`` stays
     None and the voice falls back to the primary handler — the prior behavior,
     byte-for-byte. ``method.max_tokens`` now governs ONLY the Opus narrate output
-    (the InnoGPT gather plane never receives max_tokens — vLLM serves its own
+    (the gpt-oss/vLLM gather plane never receives max_tokens — vLLM serves its own
     budget, vllm.py:119), so it is threaded as the narrate cap; it is inert on the
     primary handler's gather calls.
     """
@@ -479,7 +479,7 @@ async def _build_journal_assessor(
     # only when the descriptor sets ``method.llm.narrate.raw`` AND a by-id resolver
     # was threaded. Absent → None → the voice falls back to the primary handler
     # (zero-regression). ``gather_reasoning_high`` is set IFF the split is active
-    # (the journal's heavy gather plane is InnoGPT, which honors the directive);
+    # (the journal's heavy gather plane is the gpt-oss/vLLM plane, which honors the directive);
     # without a split there is no separate gather plane, so leave it off.
     narrate_component_id = _narrate_llm_component_id(descriptor)
     llm_narrate: LLMProviderHandler | None = None
@@ -493,7 +493,7 @@ async def _build_journal_assessor(
         gather_reasoning_high = True
         logger.info(
             "analyst_deps_builder.journal_assessor.per_phase_split analyst=%r "
-            "gather_plane=%r voice_plane=%r — GATHER on InnoGPT (Reasoning:high), "
+            "gather_plane=%r voice_plane=%r — GATHER on the gpt-oss/vLLM plane (Reasoning:high), "
             "voice on the narrate handler",
             descriptor.identity.id,
             _primary_llm_component_id(descriptor),

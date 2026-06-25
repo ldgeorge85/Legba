@@ -84,6 +84,22 @@ implicit graph edge. A **situation** is a durable thematic cluster of related
 findings/signals — a non-geographic frame that serves as Legba's deliberate stand-in for an
 events table.
 
+### What is the journal?
+The **journal** is Legba's first-person reflective voice — the one analyst pointed at the
+whole organism (its own self, state, and flow). Every other meta-analyst cuts one slice; the
+journal cuts *across* the entire flow and narrates a coherent point of view over the rest of
+the system. *"Poetry without evidence is noise. Evidence without perspective is just a log
+file."* It is deliberately **off the fact/finding/nexus chain**: a journal entry is a
+*perspective over* the **provenance** chain, never a *member of* it. It carries an
+always-empty `derived_from`, lands in its own `journal_entries` table (not `analyst_outputs`),
+and is excluded from the **lineage** catalog — so a lineage walk from any fact/situation/nexus
+can never surface a journal entry, and the journal can never produce a fact/finding/nexus or
+corrupt the substrate. The one effect it has on its own is its **continuity** (it reads its
+own last entry and current consolidation into its next run). Everything *outward* — a
+correction, a change, even a revision to its own instructions — is a **propose-and-gate**
+suggestion into a human-gated review queue, never a live edit: it can write its own next
+breath, but it cannot rewrite its own rules without the operator.
+
 ### What is Dapr and what's an "actor"?
 **Dapr** is a distributed-application runtime; a *virtual actor* is an addressable,
 single-threaded, on-demand stateful object. Legba turns each active descriptor into one such

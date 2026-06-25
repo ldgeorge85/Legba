@@ -49,6 +49,9 @@ these exceptions:
 | `/a2a/skills/*` (runtime, not registry) | **live, gated** | Mounted only when `LEGBA_A2A_ENABLED` + a trusted-key list are set; UNMOUNTED otherwise (fail-loud, not stubbed). See RUNBOOK §4.3. |
 | `GET /api/v1/registry/healthz` | **live (readiness)** | Pings PG (`SELECT 1`) + NATS (client connected): 200 `{status:ok}` when both respond, 503 `{status:unavailable, checks:{…}}` naming the failing component otherwise — so the Docker HEALTHCHECK / Caddy upstream drops a half-dead process from rotation. Upgraded from the old liveness stub under resilience-observability (W-1b §4). |
 | `GET /metrics` (registry) | **live (unauthenticated by design)** | Prometheus text exposition (`metrics_api.py`, app-level no-prefix mount in `server.py`). Like `/healthz` it is intentionally NOT bearer-gated so a scraper can poll without a token; values are real registry counters/gauges. Companion alert rules ship in `deploy/prometheus/legba_alerts.yml`. Operator setup: RUNBOOK §4.7. |
+| `GET /api/v1/journal` | **live** | Serves journal entries + consolidations from the dedicated `journal_entries` table (`journal_api.py`, `build_journal_router`, mounted in `server.py` at `/api/v1`). Off-chain — reads `journal_entries` directly, never the lineage catalog. Renders the per-claim binding (`claims` / `cited_substrate_refs`) the `system.journal` panel deep-links from (see §2). |
+| `GET /api/v1/journal_proposals` | **live** | Lists/filters the human-gated review queue from `journal_proposals` (`journal_proposals_api.py`, `build_journal_proposals_router`, mounted at `/api/v1`). The journal SUGGESTS into this queue; a human DISPOSES. |
+| `POST /api/v1/journal_proposals/{proposal_id}/accept` · `…/reject` | **live** | Accept/reject a queued proposal. Accept runs an idempotent per-kind apply worker; reject requires a `decision_reason`. **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry. |
 
 Everything else in RUNBOOK §4.1 (findings / situations / signals / lineage /
 targets / analysts / budget / source-credibility / events WS) is **live**.
@@ -67,6 +70,8 @@ authoritative per-kind maturity tracking still lives in `planning/` +
 | Phase-D graph-metrics legs | **live** | `structural_balance` / `graph_mining` / `nexus_decay` now WRITE rows via `_graph_metrics_sink.py` (previously inert). |
 | ACH outcome-resolution + calibration | **live (self-consistency-flagged)** | `competing_hypotheses` status-transitions resolve to `resolved_outcome`; `calibration_tracking` computes a Brier. **Caveat:** absent an exogenous outcome the Brier is a SELF-CONSISTENCY measure, tagged `brier_self_consistency_only` / `self_consistency_only=true` — NOT calibration against reality. The exogenous-outcome seam is preserved. |
 | `signals.source_credibility` at ingest | **live (legacy backlog)** | Now populated at ingest by a host-lookup in `source_actor.lookup_source_credibility` (the column was 100% NULL because the pipeline FILTER only ran when a descriptor bound the `source_credibility` kind, which the live descriptors don't). **Caveat:** this fixes NEW signals; pre-fix rows stay NULL until an optional backfill runs. |
+| Journal assessor (first-person reflective voice) | **live** | The ONE analyst pointed at the whole organism (its own self / state / flow) — a perspective OVER the rest of the flow, not another slice of it. Emits the 11th OutputKind `journal` into the dedicated `journal_entries` table (migration 0048), fully OFF the fact/finding/nexus chain (always-empty `derived_from`, excluded from the lineage catalog — it NEVER writes a fact/finding/nexus). `journal_assessor` is an EXTENSION analyst kind (registered via the vocabulary family, not a member of the closed built-in `AnalystKind` enum). Two descriptors, one kind: an ENTRY tier (`analyst_journal_assessor`, every 12h) and a CONSOLIDATION tier (`analyst_journal_consolidator`, daily 02:00 UTC, which distils prior consolidation + recent entries into one forward-carried narrative and fires `supersede_prior_consolidation`). Runs as a single GLOBAL meta run per tick (`target_filter=None`). **Per-phase LLM split:** the agentic GATHER investigation loop runs on the core OpenAI-compatible plane (`llm.primary.openai_compat`); the VOICE (in-voice field-notes + NARRATE synthesis) runs on the Anthropic plane (Opus 4.8, `llm.anthropic.opus_4_7`) — so Anthropic spend is only the bounded final voice synthesis. Grant-locked to two non-write-fact packs (`journal_read` incl. 9 self-instruments, `journal_propose`). Live-validated (a real off-chain entry, honesty_flags forced from substrate metrics, receipt-chained, in-voice). **Future:** a critic + optimizer over the journal's own voice (Wave 5) is designed-not-built, gated on first building a critic actuator. |
+| Journal propose-and-gate queue | **live (human-gated)** | Everything the journal wants to affect outward — a `correction`, a `change`, or a `self_revision` (including edits to its OWN instructions via `propose_self_revision`; protected sections auto-reject) — goes to the human-gated `journal_proposals` queue, NEVER a live table. A human accepts/rejects (routes in §1); accept runs an idempotent per-kind apply worker. The journal's only un-gated effect is its OWN continuity (it reads its last entry + current consolidation into its next run). **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry. |
 
 ---
 
@@ -90,7 +95,13 @@ authoritative per-kind maturity tracking still lives in `planning/` +
   `.eval_scorecard`, `.optimizer` (candidate queue),
   `.dead_letter`, `.actor_health`, `.stream_lag`,
   `.governor`, `.audit`, `.consult`, `.deep_consult`,
-  `.entities`, `.entity_graph`, `.inspector`
+  `.entities`, `.entity_graph`, `.inspector`,
+  `.journal` (`system.journal`, "Journal" — renders journal entries off
+  `GET /api/v1/journal` with provenance chips that deep-link to the cited
+  record and `[needs_citation]` / perspective spans in a distinct style;
+  `tier: 'live'`, not in `PREVIEW_KINDS`/`HIDDEN_KINDS`. **Note:** tsc-green +
+  fully wired but pending its first real in-browser render at the time of
+  writing.)
 * v4 rooms: `v4.map`, `v4.flow`, `v4.why`
 
 ### Preview — registered, honest pending / client-only state

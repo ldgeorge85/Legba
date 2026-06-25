@@ -156,8 +156,8 @@ each kind by its `KIND_NAME`. Every kind module exposes:
 - `run_method(inputs, options, deps) -> AnalystMethodResult` — the async entry
   point the analyst actor calls per run.
 - `OUTPUT_KIND` — the `OutputKind` (FINDING, PREDICTION, SITUATION, HYPOTHESIS,
-  CRITIQUE, META_FINDING, PROMPT_MODULE_CANDIDATE …) the host's dispatcher writes
-  for the kind's result.
+  CRITIQUE, META_FINDING, PROMPT_MODULE_CANDIDATE, JOURNAL …) the host's
+  dispatcher writes for the kind's result.
 - optional `READ_SLICE` — a per-kind substrate-slice reader, when the kind reads
   across many targets or reads other analysts' outputs rather than the default
   signals slice.
@@ -165,7 +165,11 @@ each kind by its `KIND_NAME`. Every kind module exposes:
   (omitted by purely-deterministic kinds).
 
 Adding a kind is one new module plus a descriptor registration. The actor host
-treats the LLM-planner kinds interchangeably.
+treats the LLM-planner kinds interchangeably. The open taxonomy is real: the
+`journal_assessor` (§3.10) is an **extension** analyst kind — registered via
+`register_analyst_kind` + the `vocabulary_entries` family rather than the closed
+built-in `AnalystKind` enum — so the count of built-in kinds is unchanged and the
+journal rides on top.
 
 The **twelve** built-in kinds the deps-builder dispatches
 (`build_analyst_run_method`; the same twelve are in `_KIND_MODULE_NAMES`, walked
@@ -219,13 +223,15 @@ connection — the receipt vs. side-write split is called out in the Writes colu
 | `optimizer` | `dspy_compile` | an analyst's traces ⋈ critiques | DSPy + GEPA compile (Dapr Workflow) | **PROMPT_MODULE_CANDIDATE** | yes (isolated worker) | daily (`0 3 * * *`) |
 | `consult_on_demand` | `react_loop` | free-form question + scope predicate | single-turn ReAct over 4 read tools | FINDING | yes | on-demand (no `fallback_schedule`) |
 | `deep_consult` | `react_loop` | free-form deep-research question | schedules the deep-consult Dapr Workflow | FINDING | yes (within the workflow) | on-demand (no `fallback_schedule`) |
+| **`journal_assessor`** (extension kind) | `llm_planner` (META, in-actor GATHER one-soul arc) | the whole organism via its own `journal_read` self-instruments (its own last entry / consolidation, plus `get_assessments` / `get_graph_structure` / `get_critic_scores` / `get_calibration` / `get_run_health` / `get_budget_status` / …) | one-soul PLAN→GATHER→NARRATE arc; narrate a coherent first-person POV OVER the system | **JOURNAL** → `journal_entries`, OFF-chain (empty `derived_from`) | yes (per-phase split: gpt-oss / vLLM gather + Opus 4.8 voice) | **12h** entry (`0 0,12 * * *`) / **daily** consolidator (`0 2 * * *`) |
 
 Each cadence pairs with a `cooldown_seconds` held **below** the interval — a
 cooldown stamped at run-completion that equals the interval lands past the next
 fire and silently halves the cadence (the 6h→12h trap noted in
-`analyst_country_assessor.yaml`). The ten `OutputKind` values are FINDING,
+`analyst_country_assessor.yaml`). The eleven `OutputKind` values are FINDING,
 SITUATION, HYPOTHESIS, PREDICTION, ALERT, META_FINDING, CRITIQUE, FACT, NEXUS,
-PROMPT_MODULE_CANDIDATE (`provenance/kinds.py:69-87`).
+PROMPT_MODULE_CANDIDATE, JOURNAL (`provenance/kinds.py:76-101`) — the eleventh,
+`JOURNAL`, lands OFF the fact/finding/nexus chain (§3.10).
 
 ### 3.1 `inline_target`
 
@@ -439,6 +445,98 @@ training query joins against.
 ### 3.9 `optimizer`
 
 `optimizer.py`. The self-improvement kind. See §6.
+
+### 3.10 `journal_assessor` — the first-person reflective voice
+
+`journal_assessor.py` + `descriptors/analyst_journal_assessor.yaml` /
+`descriptors/analyst_journal_consolidator.yaml`. Every other meta-analyst cuts
+**one** slice of the substrate; the journal is the **one** analyst pointed at the
+whole organism — its own self, state, and flow — narrating a coherent
+first-person point of view *over* the rest of the system rather than synthesizing
+another finding about the world. Its thesis: *"Poetry without evidence is noise.
+Evidence without perspective is just a log file."* It is **LIVE** —
+deployed and live-validated (a real off-chain entry, `honesty_flags` forced
+deterministically from substrate metrics, receipt-chained, in-voice).
+
+**Off the fact/finding/nexus chain — a perspective OVER the chain, not a member
+of it.** This is the single most important framing. A journal row is the **11th
+`OutputKind`** (`OutputKind.JOURNAL`, §3.0) and lands in a **dedicated
+`journal_entries` table** (migration 0048), **never** `analyst_outputs` and never
+a `fact` / `finding` / `nexus`. It carries an **always-empty `derived_from`** and
+the `journal_entries` table is deliberately **absent from the lineage catalog**
+(`lineage_api._SUBSTRATE_TABLES`), so a downstream lineage walk from a
+fact / situation / nexus can **never** surface a journal node. Its citations are
+direction-asymmetric: they live only in `claims` / `cited_substrate_refs` (an
+up-only warrant the panel hydrates into chips), never as lineage a chain walk can
+descend into. A gating test (`tests/.../test_journal_off_chain.py`) enforces the
+never-write-a-fact invariant. **Do not** place the journal inside the
+signals → entities/facts → relations/nexuses → situations → assessments lineage;
+it is a reflective layer **above / across** that chain.
+
+**One kind, two descriptors (the tier IS the descriptor).** Both descriptors
+declare `identity.kind: journal_assessor` (`OUTPUT_KIND = OutputKind.JOURNAL`);
+`run_method` selects the entry kind from `identity.id` — no mode flag. The
+**entry tier** (`journal_assessor`) fires every 12h (`0 0,12 * * *`,
+`cooldown_seconds: 42000`) and narrates the freshest window. The **consolidation
+tier** (`journal_consolidator`, same kind, distinct id) runs daily at 02:00 UTC
+(`0 2 * * *`, `cooldown_seconds: 79200`) and **distills** its prior consolidation
+plus recent entries (via `get_journal_delta`) into one forward-carried narrative
+(build-on-don't-repeat), emits `entry_kind='consolidation'`, and fires
+`supersede_prior_consolidation` — closing the prior open consolidation and opening
+this one (a partial-unique index enforces at-most-one open consolidation). Like
+`world_assessor`, both are **META** analysts: no `subscription.targets`, so one
+**global** run per cadence tick (`target_filter=None`).
+
+**The engine and the per-phase LLM split.** `method.kind: llm_planner` — the
+**in-actor agentic GATHER envelope** (a one-soul staged arc PLAN → GATHER →
+NARRATE, the persona re-loaded every phase as the attention mechanism), **not**
+the `deep_consult` Dapr workflow (that path rides the broken long-activity
+round-trip, task #86). The GATHER loop is capped at `max_rounds: 6` (a hard
+ceiling). The model planes are split per phase: the heavy GATHER investigation
+loop runs on the **local gpt-oss / vLLM plane** (the core OpenAI-compatible
+`llm.primary.openai_compat` stack component, with a "Reasoning: high" directive
+injected into the gather system prompt only), while the **voice** — the in-voice
+field-notes seam and the NARRATE synthesis — runs on the **Anthropic plane
+(Opus 4.8)** (`method.llm.narrate` → `llm.anthropic.opus_4_7`). So Anthropic spend
+is just the bounded final voice synthesis (`max_tokens` governs only the Opus
+narrate; it is never sent to the vLLM gather, which serves its own budget); the
+deep agentic loop is local. The deps-builder reads the optional
+`method.llm.narrate.raw` (`method.llm` is an open dict, no schema change) and
+resolves a second handler — an analyst without `method.llm.narrate` falls back to
+the single primary handler, byte-unchanged.
+
+**Packs and propose-and-gate — the hygiene invariant.** The journal is granted
+**only two** packs — `journal_read` (14 read tools including 9 self-instruments:
+`get_assessments`, `get_graph_structure`, `get_structural_balance`,
+`get_critic_scores`, `get_calibration`, `get_run_health`, `get_source_health`,
+`get_budget_status`, `get_journal_delta`) and `journal_propose` — and **both are
+non-write-fact**, the grant-layer backstop for the never-write-a-fact invariant.
+The journal writes **only** its own entries and consolidations directly.
+**Everything outward** — a correction, a change, or a `self_revision`,
+**including changes to its own instructions** (`propose_self_revision`; protected
+sections auto-reject) — goes to the **human-gated `journal_proposals` queue**,
+never a live table; a human accepts or rejects, and the accept path runs an
+idempotent per-kind apply worker. Its only un-gated effect is its own continuity:
+it reads its own last entry plus current consolidation into its next run. It never
+touches another analyst directly — *it can write its own next breath but cannot
+rewrite its own rules without the operator.*
+
+**API + UI.** `GET /api/v1/journal` serves the open consolidation plus the entry
+stream; `GET /api/v1/journal_proposals` and the `POST
+/api/v1/journal_proposals/{id}/accept|reject` endpoints drive the operator review
+surface (reject requires a `decision_reason`). The `system.journal` UI panel
+renders entries with provenance chips that deep-link to the cited record, styling
+`[needs_citation]` / perspective spans distinctly. The personas are
+`legba.prompts.journal_assessor:JOURNAL_SYSTEM` (entry) and
+`legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM` (consolidation).
+
+> **Honest caveats.** The `change`-apply path (on accept of a `change` proposal)
+> is import-verified but **not yet exercised against a live registry**; the
+> `correction` and `self_revision` apply paths **are** tested end-to-end. The
+> `system.journal` panel was tsc-green and fully wired but **pending its first
+> real in-browser render** at the time of writing. Wave 5 — a critic + an
+> optimizer over the journal's **own voice** — is **future / designed-not-built**,
+> gated on first building a critic actuator.
 
 ---
 
@@ -973,6 +1071,13 @@ signals → each signal's immutable acquisition provenance (source, fetch time,
 pipeline). Combined with the per-analyst SHA-256 receipt chain (§6.1), the system can
 answer "why do we believe this?" at every level — which is the foundation of
 analytical accountability, not a nicety.
+
+The **one** explicit exception is the journal (§3.10): a `journal` row is a
+perspective *over* this chain, not a node *in* it. It carries an always-empty
+`derived_from` and is absent from the lineage catalog, so this `derived_from`
+walk never descends into a journal entry. Its citations live only as an up-only
+warrant (`cited_substrate_refs`) the panel hydrates into chips — they point *out*
+at the substrate it read, never *in* as lineage a walk can surface.
 
 ### 7.8 Known data-quality limitations (live, final state 2026-06-18)
 

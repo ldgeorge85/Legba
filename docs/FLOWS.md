@@ -26,6 +26,7 @@ Walkthroughs, each a numbered step list with `file:line` citations:
 | 8 | **ACH competing-hypotheses** — read set → matrix/diagnosticity → ±2 → write_hypothesis | 1 (meta) | **LIVE** |
 | 9 | **Seeding import** — fetch → map → resolve → write_fact/write_nexus → seed_batches | 0 (curated import) | **LIVE** |
 | 10 | **A grounded assessment** — cadence fire → GROUND phase → current-facts resolve → dated preamble → LLM | 1 (injection) | **LIVE** |
+| 11 | **A journal entry** — META cadence → in-actor PLAN→GATHER→NARRATE → OFF-chain journal write → propose-and-gate | meta (reflective voice) | **LIVE** |
 
 > **Two analysis tiers (ARCHITECTURE §0).** Flow 1 is the **TIER-1 INLINE** tier —
 > the deterministic `data/filters/` baseline pipeline run *per-Signal at acquisition,
@@ -40,10 +41,21 @@ Walkthroughs, each a numbered step list with `file:line` citations:
 prior PLANNED §5a/§5b and the §4-corrections that said "no producer" are now
 SUPERSEDED by working code; every claim below cites the producing `file:line`):
 - **`OutputKind.FACT` (`= "fact"`) and `OutputKind.NEXUS` (`= "nexus"`) now exist**
-  alongside the original eight — ten members
+  alongside the original eight — ten members at that point (JOURNAL later brings
+  the enum to eleven; see the next bullet)
   (`src/legba/data/provenance/kinds.py:69-87`), with real `write_fact`
   (`src/legba/data/provenance/writes.py:385`) and `write_nexus`
   (`writes.py:416`) routes into the dedicated `facts` / `nexuses` tables.
+- **`OutputKind.JOURNAL` (`= "journal"`) now exists too — the 11th kind**
+  (`src/legba/data/provenance/kinds.py:101`), Legba's first-person reflective
+  voice (the `journal_assessor` META analyst — Flow 11). It is the deliberate
+  EXCEPTION to everything below: it lands in the dedicated `journal_entries`
+  table (migration 0048), **OFF the fact/finding/nexus chain** — a journal row
+  is a *perspective OVER* the provenance chain, never a *member of* it. It
+  carries an ALWAYS-EMPTY `derived_from` and is excluded from the lineage
+  catalog, so a downstream lineage walk can never surface a journal node
+  (`kinds.py:95-101`, `0048_journal.sql:17-21`). It must NEVER write a
+  fact/finding/nexus.
   Migration 0032 added `valid_until` / `superseded_by` / `confidence_components`
   to `facts` + the open-only partial-unique index
   (`src/legba/data/migrations/0032_facts_decay_columns.sql:25-62`); migration 0033
@@ -974,6 +986,141 @@ restates such background facts, so the model had no in-context correction
 
 ---
 
+## 11. A journal entry (LIVE)
+
+**One sentence:** the `journal_assessor` META analyst — Legba's FIRST-PERSON
+reflective voice, the ONE analyst pointed at the whole organism (its own self /
+state / flow) rather than one slice — fires on cadence as a single GLOBAL run, runs
+an in-actor staged `PLAN → GATHER → field-notes → NARRATE` arc, and writes EXACTLY
+ONE `JournalPayload` into the dedicated `journal_entries` table with an
+ALWAYS-EMPTY `derived_from` — a perspective OVER the provenance chain, never a
+member of it. Everything it wants to change OUTWARD goes through the human-gated
+`journal_proposals` queue, never a live table.
+
+> **OFF the fact/finding/nexus chain (the single most important framing).** A
+> journal row is the deliberate EXCEPTION to the lineage of Flows 6/7/9 (signals →
+> entities/facts → relations/nexuses → situations → assessments): it is a
+> *reflective layer ABOVE / ACROSS* that chain, not a node IN it. It carries an
+> empty `derived_from` (`journal_assessor.py:709`; the write path
+> `_insert_journal_entry` also HARD-FORCES the column empty) and the
+> `journal_entries` table is deliberately ABSENT from the lineage catalog
+> (`lineage_api._SUBSTRATE_TABLES`), so a `derived_from` walk FROM a
+> fact/situation/nexus can NEVER surface a journal node
+> (`0048_journal.sql:17-21`,`:58-60`). A gating test enforces that it never writes
+> a fact/finding/nexus. "Poetry without evidence is noise. Evidence without
+> perspective is just a log file."
+
+1. **Cadence run (one global META sweep).** No `subscription.targets` block →
+   the `journal_assessor` kind is a META analyst, so its cadence tick reaches
+   `run()` as a single global run (Flow 2 step 3, third regime, `target_filter=None`,
+   like `world_assessor`). The kind is an EXTENSION analyst kind (registered via the
+   vocabulary, NOT a member of the closed built-in `AnalystKind` enum); the deps
+   builder dispatches it at `src/legba/runtime/analyst_deps_builder.py:278`
+   (`_build_journal_assessor` `:435`). Two descriptors share this ONE kind:
+   - **`journal_assessor`** — the ENTRY tier, every 12h (`"0 0,12 * * *"`,
+     cooldown 42000s), narrate `max_tokens 16384`
+     (`descriptors/analyst_journal_assessor.yaml`).
+   - **`journal_consolidator`** — the CONSOLIDATION tier, SAME `identity.kind:
+     journal_assessor`, distinct id, daily at 02:00 UTC (`"0 2 * * *"`, cooldown
+     79200s), narrate `max_tokens 24576`. It DISTILLS its prior consolidation +
+     recent entries into ONE forward-carried narrative (build-on-don't-repeat),
+     emits `entry_kind='consolidation'`, and the write path fires
+     `supersede_prior_consolidation` (close the prior open consolidation, open this
+     one). **The tier IS the descriptor** (no mode flag): `run_method` selects
+     `entry_kind` purely from `identity.id` (`journal_assessor.py:548`,
+     `_entry_kind_for_analyst:90`; `descriptors/analyst_journal_consolidator.yaml`).
+
+2. **In-actor staged arc (`method.kind: llm_planner`, NOT the deep_consult
+   workflow).** `run_method` runs the one-soul staged envelope
+   `PLAN → GATHER → field-notes → NARRATE → REFLECT → HONESTY` — the persona is
+   loaded every phase (the worldview is the attention mechanism). It rides the
+   in-actor agentic GATHER, NOT the deep_consult Dapr workflow (that path rides the
+   broken long-activity round-trip, task #86, and hardcodes a FINDING)
+   (`src/legba/data/analysts/journal_assessor.py:526-539`):
+   - **PLAN/ORIENT** renders the base prompt; an opt-in **GROUND** phase (Flow 10
+     machinery, `grounding.enabled: true`) may prepend a dated current-context
+     preamble (`journal_assessor.py:568-591`).
+   - **GATHER** is a deep ReAct loop over the `journal_read` pack (hard ceiling
+     `gather.max_rounds = 6`), letting the agent investigate the whole animal +
+     its own instruments (`:593-633`).
+   - **FIELD-NOTES** is an in-voice cited handoff seam (not a thin summary), then
+     **NARRATE** writes the entry with tools still live (a small ReAct loop, cap
+     `_NARRATE_MAX_TOOL_ROUNDS = 2`) (`:635-652`).
+   - **REFLECT** flags per-claim citations permissively (flag, don't strip);
+     **HONESTY** forces the `honesty_flags` DETERMINISTICALLY from substrate
+     metrics — never trusting the agent's self-report (`:655-666`).
+
+3. **Per-phase LLM split.** The heavy GATHER investigation loop runs on the local
+   gpt-oss / vLLM plane (`method.llm.primary → llm.primary.openai_compat`; a
+   "Reasoning: high" content directive is injected into the gather system prompt
+   only). The VOICE — the field-notes seam + the NARRATE synthesis — runs on the
+   Anthropic plane, Opus 4.8 (`method.llm.narrate → llm.anthropic.opus_4_7`). So
+   `max_tokens` governs ONLY the bounded Opus narrate output (it is never sent to
+   the vLLM gather, which serves its own server budget) and the deep agentic loop
+   is local. The deps builder reads the optional `method.llm.narrate.raw` and
+   resolves a SECOND handler (`analyst_deps_builder.py:435-527`); analysts without
+   `method.llm.narrate` fall back to the single primary handler, byte-unchanged.
+   `budget_tokens_per_day` = 2,000,000.
+
+4. **OFF-chain write (PERSIST).** `run_method` returns an `AnalystMethodResult`
+   carrying the `JournalPayload` as `finding` and **`derived_from=[]`**
+   (`journal_assessor.py:679-711`). The runtime forwards it to
+   `write_analyst_output(kind=OutputKind.JOURNAL)`, which routes to the dedicated
+   `journal_entries` table (`kinds.py:251-259`, table at
+   `0048_journal.sql:33`) — NOT `analyst_outputs`. `entry_kind` ('entry' |
+   'consolidation') is the row discriminator; the per-claim bindings live in the
+   `claims` jsonb + the flat `cited_substrate_refs` UUID[] (the UP-only citation
+   walk), the supersession columns (`valid_from` / `valid_until` / `superseded_by`)
+   mirror facts/nexuses but apply to the consolidation tier only, and a
+   partial-unique index enforces AT MOST ONE open consolidation
+   (`0048_journal.sql:38-79`).
+
+5. **Packs: read + propose-and-gate (the never-write-a-fact invariant).** The
+   analyst is granted ONLY two packs (`action_packs` in both descriptors):
+   `journal_read` (14 read tools incl. 9 self-instruments — `get_assessments` /
+   `get_graph_structure` / `get_structural_balance` / `get_critic_scores` /
+   `get_calibration` / `get_run_health` / `get_source_health` / `get_budget_status`
+   / `get_journal_delta`) and `journal_propose`. BOTH are non-write-fact — the
+   grant-layer backstop for the off-chain invariant. The journal writes ONLY its
+   own entries + consolidations directly; EVERYTHING outward — a `correction`, a
+   `change`, or a `self_revision` (INCLUDING changes to its own instructions via
+   `propose_self_revision`; protected sections auto-reject) — goes to the
+   HUMAN-GATED `journal_proposals` queue (`0048_journal.sql:92`), NEVER a live
+   table. Its only un-gated effect is its OWN continuity (it reads its last entry +
+   current consolidation into its next run). "It can write its own next breath but
+   cannot rewrite its own rules without the operator."
+
+6. **Accept → idempotent per-kind apply.** A human accepts/rejects via the review
+   surface; on accept, an idempotent per-`proposal_kind` apply worker runs the
+   change THROUGH the EXISTING write/lifecycle paths — `correction` → the
+   supersession/lifecycle path, `change` → the registry's own update path,
+   `self_revision` → the optimizer's champion-promotion path. The accept endpoint
+   CAS-claims the proposal (`UPDATE … WHERE status='pending' RETURNING`) BEFORE
+   apply, so a replayed accept never double-applies
+   (`src/legba/data/registry/journal_proposals_apply.py:3-35`,`:113`). **Honest
+   caveat:** the `change`-apply path is import-verified but NOT yet exercised
+   against a live registry; the `correction` + `self_revision` apply paths ARE
+   tested end-to-end.
+
+7. **API + UI.** `GET /api/v1/journal` serves entries (the single open
+   consolidation alongside; `journal_api.py:395`); `GET /api/v1/journal_proposals`
+   + `POST …/{id}/accept` / `…/{id}/reject` drive the review surface
+   (`journal_proposals_api.py:224`,`:258`,`:347`). The `system.journal` UI panel
+   (`legba-ui-v3/src/panel-registry/registry.ts:356`) renders entries with
+   provenance chips that deep-link to the cited record and `[needs_citation]` /
+   perspective spans in a distinct style. **Honest caveat:** the panel was
+   tsc-green + fully wired but pending its first real in-browser render at the time
+   of writing.
+
+**Status (kept honest):** LIVE — deployed + live-validated (a real off-chain entry,
+`honesty_flags` forced from substrate metrics, receipt-chained, in-voice). Prompts:
+`legba.prompts.journal_assessor:JOURNAL_SYSTEM` (entry persona) +
+`legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM` (consolidation persona).
+**Future (designed-not-built):** a critic + an optimizer OVER the journal's own
+voice (Wave 5), gated on first building a critic actuator.
+
+---
+
 ## Appendix — primary entry-point index
 
 | Concern | File:line |
@@ -991,7 +1138,7 @@ restates such background facts, so the model had no in-context correction
 | Substrate slice read | `src/legba/runtime/dapr_actors.py:2989` (`_read_substrate_slice`) |
 | Kind dispatch | `src/legba/runtime/analyst_deps_builder.py:99` (`build_analyst_run_method`) |
 | Typed output write | `src/legba/data/provenance/writes.py:117` (`write_analyst_output`) |
-| OutputKind enum (10) | `src/legba/data/provenance/kinds.py:57` (`FACT`:79 / `NEXUS`:84) |
+| OutputKind enum (11) | `src/legba/data/provenance/kinds.py:64` (`FACT`:86 / `NEXUS`:91 / `JOURNAL`:101) |
 | Emit bindings | `src/legba/runtime/dapr_actors.py:2419` (`_emit_output_bindings`) |
 | STIX emit | `src/legba/data/outputs/stix_bundle.py:112` |
 | alert.emit binding | `src/legba/data/outputs/alert.py:588` (`emit`) |
@@ -1024,3 +1171,8 @@ restates such background facts, so the model had no in-context correction
 | Facts table (0032 cols) | `src/legba/data/migrations/0001_baseline.sql:480` + `0032_facts_decay_columns.sql` |
 | Nexuses table | `src/legba/data/migrations/0033_nexuses.sql:30` |
 | Seed batches | `src/legba/data/migrations/0034_seed_batches.sql:30` |
+| Journal kind run_method | `src/legba/data/analysts/journal_assessor.py:526` (`run_method`, `derived_from=[]`:709) |
+| Journal entries / proposals tables | `src/legba/data/migrations/0048_journal.sql:33` / `:92` |
+| Journal read endpoint | `src/legba/data/registry/journal_api.py:395` (`GET /api/v1/journal`) |
+| Journal proposals + accept/reject | `src/legba/data/registry/journal_proposals_api.py:224` / `:258` / `:347` |
+| Journal proposal apply worker | `src/legba/data/registry/journal_proposals_apply.py:113` (per-kind, idempotent) |
