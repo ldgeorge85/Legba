@@ -237,6 +237,13 @@ def create_app(
     from .journal_api import build_journal_router
     app.include_router(build_journal_router(deps), prefix="/api/v1")
 
+    # Journal propose-and-gate review surface (JOURNAL_ASSESSOR_PLAN §7.4 / Wave
+    # 4) — the operator queue: list/filter journal_proposals + accept (apply via
+    # the existing write/lifecycle path, idempotent) + reject (requires a reason).
+    # The journal SUGGESTS into the queue; a human DISPOSES here.
+    from .journal_proposals_api import build_journal_proposals_router
+    app.include_router(build_journal_proposals_router(deps), prefix="/api/v1")
+
     # Entity knowledge-graph read API — entity_profiles + signal_entity_links
     # + proposed_edges for the Entities / Entity-Graph / Entity-Detail panels.
     from .entities_api import build_entities_router
