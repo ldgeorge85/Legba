@@ -52,6 +52,8 @@ these exceptions:
 | `GET /api/v1/journal` | **live** | Serves journal entries + consolidations from the dedicated `journal_entries` table (`journal_api.py`, `build_journal_router`, mounted in `server.py` at `/api/v1`). Off-chain — reads `journal_entries` directly, never the lineage catalog. Renders the per-claim binding (`claims` / `cited_substrate_refs`) the `system.journal` panel deep-links from (see §2). |
 | `GET /api/v1/journal_proposals` | **live** | Lists/filters the human-gated review queue from `journal_proposals` (`journal_proposals_api.py`, `build_journal_proposals_router`, mounted at `/api/v1`). The journal SUGGESTS into this queue; a human DISPOSES. |
 | `POST /api/v1/journal_proposals/{proposal_id}/accept` · `…/reject` | **live** | Accept/reject a queued proposal. Accept runs an idempotent per-kind apply worker; reject requires a `decision_reason`. **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry. |
+| `GET /api/v1/v3/system/analyst-cadence` | **live** | Per-analyst cadence health (`v3_api.py`, `build_v3_router`, mounted at `/api/v1/v3`): last run, age, runs 1h/24h, last outcome, and a healthy/stale/silent status — read from `analyst_traces` (the actual run record), NOT `actor_state.last_run_at`, which is NULL. Powers the System Status panel's Analysis layer (§2). |
+| `GET /api/v1/v3/system/source-firing` | **live** | Per-source firing matrix (`v3_api.py`, mounted at `/api/v1/v3`): signals 24h/7d, last-seen age, last poll outcome, recent error count, and a firing/silent/error/paused status per source. Powers the System Status panel's Acquisition layer (§2). |
 
 Everything else in RUNBOOK §4.1 (findings / situations / signals / lineage /
 targets / analysts / budget / source-credibility / events WS) is **live**.
@@ -102,6 +104,17 @@ authoritative per-kind maturity tracking still lives in `planning/` +
   `tier: 'live'`, not in `PREVIEW_KINDS`/`HIDDEN_KINDS`. **Note:** tsc-green +
   fully wired but pending its first real in-browser render at the time of
   writing.)
+* **System Status** (`system.status`, "System Status" — the per-component /
+  per-layer health view that the operator repeatedly asked for: composes
+  **Acquisition** (per-source firing matrix off
+  `GET /api/v1/v3/system/source-firing`), **Analysis** (per-analyst cadence
+  health off `GET /api/v1/v3/system/analyst-cadence`, read from `analyst_traces`
+  because `actor_state.last_run_at` is NULL — the gap the existing Actor Health
+  panel could not fill), **Queues** (consumer backpressure off the
+  orphan-filtered `GET /api/v1/v3/streams/consumer_lag`), and **Infra** into one
+  page; `tier: 'live'`, not in `PREVIEW_KINDS`/`HIDDEN_KINDS`. **Note:** tsc-green
+  with both new routes confirmed serving live data, but pending its first real
+  in-browser render at the time of writing.)
 * v4 rooms: `v4.map`, `v4.flow`, `v4.why`
 
 ### Preview — registered, honest pending / client-only state

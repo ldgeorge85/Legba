@@ -624,6 +624,16 @@ The Journal panel was tsc-green and fully wired but pending its first real in-br
 render at the time of writing. A critic + optimizer over the journal's own voice
 (Wave 5) is designed-not-built, gated on first building a critic actuator.*
 
+**System Status panel** (`system.status`) — The per-component / per-layer health
+view that answers "are all sources firing? how is the queue? which cadence triggers
+are stalled?" in one operator page. Composes four layers: **Acquisition** (per-source
+firing matrix, `GET /api/v1/v3/system/source-firing`), **Analysis** (per-analyst
+cadence health, `GET /api/v1/v3/system/analyst-cadence`, read from `analyst_traces`
+rather than the NULL `actor_state.last_run_at`), **Queues** (consumer backpressure,
+the orphan-filtered `GET /api/v1/v3/streams/consumer_lag`), and **Infra** (substrate
+reachability). *Note: tsc-green with both new routes serving live data, but pending
+its first real in-browser render at the time of writing.*
+
 **governor** — The enforcer that caps each pack's usage and spend.
 The `PackGovernorEnforcer` applies per-pack invocation/rate/cost caps and the global
 token envelope before each tool call (precall-check → record → settle), logging every

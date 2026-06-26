@@ -175,6 +175,9 @@ endpoints for the UI + operator tooling:
 | Path | Purpose |
 |---|---|
 | `GET /api/v1/v3/runtime/actors` | `actor_state` roster (lifecycle, last_run_at, source_cursors) |
+| `GET /api/v1/v3/system/analyst-cadence` | per-analyst cadence health from `analyst_traces` (last run, age, runs 1h/24h, last outcome, status) — powers the System Status panel; reads `analyst_traces`, NOT the NULL `actor_state.last_run_at` (added 2026-06) |
+| `GET /api/v1/v3/system/source-firing` | per-source firing matrix (signals 24h/7d, last-seen age, last poll outcome, recent error count, firing/silent/error/paused status) — powers the System Status panel (added 2026-06) |
+| `GET /api/v1/v3/streams/consumer_lag` | per-consumer NATS lag (`num_pending`), orphaned/deleted durables filtered out — powers the System Status panel's Queues layer |
 | `GET /api/v1/v3/optimizer/candidates?state=` | prompt-module candidate queue |
 | `POST /api/v1/v3/optimizer/candidates/{id}/review` | promote / reject (descriptor lifecycle drives the flip) |
 | `GET /api/v1/findings?since=&target_id=&analyst_id=&severity=&limit=&cursor=` | cross-target finding feed (cursor-paginated) |

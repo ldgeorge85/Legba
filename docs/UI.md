@@ -286,6 +286,39 @@ tile that headlines the whole panel set.
   itself hidden by #90) covers GEPA / entity-merge / nexus proposals but not the
   journal queue; the journal-proposals review panel is a tracked follow-up.
 
+### System Status (per-layer health)
+
+- **System Status** (`system.status`) — the at-a-glance per-component /
+  per-layer health view the operator repeatedly asked for, answering "are all
+  sources firing? how is the queue? which cadence triggers are stalled?" in one
+  page instead of forcing a hunt across the plumbing panels. Renders
+  (`panels/system/SystemStatus.tsx`) four colour-coded layer sections:
+  - **Acquisition** — the per-source firing matrix off
+    `GET /api/v1/v3/system/source-firing`: each source with its signals 24h/7d,
+    last-seen age, last poll outcome, recent error count, and a
+    firing / silent / error / paused badge. This is where a 403/429/5xx source or
+    a silent (200-but-empty) feed shows up at a glance.
+  - **Analysis** — the per-analyst cadence health off
+    `GET /api/v1/v3/system/analyst-cadence`: last run, age, runs in the last
+    1h/24h, last outcome, and a healthy / stale / silent badge. It reads
+    **`analyst_traces`** (the actual run record) rather than
+    `actor_state.last_run_at` — which is NULL — so it surfaces the cadence
+    liveness the Actor Health panel structurally could not.
+  - **Queues** — consumer backpressure off the orphan-filtered
+    `GET /api/v1/v3/streams/consumer_lag`: the `num_pending` headline lag with
+    orphaned/deleted durables filtered out (the fix for the "tons of targets, all
+    with 845 pending" phantom the raw lag view showed).
+  - **Infra** — substrate component reachability (PG / NATS / registry
+    readiness) rolled up from the existing health surfaces.
+
+  A panel's nav group comes from its kind prefix, so `system.status` auto-slots
+  into the **Operate** section (`navGroups.ts`, `system.*` → Operate) with no nav
+  edit. Ships in `personal`. (Panel registered at
+  `panel-registry/registry.ts` as `system.status` → `SystemStatus`; routes in
+  `src/legba/data/registry/v3_api.py`, `build_v3_router`.) It is tsc-green with
+  both new routes confirmed serving live data, but was pending its first real
+  in-browser render at the time of writing.
+
 ### v4 visual workspace
 
 The "three rooms" visual surface — World / Flow / Why — all selection-linked

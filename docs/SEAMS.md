@@ -242,6 +242,14 @@ allowlist lines.
 | **Why deferred** | At the time of writing the panel was pending its first real in-browser render (the rendered-first eyeball loop, consistent with the broader UI track — `docs/UI_ROADMAP.md`). Not a code stub: the panel is built and registered; only the in-browser visual confirmation was outstanding. |
 | **Guard rail** | UI-side, no backend symbol involved (the stub scanner does not cover `legba-ui-v3/`). The panel reads only the real read routes; it fabricates nothing — an unrendered panel shows real (or empty) data, never a fabricated entry. |
 
+### 28. System Status panel first in-browser render (UI track)
+
+| | |
+|---|---|
+| **What** | The `system.status` Dockview panel (`legba-ui-v3/src/panel-registry/registry.ts`, `Component: SystemStatus`) composes per-component / per-layer health — Acquisition (`GET /api/v1/v3/system/source-firing`), Analysis (`GET /api/v1/v3/system/analyst-cadence`), Queues (orphan-filtered `GET /api/v1/v3/streams/consumer_lag`), Infra — into one operator page. Both new backend routes (`v3_api.py`, `build_v3_router`) were confirmed serving live data; the panel is tsc-green and registered. |
+| **Why deferred** | At the time of writing the panel was pending its first real in-browser render (the rendered-first eyeball loop, consistent with the broader UI track — `docs/UI_ROADMAP.md`, and #27 for the journal panel). Not a code stub: the panel and its routes are built and live; only the in-browser visual confirmation was outstanding. |
+| **Guard rail** | UI-side, no backend symbol involved (the stub scanner does not cover `legba-ui-v3/`). The panel reads only the real read routes (the cadence route reads `analyst_traces`, the firing route reads `signals` + `source_poll_outcomes`); it fabricates nothing — an unrendered panel shows real (or empty) health rows, never invented status. |
+
 ---
 
 ## Audited identifiers that are NOT stubs
