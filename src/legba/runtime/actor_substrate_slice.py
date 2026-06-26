@@ -98,6 +98,7 @@ _SLICE_INTERESTING_KIND_LABELS: dict[str, str] = {
 
 def _select_graph_structure_items(
     payloads: Mapping[str, Any], *, target_geo: list[str], limit: int,
+    target_scoped: bool = False,
 ) -> list[dict[str, Any]]:
     """From the latest graph_metrics payloads, pick the ``interesting`` shortlist
     items scoped to the target — entries whose ``entities``/``label`` mention any
@@ -108,6 +109,13 @@ def _select_graph_structure_items(
     Items are merged across metric kinds + de-duplicated on (kind, label). Junk
     rows (no label, non-numeric score) are dropped. Returns the chosen contract
     items (dicts) ordered scope-first then score-desc, capped at ``limit``.
+
+    ``target_scoped`` (D4 contamination fix): when True AND a ``target_geo``
+    scope is present, the GLOBAL out-of-scope tail is DROPPED rather than used to
+    top up the limit — a per-country slice must not inherit the globally-most-
+    central (US-centric) structures as input rows. The slice reader passes True
+    only for a per-country run; a META / no-target slice (no ``target_geo``)
+    leaves it False so the global structures still feed the world assessor.
     """
     if limit <= 0:
         return []
@@ -142,6 +150,11 @@ def _select_graph_structure_items(
                 or label.strip().casefold() in geo_lc
             )
             merged.append((dict(it), in_scope, score))
+    # PER-COUNTRY: keep ONLY in-scope items (drop the global top-up). Only when a
+    # geo scope actually exists — a scoped run with no geo degrades to global
+    # rather than emitting nothing.
+    if target_scoped and geo_lc:
+        merged = [t for t in merged if t[1]]
     # scope-first, then by the producer's own score (descending).
     merged.sort(key=lambda t: (t[1], t[2]), reverse=True)
     return [it for it, _scope, _score in merged[:limit]]
@@ -337,8 +350,20 @@ async def _read_substrate_slice(
                     except Exception:
                         gp = {}
                 gpayloads[gr["metric_kind"]] = gp if isinstance(gp, dict) else {}
+            # D4 contamination fix: a PER-COUNTRY run (a country_* target with a
+            # geo scope) drops the global out-of-scope structure top-up so the
+            # country slice never inherits the globally-most-central (US-centric)
+            # structures. A META / no-target slice (target_filter None) keeps the
+            # global structures — the global picture is correct for the global
+            # assessor.
+            per_country = bool(
+                target_filter
+                and isinstance(target_filter, str)
+                and target_filter.strip().startswith("country")
+            )
             items = _select_graph_structure_items(
                 gpayloads, target_geo=target_geo, limit=struct_cap,
+                target_scoped=per_country,
             )
             for it in items:
                 kind = it.get("kind")

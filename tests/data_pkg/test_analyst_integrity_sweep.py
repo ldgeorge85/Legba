@@ -70,22 +70,47 @@ def test_registered_in_dispatch_tables() -> None:
 
 
 def test_clean_sweep_emits_honest_zero_finding() -> None:
-    res = _run([0, 0, 0, 0, 0, 0])  # all six checks clean
+    res = _run([0, 0, 0, 0, 0, 0, 0])  # all seven checks clean
     assert isinstance(res, AnalystMethodResult)
     assert res.finding.data["total_issues"] == 0
     assert "integrity_clean" in res.finding.tags
     assert "integrity_issues_present" not in res.finding.tags
-    assert len(res.finding.data["issues"]) == 6  # every check ran
+    assert len(res.finding.data["issues"]) == 7  # every check ran
     assert res.usage["completion_tokens"] == 0  # deterministic: zero LLM spend
 
 
 def test_issues_surface_with_counts_and_tag() -> None:
-    res = _run([0, 0, 7, 24, 0, 0])  # the live proposed_edges orphan counts
+    res = _run([0, 0, 7, 24, 0, 0, 0])  # the live proposed_edges orphan counts
     assert res.finding.data["total_issues"] == 31
     assert res.finding.data["issues"]["orphan_proposed_edges_source"] == 7
     assert res.finding.data["issues"]["orphan_proposed_edges_target"] == 24
     assert "integrity_issues_present" in res.finding.tags
     assert "integrity_clean" not in res.finding.tags
+
+
+def test_dangling_derived_from_check_registered_and_counted() -> None:
+    """D23/D10: the dangling-derived_from audit is the LAST check and its count
+    surfaces under the documented issue key."""
+    # Check order: signal/signal, signal/entity, pe/source, pe/target,
+    # facts_no_evidence, broken_supersession, dangling_derived_from.
+    res = _run([0, 0, 0, 0, 0, 0, 101506])
+    issues = res.finding.data["issues"]
+    assert "dangling_analyst_output_derived_from" in issues
+    assert issues["dangling_analyst_output_derived_from"] == 101506
+    assert res.finding.data["total_issues"] == 101506
+    assert "integrity_issues_present" in res.finding.tags
+
+
+def test_dangling_derived_from_check_is_last_check_key() -> None:
+    """Pin the new check's identity + position so ordering drift is caught."""
+    keys = [k for k, _sql in integrity_sweep._CHECKS]
+    assert keys[-1] == "dangling_analyst_output_derived_from"
+    assert len(keys) == 7
+    # The SQL references analyst_outputs.derived_from + the lineage tables.
+    sql = dict(integrity_sweep._CHECKS)["dangling_analyst_output_derived_from"]
+    assert "unnest(ao.derived_from)" in sql
+    for tbl in ("signals", "analyst_outputs", "facts", "entity_profiles"):
+        assert tbl in sql
 
 
 def test_no_pool_refuses_loud() -> None:
@@ -99,4 +124,4 @@ def test_missing_relation_refuses_loud() -> None:
     # into a zeroed clean finding — the exact predecessor bug this re-home fixes.
     boom = RuntimeError('relation "proposed_edges" does not exist')
     with pytest.raises(RuntimeError, match="does not exist"):
-        _run([0, 0, boom, 0, 0, 0])
+        _run([0, 0, boom, 0, 0, 0, 0])

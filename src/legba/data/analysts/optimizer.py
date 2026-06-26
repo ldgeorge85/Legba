@@ -157,8 +157,16 @@ async def read_traces_and_critiques(
 
     Returns row dicts with the columns the GEPA loop's metric needs:
 
-      * ``run_id`` — trace run UUID (also the row's natural primary key
-        in our derived_from list).
+      * ``run_id`` — trace run UUID. NB: this is an ``analyst_traces``
+        primary key, NOT a lineage-catalog row id — it is recorded only
+        under ``data.derived_trace_ids`` on the candidate, never in the
+        candidate's ``derived_from`` (D10: ``analyst_traces`` is not in
+        the ``derived_from`` lineage catalog, so trace run_ids there are
+        100%-dangling edges).
+      * ``output_row_refs`` — the substrate-row UUIDs the analyzed run
+        actually produced (``analyst_traces.output_row_refs``). THESE are
+        the real lineage roots that populate the candidate's
+        ``derived_from`` (D10 fix).
       * ``input`` — the trace's ``prompt_rendered`` (what the analyst
         was asked to reason over).
       * ``gold`` — the critic's narrative-corrected output if present,
@@ -190,6 +198,7 @@ async def read_traces_and_critiques(
             t.prompt_rendered     AS input,
             t.output_payload      AS gold,
             t.status              AS trace_status,
+            t.output_row_refs     AS output_row_refs,
             c.overall_score       AS critique_score,
             c.scores              AS critique_scores,
             c.revision_delta      AS critique_revision_delta,
@@ -559,7 +568,13 @@ async def run_method(
     actual_method = str(diagnostics.get("method") or "unknown")
 
     # Build the candidate payload.
+    # D10: ``derived_from`` carries the substrate-row UUIDs the analyzed runs
+    # PRODUCED (analyst_traces.output_row_refs) — real lineage-catalog rows.
+    # The trace + critique ids go to ``data.derived_trace_ids`` ONLY (audit
+    # slot; not walked as lineage), since analyst_traces/analyst_critiques are
+    # not in the derived_from catalog.
     derived_from = _collect_derived_from(inputs)
+    derived_trace_ids = _collect_derived_trace_ids(inputs)
     candidate = PromptModuleCandidatePayload(
         analyst_id=str(analyzed_analyst_id),
         analyst_version=str(analyzed_analyst_version or ""),
@@ -583,7 +598,7 @@ async def run_method(
         data={
             "diagnostics": diagnostics,
             "method": actual_method,
-            "derived_trace_ids": [str(u) for u in derived_from],
+            "derived_trace_ids": [str(u) for u in derived_trace_ids],
             "optimizer_options": {
                 "max_generations": deps.max_generations,
                 "auto_mode": deps.auto_mode,
@@ -758,23 +773,70 @@ def _usage_from_workflow_result(workflow_result: Any) -> dict[str, int]:
     }
 
 
+def _coerce_uuid(raw: Any) -> UUID | None:
+    """Coerce a scalar into a :class:`UUID`, or ``None`` when unparseable."""
+    if raw is None:
+        return None
+    if isinstance(raw, UUID):
+        return raw
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _collect_derived_from(
     inputs: list[Mapping[str, Any]] | Sequence[Mapping[str, Any]],
 ) -> list[UUID]:
-    """Extract trace + critique UUIDs for the candidate's derived_from."""
+    """Resolve the candidate's ``derived_from`` to REAL substrate-row UUIDs (D10).
+
+    The lineage catalog walked by ``derived_from`` (the recursive-CTE in
+    :mod:`legba.data.provenance._core`) has NO ``analyst_traces`` table, so a
+    trace ``run_id`` placed in ``derived_from`` is a permanently-dangling edge —
+    that was D10 (``country_optimizer`` wrote 100% broken candidate lineage).
+
+    The correct lineage roots are the substrate rows the analyzed analyst's runs
+    actually PRODUCED: ``analyst_traces.output_row_refs`` (a ``uuid[]`` of
+    ``analyst_outputs`` ids), projected onto each input row by
+    :func:`read_traces_and_critiques`. We dedupe (multiple traces can share a
+    produced row) while preserving first-seen order.
+
+    The trace + critique ids themselves are still recorded — but only in
+    ``data.derived_trace_ids`` (see :func:`_collect_derived_trace_ids`), the
+    audit slot that is NOT walked as lineage.
+    """
+    seen: set[UUID] = set()
+    out: list[UUID] = []
+    for row in inputs:
+        refs = row.get("output_row_refs")
+        if not refs:
+            continue
+        for raw in refs:
+            u = _coerce_uuid(raw)
+            if u is not None and u not in seen:
+                seen.add(u)
+                out.append(u)
+    return out
+
+
+def _collect_derived_trace_ids(
+    inputs: list[Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+) -> list[UUID]:
+    """Collect the trace ``run_id`` + ``critique_id`` UUIDs for the audit slot.
+
+    These point at ``analyst_traces`` / ``analyst_critiques`` rows — which are
+    NOT in the ``derived_from`` lineage catalog — so they are recorded ONLY under
+    the candidate's ``data.derived_trace_ids`` (kept for audit / debugging of
+    which traces the GEPA run consumed), never in ``derived_from`` (D10).
+    """
+    seen: set[UUID] = set()
     out: list[UUID] = []
     for row in inputs:
         for key in ("run_id", "critique_id"):
-            raw = row.get(key)
-            if raw is None:
-                continue
-            if isinstance(raw, UUID):
-                out.append(raw)
-                continue
-            try:
-                out.append(UUID(str(raw)))
-            except (ValueError, AttributeError):
-                continue
+            u = _coerce_uuid(row.get(key))
+            if u is not None and u not in seen:
+                seen.add(u)
+                out.append(u)
     return out
 
 
@@ -893,4 +955,6 @@ __all__ = [
     "read_traces_and_critiques",
     "run_method",
     "should_auto_promote",
+    "_collect_derived_from",
+    "_collect_derived_trace_ids",
 ]

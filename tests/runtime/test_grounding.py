@@ -968,3 +968,267 @@ async def test_deps_builder_hook_appends_assessed_situations_block():
     assert "US–Iran War" in out
     # The situations block is rendered AFTER the ground-truth block, separately.
     assert out.index("AUTHORITATIVE CURRENT CONTEXT") < out.index("ASSESSED SITUATIONS")
+
+
+# ---------------------------------------------------------------------------
+# D4 contamination — per-country scoping of graph-centrality + situations
+# (regression: a country run NARROWS to its target; a META run keeps GLOBAL).
+# ---------------------------------------------------------------------------
+
+
+class _GraphMetricsStubConn:
+    """Serves a single canned graph_metrics fetch for resolve_graph_structure."""
+
+    def __init__(self, payload_rows: list[dict[str, Any]]) -> None:
+        self._rows = payload_rows
+
+    async def fetch(self, sql: str, *params: Any) -> list[dict[str, Any]]:
+        if "FROM graph_metrics" in sql:
+            return self._rows
+        return []
+
+
+class _GraphMetricsStubPool:
+    def __init__(self, payload_rows: list[dict[str, Any]]) -> None:
+        self._conn = _GraphMetricsStubConn(payload_rows)
+
+    def acquire(self) -> _StubAcquire:
+        return _StubAcquire(self._conn)
+
+
+def _graph_rows_with_interesting() -> list[dict[str, Any]]:
+    # graph_mining carries an interesting shortlist where the US (globally most
+    # central) outscores Indonesia. The per-country run for Indonesia must NOT
+    # inherit the US item; the global (meta) run must keep it.
+    return [
+        {
+            "metric_kind": "graph_mining",
+            "payload": {
+                "interesting": [
+                    {"kind": "broker", "label": "United States", "score": 0.99,
+                     "rationale": "globally most central", "entities": ["United States"]},
+                    {"kind": "tense_actor", "label": "Indonesia", "score": 0.40,
+                     "rationale": "regional tension", "entities": ["Indonesia"]},
+                ]
+            },
+        },
+        {"metric_kind": "structural_balance", "payload": {}},
+    ]
+
+
+def test_top_graph_items_target_scoped_drops_global_tail():
+    # Per-country (target_scoped=True): only the candidate (iran) survives — the
+    # globally-higher United States tail is DROPPED, not used to top up.
+    scoped = _top_graph_items(
+        {"Iran": 22, "United States": 99}, {"iran"}, 6, min_value=0.0, target_scoped=True,
+    )
+    assert [n for n, _ in scoped] == ["Iran"]
+    # Meta (target_scoped=False, the default): global tail is kept (US present).
+    glob = _top_graph_items(
+        {"Iran": 22, "United States": 99}, {"iran"}, 6, min_value=0.0,
+    )
+    assert "United States" in [n for n, _ in glob]
+
+
+def test_top_graph_items_scoped_empty_candidates_degrades_to_global():
+    # A scoped run with NO candidates must not blank the block — it degrades to
+    # the global view rather than returning nothing.
+    out = _top_graph_items(
+        {"United States": 99}, set(), 6, min_value=0.0, target_scoped=True,
+    )
+    assert [n for n, _ in out] == ["United States"]
+
+
+def test_collect_interesting_target_scoped_drops_out_of_scope():
+    payloads = {
+        "graph_mining": {
+            "interesting": [
+                {"kind": "broker", "label": "United States", "score": 0.99,
+                 "rationale": "global", "entities": ["United States"]},
+                {"kind": "tense_actor", "label": "Indonesia", "score": 0.4,
+                 "rationale": "scoped", "entities": ["Indonesia"]},
+            ]
+        }
+    }
+    scoped = _collect_interesting(payloads, {"indonesia"}, 12, target_scoped=True)
+    assert [i.label for i in scoped] == ["Indonesia"]   # US dropped
+    glob = _collect_interesting(payloads, {"indonesia"}, 12)  # default = global
+    assert {"United States", "Indonesia"} == {i.label for i in glob}
+
+
+def test_top_proxy_chains_target_scoped_drops_non_candidate_chains():
+    chains = [
+        {"subject": "United States", "via": "X", "object": "China", "sign": -1},
+        {"subject": "Indonesia", "via": "Y", "object": "Malaysia", "sign": 1},
+    ]
+    scoped = _top_proxy_chains(chains, {"indonesia"}, 6, target_scoped=True)
+    assert scoped == ["Indonesia → Y → Malaysia [aligned path]"]
+    glob = _top_proxy_chains(chains, {"indonesia"}, 6)
+    assert len(glob) == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_graph_structure_country_scopes_meta_keeps_global():
+    """THE mandate regression. resolve_graph_structure:
+      * a META / no-target run KEEPS the GLOBAL structure (the US item present);
+      * a PER-COUNTRY run (Indonesia) NARROWS to its candidate — no US leak.
+    Same candidate name set + same metrics; only the scope_target_id differs.
+    """
+    pool = _GraphMetricsStubPool(_graph_rows_with_interesting())
+    resolver = SubstrateGroundingResolver(pg_pool=pool)
+    candidates = ["Indonesia"]
+
+    # META (world_assessor): no target → global structure block, US KEPT.
+    meta = await resolver.resolve_graph_structure(
+        candidates, limit=8, scope_target_id=None,
+    )
+    assert meta is not None
+    meta_labels = {i.label for i in meta.interesting}
+    assert "United States" in meta_labels, "meta run must keep the global structure"
+    assert "Indonesia" in meta_labels
+
+    # PER-COUNTRY (Indonesia): scope_target_id is a country id → US DROPPED.
+    country = await resolver.resolve_graph_structure(
+        candidates, limit=8, scope_target_id="country_g20_id",
+    )
+    assert country is not None
+    country_labels = {i.label for i in country.interesting}
+    assert "United States" not in country_labels, "country run must NOT inherit the US-central item"
+    assert country_labels == {"Indonesia"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_graph_structure_self_scopes_from_resolver_target():
+    """When the resolver is CONSTRUCTED with a country target_id, it self-scopes
+    even if the caller passes no explicit scope arg (live wiring path)."""
+    pool = _GraphMetricsStubPool(_graph_rows_with_interesting())
+    resolver = SubstrateGroundingResolver(pg_pool=pool, target_id="country_g20_id")
+    out = await resolver.resolve_graph_structure(["Indonesia"], limit=8)
+    assert out is not None
+    assert {i.label for i in out.interesting} == {"Indonesia"}
+
+
+def test_is_per_country_target_only_country_ids():
+    from legba.runtime.grounding import is_per_country_target
+    assert is_per_country_target("country_g20_id") is True
+    assert is_per_country_target(None) is False          # meta / world_assessor
+    assert is_per_country_target("situation_iran_war") is False  # thematic
+
+
+# ---------------------------------------------------------------------------
+# D4 off-target guard — a per-country finding naming ONLY other countries
+# ---------------------------------------------------------------------------
+
+
+def test_finding_off_target_flags_us_only_indonesia_run():
+    from legba.runtime.grounding import finding_is_off_target
+    # The literal D4 shape: an Indonesia run whose finding is all about the US.
+    assert finding_is_off_target(
+        target_id="country_g20_id",
+        text="The United States escalated sanctions against China and Russia.",
+        key_entities=["United States", "China"],
+        geo=["United States"],
+    ) is True
+
+
+def test_finding_on_target_when_it_names_its_own_country():
+    from legba.runtime.grounding import finding_is_off_target
+    # Mentions Indonesia (slug token 'id' won't match, but the geo tag does).
+    assert finding_is_off_target(
+        target_id="country_g20_id",
+        text="Indonesia's central bank held rates as the US dollar strengthened.",
+        key_entities=["Indonesia", "United States"],
+        geo=["Indonesia"],
+    ) is False
+
+
+def test_finding_off_target_false_for_meta_run():
+    from legba.runtime.grounding import finding_is_off_target
+    # A meta / no-target run is NEVER gated — the world assessor talks about
+    # every country by design.
+    assert finding_is_off_target(
+        target_id=None,
+        text="The United States and China escalated tariffs.",
+        key_entities=["United States", "China"],
+    ) is False
+
+
+def test_finding_off_target_false_when_no_country_named():
+    from legba.runtime.grounding import finding_is_off_target
+    # Names no country at all (generic/thin finding) → NOT suppressed; we only
+    # gate a finding demonstrably about OTHER countries.
+    assert finding_is_off_target(
+        target_id="country_g20_id",
+        text="Heavy rainfall triggered local flooding and transport delays.",
+        key_entities=["flooding"],
+    ) is False
+
+
+def test_target_scope_names_lifts_slug_token():
+    from legba.runtime.grounding import target_scope_names
+    assert "us" in target_scope_names("country_g20_us")
+    assert target_scope_names(None) == set()
+
+
+# ---------------------------------------------------------------------------
+# D4 off-target guard — END-TO-END through inline_target.run_method:
+# a per-country run whose finding is all about OTHER countries → force_trace_only.
+# ---------------------------------------------------------------------------
+
+
+class _FixedFindingLLM:
+    """LLM double returning a caller-supplied finding JSON verbatim."""
+
+    subprovider = "openai"
+
+    def __init__(self, finding: dict[str, Any]) -> None:
+        self._finding = finding
+
+    async def chat_complete(self, messages, *, max_tokens=None, temperature=None,
+                            system=None, **kwargs) -> Any:
+        return _Response(content=json.dumps(self._finding), usage=_Usage())
+
+
+@pytest.mark.asyncio
+async def test_run_method_off_target_country_finding_forces_trace_only():
+    """An Indonesia run whose finding names ONLY the US/China → TRACE_ONLY."""
+    llm = _FixedFindingLLM({
+        "title": "US escalates sanctions on China",
+        "body": "The United States imposed new sanctions on China and Russia.",
+        "confidence": 0.7, "evidence": [], "tags": ["United States", "China"],
+    })
+    deps = InlineTargetDeps(llm=llm)
+    result = await run_method(
+        [_signal(geo=["United States"])], {"target_id": "country_g20_id"}, deps,
+    )
+    assert result.force_trace_only is True
+    assert any(s.get("kind") == "off_target_guard" for s in result.intermediate_steps)
+
+
+@pytest.mark.asyncio
+async def test_run_method_on_target_country_finding_publishes():
+    """An Indonesia run whose finding actually names Indonesia → published."""
+    llm = _FixedFindingLLM({
+        "title": "Indonesia central bank holds rates",
+        "body": "Indonesia kept its policy rate steady amid a stronger US dollar.",
+        "confidence": 0.7, "evidence": [], "tags": ["Indonesia"],
+    })
+    deps = InlineTargetDeps(llm=llm)
+    result = await run_method(
+        [_signal(geo=["Indonesia"])], {"target_id": "country_g20_id"}, deps,
+    )
+    assert result.force_trace_only is False
+
+
+@pytest.mark.asyncio
+async def test_run_method_meta_run_never_off_target_gated():
+    """A META / no-target run (world_assessor) is never gated even when its
+    finding is entirely about other countries."""
+    llm = _FixedFindingLLM({
+        "title": "US-China trade war intensifies",
+        "body": "The United States and China escalated tariffs.",
+        "confidence": 0.7, "evidence": [], "tags": ["United States", "China"],
+    })
+    deps = InlineTargetDeps(llm=llm)
+    result = await run_method([_signal()], {"target_id": None}, deps)
+    assert result.force_trace_only is False

@@ -47,8 +47,19 @@ class RuntimeReceiptChain:
     at checkpoint time.
     """
 
-    def __init__(self, pg_pool: asyncpg.Pool):
+    def __init__(
+        self,
+        pg_pool: asyncpg.Pool,
+        *,
+        analyst_id: str | None = None,
+    ):
         self._pool = pg_pool
+        # The analyst this chain is bound to, when the factory knows it. Purely
+        # diagnostic (the per-analyst methods still take an explicit
+        # ``analyst_id`` so the multi-analyst test shape is unchanged); lets the
+        # D11 fork-tip diagnostic default to the bound id. Optional + keyword =
+        # backward-compatible with the ``RuntimeReceiptChain(pool)`` call shape.
+        self._analyst_id = analyst_id
         self._heads: dict[str, str] = {}              # analyst_id → hash
         self._counts: dict[str, int] = {}             # analyst_id → trace count
         self._locks: dict[str, asyncio.Lock] = {}
@@ -72,21 +83,69 @@ class RuntimeReceiptChain:
             return await self._head_locked(analyst_id)
 
     async def _head_locked(self, analyst_id: str) -> str:
-        """Caller must hold ``self._lock(analyst_id)``."""
+        """Caller must hold ``self._lock(analyst_id)``.
+
+        D11 — DETERMINISTIC, fork-safe head derivation. The head of a chain is
+        the unique tip: the ``receipt_hash`` that NO other row in the chain
+        references as its ``prev_receipt_hash`` (i.e. it has no successor). The
+        old rule (``ORDER BY run_started_at DESC LIMIT 1``) is non-deterministic
+        once the chain forks — two rows sharing a ``prev_receipt_hash`` (which
+        happens across a process recreate that lost the in-memory head, or two
+        concurrent same-analyst runs racing the prev pointer) leave two leaves,
+        and "most recent" can flip between recreates, picking a NON-tip and
+        deepening the fork on the next ``record()``.
+
+        A healthy linear chain has exactly one tip → this returns it. A FORKED
+        chain has several tips; we pick ONE deterministically (newest by
+        ``run_started_at``, ties broken by ``run_id`` text) so the choice is
+        STABLE across recreate and every future run extends the SAME tip rather
+        than spraying new leaves. The actual fork relink is a forward-only
+        migration (roadmap 0050); this stops the runtime from MAKING IT WORSE.
+        """
         if analyst_id in self._heads:
             return self._heads[analyst_id]
         async with self._pool.acquire() as conn:
+            # Tip = a receipt_hash that is not the prev_receipt_hash of any other
+            # row for this analyst. ``DISTINCT`` on the inner set guards the
+            # NOT IN against a NULL row exploding the predicate. There can be >1
+            # tip after a fork; ORDER BY makes the pick deterministic (stable
+            # across recreate) — NOT "most recent overall row".
             row = await conn.fetchrow(
                 """
-                SELECT receipt_hash
-                FROM analyst_traces
-                WHERE analyst_id = $1
-                ORDER BY run_started_at DESC
+                SELECT t.receipt_hash
+                FROM analyst_traces t
+                WHERE t.analyst_id = $1
+                  AND t.receipt_hash NOT IN (
+                        SELECT DISTINCT p.prev_receipt_hash
+                        FROM analyst_traces p
+                        WHERE p.analyst_id = $1
+                          AND p.prev_receipt_hash IS NOT NULL
+                  )
+                ORDER BY t.run_started_at DESC, t.run_id::text DESC
                 LIMIT 1
                 """,
                 analyst_id,
             )
-            self._heads[analyst_id] = row["receipt_hash"] if row else ZERO_HASH
+            if row is not None:
+                self._heads[analyst_id] = row["receipt_hash"]
+            else:
+                # No tip resolves only when there are zero rows OR every row is
+                # referenced as some row's prev (a cycle — never produced by
+                # this writer, but degrade safely). Fall back to the latest row
+                # so the chain still advances rather than re-rooting at ZERO.
+                fallback = await conn.fetchrow(
+                    """
+                    SELECT receipt_hash
+                    FROM analyst_traces
+                    WHERE analyst_id = $1
+                    ORDER BY run_started_at DESC, run_id::text DESC
+                    LIMIT 1
+                    """,
+                    analyst_id,
+                )
+                self._heads[analyst_id] = (
+                    fallback["receipt_hash"] if fallback else ZERO_HASH
+                )
             cnt = await conn.fetchval(
                 "SELECT COUNT(*) FROM analyst_traces WHERE analyst_id = $1",
                 analyst_id,
@@ -98,6 +157,43 @@ class RuntimeReceiptChain:
         if analyst_id not in self._counts:
             await self.head(analyst_id)
         return self._counts.get(analyst_id, 0)
+
+    async def head_tip_count(self, analyst_id: str | None = None) -> int:
+        """Number of chain TIPS for an analyst — D11 fork observability.
+
+        A tip is a ``receipt_hash`` referenced by no other row's
+        ``prev_receipt_hash``. A healthy linear chain has exactly one tip; ``>1``
+        means the chain has FORKED into a multi-tip tree (the D11 condition —
+        e.g. cross_source_dedup at 27 tips, country_critic at 6). ``0`` means no
+        rows yet. This is the runtime-side counterpart to the integrity_sweep
+        dangling-edge audit: a cheap probe an operator / health check can call to
+        confirm the deterministic head-derivation is holding the fork count flat
+        rather than growing it.
+
+        ``analyst_id`` defaults to the chain's bound analyst when one was passed
+        to the constructor.
+        """
+        aid = analyst_id if analyst_id is not None else self._analyst_id
+        if aid is None:
+            raise ValueError(
+                "head_tip_count requires an analyst_id (none bound to this chain)"
+            )
+        async with self._pool.acquire() as conn:
+            n = await conn.fetchval(
+                """
+                SELECT count(*)
+                FROM analyst_traces t
+                WHERE t.analyst_id = $1
+                  AND t.receipt_hash NOT IN (
+                        SELECT DISTINCT p.prev_receipt_hash
+                        FROM analyst_traces p
+                        WHERE p.analyst_id = $1
+                          AND p.prev_receipt_hash IS NOT NULL
+                  )
+                """,
+                aid,
+            )
+        return int(n or 0)
 
     async def record(
         self,

@@ -74,7 +74,10 @@ def build_receipt_chain_for_analyst(
     key = (id(pg_pool), analyst_id)
     chain = _CHAINS.get(key)
     if chain is None:
-        chain = RuntimeReceiptChain(pg_pool)
+        # Bind the analyst id so the chain's D11 fork-tip diagnostic
+        # (``head_tip_count``) can default to it. Per-run methods still take an
+        # explicit analyst_id; this is diagnostic-only.
+        chain = RuntimeReceiptChain(pg_pool, analyst_id=analyst_id)
         _CHAINS[key] = chain
     return chain
 

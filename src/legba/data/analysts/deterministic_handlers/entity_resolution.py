@@ -662,10 +662,19 @@ async def handle(
             cand = extras.get("geocoder")
             if isinstance(cand, NameGeocoder):
                 geocoder = cand
-        # Provenance stamps for the entity_profile_versions rows the resolver
-        # writes when it folds an alias / corrects a class.
+        # Provenance stamps for the entity_profiles / entity_profile_versions
+        # rows the resolver writes. D26 RESIDUAL: the deterministic sub-handler
+        # invocation does NOT reliably carry ``analyst_id`` in ``options`` (it is
+        # populated for some callers, absent for others), so a bare
+        # ``options.get("analyst_id")`` resolved to ``None`` and the upsert's
+        # ``analyst_id = COALESCE(..., EXCLUDED.analyst_id)`` always stayed NULL
+        # (completeness + derived_from landed because they do not depend on
+        # ``options``). Fall back to ``SUB_HANDLER_NAME`` exactly like the sibling
+        # deterministic handlers (cross_source_coalesce / cross_source_dedup /
+        # graph_mining / hypothesis_lifecycle) so the analyst stamp is never NULL
+        # and lands on the same write path as completeness + derived_from.
         run_id = options.get("run_id")
-        analyst_id = options.get("analyst_id")
+        analyst_id = str(options.get("analyst_id") or SUB_HANDLER_NAME)
         analyst_version = options.get("analyst_version")
         try:
             counters = await _resolve_batch(
@@ -673,7 +682,7 @@ async def handle(
                 batch_limit=batch_limit,
                 geocoder=geocoder,
                 run_id=run_id,
-                analyst_id=str(analyst_id) if analyst_id is not None else None,
+                analyst_id=analyst_id,
                 analyst_version=(
                     str(analyst_version) if analyst_version is not None else None
                 ),

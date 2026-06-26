@@ -138,6 +138,14 @@ CRITICAL_RETRY_BACKOFF_SECONDS: tuple[float, ...] = (0.5, 1.5, 4.0)
 #: NATS subject pattern. ``{severity}`` is substituted at emit time.
 NATS_SUBJECT_PATTERN = "legba.alerts.{severity}"
 
+#: Target-id values that are NEVER a real target. A run that resolves to one of
+#: these is the D32 no-target tail (a country_assessor whose target failed to
+#: thread, stringified to None/"unknown"), and its alert is skipped at the emit
+#: path — an empty "" is left ALONE because a legitimate META analyst
+#: (world_assessor) emits target-less alerts by design. To additionally suppress
+#: an empty-target alert, a descriptor sets ``config.require_target: true``.
+_NO_TARGET_ALERT_SENTINELS: frozenset[str] = frozenset({"unknown", "none", "null"})
+
 #: Severities at which Pushover fires when its surface override is "default"
 #: but the descriptor explicitly opts in for ``low``. The default ladder
 #: leaves ``low`` Pushover-off; an operator who wants low+Pushover writes
@@ -644,6 +652,23 @@ async def emit(
     out_ctx = ctx or OutputContext()
     if out_ctx.alert_row_id is None and output_id is not None:
         out_ctx = out_ctx.model_copy(update={"alert_row_id": str(output_id)})
+
+    # D32 no-target emit gate. A run whose target failed to thread (the D4
+    # contamination tail) emitted a NULL-target alert. Skip the sentinel
+    # ("unknown"/"none"/"null") values outright — they are never a real target —
+    # and skip an empty target when the descriptor opts in via
+    # ``config.require_target``. A legitimately target-less META alert
+    # (world_assessor, empty target, no ``require_target``) still fires.
+    _tgt = str(out_ctx.target_id or "").strip()
+    _cfg = _config_block(descriptor)
+    _require_target = bool(_cfg.get("require_target")) if isinstance(_cfg, Mapping) else False
+    if _tgt.casefold() in _NO_TARGET_ALERT_SENTINELS or (_require_target and not _tgt):
+        out_ctx.logger.warning(
+            "alert.emit.no_target_skip target=%r require_target=%s — refusing to "
+            "emit a NULL/unknown-target alert (D32)",
+            out_ctx.target_id, _require_target,
+        )
+        return []
 
     # Audit-row write is opt-in: needs both a pg_pool and a parent
     # analyst_outputs row id. When either is absent we keep the historical

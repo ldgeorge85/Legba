@@ -1476,11 +1476,48 @@ async def run_method(
         "derived_from": len(full_derived),
     })
 
+    # D4 off-target guard. A PER-COUNTRY assessment whose finding names ONLY
+    # other countries and not its own target is the contamination shape (an
+    # Indonesia run that emitted a fully US-focused report). Publish it as
+    # TRACE_ONLY rather than as this country's product — the run is still fully
+    # traced, only the misattributed feed/output row is suppressed. A meta /
+    # no-target run (world_assessor) is never gated (the helper returns False for
+    # a non-country target). Best-effort: any guard error degrades to publishing.
+    force_trace_only = False
+    try:
+        from ...runtime.grounding import finding_is_off_target
+
+        guard_geo = [g for g in (narrated.data or {}).get("geo", []) if isinstance(g, str)] \
+            if isinstance(narrated.data, dict) else []
+        guard_entities = (narrated.data or {}).get("key_entities", []) \
+            if isinstance(narrated.data, dict) else []
+        if finding_is_off_target(
+            target_id=target_id,
+            text=f"{narrated.title}\n{narrated.body}",
+            key_entities=[e for e in guard_entities if isinstance(e, str)],
+            geo=guard_geo,
+        ):
+            force_trace_only = True
+            steps.append({
+                "phase": "reflect",
+                "kind": "off_target_guard",
+                "target_id": target_id,
+                "action": "force_trace_only",
+            })
+            logger.warning(
+                "inline_target.off_target_guard target=%s analyst=%s — finding "
+                "names only other countries; forcing TRACE_ONLY (D4)",
+                target_id, analyst_id,
+            )
+    except Exception as exc:  # pragma: no cover — guard must never break a run
+        logger.debug("inline_target.off_target_guard.skipped err=%s", exc)
+
     return AnalystMethodResult(
         finding=narrated,
         usage=usage,
         derived_from=full_derived,
         intermediate_steps=steps,
+        force_trace_only=force_trace_only,
     )
 
 

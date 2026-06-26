@@ -649,8 +649,12 @@ def _build_grounding_hook(
         # (tense actors / brokers / proxy chains), also analysis-derived + fenced
         # off from ground truth. Scoped to the candidate entities.
         if want_graph_structure:
+            # Scope the ASSESSED STRUCTURE block to the RUN's target on a
+            # per-country run (D4 contamination fix — the global "US is the most
+            # central node" must not override a country slice). A META / no-target
+            # run passes target_id=None and keeps the GLOBAL structure unchanged.
             structure = await resolver.resolve_graph_structure(
-                candidates(), limit=max_facts,
+                candidates(), limit=max_facts, scope_target_id=target_id,
             )
             block = build_graph_structure_block(structure)
             if block:

@@ -25,6 +25,14 @@ re-homes the two whose substrate moved:
   4. broken finding supersession — ``analyst_outputs.superseded_by`` pointing to
      a missing output row. The pivot moved supersession off ``facts`` onto the
      finding pool, so this REPLACES the old ``facts.superseded_by`` check.
+  5. dangling ``analyst_outputs.derived_from`` edges — ``derived_from`` array
+     elements that reference NO row in any lineage-catalog table (signals /
+     analyst_outputs / facts / entity_profiles). This makes the dead-edge debt
+     OBSERVABLE (D23) and is the regression sentinel for D10: ``country_optimizer``
+     used to write ``analyst_traces.run_id`` into ``derived_from`` — those are
+     not lineage-catalog rows, so they land here as a rising count if D10 ever
+     regresses. The prune itself is a later operator-gated migration (roadmap
+     0051); this handler only COUNTS, per its read-only audit contract.
 
 Crucially — and unlike its predecessor — it **refuses loud**: a failing check
 (e.g. a relation that does not exist) is NOT swallowed into a zeroed finding.
@@ -111,6 +119,32 @@ _CHECKS: tuple[tuple[str, str], ...] = (
           AND NOT EXISTS (
               SELECT 1 FROM analyst_outputs ao2 WHERE ao2.id = ao.superseded_by
           )
+        """,
+    ),
+    (
+        # D23 observability + D10 regression sentinel. Counts DISTINCT
+        # derived_from elements on analyst_outputs that reference NO row in any
+        # lineage-catalog table. A trace run_id (the D10 bug) matches none of
+        # these, so a D10 regression shows up here as a rising count. Read-only:
+        # the prune is roadmap migration 0051. Cross-join UNNEST + a single NOT
+        # EXISTS over the union keeps it index-friendly (GIN on derived_from is
+        # not used here, but the per-table id PKs are).
+        "dangling_analyst_output_derived_from",
+        """
+        SELECT count(*) FROM (
+            SELECT DISTINCT df.ref
+            FROM analyst_outputs ao
+            CROSS JOIN LATERAL unnest(ao.derived_from) AS df(ref)
+            WHERE array_length(ao.derived_from, 1) IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM signals s WHERE s.id = df.ref)
+              AND NOT EXISTS (
+                    SELECT 1 FROM analyst_outputs ao2 WHERE ao2.id = df.ref
+              )
+              AND NOT EXISTS (SELECT 1 FROM facts f WHERE f.id = df.ref)
+              AND NOT EXISTS (
+                    SELECT 1 FROM entity_profiles ep WHERE ep.id = df.ref
+              )
+        ) dangling
         """,
     ),
 )

@@ -48,6 +48,7 @@ from legba.data.analysts.optimizer import (
     OptimizerDeps,
     SCHEMA_VERSION,
     _collect_derived_from,
+    _collect_derived_trace_ids,
     _dispatch_workflow,
     _resolve_analyzed_identity,
     _shape_training_set,
@@ -169,9 +170,17 @@ def _trace_critique_row(
     output_text: str = "Itaipu upgrade was the most significant event.",
     run_id: UUID | None = None,
     critique_id: UUID | None = None,
+    output_row_refs: list[UUID] | None = None,
     produced_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build a row as :func:`read_traces_and_critiques` would project."""
+    """Build a row as :func:`read_traces_and_critiques` would project.
+
+    ``output_row_refs`` mirrors ``analyst_traces.output_row_refs`` — the
+    substrate-row UUIDs the analyzed run produced. When unset it defaults to a
+    single fresh produced-row id so the D10 ``derived_from`` resolution has a
+    real lineage root to surface; pass ``[]`` to model a trace that produced no
+    substrate rows.
+    """
     return {
         "run_id": run_id or uuid4(),
         "analyzed_analyst_id": analyst_id,
@@ -179,6 +188,9 @@ def _trace_critique_row(
         "input": prompt_text,
         "gold": output_text,
         "trace_status": "success",
+        "output_row_refs": (
+            output_row_refs if output_row_refs is not None else [uuid4()]
+        ),
         "critique_score": critique_score,
         "critique_scores": {} if critique_score is None else {"helpfulness": critique_score},
         "critique_revision_delta": None,
@@ -274,21 +286,70 @@ def test_shape_training_set_handles_missing_critique() -> None:
     assert shaped[0]["critique_score"] is None
 
 
-def test_collect_derived_from_picks_up_traces_and_critiques() -> None:
+def test_collect_derived_from_uses_output_row_refs_not_trace_ids() -> None:
+    """D10: derived_from carries the PRODUCED substrate-row ids, NOT trace ids.
+
+    A trace run_id / critique_id points at analyst_traces / analyst_critiques —
+    tables NOT in the derived_from lineage catalog — so putting them in
+    derived_from creates 100%-dangling edges. The lineage roots are the rows the
+    analyzed run produced (analyst_traces.output_row_refs).
+    """
+    trace_id = uuid4()
+    critique_id = uuid4()
+    produced = [uuid4(), uuid4()]
+    row = _trace_critique_row(
+        run_id=trace_id, critique_id=critique_id, output_row_refs=produced,
+    )
+    refs = _collect_derived_from([row])
+    assert set(refs) == set(produced)
+    # The trace + critique ids MUST NOT leak into derived_from (the D10 bug).
+    assert trace_id not in refs
+    assert critique_id not in refs
+
+
+def test_collect_derived_from_empty_when_no_produced_rows() -> None:
+    """A trace that produced no substrate rows contributes no lineage edge."""
+    row = _trace_critique_row(output_row_refs=[])
+    assert _collect_derived_from([row]) == []
+
+
+def test_collect_derived_from_dedupes_shared_produced_rows() -> None:
+    """Two traces sharing a produced row yield ONE derived_from edge (ordered)."""
+    shared = uuid4()
+    only_b = uuid4()
+    rows = [
+        _trace_critique_row(output_row_refs=[shared]),
+        _trace_critique_row(output_row_refs=[shared, only_b]),
+    ]
+    refs = _collect_derived_from(rows)
+    assert refs == [shared, only_b]
+
+
+def test_collect_derived_from_skips_malformed_output_refs() -> None:
+    """Unparseable produced-row ids are dropped, not raised on."""
+    good = uuid4()
+    row = _trace_critique_row(output_row_refs=[good])
+    row["output_row_refs"] = ["not-a-uuid", str(good), None]
+    refs = _collect_derived_from([row])
+    assert refs == [good]
+
+
+def test_collect_derived_trace_ids_picks_up_traces_and_critiques() -> None:
+    """The trace + critique ids live ONLY in the data.derived_trace_ids audit
+    slot — recorded for debugging, NEVER in derived_from (D10)."""
     trace_id = uuid4()
     critique_id = uuid4()
     row = _trace_critique_row(run_id=trace_id, critique_id=critique_id)
-    refs = _collect_derived_from([row])
+    refs = _collect_derived_trace_ids([row])
     assert trace_id in refs
     assert critique_id in refs
 
 
-def test_collect_derived_from_skips_malformed_ids() -> None:
+def test_collect_derived_trace_ids_skips_malformed_ids() -> None:
     row = _trace_critique_row()
     row["run_id"] = "not-a-uuid"
     row["critique_id"] = None
-    refs = _collect_derived_from([row])
-    assert refs == []
+    assert _collect_derived_trace_ids([row]) == []
 
 
 # ---------------------------------------------------------------------------
@@ -430,19 +491,33 @@ async def test_run_method_no_analyzed_analyst_short_circuits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_method_derived_from_contains_trace_and_critique_ids() -> None:
+async def test_run_method_derived_from_is_produced_rows_traces_in_data() -> None:
+    """D10 end-to-end: the candidate's derived_from carries the analyzed runs'
+    PRODUCED substrate-row ids; the trace + critique ids land only under
+    data.derived_trace_ids (the audit slot), never in derived_from."""
     stub_client = _StubTemporalClient()
     deps = OptimizerDeps(temporal_client=stub_client)
     trace_ids = [uuid4() for _ in range(3)]
     critique_ids = [uuid4() for _ in range(3)]
+    produced_ids = [uuid4() for _ in range(3)]
     inputs = [
-        _trace_critique_row(run_id=t, critique_id=c)
-        for t, c in zip(trace_ids, critique_ids)
+        _trace_critique_row(run_id=t, critique_id=c, output_row_refs=[p])
+        for t, c, p in zip(trace_ids, critique_ids, produced_ids)
     ]
     result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
     derived = set(result.derived_from)
-    assert set(trace_ids).issubset(derived)
-    assert set(critique_ids).issubset(derived)
+    # derived_from = produced substrate rows (real lineage roots).
+    assert set(produced_ids).issubset(derived)
+    # trace / critique ids are EXCLUDED from derived_from (the D10 fix).
+    assert derived.isdisjoint(set(trace_ids))
+    assert derived.isdisjoint(set(critique_ids))
+    # ...but recorded in the candidate's data.derived_trace_ids audit slot.
+    candidate = PromptModuleCandidatePayload(**result.finding.data["candidate"])
+    audit = set(candidate.data["derived_trace_ids"])
+    assert {str(t) for t in trace_ids}.issubset(audit)
+    assert {str(c) for c in critique_ids}.issubset(audit)
+    # And the produced rows are NOT in the trace-id audit slot.
+    assert audit.isdisjoint({str(p) for p in produced_ids})
 
 
 @pytest.mark.asyncio

@@ -87,8 +87,10 @@ __all__ = [
     "build_grounding_preamble",
     "build_situations_block",
     "collect_grounding_candidates",
+    "finding_is_off_target",
     "situation_grounding_min_intensity",
     "situation_scope_for_target",
+    "target_scope_names",
     "trusted_source_types",
 ]
 
@@ -379,11 +381,21 @@ def _json_or_dict(payload: Any) -> dict[str, Any]:
 
 def _top_graph_items(
     d: Any, cand_lc: set[str], limit: int, *, min_value: float | None = None,
+    target_scoped: bool = False,
 ) -> list[tuple[str, float]]:
     """From a {name: numeric} map, the top-``limit`` (name, value) pairs — names
     matching the assessor's candidate entities FIRST (their structure is the most
     relevant), then the highest-value global structures. Junk names (too short /
-    bare QID) are dropped."""
+    bare QID) are dropped.
+
+    ``target_scoped`` (D4 contamination fix): when True AND a candidate set is
+    present, the global out-of-scope tail is DROPPED entirely rather than used to
+    top up the limit. This is the per-country path — a country_assessor must NOT
+    inherit the globally-most-central node (the US is the most-central node in the
+    signed graph, so the global top-up made every country's ASSESSED STRUCTURE
+    block US-centric). A no-target / meta run (world_assessor) leaves this False,
+    so the global structure block is preserved unchanged (the global picture is
+    correct for the global assessor)."""
     if not isinstance(d, dict):
         return []
     items: list[tuple[str, float]] = []
@@ -402,16 +414,26 @@ def _top_graph_items(
     in_scope = sorted(
         (it for it in items if it[0].casefold() in cand_lc), key=lambda x: x[1], reverse=True,
     )
+    # PER-COUNTRY: drop the global tail outright (no US-centric top-up). Only when
+    # there actually IS a candidate scope — a scoped run with an empty candidate
+    # set degrades to the global view rather than emitting nothing.
+    if target_scoped and cand_lc:
+        return in_scope[:limit]
     out_scope = sorted(
         (it for it in items if it[0].casefold() not in cand_lc), key=lambda x: x[1], reverse=True,
     )
     return (in_scope + out_scope)[:limit]
 
 
-def _top_brokers(d: Any, cand_lc: set[str], limit: int) -> list[tuple[str, float]]:
+def _top_brokers(
+    d: Any, cand_lc: set[str], limit: int, *, target_scoped: bool = False,
+) -> list[tuple[str, float]]:
     """Flatten {name: {betweenness, degree}} → top-``limit`` (name, betweenness),
     keeping only true brokers (betweenness > 0 — a high-degree hub with zero
-    betweenness, e.g. a catalog body, is NOT a cut-point)."""
+    betweenness, e.g. a catalog body, is NOT a cut-point).
+
+    ``target_scoped`` is forwarded to :func:`_top_graph_items` (per-country drops
+    the global broker tail; meta keeps it)."""
     if not isinstance(d, dict):
         return []
     flat: dict[str, float] = {}
@@ -423,7 +445,9 @@ def _top_brokers(d: Any, cand_lc: set[str], limit: int) -> list[tuple[str, float
             continue
         if bf > 0:
             flat[name] = bf
-    return _top_graph_items(flat, cand_lc, limit, min_value=0.0)
+    return _top_graph_items(
+        flat, cand_lc, limit, min_value=0.0, target_scoped=target_scoped,
+    )
 
 
 def _render_proxy_chain(c: Any) -> str | None:
@@ -452,15 +476,24 @@ def _render_proxy_chain(c: Any) -> str | None:
     return None
 
 
-def _top_proxy_chains(chains: Any, cand_lc: set[str], limit: int) -> list[str]:
+def _top_proxy_chains(
+    chains: Any, cand_lc: set[str], limit: int, *, target_scoped: bool = False,
+) -> list[str]:
     """Render up to ``limit`` notable proxy chains, preferring ones that touch a
-    candidate entity."""
+    candidate entity.
+
+    ``target_scoped`` (D4): when True AND a candidate scope is present, chains
+    that touch NO candidate entity are dropped — a per-country block must not
+    inherit a global proxy chain between two other countries. Meta keeps them."""
     if not isinstance(chains, list):
         return []
     rendered = [(s, any(n in s.casefold() for n in cand_lc))
                 for s in (_render_proxy_chain(c) for c in chains) if s]
-    # candidate-touching chains first, order otherwise preserved (already ranked upstream)
-    ordered = [s for s, hit in rendered if hit] + [s for s, hit in rendered if not hit]
+    if target_scoped and cand_lc:
+        ordered = [s for s, hit in rendered if hit]
+    else:
+        # candidate-touching chains first, order otherwise preserved (already ranked upstream)
+        ordered = [s for s, hit in rendered if hit] + [s for s, hit in rendered if not hit]
     out: list[str] = []
     for s in ordered:
         if s not in out:
@@ -484,6 +517,7 @@ _INTERESTING_KIND_ORDER: tuple[str, ...] = (
 
 def _collect_interesting(
     payloads: Mapping[str, dict[str, Any]], cand_lc: set[str], limit: int,
+    *, target_scoped: bool = False,
 ) -> list[GroundingInterestingItem]:
     """Merge + rank the ``interesting`` shortlists across the metric payloads
     (the shared contract). Items touching a candidate entity rank FIRST (their
@@ -494,6 +528,13 @@ def _collect_interesting(
     ``limit`` here bounds the WHOLE shortlist (not per-kind) — the producers
     already cap at ~12 and self-rank, so a single overall cap keeps the block
     tight without re-imposing the per-category fallback shape.
+
+    ``target_scoped`` (D4 contamination fix): when True AND a candidate scope is
+    present, out-of-scope items are DROPPED entirely (not merely out-ranked) —
+    this is the per-country path, so a country_assessor's ASSESSED STRUCTURE
+    block contains ONLY structures touching its own entities and never inherits
+    the globally-most-central (US-centric) shortlist. A no-target / meta run
+    leaves this False, so the merged global shortlist is preserved unchanged.
     """
     merged: list[tuple[GroundingInterestingItem, bool]] = []
     seen: set[tuple[str, str]] = set()
@@ -537,6 +578,11 @@ def _collect_interesting(
                     in_scope,
                 )
             )
+    # PER-COUNTRY: keep ONLY in-scope items (drop the global tail). Only when a
+    # candidate scope actually exists — a scoped run with no candidates degrades
+    # to the global view rather than emitting an empty block.
+    if target_scoped and cand_lc:
+        merged = [t for t in merged if t[1]]
     # candidate-touching first, then score desc (the producers' own ranking).
     merged.sort(key=lambda t: (t[1], t[0].score), reverse=True)
     return [item for item, _ in merged[:limit]]
@@ -559,6 +605,151 @@ def situation_scope_for_target(target_id: str | None) -> str | None:
         return None
     tid = target_id.strip()
     return tid if tid.startswith("country") else None
+
+
+def is_per_country_target(target_id: str | None) -> bool:
+    """True for a per-country run (a ``country_*`` target id) — the path whose
+    grounding graph/situation candidates must NARROW to the target geo (D4).
+
+    A meta / no-target run (``world_assessor`` — ``target_id`` None) and a
+    non-country thematic target return False, so their GLOBAL structure block is
+    left untouched. Mirrors the conservative ``startswith('country')`` test used
+    by :func:`situation_scope_for_target` so the two scope decisions never
+    diverge."""
+    return situation_scope_for_target(target_id) is not None
+
+
+# ISO-2 (and a couple of common slug tokens) → casefolded country name(s) so a
+# ``country_<iso2>`` target id expands to the name a finding actually prints
+# ("country_g20_id" → 'indonesia'). The off-target guard checks BOTH the raw
+# slug token (matches a finding's ISO-coded ``geo`` tag) and the expanded
+# name(s) (matches the country named in the finding text). Covers the G20 set
+# the country_assessor fans out over; a miss only means a borderline finding is
+# (safely) published rather than suppressed.
+_TARGET_SLUG_TO_NAMES: dict[str, tuple[str, ...]] = {
+    "us": ("united states", "america"),
+    "cn": ("china",),
+    "ru": ("russia",),
+    "ir": ("iran",),
+    "il": ("israel",),
+    "in": ("india",),
+    "id": ("indonesia",),
+    "br": ("brazil",),
+    "ar": ("argentina",),
+    "mx": ("mexico",),
+    "ca": ("canada",),
+    "fr": ("france",),
+    "de": ("germany",),
+    "it": ("italy",),
+    "gb": ("united kingdom", "britain"),
+    "uk": ("united kingdom", "britain"),
+    "jp": ("japan",),
+    "kr": ("south korea", "korea"),
+    "sa": ("saudi arabia",),
+    "tr": ("turkey", "turkiye"),
+    "au": ("australia",),
+    "za": ("south africa",),
+    "eu": ("european union",),
+}
+
+
+def target_scope_names(target_id: str | None) -> set[str]:
+    """The casefolded geo name set a per-country finding must mention to be
+    on-target — the geo token(s) lifted from the run's ``target_id`` slug
+    (``country_g20_us`` → {'us', 'united states', 'america'}). Empty for a meta /
+    no-target run.
+
+    Includes BOTH the raw slug token (an ISO-2 code that matches a finding's
+    ISO-coded ``geo`` tag) AND the expanded country name(s) from
+    :data:`_TARGET_SLUG_TO_NAMES` (which match the country named in the finding
+    TEXT). DB-free; a caller can fold in additional aliases via
+    :func:`finding_is_off_target`'s ``extra_target_names``."""
+    names: set[str] = set()
+    for tok in _target_id_geo_names(target_id):
+        tlc = tok.casefold()
+        names.add(tlc)
+        names.update(_TARGET_SLUG_TO_NAMES.get(tlc, ()))
+    return names
+
+
+# A country-name token from a finding's text. We match WHOLE words against a
+# known-country gazetteer so a substring (e.g. 'us' inside 'thus') never
+# false-positives. Kept deliberately small + lowercase — it only has to catch
+# the "names ONLY other countries" contamination shape the off-target guard
+# guards against, not be an exhaustive geocoder.
+def finding_is_off_target(
+    *,
+    target_id: str | None,
+    text: str,
+    key_entities: Sequence[str] = (),
+    geo: Sequence[str] = (),
+    extra_target_names: Sequence[str] = (),
+) -> bool:
+    """True when a PER-COUNTRY finding names ONLY other countries and not its own
+    target (the D4 contamination shape: an Indonesia run that emitted a fully
+    US-focused report). Such a finding must be published as TRACE_ONLY, not as a
+    country product.
+
+    Decision (conservative, fail-OPEN — only flips on a clear off-target shape):
+
+      * Non-country / no-target run → always False (never gates a meta run).
+      * If the finding mentions its OWN target geo (slug token, an
+        ``extra_target_names`` alias, or a ``geo`` tag) → on-target, False.
+      * Else, if it names at least one OTHER country (in text / key_entities /
+        geo) → OFF-target, True.
+      * Else (names no country at all — a generic/thin finding) → False; we only
+        suppress a finding that is demonstrably ABOUT other countries, never one
+        that merely failed to name its own.
+    """
+    if not is_per_country_target(target_id):
+        return False
+    own = target_scope_names(target_id) | {
+        n.casefold() for n in extra_target_names if isinstance(n, str) and n.strip()
+    }
+    hay_parts: list[str] = []
+    if isinstance(text, str):
+        hay_parts.append(text)
+    for e in key_entities:
+        if isinstance(e, str):
+            hay_parts.append(e)
+    haystack = " ".join(hay_parts)
+    haystack_lc = haystack.casefold()
+    geo_lc = {g.casefold() for g in geo if isinstance(g, str) and g.strip()}
+
+    def _mentions(name: str) -> bool:
+        nlc = name.casefold()
+        if nlc in geo_lc:
+            return True
+        # whole-word / token boundary so 'us' doesn't hit 'thus'.
+        return re.search(rf"(?<![a-z0-9]){re.escape(nlc)}(?![a-z0-9])", haystack_lc) is not None
+
+    # On-target if it mentions its own geo anywhere.
+    if any(_mentions(n) for n in own if n):
+        return False
+    # Otherwise: off-target only if it names some OTHER country.
+    others = {c for c in _KNOWN_COUNTRY_TOKENS if c not in own}
+    return any(_mentions(c) for c in others)
+
+
+# A small lowercase country gazetteer (ISO-2 + common names) for the off-target
+# guard's "names some OTHER country" test. Intentionally not exhaustive — it
+# only needs to recognise the country-shaped tokens that drive the D4
+# contamination (a per-country run whose finding is entirely about other
+# nation-states). Extend as needed; a miss only means a borderline finding is
+# (safely) published rather than suppressed.
+_KNOWN_COUNTRY_TOKENS: frozenset[str] = frozenset(
+    {
+        # G20 + frequent geopolitical actors (names + ISO-2 where unambiguous).
+        "united states", "america", "u.s.", "usa", "us",
+        "china", "russia", "iran", "israel", "ukraine", "india", "indonesia",
+        "brazil", "argentina", "mexico", "canada", "france", "germany",
+        "italy", "spain", "united kingdom", "britain", "uk", "japan",
+        "south korea", "north korea", "korea", "saudi arabia", "turkey",
+        "turkiye", "australia", "south africa", "egypt", "pakistan",
+        "afghanistan", "iraq", "syria", "lebanon", "yemen", "venezuela",
+        "taiwan", "vietnam", "thailand", "philippines", "nigeria",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -714,8 +905,15 @@ class SubstrateGroundingResolver:
     outranked.
     """
 
-    def __init__(self, *, pg_pool: Any) -> None:
+    def __init__(self, *, pg_pool: Any, target_id: str | None = None) -> None:
         self._pool = pg_pool
+        # The run's target id, when the deps-builder constructs one resolver per
+        # run (per-country path). Optional + backward-compatible: a resolver
+        # built without it (the historical call, or a meta analyst) defaults to
+        # the GLOBAL view, so world_assessor is untouched. When set to a
+        # ``country_*`` id, resolve_graph_structure self-scopes (D4) even if the
+        # caller doesn't thread an explicit scope arg.
+        self._target_id = target_id
 
     async def resolve(
         self, candidates: Sequence[str], *, max_facts: int,
@@ -908,6 +1106,7 @@ class SubstrateGroundingResolver:
 
     async def resolve_graph_structure(
         self, candidates: Sequence[str], *, limit: int,
+        scope_target_id: str | None = None,
     ) -> "GroundingGraphStructure | None":
         """Return the headline interesting STRUCTURES the knowledge graph
         surfaced (most-tense actors, brokers, proxy chains) for the ASSESSED
@@ -923,11 +1122,24 @@ class SubstrateGroundingResolver:
         per-target column), so we scope by candidate NAME. Degrade-not-drop: any
         read/parse failure logs + yields ``None`` (no block). Returns ``None``
         when nothing notable renders so the caller skips an empty header.
+
+        D4 CONTAMINATION FIX — per-country scoping. When this is a PER-COUNTRY
+        run (``scope_target_id`` is a ``country_*`` id, or the resolver was built
+        with one), out-of-scope global structures are DROPPED rather than used to
+        top up the limit, so a country_assessor never inherits the globally-most-
+        central (US-centric) structure. ``scope_target_id`` defaults to ``None``
+        and, when ``None``, falls back to the resolver's own ``target_id`` — so a
+        caller that doesn't thread the arg still self-scopes when the resolver was
+        constructed per-country, and a META / no-target run (no target either
+        place) keeps the GLOBAL block unchanged.
         """
         per_cat = min(int(limit), _MAX_GRAPH_STRUCTURE)
         if per_cat <= 0:
             return None
         cand_lc = {c.casefold() for c in candidates if c and c.strip()}
+        # Per-country path drops the global tail; meta / no-target keeps it.
+        effective_target = scope_target_id if scope_target_id is not None else self._target_id
+        target_scoped = is_per_country_target(effective_target)
         # DISTINCT ON keeps only the freshest row per metric_kind.
         sql = """
             SELECT DISTINCT ON (metric_kind) metric_kind, payload
@@ -945,7 +1157,9 @@ class SubstrateGroundingResolver:
         # PREFER the shared ``interesting`` shortlist. Cap at 2× the per-category
         # bound so the merged (cross-metric, multi-kind) list keeps roughly the
         # same overall footprint as the legacy 3-category fallback.
-        interesting = _collect_interesting(payloads, cand_lc, per_cat * 2)
+        interesting = _collect_interesting(
+            payloads, cand_lc, per_cat * 2, target_scoped=target_scoped,
+        )
         if interesting:
             structure = GroundingGraphStructure(
                 frustration=[], brokers=[], proxy_chains=[], interesting=interesting,
@@ -955,9 +1169,16 @@ class SubstrateGroundingResolver:
         sb = payloads.get("structural_balance") or {}
         gm = payloads.get("graph_mining") or {}
         structure = GroundingGraphStructure(
-            frustration=_top_graph_items(sb.get("frustration"), cand_lc, per_cat, min_value=0.0),
-            brokers=_top_brokers(gm.get("top_centrality"), cand_lc, per_cat),
-            proxy_chains=_top_proxy_chains(gm.get("proxy_chains"), cand_lc, per_cat),
+            frustration=_top_graph_items(
+                sb.get("frustration"), cand_lc, per_cat, min_value=0.0,
+                target_scoped=target_scoped,
+            ),
+            brokers=_top_brokers(
+                gm.get("top_centrality"), cand_lc, per_cat, target_scoped=target_scoped,
+            ),
+            proxy_chains=_top_proxy_chains(
+                gm.get("proxy_chains"), cand_lc, per_cat, target_scoped=target_scoped,
+            ),
         )
         return None if structure.is_empty() else structure
 

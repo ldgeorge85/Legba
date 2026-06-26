@@ -125,6 +125,11 @@ NATS_SUBJECT_PATTERN: str = "legba.outputs.stix.{target_id}"
 #: TAXII 2.1 collection name pattern per target.
 TAXII_COLLECTION_PATTERN: str = "legba_target_{target_id}_collection"
 
+#: Target-id values that are NOT a real target — a run that resolves to one of
+#: these must NOT emit a bundle (D32 no-target emit gate). ``unknown`` was the
+#: historical fallback string; ``none``/``null`` catch a stringified None.
+_NO_TARGET_SENTINELS: frozenset[str] = frozenset({"unknown", "none", "null"})
+
 #: Stable namespace UUID for derived STIX identifiers (so the same Legba
 #: UUID always maps to the same STIX UUID; lets downstream consumers
 #: deduplicate across re-exports).
@@ -803,7 +808,23 @@ async def emit(
     """
     cfg = _payload_from_descriptor(descriptor)
     tlp: Tlp = cfg.get("tlp", "amber")  # amber is the safe default
-    target_id: str = cfg.get("target_id") or (ctx.target_id if ctx else "") or "unknown"
+    # D32 no-target emit gate. A run with no resolvable target_id (the D4
+    # contamination tail: a country_assessor run whose target failed to thread)
+    # used to fall back to the literal string "unknown", emitting an
+    # ``unknown``-keyed STIX bundle on ``legba.outputs.stix.unknown`` + a
+    # collection named ``legba_target_unknown_collection`` — junk that pollutes
+    # every downstream TAXII consumer. SKIP the emit instead (return an empty
+    # bundle, publish nothing). The condition is opt-out via env for the rare
+    # legitimately-target-less producer.
+    resolved_target = cfg.get("target_id") or (ctx.target_id if ctx else "") or ""
+    target_id = str(resolved_target).strip()
+    if not target_id or target_id.casefold() in _NO_TARGET_SENTINELS:
+        logger.warning(
+            "stix_bundle.emit.no_target_skip target=%r — refusing to emit an "
+            "unknown-keyed STIX bundle (D32); no NATS publish, no file/TAXII sink",
+            resolved_target,
+        )
+        return stix2.Bundle(allow_custom=True)
 
     env = OutputEnvelope(
         payload=payload,
