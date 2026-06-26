@@ -80,6 +80,62 @@ _MAX_INTERESTING = 12  # shared "interesting" shortlist cap (#99 contract).
 
 
 # ---------------------------------------------------------------------------
+# D14 — POLARITY derived DETERMINISTICALLY from intent / rel_type.
+#
+# The live review (PLATFORM_HEALTH_RESULTS D14) found nexuses whose `polarity`
+# and `intent` DISAGREED ("Spain hostile to Saudi Arabia" carried polarity=-1
+# but intent=supportive; co-occurrence sports fixtures were signed -1 "hostile
+# to"). The fix per the W2 contract: polarity is a PURE FUNCTION of (intent,
+# rel_type) computed at the producer, so the two can never contradict on write.
+#
+# Priority — intent first (it is the producer's explicit semantic claim), then
+# the rel_type POLARITY table, then 0. A supportive intent can NEVER come out
+# negative; a hostile/conflict intent can NEVER come out positive.
+# ---------------------------------------------------------------------------
+
+#: Intent string → canonical sign. The keys are the closed _VALID_INTENTS set
+#: the reifier coerces to (supportive / hostile / dual-use / neutral) PLUS the
+#: structural_balance legacy "dual_use" spelling and a few conflict synonyms a
+#: producer might surface. Anything unmapped falls through to the rel_type table.
+INTENT_POLARITY: dict[str, int] = {
+    "supportive": 1,
+    "allied": 1,
+    "cooperative": 1,
+    "hostile": -1,
+    "antagonistic": -1,
+    "conflict": -1,
+    "adversarial": -1,
+    "neutral": 0,
+    "dual-use": 0,
+    "dual_use": 0,
+    "structural": 0,
+}
+
+
+def polarity_from(intent: Any, rel_type: Any) -> int:
+    """Resolve the canonical polarity sign DETERMINISTICALLY (D14).
+
+    Pure. ``intent`` is the producer's explicit semantic claim and wins when it
+    is one of the known intents (so polarity can never disagree with intent);
+    otherwise the rel_type :data:`POLARITY` table decides; otherwise 0 (neutral).
+
+    This is the single source of truth both the reifier (producer) and this
+    handler (consumer) sign through, so a relationship's sign is a function of
+    its declared intent / type — never a free LLM integer that can contradict
+    the words next to it.
+    """
+    key = str(intent or "").strip().lower()
+    if key in INTENT_POLARITY:
+        return INTENT_POLARITY[key]
+    table = POLARITY.get(str(rel_type or "").strip(), 0)
+    if table > 0:
+        return 1
+    if table < 0:
+        return -1
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Interesting-shortlist distillation (#99 shared contract)
 # ---------------------------------------------------------------------------
 
@@ -516,4 +572,4 @@ async def handle(
     )
 
 
-__all__ = ["POLARITY", "handle"]
+__all__ = ["POLARITY", "INTENT_POLARITY", "polarity_from", "handle"]

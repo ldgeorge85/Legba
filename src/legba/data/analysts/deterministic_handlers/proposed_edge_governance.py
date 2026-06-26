@@ -46,7 +46,11 @@ from uuid import UUID
 from ...provenance.models import FindingPayload, NexusPayload
 from ...provenance.writes import write_nexus
 from ....runtime.analyst_method import AnalystMethodResult
-from ._entity_canon import is_demonym, is_junk_entity
+# W2 shared canon spine — prefer the new shared module path (the old
+# deterministic_handlers/_entity_canon is now a re-export shim). canonicalize_entity
+# normalizes a promoted endpoint; is_junk_entity drops true junk; is_demonym is
+# retained for the existing centrality-inflation gate.
+from ..._entity_canon import canonicalize_entity, is_demonym, is_junk_entity
 
 logger = logging.getLogger(__name__)
 
@@ -122,25 +126,29 @@ async def _promote_candidates(
         target_version=target_version,
     )
     for r in rows:
-        subj = str(r["source_entity"] or "").strip()
-        obj = str(r["target_entity"] or "").strip()
-        if not subj or not obj or subj.lower() == obj.lower():
-            # Degenerate edge — mark rejected so it leaves the queue.
-            await conn.execute(
-                "UPDATE proposed_edges SET status = 'rejected', reviewed_at = now() "
-                "WHERE id = $1",
-                r["id"],
-            )
-            continue
-        # DQ-H4 entity-quality gate: never promote an edge whose endpoint is a
-        # national demonym ("Iranian") or a junk token ("TV") into a first-class
-        # nexus — those are the same referent as their country (inflating graph
-        # centrality, e.g. Iran↔Iranian) or not entities at all. Reject so they
-        # leave the queue instead of graduating to the graph.
+        raw_subj = str(r["source_entity"] or "").strip()
+        raw_obj = str(r["target_entity"] or "").strip()
+        # D3: route BOTH promoted endpoints through the shared canon BEFORE any
+        # gate or write, so the nexus carries the normalized referent
+        # ("Iranian"→"Iran", "Cape Verde&#039;s"→"Cape Verde", "US"→"United
+        # States"). The proposed_edge has no NER class, so canonicalize against
+        # the generic bucket and consume the canonical NAME only.
+        subj, _ = canonicalize_entity(raw_subj, "entity")
+        obj, _ = canonicalize_entity(raw_obj, "entity")
+        subj, obj = subj.strip(), obj.strip()
+        # D3: drop a true-junk endpoint (clock-time / quantifier / numeric /
+        # residual-HTML token) so it never graduates into a first-class nexus.
+        # Demonyms are NOT junk here — canonicalize_entity already collapsed them
+        # to their country above, so is_junk_entity returns False and the
+        # canonical country flows through. is_demonym is still tested below to
+        # catch any non-curated/edge case that survived canonicalization.
         if (
-            is_demonym(subj) or is_demonym(obj)
+            not subj or not obj or subj.lower() == obj.lower()
             or is_junk_entity(subj) or is_junk_entity(obj)
+            or is_demonym(subj) or is_demonym(obj)
         ):
+            # Degenerate / junk / demonym-collapsed-to-self edge — mark rejected
+            # so it leaves the queue instead of graduating to the graph.
             await conn.execute(
                 "UPDATE proposed_edges SET status = 'rejected', reviewed_at = now() "
                 "WHERE id = $1",
@@ -186,8 +194,16 @@ async def _promote_candidates(
             },
         )
         try:
+            # D15 (gov side): pass the originating signal ids to write_nexus so
+            # Agent D's storage populates BOTH derived_from AND source_signal_ids
+            # (an agent nexus must not carry empty provenance). The proposed_edge
+            # carried these in its own derived_from (the co-occurrence's signals).
             out, dlq = await write_nexus(
-                conn, analyst_ctx=actx, payload=payload, derived_from=derived,
+                conn,
+                analyst_ctx=actx,
+                payload=payload,
+                derived_from=derived,
+                source_signal_ids=list(derived),
             )
         except Exception as exc:  # pragma: no cover - per-row best-effort
             logger.warning(

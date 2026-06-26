@@ -55,7 +55,14 @@ from typing import Any, Mapping
 
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
-from ._entity_canon import canonicalize_entity
+# W2 shared canon spine — prefer the new shared module path (the old
+# deterministic_handlers/_entity_canon is now a re-export shim). canonicalize_entity
+# normalizes a span; is_junk_entity drops true junk; is_org_surface types orgs.
+from ..._entity_canon import (
+    canonicalize_entity,
+    is_junk_entity,
+    is_org_surface,
+)
 from ._entity_geo import NameGeocoder, resolve_entity_geo
 
 logger = logging.getLogger(__name__)
@@ -96,6 +103,112 @@ _ALIAS_NAMESPACE = uuid.UUID("6f6c6c61-0000-0000-0000-6c65676261ab")
 def _alias_marker(surface_form: str) -> uuid.UUID:
     """Deterministic v5 UUID for an original surface form (derived_from marker)."""
     return uuid.uuid5(_ALIAS_NAMESPACE, surface_form)
+
+
+# ---------------------------------------------------------------------------
+# D8 — CLASS-AGNOSTIC IDENTITY (forward de-fragmentation, NO migration).
+#
+# The live audit found 611 names fragmented across classes ("turkey" lived as
+# country / entity / location / person simultaneously, "Bank of England" typed
+# person, etc.). The composite key (lower(name), entity_class) then LOCKED each
+# fragment as a distinct node. The forward fix: resolve a name to ONE entity
+# class deterministically at write time so every mention of the same surface
+# form converges onto the SAME (name, class) row going forward.
+#
+# Priority (highest wins): country > organization > person > location > entity.
+#  * country  — canonicalize_entity already forces the gazetteer/alias country
+#    class; we honour it first so "Turkey" (the nation) never loses to a stray
+#    "turkey"/entity NER guess.
+#  * organization — is_org_surface (the W1 org-suffix/head gazetteer) types
+#    corporate/institutional surfaces ("Bank of England", "Nippon Steel",
+#    "Hyundai Motor Group") as organization, NEVER person.
+#  * person / location / entity — fall back to the (canonicalized) NER class,
+#    floored to the generic "entity" bucket for anything outside the taxonomy.
+# ---------------------------------------------------------------------------
+
+#: Deterministic priority order — index 0 is highest. Two competing class
+#: signals for the same name resolve to the EARLIER member.
+_CLASS_PRIORITY: tuple[str, ...] = (
+    "country",
+    "organization",
+    "person",
+    "location",
+    "entity",
+)
+_CLASS_RANK: dict[str, int] = {c: i for i, c in enumerate(_CLASS_PRIORITY)}
+
+
+def resolve_entity_class(name: str, canonical_class: str) -> str:
+    """Resolve ONE deterministic entity_class for a canonicalized name (D8).
+
+    ``canonical_class`` is the class :func:`canonicalize_entity` already settled
+    (it forces ``country`` for a gazetteer/alias hit and ``organization`` for an
+    NWS-office surface). This adds the org-SURFACE gazetteer
+    (:func:`is_org_surface` — "Bank of England" / "Nippon Steel" / "Hyundai
+    Motor Group") so a corporate/institutional name typed ``person`` by NER is
+    promoted to ``organization``, then collapses any remaining competing signal
+    to the single highest-priority class. Pure + deterministic — same name ⇒
+    same class, every time, so "turkey" lands in ONE class going forward.
+    """
+    cls = (str(canonical_class or "entity").strip() or "entity")
+    candidates = [cls if cls in _CLASS_RANK else "entity"]
+    # Org-surface gazetteer: a corporate/institutional surface is an
+    # organization regardless of the NER guess (the canon already handled NWS).
+    if is_org_surface(name):
+        candidates.append("organization")
+    # Lowest rank index (highest priority) wins.
+    return min(candidates, key=lambda c: _CLASS_RANK.get(c, len(_CLASS_PRIORITY)))
+
+
+# ---------------------------------------------------------------------------
+# D26 — COMPUTED completeness_score (was a flat 0.3 constant).
+#
+# The audit flagged entity_profiles.completeness_score as an inert constant 0.3
+# on every row. Compute it instead from how many identifying fields the profile
+# actually carries, so a richly-resolved entity (name + class + geo) scores
+# higher than a bare name. Bounded to [0, 1]; deterministic.
+# ---------------------------------------------------------------------------
+
+#: Field-presence weights. canonical_name + a non-generic class are the
+#: identity floor; geo (country, then lat/lon) and merge provenance (aliases)
+#: add corroboration. Weights sum to 1.0 at full completeness.
+_COMPLETENESS_WEIGHTS: dict[str, float] = {
+    "name": 0.30,        # has a canonical name (always true past MIN_NAME_LEN)
+    "class": 0.20,       # typed to a non-generic class (not the "entity" bucket)
+    "geo_country": 0.20,
+    "geo_latlon": 0.20,
+    "aliases": 0.10,     # at least one folded surface-form alias (merge evidence)
+}
+
+
+def compute_completeness(
+    *,
+    name: str,
+    entity_class: str,
+    geo_country: str | None,
+    geo_lat: float | None,
+    geo_lon: float | None,
+    alias_count: int,
+) -> float:
+    """Completeness in [0, 1] from filled fields (D26 — replaces the 0.3 const).
+
+    Pure + deterministic. A bare name+class entity floors at 0.50; geo + merge
+    provenance lift it toward 1.0. ``entity_class == "entity"`` (the generic
+    fallback bucket) does NOT count toward the class weight — only a resolved,
+    non-generic class does.
+    """
+    score = 0.0
+    if name and name.strip():
+        score += _COMPLETENESS_WEIGHTS["name"]
+    if entity_class and entity_class.strip() and entity_class.strip().lower() != "entity":
+        score += _COMPLETENESS_WEIGHTS["class"]
+    if geo_country and str(geo_country).strip():
+        score += _COMPLETENESS_WEIGHTS["geo_country"]
+    if geo_lat is not None and geo_lon is not None:
+        score += _COMPLETENESS_WEIGHTS["geo_latlon"]
+    if alias_count > 0:
+        score += _COMPLETENESS_WEIGHTS["aliases"]
+    return max(0.0, min(1.0, round(score, 4)))
 
 
 async def _record_provenance(
@@ -295,6 +408,18 @@ async def _resolve_batch(
                 text, cls = canonicalize_entity(raw_text, raw_cls)
                 if len(text) < MIN_NAME_LEN:
                     continue
+                # D8/D7: drop a span canonicalization left as true junk (a
+                # clock-time / quantifier / numeric / residual-HTML token NER
+                # mis-emitted) so it never becomes an entity node. Demonyms are
+                # NOT junk — canonicalize_entity already collapsed them to their
+                # country above (is_junk_entity returns False for them).
+                if is_junk_entity(text):
+                    continue
+                # D8 class-agnostic identity: resolve ONE deterministic class so
+                # the same surface form ("turkey", "Bank of England") converges
+                # on a SINGLE (name, class) row going forward instead of
+                # fragmenting across country/entity/location/person.
+                cls = resolve_entity_class(text, cls)
                 key = (text.lower(), cls)
                 seen.setdefault(key, (text, cls))
                 # Record the original surface form as provenance only when
@@ -316,15 +441,50 @@ async def _resolve_batch(
                         geocoder=geocoder,
                     )
                     lat, lon, country = egeo.lat, egeo.lon, egeo.country
+                    # D26: COMPUTE completeness from the filled fields (was a
+                    # flat 0.3 constant). aliases for THIS signal are the merge
+                    # evidence; the geo + non-generic class lift it.
+                    completeness = compute_completeness(
+                        name=text,
+                        entity_class=cls,
+                        geo_country=country,
+                        geo_lat=lat,
+                        geo_lon=lon,
+                        alias_count=len(key_aliases),
+                    )
+                    # D26: source-signal provenance — the originating signal id
+                    # stamped into derived_from (a uuid[]), plus analyst_id /
+                    # analyst_version / run_id (were NULL → lineage couldn't enter
+                    # the tier). On conflict we UNION the new signal id, keep the
+                    # HIGHER completeness, and backfill a NULL analyst stamp.
+                    src_sig = r["id"] if isinstance(r["id"], uuid.UUID) else None
+                    derived_arr = [src_sig] if src_sig is not None else []
                     prof = await conn.fetchrow(
                         """
                         INSERT INTO entity_profiles
                             (canonical_name, entity_type, entity_class, data,
                              geo_lat, geo_lon, geo_country, completeness_score,
+                             analyst_id, analyst_version, run_id, derived_from,
                              last_event_link_at)
-                        VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8, now())
+                        VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11::uuid,
+                                $12::uuid[], now())
                         ON CONFLICT (lower(canonical_name), entity_class) DO UPDATE
                             SET last_event_link_at = now(),
+                                -- D26: keep the richer completeness; never regress.
+                                completeness_score = GREATEST(
+                                    entity_profiles.completeness_score,
+                                    EXCLUDED.completeness_score
+                                ),
+                                -- D26: backfill a NULL analyst stamp (don't clobber).
+                                analyst_id = COALESCE(entity_profiles.analyst_id, EXCLUDED.analyst_id),
+                                analyst_version = COALESCE(entity_profiles.analyst_version, EXCLUDED.analyst_version),
+                                run_id = COALESCE(entity_profiles.run_id, EXCLUDED.run_id),
+                                -- D26: UNION the originating signal id (deduped).
+                                derived_from = (
+                                    SELECT COALESCE(array_agg(DISTINCT m), '{}'::uuid[])
+                                      FROM unnest(entity_profiles.derived_from
+                                                  || EXCLUDED.derived_from) AS m
+                                ),
                                 -- Geo is inherited on conflict ONLY when the
                                 -- countries are consistent: fill a NULL stored
                                 -- geo, or keep refining within the same
@@ -356,7 +516,10 @@ async def _resolve_batch(
                         RETURNING id, version, (xmax = 0) AS inserted
                         """,
                         text, cls, cls, json.dumps({"source": "entity_resolution"}),
-                        lat, lon, country, 0.3,
+                        lat, lon, country, completeness,
+                        analyst_id, analyst_version,
+                        str(run_id) if run_id is not None else None,
+                        derived_arr,
                     )
                     eid = str(prof["id"])
                     name_to_id[key] = eid

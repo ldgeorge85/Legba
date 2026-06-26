@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Sequence
@@ -44,6 +45,7 @@ from ._core import (
     AnalystContext,
     ProvenanceFields,
     TargetContext,
+    append_derived_from,
     from_analyst,
     from_target,
 )
@@ -133,6 +135,7 @@ async def write_analyst_output(
     row_id: UUID | None = None,
     source_type: str | None = None,
     seed_batch_id: UUID | None = None,
+    source_signal_ids: Sequence[UUID] | None = None,
 ) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
     """Generic analyst-output writer.
 
@@ -156,6 +159,13 @@ async def write_analyst_output(
     (``'agent'``) and a NULL ``seed_batch_id``. A seed write passes
     ``source_type='seed'`` + the batch id so the row is stamped + selectively
     refreshable/purgeable.
+
+    ``source_signal_ids`` (D15) is honored ONLY by the ``nexuses`` route: the
+    originating signal/fact UUIDs the nexus was reified from. The ``nexuses``
+    insert UNIONS it with ``derived_from`` and the payload's own
+    ``source_signal_ids`` and writes the full set to BOTH the ``derived_from``
+    lineage array and the ``source_signal_ids`` slice. ``None`` (the default)
+    leaves the existing behavior (payload-carried ids + ``derived_from``).
     """
     spec = spec_for_kind(kind)
     effective_schema_uri = schema_uri or spec.schema_uri
@@ -203,6 +213,7 @@ async def write_analyst_output(
         effective_schema_uri=effective_schema_uri,
         source_type=source_type,
         seed_batch_id=seed_batch_id,
+        source_signal_ids=source_signal_ids,
     )
 
     # 4) Best-effort NATS publish.
@@ -428,6 +439,7 @@ async def write_nexus(
     analyst_ctx: AnalystContext,
     payload: NexusPayload | dict[str, Any],
     derived_from: Sequence[UUID],
+    source_signal_ids: Sequence[UUID] | None = None,
     **kwargs: Any,
 ) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
     """Write a reified-relationship ``nexus`` row to the dedicated ``nexuses``
@@ -439,7 +451,22 @@ async def write_nexus(
     facts) so a repeated OPEN triple lifts confidence + unions lineage instead
     of raising, and runs ``supersede_prior_nexuses`` first so a value/polarity
     CHANGE for an existing ``(subject, intermediary, object, rel_type)`` closes
-    the prior open row(s) and opens this one.
+    the prior open row(s) and opens this one. ``rel_type`` is normalized to ONE
+    canonical lowercase-spaced vocabulary on write (``normalize_predicate``), so
+    mixed-case producers (``CoOccursWith`` vs ``co-occurs-with``) converge on
+    the single key the open-triple unique index + supersession dedup on (D18).
+
+    ``source_signal_ids`` (D15) — the originating signal/fact UUIDs the nexus
+    was reified FROM. Producers (the reifier, proposed_edge_governance) gather
+    these and pass them here; ``write_nexus`` populates BOTH the relational
+    ``derived_from`` lineage array AND the ``source_signal_ids`` convenience
+    slice on the row so 100%-empty-provenance nexuses (lineage couldn't enter
+    the tier) can't recur. The param is keyword-default ``None`` for
+    backward-compat: when omitted, the ids fall back to ``derived_from`` (and
+    the payload's own ``source_signal_ids``) so existing call sites are
+    unchanged. The explicit param, ``derived_from``, and any payload-carried
+    ``source_signal_ids`` are UNIONED — a producer can supply the ids via any of
+    the three and the row carries the full set in both columns.
     """
     return await write_analyst_output(
         conn,
@@ -447,6 +474,7 @@ async def write_nexus(
         kind=OutputKind.NEXUS,
         output_payload=payload,
         derived_from=derived_from,
+        source_signal_ids=source_signal_ids,
         **kwargs,
     )
 
@@ -508,11 +536,13 @@ async def _insert_for_spec(
     effective_schema_uri: str,
     source_type: str | None = None,
     seed_batch_id: UUID | None = None,
+    source_signal_ids: Sequence[UUID] | None = None,
 ) -> None:
     """Dispatch INSERT based on the spec's target table.
 
     ``source_type`` / ``seed_batch_id`` are the curated-seeding marker; only
     the knowledge-layer tables (``facts`` / ``nexuses``) honor them.
+    ``source_signal_ids`` is honored only by the ``nexuses`` route (D15).
     """
     table = spec.table
     if table == "analyst_outputs":
@@ -564,6 +594,7 @@ async def _insert_for_spec(
             effective_schema_uri=effective_schema_uri,
             source_type=source_type,
             seed_batch_id=seed_batch_id,
+            source_signal_ids=source_signal_ids,
         )
     elif table == "journal_entries":
         # Consolidation supersession runs INSIDE this route (close-prior +
@@ -849,6 +880,91 @@ async def supersede_prior_facts(
         return 0
 
 
+async def collapse_open_triple(
+    conn: asyncpg.Connection,
+    *,
+    subject: str,
+    predicate: str,
+    value: str,
+    new_fact_id: UUID,
+    confidence: float,
+    derived_from: Sequence[UUID],
+    valid_from: datetime | None = None,
+) -> UUID | None:
+    """Collapse a standing fact triple onto ONE open row regardless of
+    ``valid_from`` drift (D17 — full-triple supersession leaked open duplicates
+    via per-cycle valid_from drift).
+
+    The ``idx_facts_temporal_triple_open`` partial-unique index keys on the FULL
+    quad INCLUDING ``COALESCE(valid_from, '1970-01-01')``, so the SAME
+    ``(subject, predicate, value)`` re-asserted from N cycles with N distinct
+    event-times accumulates N OPEN rows — the live "Russia located in UK" ×8
+    noise the ON CONFLICT upsert never catches (its conflict target carries the
+    valid_from dimension, so a drifted valid_from is a NEW conflict key, not a
+    hit).
+
+    This helper closes that dimension for SAME-value OPEN rows BEFORE the
+    insert: if an open row for ``(lower(subject), lower(predicate),
+    lower(value))`` already exists (ANY valid_from), it is refreshed in place
+    (confidence → max, lineage unioned, EARLIEST valid_from kept) and its id is
+    returned so the caller SKIPS the insert. Returns ``None`` when no open row
+    exists (the caller proceeds to insert the fresh open row).
+
+    Contract / safety:
+      * **same-value only** — the match is on ``lower(value) = lower($3)``; a
+        DIFFERENT value is NOT collapsed here (that path is
+        :func:`supersede_prior_facts`, which the caller runs first).
+      * **open-only** — only rows still open (``valid_until IS NULL AND
+        superseded_by IS NULL``) are touched; a closed/superseded row is never
+        resurrected (matches the partial index's WHERE).
+      * **idempotent** — a replay of the same triple lifts confidence to the
+        max + unions lineage; the row count is unchanged.
+      * **deterministic pick** — when (legacy data) more than one open row for
+        the triple exists, the EARLIEST (``valid_from ASC, created_at ASC``) is
+        refreshed; the caller's :func:`supersede_prior_facts` already collapsed
+        differing-value rows, and future writes converge on this one open row.
+
+    Runs on the caller's connection so the collapse + insert are one logical
+    step. Shared by BOTH fact producers (the analyst ``_insert_fact`` path and
+    the ingest ``fact_extractor._insert_ingestion_fact`` path) so a standing
+    triple keeps ONE open row across producers.
+    """
+    existing_id = await conn.fetchval(
+        """
+        UPDATE facts
+           SET confidence   = GREATEST(facts.confidence, $4),
+               derived_from = COALESCE((SELECT array_agg(DISTINCT e)
+                               FROM unnest(facts.derived_from || $5::uuid[]) e),
+                              '{}'::uuid[]),
+               -- LEAST/GREATEST skip NULL args in Postgres (NULL only if ALL
+               -- are NULL), so this keeps the EARLIEST known valid_from and is
+               -- a no-op when either side is NULL — matches the ingest path.
+               valid_from   = LEAST(facts.valid_from, $6),
+               updated_at   = now()
+         WHERE id = (
+                 SELECT id FROM facts
+                  WHERE lower(subject)   = lower($1)
+                    AND lower(predicate) = lower($2)
+                    AND lower(value)     = lower($3)
+                    AND valid_until IS NULL
+                    AND superseded_by IS NULL
+                    AND id <> $7
+                  ORDER BY valid_from ASC, created_at ASC
+                  LIMIT 1
+               )
+        RETURNING id
+        """,
+        subject,
+        predicate,
+        value,
+        float(confidence),
+        list(derived_from),
+        valid_from,
+        new_fact_id,
+    )
+    return existing_id
+
+
 async def _insert_fact(
     conn: asyncpg.Connection,
     *,
@@ -908,6 +1024,28 @@ async def _insert_fact(
         value=getattr(p, "value"),
         new_fact_id=row_id,
     )
+    # D17 — collapse a standing triple onto ONE open row regardless of
+    # valid_from drift. The ON CONFLICT upsert below keys on the FULL quad
+    # (including COALESCE(valid_from, '1970-01-01')), so the SAME triple
+    # re-asserted across cycles with drifting valid_from accumulates duplicate
+    # OPEN rows. collapse_open_triple refreshes the existing open row in place
+    # (confidence→max, lineage union, earliest valid_from) and, when it hits,
+    # we SKIP the insert — the analyst path now matches the ingest path's
+    # same-triple dedup so both producers keep one open row.
+    collapsed_into = await collapse_open_triple(
+        conn,
+        subject=getattr(p, "subject"),
+        predicate=predicate,
+        value=getattr(p, "value"),
+        new_fact_id=row_id,
+        confidence=float(getattr(p, "confidence", 1.0)),
+        derived_from=list(prov.derived_from),
+        valid_from=getattr(p, "valid_from", None),
+    )
+    if collapsed_into is not None:
+        # An open row already carries this exact triple — refreshed in place,
+        # no duplicate inserted (mirrors _insert_ingestion_fact).
+        return
     effective_source_type = source_type or getattr(p, "source_type", "agent")
     await conn.execute(
         """
@@ -1044,6 +1182,7 @@ async def _insert_nexus(
     effective_schema_uri: str,
     source_type: str | None = None,
     seed_batch_id: UUID | None = None,
+    source_signal_ids: Sequence[UUID] | None = None,
 ) -> None:
     """Insert (or upsert) one ``nexuses`` row (PIECE A — faithful copy of
     :func:`_insert_fact`).
@@ -1072,14 +1211,35 @@ async def _insert_nexus(
     """
     p = payload                                          # type: ignore[assignment]
     data_payload = getattr(p, "data", {}) or {}
-    source_signal_ids = list(getattr(p, "source_signal_ids", []) or [])
+    # D15 — populate BOTH the derived_from lineage array AND the
+    # source_signal_ids slice from the union of every id source: the explicit
+    # write_nexus(source_signal_ids=...) param, the row's derived_from lineage,
+    # and any payload-carried source_signal_ids. 100% of agent nexuses were
+    # carrying empty provenance because the call site set neither; now any one
+    # of the three populates both columns (dedupe-preserving order union).
+    payload_ssids = list(getattr(p, "source_signal_ids", []) or [])
+    explicit_ssids = list(source_signal_ids or [])
+    lineage_union = append_derived_from(
+        list(prov.derived_from), [*explicit_ssids, *payload_ssids]
+    )
+    # source_signal_ids = the originating signal/fact ids (the explicit param +
+    # payload-carried + lineage), so the convenience slice is never emptier than
+    # the lineage it slices.
+    ssid_union = append_derived_from(
+        explicit_ssids, [*payload_ssids, *list(prov.derived_from)]
+    )
+    nexus_source_signal_ids = ssid_union
     intermediary = getattr(p, "intermediary", None)
     polarity = int(getattr(p, "polarity", 0) or 0)
     label = getattr(p, "label", "") or ""
-    # Converge the rel_type vocabulary at the write path (mirrors _insert_fact):
-    # the seed driver writes CamelCase ("MemberOf"), so normalize to the
-    # canonical lowercase-spaced form the lower(rel_type) key dedups on.
-    rel_type = normalize_predicate(getattr(p, "rel_type"))
+    # Converge the rel_type vocabulary at the write path to ONE canonical form
+    # (D18): the seed driver writes CamelCase ("MemberOf"), proposed_edge_gov
+    # writes "CoOccursWith", and a hyphen/underscore variant ("co-occurs-with")
+    # would otherwise slip past normalize_predicate's exact-key map and split
+    # the vocabulary — defeating the lower(rel_type) open-triple unique index so
+    # the supersession path stays inert (0 superseded). _canonical_rel_type
+    # collapses every separator surface first, so all variants fold to one key.
+    rel_type = _canonical_rel_type(getattr(p, "rel_type"))
     await supersede_prior_nexuses(
         conn,
         subject=getattr(p, "subject"),
@@ -1140,8 +1300,8 @@ async def _insert_nexus(
         float(getattr(p, "confidence", 1.0)),
         getattr(p, "valid_from", None),
         getattr(p, "valid_until", None),
-        list(prov.derived_from),
-        source_signal_ids,
+        lineage_union,
+        nexus_source_signal_ids,
         json.dumps(data_payload, default=_json_default),
         prov.target_id,
         prov.target_version,
@@ -1308,6 +1468,52 @@ async def _insert_journal_entry(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+# Split a CamelCase / PascalCase token boundary ("CoOccursWith" → "Co Occurs
+# With") so a hyphen/underscore/space/CamelCase variant of the SAME rel_type all
+# fold to one separator-collapsed surface form before the canonical-map lookup.
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _canonical_rel_type(rel_type: str) -> str:
+    """Canonicalize a fact predicate / nexus rel_type onto ONE form on write
+    (D18 — mixed-case ``CoOccursWith`` vs ``co-occurs-with`` defeated the
+    open-triple unique index, so the supersession path stayed inert at 0).
+
+    :func:`legba.data.vocabulary.normalize_predicate` only maps EXACT
+    case-folded keys (``cooccurswith`` → ``co occurs with``), so a separator
+    variant (``co-occurs-with``, ``co_occurs_with``, ``Co Occurs With``) slipped
+    through verbatim and split the vocabulary. We first collapse every separator
+    surface — hyphen / underscore / CamelCase boundary / runs of whitespace —
+    into single spaces, THEN run the seam's canonical map on BOTH the collapsed
+    spaced form and the space-stripped form. The first hit wins; an unmapped
+    predicate still flows through ``normalize_predicate`` (verbatim) so novel
+    operator predicates are never rewritten.
+
+    Pure / deterministic / no DB. Empty or whitespace-only → returned unchanged
+    (callers own required-field validation).
+    """
+    if not rel_type or not rel_type.strip():
+        return rel_type
+    # Split CamelCase, then turn -/_ into spaces and collapse whitespace runs.
+    spaced = _CAMEL_BOUNDARY_RE.sub(" ", rel_type)
+    spaced = re.sub(r"[-_\s]+", " ", spaced).strip()
+    # Try the canonical map on the collapsed spaced form (the dominant live
+    # form) and on the space-stripped form (the CamelCase map keys), preferring
+    # whichever the seam actually maps. normalize_predicate case-folds + returns
+    # verbatim on a miss, so a double-miss returns the spaced form unchanged.
+    mapped_spaced = normalize_predicate(spaced)
+    if mapped_spaced != spaced:
+        return mapped_spaced
+    mapped_tight = normalize_predicate(spaced.replace(" ", ""))
+    if mapped_tight != spaced.replace(" ", ""):
+        return mapped_tight
+    # No canonical-map hit: return the separator-collapsed, lowercased spaced
+    # form so two surface variants of an UNMAPPED predicate still converge on
+    # one key (the open-triple index lower()s the column, so lowercase here
+    # keeps the row's stored form aligned with the dedup key).
+    return spaced.casefold()
 
 
 def _coerce_payload(

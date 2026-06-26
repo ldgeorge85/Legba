@@ -47,6 +47,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .._entity_canon import (
+    canonicalize_entity,
+    is_demonym,
+    is_junk_entity,
+)
 from ..provenance.writes import supersede_prior_facts
 from ..sources._contract import Signal
 from ..vocabulary import normalize_predicate
@@ -262,8 +267,293 @@ def _is_token_subphrase(inner: str, outer: str) -> bool:
 #: historical REBEL backend stamped a synthetic 1.0 — see the module-level note
 #: — so a missing/sentinel score must NOT land at 1.0).
 #: Below 1.0 so ingestion (machine-extracted) facts are never as certain as a
-#: curated seed (0.95) or a deliberate analyst assertion.
-_INGESTION_DEFAULT_CONFIDENCE: float = 0.75
+#: curated seed (0.95) or a deliberate analyst assertion. NOT a calibrated
+#: probability — a deliberately conservative documented constant; the
+#: data-quality gates (not this floor) own noise rejection. When the extractor
+#: DOES provide a real per-triple score, ``_resolve_ingestion_confidence`` uses
+#: that instead of this constant.
+_INGESTION_DEFAULT_CONFIDENCE: float = 0.5
+
+
+# ---------------------------------------------------------------------------
+# D6 / D13 — adjective / demonymic-plural value gate, source-publication
+# subjects, relation-DIRECTION sanity, and a sports-roster topic filter.
+# ---------------------------------------------------------------------------
+#
+# The live audit (PLATFORM_HEALTH_RESULTS D6/D13) found the ingestion path
+# laundering whole classes of garbage triples past the existing junk / quantity
+# gates — categorically-wrong relations stamped as first-class facts:
+#
+#   * ADJECTIVE / DEMONYMIC-PLURAL endpoints — "France capital of Parisians":
+#     "Parisians" is a demonymic plural (an adjective surface, not a typed
+#     place/org/person). The W1 canon collapses national demonyms ("Iranian" ->
+#     "Iran") but a city-demonym plural like "Parisians" has no country to
+#     collapse to, so it is dropped here instead of becoming a fact value.
+#   * REFLEXIVE-AFTER-CANON — "US located in US", "EU member of EU",
+#     "China leader of America": after canonicalisation BOTH endpoints resolve
+#     to the SAME canonical entity ("United States" == "United States"). The
+#     pre-canon junk check misses these because the RAW surfaces differ; we
+#     re-test self-reference on the CANONICAL forms.
+#   * SOURCE-PUBLICATION SUBJECTS — "Reuters", "Al Jazeera", "BBC News" as the
+#     SUBJECT of a geopolitical fact: the publisher is the messenger, not a
+#     participant; a relation whose subject is the reporting outlet is a byline
+#     artifact, not a world fact.
+#   * INVERTED RELATIONS — "US located in New York" (a country located in a
+#     city/state), "Washington capital of US" (the country as the value of a
+#     capital-of relation). Direction sanity rejects the clear structural
+#     inversions deterministically.
+#   * SPORTS-ROSTER NOISE — the World-Cup feed flooding geopolitical extraction:
+#     "Kylian Mbappe member of Iraq" (a footballer "member of" a national squad
+#     read as a country), "Harry Kane member of Jude Bellingham" (person member
+#     of person). A topic gate skips extraction on sports-dominated text, and a
+#     triple-shape gate drops person-"member of"-country / person-"member of"-
+#     person roster artifacts even when the text gate lets a mixed signal pass.
+
+#: Demonymic / adjectival surface suffixes a CITY/REGION demonym plural takes
+#: ("Parisians", "Londoners", "New Yorkers", "Texans") that the curated
+#: national ``_DEMONYM_MAP`` does NOT cover (it only collapses NATIONAL
+#: demonyms). A value surface that is a single title-cased token with no digits
+#: ending in one of these is treated as an adjective/people-of surface — not a
+#: typed entity — and dropped. Conservative: known countries + national
+#: demonyms + multi-token names are exempted before this check fires.
+_DEMONYMIC_PLURAL_SUFFIXES: tuple[str, ...] = (
+    "ians", "eans", "ers", "ners", "ish", "ese", "ans",
+)
+
+#: Source / publication surface names that must never be the SUBJECT of an
+#: ingestion fact (the reporting outlet is the messenger, not a participant).
+#: Lower-cased, stripped surface forms. Conservative + curated to the live
+#: feeds; an unknown outlet flows through (the resolver/critic still see it).
+_SOURCE_PUBLICATION_SUBJECTS: frozenset[str] = frozenset({
+    "reuters", "associated press", "ap", "afp", "agence france-presse",
+    "bloomberg", "bbc", "bbc news", "cnn", "al jazeera", "aljazeera",
+    "the guardian", "guardian", "the new york times", "new york times",
+    "nyt", "the washington post", "washington post", "the times",
+    "financial times", "ft", "the economist", "xinhua", "tass", "rt",
+    "sputnik", "fox news", "msnbc", "nbc news", "abc news", "cbs news",
+    "politico", "axios", "the telegraph", "telegraph", "the independent",
+    "sky news", "npr", "voa", "voice of america", "deutsche welle", "dw",
+    "the wall street journal", "wall street journal", "wsj", "newsweek",
+    "the hill", "vox", "buzzfeed", "huffpost", "breitbart",
+})
+
+#: Sports-vocabulary tokens used by the topic/relevance gate. When a signal's
+#: text is dominated by these (≥ ``_SPORTS_TEXT_MIN_HITS`` distinct hits),
+#: extraction is skipped so a World-Cup roster feed does not pour player/squad
+#: triples into the geopolitical substrate.
+_SPORTS_TOKENS: frozenset[str] = frozenset({
+    "world cup", "fifa", "uefa", "premier league", "la liga", "bundesliga",
+    "serie a", "champions league", "euro 2024", "euro 2028", "qualifier",
+    "qualifiers", "group stage", "knockout", "quarter-final", "quarter-finals",
+    "semi-final", "semi-finals", "kickoff", "kick-off", "half-time",
+    "halftime", "full-time", "midfielder", "midfield", "striker",
+    "goalkeeper", "defender", "winger", "penalty", "free kick", "free-kick",
+    "offside", "corner kick", "hat-trick", "hat trick", "goalscorer",
+    "top scorer", "clean sheet", "matchday", "fixture", "fixtures", "lineup",
+    "line-up", "starting xi", "squad", "roster", "transfer window",
+    "substitute", "substitution", "injury time", "stoppage time",
+    "extra time", "shootout", "national team", "footballer", "nba", "nfl",
+    "mlb", "nhl", "cricket", "rugby", "formula 1", "grand prix", "olympics",
+    "tournament", "playoff", "playoffs",
+})
+#: Minimum distinct sports-token hits before the topic gate fires.
+_SPORTS_TEXT_MIN_HITS: int = 3
+
+#: Predicates that assert organizational membership / squad inclusion. A PERSON
+#: subject under one of these is a sports-roster / citizenship artifact
+#: ("Kylian Mbappe member of Iraq"), and a PERSON value is nonsense
+#: ("Harry Kane member of Jude Bellingham") — both dropped by the triple-shape
+#: gate regardless of the text topic gate.
+_MEMBERSHIP_PREDICATES: frozenset[str] = frozenset({
+    "member of", "part of", "plays for", "member",
+})
+
+#: 'capital of' direction sanity — the SUBJECT must be a city/place (not a
+#: country), the VALUE a country.
+_CAPITAL_PREDICATES: frozenset[str] = frozenset({"capital of"})
+#: 'located in' direction sanity — a COUNTRY subject located in a NON-country
+#: value ("US located in New York") is the structural inversion (a sovereign
+#: state is not located inside a city/state).
+_LOCATED_IN_PREDICATES: frozenset[str] = frozenset({"located in", "capital of"})
+
+#: Continents / supranational regions a COUNTRY legitimately sits inside, so
+#: "France located in Europe" is NOT flagged as an inversion. Lower-cased.
+#: Conservative + curated — a non-country value NOT in this set under a
+#: country subject is the city/state inversion ("US located in New York").
+_CONTINENTS_REGIONS: frozenset[str] = frozenset({
+    "europe", "asia", "africa", "north america", "south america",
+    "latin america", "central america", "oceania", "antarctica",
+    "eurasia", "the americas", "americas", "middle east", "the middle east",
+    "scandinavia", "the balkans", "balkans", "the caucasus", "caucasus",
+    "central asia", "southeast asia", "south asia", "east asia",
+    "west africa", "east africa", "north africa", "sub-saharan africa",
+    "the eu", "european union", "the caribbean", "caribbean",
+    "the gulf", "the levant", "the pacific", "the arctic",
+})
+
+
+def _is_adjective_or_demonymic_value(value: str) -> bool:
+    """True when ``value`` is an adjectival / demonymic-PLURAL surface that is
+    not a typed entity (e.g. "Parisians", "Londoners", "Texans").
+
+    The W1 canon already collapses NATIONAL demonyms ("Iranian" -> "Iran"), so
+    by the time this runs a surviving demonym surface is one with no country to
+    collapse to — a city/region people-of plural. Conservative:
+      * a national demonym (collapses via canon) is NOT flagged;
+      * only a SINGLE title-cased token with no digits whose lowercase form
+        ends in a demonymic-plural suffix is flagged.
+    """
+    s = " ".join(str(value or "").split()).strip()
+    if not s or " " in s:
+        return False  # multi-token names are not bare adjectives
+    if any(ch.isdigit() for ch in s):
+        return False
+    if not s[:1].isupper():
+        return False
+    if is_demonym(s):
+        return False  # a national demonym collapses via canon, not dropped here
+    low = s.lower()
+    return any(low.endswith(suf) and len(low) > len(suf) + 1
+               for suf in _DEMONYMIC_PLURAL_SUFFIXES)
+
+
+#: STRUCTURAL org relations that survive even when the SUBJECT is a known
+#: outlet name. The source-publication gate targets BYLINE NOISE ("Reuters
+#: reports that X") — a reporting/content relation whose subject is the
+#: messenger. But an outlet is ALSO a real organization, and a legitimate
+#: structural org fact about it ("BBC operates in United Kingdom",
+#: "Reuters headquartered in London") is a genuine world fact, not a byline.
+#: When the predicate is one of these structural relations the outlet-subject
+#: drop is SUPPRESSED so the legit org fact survives. Lower-cased, canonical
+#: (matched after ``normalize_predicate``).
+_SOURCE_PUBLICATION_STRUCTURAL_PREDICATES: frozenset[str] = frozenset({
+    "located in", "operates in", "headquartered in", "based in",
+    "headquarters location",
+})
+
+
+def _is_source_publication_subject(subject: str) -> bool:
+    """True when ``subject`` is a reporting outlet / publication name (the
+    messenger), which must never be the SUBJECT of an ingestion fact."""
+    s = " ".join(str(subject or "").split()).strip().lower().strip(".")
+    return bool(s) and s in _SOURCE_PUBLICATION_SUBJECTS
+
+
+def _value_is_country(value: str) -> bool:
+    """True when ``value`` canonicalizes to a COUNTRY (the gazetteer-backed
+    typing the rest of the D6 gate uses). Used to keep the source-publication
+    structural-relation exemption tight (an outlet's org-jurisdiction fact like
+    "BBC operates in United Kingdom" survives; a structural relation to a
+    non-country place does not)."""
+    _, cls = canonicalize_entity(value, "entity")
+    return cls == "country"
+
+
+def _is_reflexive_after_canon(subject: str, value: str) -> bool:
+    """True when subject and value canonicalize to the SAME entity.
+
+    Catches the reflexive triples the pre-canon junk check misses because the
+    RAW surfaces differ but resolve to one referent: "US located in US",
+    "EU member of EU", "China leader of America" ("America" -> "United States"),
+    "US located in United States".
+    """
+    cs, _ = canonicalize_entity(subject, "entity")
+    cv, _ = canonicalize_entity(value, "entity")
+    if not cs or not cv:
+        return False
+    return cs.casefold() == cv.casefold()
+
+
+def _is_inverted_relation(subject: str, predicate: str, value: str) -> bool:
+    """Deterministic relation-DIRECTION sanity on the canonical endpoints.
+
+    Rejects the clear structural inversions the live audit flagged:
+
+      * ``capital of`` — a COUNTRY subject ("US capital of …") is reversed (the
+        capital is a CITY, the value is the country); a NON-country value
+        ("… capital of Parisians") is the wrong object type. "Paris capital of
+        France" passes (subject not a country, value a country).
+      * ``located in`` — a COUNTRY subject located in a NON-country value
+        ("US located in New York"): a sovereign state is not located inside a
+        city/state. "France located in Europe" / "Texas located in US"
+        (non-country subject) pass.
+
+    Uses :func:`canonicalize_entity` (the gazetteer-backed country typing) so
+    the country test is reliable regardless of the noisy NER class.
+    """
+    pred = normalize_predicate((predicate or "").strip().lower())
+    _, subj_cls = canonicalize_entity(subject, "entity")
+    _, val_cls = canonicalize_entity(value, "entity")
+    subj_is_country = subj_cls == "country"
+    val_is_country = val_cls == "country"
+
+    if pred in _CAPITAL_PREDICATES:
+        if subj_is_country:
+            return True  # "US capital of ..." — inverted
+        if not val_is_country:
+            return True  # "... capital of Parisians" — value not a country
+        return False
+    if pred in _LOCATED_IN_PREDICATES:
+        # A country inside a NON-country, NON-continent value is the inversion
+        # ("US located in New York"); "France located in Europe" passes.
+        val_low = " ".join(str(value or "").split()).strip().lower()
+        if subj_is_country and not val_is_country \
+                and val_low not in _CONTINENTS_REGIONS:
+            return True
+        return False
+    return False
+
+
+def _is_roster_triple(subject: str, predicate: str, value: str) -> bool:
+    """True when a membership triple is a sports-roster / nonsense artifact.
+
+    The World-Cup feed produces "<player> member of <national-squad>" (read as
+    a country) and "<player> member of <player>". A PERSON subject under a
+    membership predicate whose value is a COUNTRY (a squad read as its country)
+    or another PERSON is roster noise, not a geopolitical membership.
+
+    Uses the canon for the country test + the NER classifier for the person
+    test (conservative: only fires when the subject clearly classifies person).
+    """
+    pred = normalize_predicate((predicate or "").strip().lower())
+    if pred not in _MEMBERSHIP_PREDICATES:
+        return False
+    subj_cls = _classify_entity_text(subject, predicate=pred, slot="subject")
+    if subj_cls != "person":
+        return False
+    _, val_canon_cls = canonicalize_entity(value, "entity")
+    if val_canon_cls == "country":
+        return True  # "Kylian Mbappe member of Iraq" — squad-as-country
+    val_cls = _classify_entity_text(value, predicate=pred, slot="object")
+    if val_cls == "person":
+        return True  # "Harry Kane member of Jude Bellingham" — person/person
+    return False
+
+
+def _text_is_sports_dominated(text: str) -> bool:
+    """Topic/relevance gate: True when ``text`` is dominated by sports
+    vocabulary, so geopolitical extraction should be skipped on it.
+
+    Counts distinct sports-token hits (multi-word / hyphenated tokens matched as
+    substrings, single-word tokens matched at word boundaries). Fires only at
+    ``_SPORTS_TEXT_MIN_HITS`` distinct hits so an incidental "final" / "manager"
+    never trips it. Conservative — a geopolitics story that mentions one match
+    is unaffected.
+    """
+    if not text:
+        return False
+    low = text.lower()
+    words = set(re.findall(r"[a-z0-9]+", low))
+    hits = 0
+    for tok in _SPORTS_TOKENS:
+        if " " in tok or "-" in tok:
+            if tok in low:
+                hits += 1
+        elif tok in words:
+            hits += 1
+        if hits >= _SPORTS_TEXT_MIN_HITS:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +630,18 @@ class FactExtractorConfig(BaseModel):
             "score). "
             "Conservative — a single real-name token keeps the endpoint. ON by "
             "default (graph-and-data Wave-1b item 4); set false to disable.",
+        ),
+    )
+    reject_sports_topic: bool = Field(
+        default=True,
+        description=(
+            "Topic/relevance gate (D6/D13): when a signal's text is dominated "
+            "by sports vocabulary (≥3 distinct sports-token hits), SKIP "
+            "extraction so a World-Cup roster feed does not pour player/squad "
+            "triples ('Kylian Mbappe member of Iraq') into the geopolitical "
+            "substrate. Conservative — a geopolitics story mentioning one match "
+            "is unaffected. ON by default; set false to disable. The "
+            "per-triple sports-roster shape gate runs regardless."
         ),
     )
     relation_allowlist: list[str] | None = Field(
@@ -772,6 +1074,78 @@ class FactExtractorHandler:
             kept.append(triple)
         return kept
 
+    # ------------------------------------------------------------- D6/D13 gate
+
+    @staticmethod
+    def _d6_drop_reason(
+        subject: str,
+        predicate: str,
+        value: str,
+        *,
+        reject_quantity_endpoints: bool = True,
+    ) -> str | None:
+        """Return a short reason string when a (subject, predicate, value)
+        triple must be DROPPED by the D6/D13 hardened gate, else ``None``.
+
+        Pure + deterministic + canon-aware. The order is cheapest-first; the
+        returned tag is only for the drop-log. Endpoints arrive already scrubbed
+        (HTML-unescaped, zero-width-stripped) and the predicate already
+        normalized by the caller.
+
+        ``reject_quantity_endpoints`` mirrors the same config flag the dedicated
+        ``_is_quantity_phrase`` gate honors: when it is False the QUANTITY slice
+        of the shared junk gate (spelled-out / leading-quantifier endpoints like
+        "At least five") is NOT dropped here. The other junk classes
+        (clock-times, residual HTML, demonym collapse, length≤2) stay always-on.
+        Defaults True so the D6 pure-unit callers keep the always-on behaviour.
+        """
+        # Shared W1 junk gate on either RAW endpoint (clock-time / quantifier /
+        # numeric / residual-HTML / length≤2). canonicalize_entity collapses
+        # demonyms, so we DROP via is_junk_entity (which never flags a demonym).
+        # The QUANTITY/leading-quantifier slice is gated by
+        # reject_quantity_endpoints: when that flag is off, an endpoint whose
+        # ONLY junk reason is a spelled-out/numeric quantity phrase ("At least
+        # five") is NOT dropped here (the descriptor opted that gate off). A
+        # quantity endpoint that is junk for an INDEPENDENT reason still drops.
+        for endpoint in (subject, value):
+            if not is_junk_entity(endpoint):
+                continue
+            if not reject_quantity_endpoints and _is_quantity_phrase(endpoint):
+                continue  # quantity gate is off — let the quantity endpoint pass
+            return "junk_entity"
+        # Source/publication outlet as the SUBJECT — the messenger, not a actor.
+        # Narrowed (Regression 1): the gate targets BYLINE NOISE, not legitimate
+        # STRUCTURAL org facts about the outlet. An outlet IS a real organization,
+        # so a structural located-in / operates-in / headquartered-in / based-in
+        # relation to a real COUNTRY ("BBC operates in United Kingdom") is a
+        # genuine org fact and survives; everything else with an outlet subject
+        # (a reporting/content relation, or a structural relation to a non-country
+        # place like "Reuters located in Gaza") is still treated as the messenger
+        # and dropped. Requiring a COUNTRY value keeps the exemption tight: it
+        # admits the org-jurisdiction fact without re-opening byline-shaped noise.
+        if _is_source_publication_subject(subject) and not (
+            predicate in _SOURCE_PUBLICATION_STRUCTURAL_PREDICATES
+            and _value_is_country(value)
+        ):
+            return "source_publication_subject"
+        # Adjective / demonymic-plural VALUE the canon could not collapse to a
+        # country ("France capital of Parisians").
+        if _is_adjective_or_demonymic_value(value):
+            return "adjective_value"
+        # Reflexive after canon ("US located in US", "EU member of EU",
+        # "China leader of America").
+        if _is_reflexive_after_canon(subject, value):
+            return "reflexive_after_canon"
+        # Inverted relation direction ("US located in New York",
+        # "Washington capital of US").
+        if _is_inverted_relation(subject, predicate, value):
+            return "inverted_relation"
+        # Sports-roster shape ("Mbappe member of Iraq" / person member of
+        # person) even when the text topic gate let a mixed signal through.
+        if _is_roster_triple(subject, predicate, value):
+            return "sports_roster_triple"
+        return None
+
     # ----------------------------------------------------------- facts write
 
     async def _write_facts(
@@ -789,8 +1163,20 @@ class FactExtractorHandler:
         geo = payload.get("geo") if isinstance(payload.get("geo"), dict) else {}
         geo_lat = geo.get("lat")
         geo_lon = geo.get("lon")
-        excerpt = _concat_text(payload, cfg.text_fields)[:512]
+        full_text = _concat_text(payload, cfg.text_fields)
+        excerpt = full_text[:512]
         overrides = None
+
+        # D6/D13 topic gate: a sports-dominated signal (a World-Cup roster feed)
+        # must NOT pour player/squad triples into the geopolitical substrate.
+        # Conservative — fires only on text dense with sports vocabulary; a
+        # geopolitics story mentioning one match is unaffected.
+        if cfg.reject_sports_topic and _text_is_sports_dominated(full_text):
+            ctx.logger.debug(
+                "fact_extractor.sports_topic_skip signal_id=%s triples=%d",
+                signal.signal_id, len(triples),
+            )
+            return 0
 
         # Relation-type allowlist (canonical edge labels). Empty/None disables
         # the typing FILTER (type is still stamped on every kept fact).
@@ -825,6 +1211,27 @@ class FactExtractorHandler:
                 ctx.logger.debug(
                     "fact_extractor.junk_drop signal_id=%s subject=%r value=%r",
                     signal.signal_id, subject, value,
+                )
+                continue
+            # D6/D13 hardened gate (canon-aware). Drop, with a per-reason debug:
+            #   * shared W1 junk gate on either RAW endpoint (clock-time /
+            #     quantifier / numeric / residual-HTML / length≤2);
+            #   * SOURCE-PUBLICATION subject (the outlet is the messenger);
+            #   * ADJECTIVE / demonymic-plural VALUE ("…capital of Parisians");
+            #   * REFLEXIVE-AFTER-CANON ("US located in US", "EU member of EU",
+            #     "China leader of America" — both collapse to one entity);
+            #   * INVERTED relation direction ("US located in New York",
+            #     "Washington capital of US");
+            #   * SPORTS-ROSTER triple ("Mbappe member of Iraq").
+            drop_reason = self._d6_drop_reason(
+                subject, predicate, value,
+                reject_quantity_endpoints=cfg.reject_quantity_endpoints,
+            )
+            if drop_reason is not None:
+                ctx.logger.debug(
+                    "fact_extractor.gate_drop reason=%s signal_id=%s "
+                    "subject=%r predicate=%r value=%r",
+                    drop_reason, signal.signal_id, subject, predicate, value,
                 )
                 continue
             # Light validity gate (ON by default): drop spelled-out quantity/

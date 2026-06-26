@@ -60,8 +60,18 @@ from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 # The authoritative canonical edge-label → polarity table lives with the
 # structural-balance handler (the consumer). The reifier maps the LLM's typed
 # label through the SAME table so producer + consumer agree on the sign — there
-# is one canonical POLARITY map in the tree, not two.
-from .deterministic_handlers.structural_balance import POLARITY
+# is one canonical POLARITY map in the tree, not two. ``polarity_from`` is the
+# single deterministic intent/rel_type → sign function both sides use (D14) so a
+# nexus's polarity can never contradict its declared intent.
+from .deterministic_handlers.structural_balance import POLARITY, polarity_from
+
+# SHARED CANON SPINE (W1 / remediation #1). Route nexus endpoints through the
+# ONE canon every producer uses BEFORE building the nexus: collapse demonyms to
+# their country ("Iranian" → "Iran") so "Israel leader of Israeli" / "Iran
+# supplies weapons to Iranian" can never be reified, and DROP true junk
+# endpoints. Prefer the new shared module path (the old deterministic_handlers
+# path is now a re-export shim).
+from .._entity_canon import canonicalize_entity, is_junk_entity
 
 logger = logging.getLogger(__name__)
 
@@ -264,21 +274,67 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _canonical_polarity(rel_type: str, llm_polarity: Any) -> int:
-    """Resolve the canonical sign. The POLARITY table is authoritative for the
-    rel_type; the LLM's polarity only overrides for the proxy/intent twist
-    (e.g. a hostile SuppliesWeaponsTo already signs -1, but a hostile-via-proxy
-    on an otherwise-neutral predicate needs the LLM sign). We take the table
-    sign when it is non-zero, else fall back to the LLM's sign coerced to
-    {-1,0,+1}."""
-    table = POLARITY.get(rel_type, 0)
-    if table != 0:
-        return table
-    try:
-        v = int(llm_polarity)
-    except (TypeError, ValueError):
-        return 0
-    return 1 if v > 0 else (-1 if v < 0 else 0)
+# ---------------------------------------------------------------------------
+# D14 — sports / event co-occurrence gate.
+#
+# The live review found co-occurrence of two entities inside a sports fixture /
+# match report ("Spain hostile to Saudi Arabia", "Iran hostile to Group G")
+# being reified as signed -1 "hostile" GEOPOLITICS. A World-Cup group draw is
+# NOT a hostile relationship. When the evidence context is a sports/match frame,
+# a HOSTILE typing is downgraded to a NEUTRAL co-occurrence (polarity 0,
+# intent=neutral) — we keep the pair as a benign edge instead of poisoning the
+# signed graph with fake antagonism.
+# ---------------------------------------------------------------------------
+
+import re as _re  # noqa: E402
+
+#: Whole-word sports / fixture context tokens. Matched case-insensitively over
+#: the co-mention evidence text. Deliberately match-report vocabulary, NOT bare
+#: words that recur in geopolitics (so "group" alone does not trigger — only
+#: "group <letter>"/"group stage"). Conservative: a real military "match"/"draw"
+#: in a war report is rare and the floor is co-occurrence not hostility anyway.
+_SPORTS_CONTEXT_RE = _re.compile(
+    r"\b(?:"
+    r"world\s+cup|"
+    r"group\s+(?:stage|[a-h])\b|"
+    r"qualifier|qualifiers|qualifying|"
+    r"friendly\s+match|"
+    r"kick[\s-]?off|"
+    r"football|soccer|"
+    r"la\s+liga|premier\s+league|bundesliga|serie\s+a\b|ligue\s+1|"
+    r"champions\s+league|europa\s+league|"
+    r"fifa|uefa|"
+    r"semi[\s-]?final|quarter[\s-]?final|"
+    r"olympic|olympics|"
+    r"tournament|fixture|fixtures|"
+    r"cricket|rugby|tennis|basketball|"
+    r"match\s+(?:report|preview|day)|"
+    r"goalkeeper|midfielder|striker|penalty\s+kick"
+    r")\b",
+    _re.IGNORECASE,
+)
+
+
+def _is_sports_context(evidence_text: str) -> bool:
+    """True when the co-mention evidence reads as a sports / fixture frame (D14).
+
+    Pure. A hostile typing over a sports co-mention is a false antagonism — the
+    caller downgrades it to a neutral co-occurrence so the signed graph is not
+    poisoned with "<country> hostile to <country>" from a match report."""
+    return bool(_SPORTS_CONTEXT_RE.search(str(evidence_text or "")))
+
+
+def _canonical_polarity(rel_type: str, intent: Any) -> int:
+    """Resolve the canonical sign DETERMINISTICALLY from (intent, rel_type) — D14.
+
+    Delegates to the ONE shared :func:`polarity_from` (lives with the POLARITY
+    table) so producer + consumer sign identically and the sign is a PURE
+    function of the declared intent / rel_type. The LLM's free ``polarity``
+    integer is NO LONGER consulted: it was the source of the polarity≠intent
+    contradictions the review flagged. ``intent`` wins when known
+    (supportive→+1, hostile/conflict→-1, neutral/dual-use→0); else the rel_type
+    table; else 0."""
+    return polarity_from(intent, rel_type)
 
 
 def _coerce_typing(
@@ -287,15 +343,29 @@ def _coerce_typing(
     fallback_subject: str,
     fallback_object: str,
     allowed_intermediaries: Sequence[str] = (),
+    evidence_text: str = "",
 ) -> NexusPayload | None:
     """Turn the parsed LLM object into a validated :class:`NexusPayload`, or
     ``None`` when the model said there is no real relationship / the shape is
-    unusable (degrade-not-drop: a None just skips this candidate).
+    unusable / an endpoint is junk or self-referential after canonicalization
+    (degrade-not-drop: a None just skips this candidate).
 
     ``allowed_intermediaries`` is the OFFERED cut-out set (#99). A returned
     intermediary that is not in this set is dropped to null — the typer SELECTS
     or nulls, it may never free-text a famous-but-absent proxy. When no set is
-    offered, any returned intermediary is also dropped (no candidate path ran)."""
+    offered, any returned intermediary is also dropped (no candidate path ran).
+
+    ``evidence_text`` is the co-mention context, consulted ONLY for the D14
+    sports/event gate (a hostile typing over a sports fixture is downgraded to a
+    neutral co-occurrence).
+
+    D3: subject / object / intermediary are routed through the shared
+    :func:`canonicalize_entity` BEFORE the nexus is built — demonyms collapse to
+    their country ("Israeli" → "Israel"), so a self-loop like "Israel LeaderOf
+    Israeli" or "Iran SuppliesWeaponsTo Iranian" canonicalizes to subject ==
+    object and is DROPPED; true junk endpoints (:func:`is_junk_entity`) are also
+    dropped.
+    """
     if not obj.get("related", False):
         return None
     rel_type = str(obj.get("rel_type") or "").strip()
@@ -303,8 +373,20 @@ def _coerce_typing(
         # Off-list label — the consumers can't sign it; skip rather than write a
         # neutral nexus that adds no signal.
         return None
-    subject = str(obj.get("subject") or fallback_subject).strip()
-    object_ = str(obj.get("object") or fallback_object).strip()
+    raw_subject = str(obj.get("subject") or fallback_subject).strip()
+    raw_object = str(obj.get("object") or fallback_object).strip()
+    if not raw_subject or not raw_object:
+        return None
+    # D3 — DROP true junk endpoints, then CANONICALIZE (demonym → country, HTML
+    # strip, alias merge) so the nexus is built over the canonical referents.
+    if is_junk_entity(raw_subject) or is_junk_entity(raw_object):
+        return None
+    subject, _ = canonicalize_entity(raw_subject, "entity")
+    object_, _ = canonicalize_entity(raw_object, "entity")
+    # canonicalize_entity returns "" for a fully-stripped-away / junk-collapsed
+    # name — drop. A demonym collapse can also make subject == object (the
+    # "Israel leader of Israeli" / "Iran supplies weapons to Iranian" class):
+    # that is a self-loop, not a relationship — DROP it.
     if not subject or not object_ or subject.lower() == object_.lower():
         return None
     intermediary = obj.get("intermediary")
@@ -314,16 +396,49 @@ def _coerce_typing(
     # SELECT-or-null enforcement: an intermediary survives ONLY if it is one of
     # the offered candidates (case-insensitive) and is distinct from both
     # endpoints. Anything else (a hallucinated proxy, or one returned when no
-    # candidates were offered) is nulled — the relationship stays direct.
+    # candidates were offered) is nulled — the relationship stays direct. The
+    # offered-set comparison is on the RAW offered names (the typer copies them
+    # verbatim); the surviving intermediary is then canonicalized like the
+    # endpoints and re-checked for collision / junk.
     if intermediary is not None:
         _allowed = {c.strip().lower() for c in allowed_intermediaries if c.strip()}
-        if (
-            intermediary.lower() not in _allowed
-            or intermediary.lower() == subject.lower()
-            or intermediary.lower() == object_.lower()
-        ):
+        if intermediary.lower() not in _allowed:
             intermediary = None
-    polarity = _canonical_polarity(rel_type, obj.get("polarity"))
+        elif is_junk_entity(intermediary):
+            intermediary = None
+        else:
+            canon_inter, _ = canonicalize_entity(intermediary, "entity")
+            if (
+                not canon_inter
+                or canon_inter.lower() == subject.lower()
+                or canon_inter.lower() == object_.lower()
+            ):
+                intermediary = None
+            else:
+                intermediary = canon_inter
+    # D14 — intent first (it drives the deterministic polarity). Validate against
+    # the closed intent set; an unknown intent is resolved from the rel_type
+    # table sign below.
+    intent = str(obj.get("intent") or "").strip().lower()
+    if intent not in _VALID_INTENTS:
+        intent = ""  # unknown → let polarity_from fall back to the rel_type table
+    # D14 SPORTS GATE — a hostile typing over a sports/fixture co-mention is a
+    # false antagonism (World-Cup group draw ≠ geopolitics). Downgrade it to a
+    # neutral co-occurrence so the signed graph is not poisoned.
+    if intent == "hostile" and _is_sports_context(evidence_text):
+        intent = "neutral"
+        rel_type = "CoOccursWith" if "CoOccursWith" in ALLOWED_REL_TYPES else rel_type
+        logger.info(
+            "relationship_reifier.sports_gate downgraded hostile pair=%s/%s",
+            subject, object_,
+        )
+    # D14 — polarity is now a PURE function of (intent, rel_type); the LLM's free
+    # polarity integer is no longer consulted (it was the contradiction source).
+    polarity = _canonical_polarity(rel_type, intent)
+    # Backfill a still-empty intent FROM the resolved sign so the row carries a
+    # coherent intent string (and intent ⇔ polarity stay consistent).
+    if not intent:
+        intent = "hostile" if polarity < 0 else ("supportive" if polarity > 0 else "neutral")
     channel = str(obj.get("channel") or "direct").strip().lower()
     if channel not in _VALID_CHANNELS:
         channel = "proxy" if intermediary else "direct"
@@ -331,9 +446,6 @@ def _coerce_typing(
     # was nulled (hallucinated / not offered), the relationship is direct.
     if channel == "proxy" and not intermediary:
         channel = "direct"
-    intent = str(obj.get("intent") or "").strip().lower()
-    if intent not in _VALID_INTENTS:
-        intent = "hostile" if polarity < 0 else ("supportive" if polarity > 0 else "neutral")
     try:
         confidence = float(obj.get("confidence", 0.6))
     except (TypeError, ValueError):
@@ -553,6 +665,7 @@ async def run_method(
     written = 0
     superseded = 0
     degraded = 0
+    skipped_endpoints = 0  # D3: candidate pairs dropped as junk / demonym self-loop
     budget_paused = False
 
     for cand in candidates:
@@ -567,8 +680,26 @@ async def run_method(
                 budget_paused = True
                 break
 
-        source = str(cand["source_entity"])
-        target = str(cand["target_entity"])
+        raw_source = str(cand["source_entity"])
+        raw_target = str(cand["target_entity"])
+        # D3 EARLY GATE — drop junk endpoints and canonicalize the candidate pair
+        # BEFORE spending an LLM call. A demonym pair ("Iran" / "Iranian") both
+        # canonicalize to "Iran" → a self-loop, never a relationship; a junk
+        # endpoint ("TV") is dropped. This kills the "Israel leader of Israeli" /
+        # "Iran supplies weapons to Iranian" class at the cheapest point. The
+        # final _coerce_typing canon pass still re-guards the LLM's own
+        # subject/object (it may re-name them), so this is a fast pre-filter, not
+        # the only gate.
+        if is_junk_entity(raw_source) or is_junk_entity(raw_target):
+            skipped_endpoints += 1
+            continue
+        c_source, _ = canonicalize_entity(raw_source, "entity")
+        c_target, _ = canonicalize_entity(raw_target, "entity")
+        if not c_source or not c_target or c_source.lower() == c_target.lower():
+            skipped_endpoints += 1
+            continue
+        source = c_source
+        target = c_target
         facts_ctx: list[dict[str, Any]] = []
         intermediaries: list[str] = []
         if pool is not None:
@@ -633,6 +764,7 @@ async def run_method(
             fallback_subject=source,
             fallback_object=target,
             allowed_intermediaries=intermediaries,
+            evidence_text=str(cand.get("evidence_text") or ""),
         )
         if payload is None:
             # Model said no real relationship, or shape unusable — not a
@@ -644,6 +776,11 @@ async def run_method(
         # else now. Mirrors fact_extractor stamping valid_from at event time.
         ev = cand.get("produced_at")
         payload.valid_from = ev if isinstance(ev, datetime) else now
+        # D15 — gather the originating signal/fact UUIDs (the co-occurrence
+        # edge's derived_from) so the nexus carries real provenance into the
+        # tier. These are passed to write_nexus as source_signal_ids (Agent D's
+        # storage populates BOTH derived_from + source_signal_ids columns); we
+        # also stamp the payload field so the row is populated pre-merge.
         derived = [u for u in (cand.get("derived_from") or []) if isinstance(u, UUID)]
         payload.source_signal_ids = list(derived)
 
@@ -675,6 +812,7 @@ async def run_method(
                     analyst_ctx=actx,
                     payload=payload,
                     derived_from=derived,
+                    source_signal_ids=derived,  # D15: populate BOTH columns
                 )
                 if out is not None:
                     written += 1
@@ -702,6 +840,7 @@ async def run_method(
         written=written,
         superseded=superseded,
         degraded=degraded,
+        skipped_endpoints=skipped_endpoints,
         budget_paused=budget_paused,
         target_id=target_id,
     )
@@ -715,6 +854,7 @@ def _build_summary(
     written: int,
     superseded: int,
     degraded: int,
+    skipped_endpoints: int = 0,
     budget_paused: bool,
     target_id: str | None,
 ) -> FindingPayload:
@@ -736,6 +876,7 @@ def _build_summary(
         body=(
             f"candidates={n_candidates} typed={typed} written={written} "
             f"superseded={superseded} degraded={degraded} "
+            f"skipped_endpoints={skipped_endpoints} "
             f"budget_paused={budget_paused}"
         )[:65536],
         confidence=1.0,
@@ -748,6 +889,7 @@ def _build_summary(
             "written": written,
             "superseded": superseded,
             "degraded": degraded,
+            "skipped_endpoints": skipped_endpoints,
             "budget_paused": budget_paused,
         },
     )

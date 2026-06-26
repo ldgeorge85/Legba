@@ -91,6 +91,9 @@ from .writes import (
     write_fact,
     write_nexus,
     write_journal,
+    collapse_open_triple,
+    supersede_prior_facts,
+    supersede_prior_nexuses,
     supersede_prior_consolidation,
 )
 from .budget import BudgetLedgerRow, compute_cost_usd, record_budget
@@ -162,6 +165,9 @@ __all__ = [
     "write_fact",
     "write_nexus",
     "write_journal",
+    "collapse_open_triple",
+    "supersede_prior_facts",
+    "supersede_prior_nexuses",
     "supersede_prior_consolidation",
     # L-114 — DLQ
     "OutputDeadLetterEntry",
