@@ -154,8 +154,12 @@ if [ "${DO_TEARDOWN}" -eq 1 ]; then
     warn "project is the REAL 'legba' stack — refusing 'down -v'."
     info "only-instance rule: the live volumes are NEVER destroyed by this tool."
     info "stopping containers (volumes preserved; scheduler 45s grace honored)..."
-    dc_runtime stop
-    ok "legba stopped. Volumes intact. Restart with: deploy/deploy.sh (no flags)."
+    # Stop EVERY container in the project regardless of compose profile — a
+    # `--profile runtime stop` alone misses profile-gated services (e.g. the
+    # dapr-workflow-worker), leaving a straggler holding ports/state.
+    docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" \
+      | xargs -r docker stop
+    ok "legba stopped (all services). Volumes intact. Restart: docker compose -p legba start"
     exit 0
   fi
 
@@ -195,18 +199,17 @@ if [ "${IS_REAL}" -eq 0 ]; then
 fi
 ok "docker + compose + compose-files + baseline + env file present"
 
-# Required boot env keys (from the audit's required-env inventory). These must
-# be PRESENT (non-empty) in the env file or the stack fails closed at boot.
+# Required boot env keys = the operator-must-provide SECRETS/config that live in
+# the env file. The substrate CONNECTION params (PG/NATS/Qdrant/Redis host+port,
+# the app DB name) are NOT here: docker-compose's `environment:` block supplies
+# them from the service names (postgres/nats/qdrant/redis) with sane defaults, so
+# requiring them in .env would falsely fail a valid env. These must be PRESENT
+# (non-empty) in the env file or the stack fails closed at boot.
 REQUIRED_KEYS=(
-  LEGBA_DATA_REGISTRY_DSN
   LEGBA_DATA_MASTER_KEY
-  LEGBA_DATA_PG_HOST LEGBA_DATA_PG_PORT LEGBA_DATA_PG_USER
-  LEGBA_DATA_PG_PASSWORD LEGBA_DATA_PG_DB
-  LEGBA_DATA_QDRANT_HOST LEGBA_DATA_QDRANT_PORT
-  LEGBA_DATA_REDIS_HOST LEGBA_DATA_REDIS_PORT
-  LEGBA_DATA_NATS_URL
   LEGBA_DAPR_PG_CONNSTRING
   LEGBA_REGISTRY_API_TOKEN
+  LEGBA_REGISTRY_SIGNING_KEY
   LEGBA_GEOCODER_CONTACT_EMAIL
   LEGBA_PUBLIC_DOMAIN
   LEGBA_BASIC_AUTH_HASH
