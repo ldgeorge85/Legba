@@ -35,6 +35,7 @@ set unless ``force_redetect=True``.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Mapping
 
@@ -138,6 +139,54 @@ _TEXT_FIELDS = ("text", "title", "summary", "raw_body")
 
 
 # ---------------------------------------------------------------------------
+# D30: ISO-639-1 normalization + short ALL-CAPS misdetect guard
+# ---------------------------------------------------------------------------
+
+
+def normalize_lang(code: Any) -> str:
+    """Normalize a BCP-47 / region-tagged code to its ISO-639-1 base.
+
+    ``en-US`` → ``en``; ``zh-Hans`` / ``zh_CN`` → ``zh``; ``EN`` → ``en``;
+    ``pt-BR`` → ``pt``. The base subtag is lower-cased; region / script
+    subtags (after a ``-`` or ``_``) are dropped. ``und`` and empties pass
+    through as ``"und"``. This is the canonical surface every code path stamps
+    through so the typed ``signals.language`` column never holds an ``en-US``.
+    """
+    if not isinstance(code, str):
+        return UND
+    base = code.strip().lower().replace("_", "-").split("-", 1)[0]
+    if not base or base == "unknown":
+        return UND
+    return base
+
+
+# Short, ALL-CAPS headlines (wire-service slugs, NGO press-release headers like
+# Amnesty's "URGENT ACTION: ...") strip the case + diacritic signal langdetect's
+# char-n-gram model relies on, so it confidently mislabels English as de / nl /
+# af. Below this length AND when the alpha text is all-uppercase we abstain to
+# ``und`` rather than trust a high-confidence-but-wrong guess.
+_ALLCAPS_MIN_CHARS = 40
+_ALPHA_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+def is_short_allcaps_headline(text: str, *, min_chars: int = _ALLCAPS_MIN_CHARS) -> bool:
+    """True when ``text`` is a short, all-uppercase headline (D30 misdetect guard).
+
+    Requires at least 2 cased letters so a numeric / symbol-only string isn't
+    flagged; a string with ANY lowercase letter is not all-caps and returns
+    False (a normal sentence-cased headline is left to the detector).
+    """
+    if not text:
+        return False
+    if len(text.strip()) >= min_chars:
+        return False
+    letters = [ch for ch in text if _ALPHA_RE.match(ch)]
+    if len(letters) < 2:
+        return False
+    return all(ch.isupper() for ch in letters)
+
+
+# ---------------------------------------------------------------------------
 # Detector adapter
 # ---------------------------------------------------------------------------
 
@@ -208,7 +257,7 @@ class _DetectorAdapter:
         iso = _lingua_iso(lang)
         if iso is None:
             return _UNKNOWN
-        return iso, conf
+        return normalize_lang(iso), conf
 
     def _detect_langdetect(self, text: str) -> tuple[str, float]:
         try:
@@ -227,9 +276,12 @@ class _DetectorAdapter:
             return _UNKNOWN
         if not iso or iso == "unknown":                     # pragma: no cover
             return _UNKNOWN
-        # langdetect returns codes like 'zh-cn'; normalise to the first
-        # two letters for consistency with the rest of the pipeline.
-        iso = iso.lower().split("-", 1)[0]
+        # langdetect returns codes like 'zh-cn'; normalise to the ISO-639-1
+        # base (drops region/script subtags) for consistency with the rest of
+        # the pipeline. D30: en-US/zh-cn → en/zh.
+        iso = normalize_lang(iso)
+        if iso == UND:                                      # pragma: no cover
+            return _UNKNOWN
         return iso, conf
 
 
@@ -324,6 +376,21 @@ class LanguageDetectHandler:
         # --- 1. Idempotency check ------------------------------------------
         existing = signal.payload.get(PAYLOAD_LANGUAGE_KEY)
         if existing and not self._config.force_redetect:
+            # D30: an upstream source may have stamped a region-tagged hint
+            # (e.g. `en-US` from a source's `language_hint`). Don't re-detect,
+            # but DO normalize the stored value to its ISO-639-1 base so the
+            # typed column never holds `en-US`. Re-stamp only when normalization
+            # actually changes the value (keeps the idempotent fast path).
+            normalized = normalize_lang(existing)
+            if normalized != existing:
+                conf = signal.payload.get(PAYLOAD_LANGUAGE_CONFIDENCE_KEY)
+                return self._stamp(
+                    signal,
+                    lang=normalized,
+                    conf=float(conf) if isinstance(conf, (int, float)) else 0.0,
+                    reason="normalized_existing",
+                    ctx=ctx,
+                )
             self._signals_out += 1
             self._last_success_at = datetime.now(tz=timezone.utc)
             return signal
@@ -338,6 +405,19 @@ class LanguageDetectHandler:
                 lang=UND,
                 conf=0.0,
                 reason="short_text",
+                ctx=ctx,
+            )
+
+        # --- 3b. Short ALL-CAPS headline guard (D30) -----------------------
+        # langdetect confidently mis-labels short upper-cased headlines (NGO
+        # press slugs, wire-service all-caps) — the Amnesty English→de class.
+        # Abstain to `und` rather than emit a high-confidence wrong language.
+        if is_short_allcaps_headline(text):
+            return self._stamp(
+                signal,
+                lang=UND,
+                conf=0.0,
+                reason="short_allcaps",
                 ctx=ctx,
             )
 
@@ -444,6 +524,10 @@ class LanguageDetectHandler:
         regardless of the detected language.  Now both surfaces carry
         the result; downstream readers prefer the typed column.
         """
+        # D30: normalize at the single write surface so neither payload nor the
+        # typed `language_hint`/`signals.language` column can ever hold a
+        # region-tagged code (en-US) — UND passes through unchanged.
+        lang = normalize_lang(lang) if lang != UND else UND
         new_payload = dict(signal.payload)
         new_payload[PAYLOAD_LANGUAGE_KEY] = lang
         new_payload[PAYLOAD_LANGUAGE_CONFIDENCE_KEY] = float(conf)
@@ -506,4 +590,6 @@ __all__ = [
     "PAYLOAD_LANGUAGE_KEY",
     "PAYLOAD_LANGUAGE_CONFIDENCE_KEY",
     "UND",
+    "normalize_lang",
+    "is_short_allcaps_headline",
 ]

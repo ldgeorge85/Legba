@@ -427,6 +427,78 @@ def _render_user_prompt(
 # ---------------------------------------------------------------------------
 
 
+def _title_from_text(text: str, *, fallback_title: str) -> str:
+    """D27: derive an LLM-authored title from free-text content.
+
+    The static ``fallback_title`` ("Assessment for country_g20_XX") is a
+    placeholder that surfaces on the product UI as a non-title; when the LLM
+    DID author prose (even unparseable JSON / a bare narrative), there is almost
+    always a real headline in it. Prefer, in order:
+      1. a leading markdown heading line (``# ...`` / ``## ...``);
+      2. a ``BLUF:`` / ``Bottom line:`` lead-in (strip the label, take the line);
+      3. the first non-empty, non-JSON-punctuation line.
+    Falls back to ``fallback_title`` only when no usable line exists (e.g. the
+    LLM returned whitespace). Returned trimmed + length-capped to the column.
+    """
+    if not text:
+        return fallback_title[:2048]
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Skip a bare JSON-envelope open/close brace line.
+        if line in ("{", "}", "[", "]"):
+            continue
+        # Markdown heading → use the heading text.
+        if line.startswith("#"):
+            heading = line.lstrip("#").strip()
+            if heading:
+                return heading[:2048]
+            continue
+        # BLUF / bottom-line lead-in → strip the label.
+        low = line.lower()
+        for label in ("bluf:", "bottom line:", "bottom-line:", "**bluf:**"):
+            if low.startswith(label):
+                rest = line[len(label):].strip().lstrip("*").strip()
+                if rest:
+                    return rest[:2048]
+        # First usable narrative line — strip a leading markdown emphasis.
+        cleaned = line.strip("*").strip()
+        if cleaned and cleaned not in ("{", "}"):
+            return cleaned[:2048]
+    return fallback_title[:2048]
+
+
+def _unwrap_envelope_body(body: str) -> str:
+    """D27: if a body string is itself a raw ``{title, body}`` JSON envelope,
+    unwrap it so the body column holds the rendered markdown, not the JSON.
+
+    Some LLM responses double-wrap: the outer parse succeeds but the ``body``
+    field is a stringified ``{"title": ..., "body": ...}`` object (or a fenced
+    JSON block). Returns the inner ``body`` (markdown) when that shape is
+    detected; otherwise returns the input unchanged.
+    """
+    if not body:
+        return body
+    candidate = body.strip()
+    if candidate.startswith("```"):
+        candidate = candidate.strip("`")
+        if candidate.lower().startswith("json"):
+            candidate = candidate[4:]
+        candidate = candidate.strip()
+    if not candidate.startswith("{"):
+        return body
+    try:
+        inner = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return body
+    if isinstance(inner, dict) and "body" in inner:
+        inner_body = inner.get("body")
+        if isinstance(inner_body, str) and inner_body.strip():
+            return inner_body
+    return body
+
+
 def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
     """Parse the LLM's JSON response into a :class:`FindingPayload`.
 
@@ -436,6 +508,12 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
       * malformed JSON — falls back to an "unstructured" finding whose
         body carries the raw LLM output so the operator can re-curate.
       * field-shape errors — same fallback.
+
+    D27 (product surface): on every fallback path, derive the title from the
+    LLM-authored prose (``_title_from_text``) instead of the static
+    "Assessment for country_g20_XX" placeholder; and unwrap a double-wrapped
+    ``{title, body}`` JSON envelope (``_unwrap_envelope_body``) so the body
+    column holds rendered markdown rather than raw JSON.
 
     Failure is non-fatal here on purpose: the runtime's
     ``write_analyst_output`` validates against the iglu schema and
@@ -468,25 +546,35 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         parsed = json.loads(candidate)
     except (json.JSONDecodeError, ValueError) as exc:
         logger.warning("inline_target.finding.parse_failed err=%s", exc)
+        # D27: the LLM authored prose that didn't parse as JSON — keep its text
+        # as the body (rendered markdown) and lift a real title from it instead
+        # of the static placeholder.
         return FindingPayload(
-            title=fallback_title[:200],
-            body=raw[:32000],
+            title=_title_from_text(raw, fallback_title=fallback_title),
+            body=raw[:65536],
             confidence=0.3,
             tags=["unstructured"],
         )
 
     if not isinstance(parsed, dict):
+        body = str(parsed)
         return FindingPayload(
-            title=fallback_title[:200],
-            body=str(parsed)[:32000],
+            title=_title_from_text(body, fallback_title=fallback_title),
+            body=body[:65536],
             confidence=0.3,
             tags=["unstructured"],
         )
 
     try:
+        body = _unwrap_envelope_body(str(parsed.get("body") or ""))
+        # D27: if the LLM gave a usable title, keep it; otherwise lift one from
+        # the rendered body before falling back to the static placeholder.
+        title = str(parsed.get("title") or "").strip()
+        if not title:
+            title = _title_from_text(body, fallback_title=fallback_title)
         return FindingPayload(
-            title=str(parsed.get("title") or fallback_title)[:2048],
-            body=str(parsed.get("body") or "")[:65536],
+            title=title[:2048],
+            body=body[:65536],
             confidence=float(parsed.get("confidence", 0.5)),
             evidence=[str(e) for e in (parsed.get("evidence") or [])][:50],
             tags=[str(t) for t in (parsed.get("tags") or [])][:50],
@@ -495,8 +583,8 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
     except Exception as exc:                            # pragma: no cover
         logger.warning("inline_target.finding.coerce_failed err=%s", exc)
         return FindingPayload(
-            title=fallback_title[:200],
-            body=raw[:32000],
+            title=_title_from_text(raw, fallback_title=fallback_title),
+            body=raw[:65536],
             confidence=0.3,
             tags=["coerce_failed"],
         )

@@ -168,6 +168,85 @@ def test_resolved_by_label_is_exogenous():
     assert fa.RESOLVED_BY != cal._FORECAST_RESOLVER_SOURCE
 
 
+# ---------------------------------------------------------------------------
+# D9 — forecast honesty: epsilon-clamp, climatology-shrink, degeneracy abstain
+# ---------------------------------------------------------------------------
+
+
+def test_clamp_p_never_asserts_0_or_1():
+    # A saturated tail (λ huge → p≈1) is pulled back to 1-eps; a dead one (λ=0 →
+    # p=0) up to eps. The forecast keeps a hedge in BOTH directions.
+    assert fa.clamp_p(1.0) == 1.0 - fa.P_EPSILON
+    assert fa.clamp_p(0.0) == fa.P_EPSILON
+    assert fa.clamp_p(fa.poisson_tail_p(50.0)) == 1.0 - fa.P_EPSILON
+    # An interior probability is untouched.
+    assert abs(fa.clamp_p(0.5) - 0.5) < 1e-12
+    # Custom epsilon honored.
+    assert fa.clamp_p(1.0, epsilon=0.05) == 0.95
+    assert fa.clamp_p(0.0, epsilon=0.05) == 0.05
+
+
+def test_derate_lambda_shrinks_toward_climatology():
+    # A high recent λ (saturating) blended 50/50 with a low climatology λ lands
+    # halfway — so the issued p is pulled OFF saturation.
+    lam = fa.derate_lambda(10.0, 0.0, w=0.5)
+    assert abs(lam - 5.0) < 1e-12
+    # w=0 ⇒ pure recent; w=1 ⇒ pure climatology.
+    assert fa.derate_lambda(10.0, 2.0, w=0.0) == 10.0
+    assert fa.derate_lambda(10.0, 2.0, w=1.0) == 2.0
+    # The default weight is the documented 0.5.
+    assert fa.CLIMATOLOGY_SHRINK_W == 0.5
+    assert abs(fa.derate_lambda(8.0, 0.0) - 4.0) < 1e-12
+    # Negative inputs floored; weight clamped into [0,1].
+    assert fa.derate_lambda(-3.0, -1.0, w=0.5) == 0.0
+    assert fa.derate_lambda(4.0, 0.0, w=2.0) == 0.0   # w clamped to 1 → all clim
+
+
+def test_lambda_from_p_is_poisson_tail_inverse():
+    # _lambda_from_p(poisson_tail_p(λ)) round-trips λ for a regular value.
+    lam = 1.3
+    p = fa.poisson_tail_p(lam)
+    assert abs(fa._lambda_from_p(p) - lam) < 1e-9
+    assert fa._lambda_from_p(0.0) == 0.0
+
+
+def test_derate_lambda_desaturates_a_saturated_country():
+    # A country whose recent λ saturates p to ~1.0, with a modest climatology
+    # base rate, ends up with a NON-degenerate issued p after shrink + clamp.
+    p_base = 0.3
+    lam_recent = 12.0                       # poisson_tail_p ≈ 1.0 (saturated)
+    assert fa.poisson_tail_p(lam_recent) > 0.99
+    lam_clim = fa._lambda_from_p(p_base)
+    lam_eff = fa.derate_lambda(lam_recent, lam_clim, w=0.5)
+    p = fa.clamp_p(fa.poisson_tail_p(lam_eff))
+    # No longer a 1.0 certainty.
+    assert p < 1.0 - fa.P_EPSILON + 1e-12
+    assert p <= 1.0 - fa.P_EPSILON
+    assert p > fa.P_EPSILON
+
+
+def test_p_vector_degenerate_abstain():
+    # An all-{0,1} certainty vector (geography-dominated) is degenerate → abstain.
+    deg = [0.0, 1.0, 0.0, 1.0, 0.0]
+    assert fa.p_vector_is_degenerate(deg) is True
+    # Near-{0,1} after clamping is STILL degenerate (no genuine uncertainty).
+    near = [fa.P_EPSILON, 1.0 - fa.P_EPSILON] * 5
+    assert fa.p_vector_is_degenerate(near) is True
+    # An empty batch abstains (nothing to issue).
+    assert fa.p_vector_is_degenerate([]) is True
+
+
+def test_p_vector_non_degenerate_issues():
+    # A vector with enough genuinely-uncertain calls is NOT degenerate → issue.
+    mixed = [0.0, 1.0, 0.4, 0.55, 0.6]   # 3/5 = 60% uncertain ≥ 20% threshold
+    assert fa.p_vector_is_degenerate(mixed) is False
+    # Exactly at the threshold share is NOT degenerate (>= passes).
+    at_thresh = [0.5, 0.0, 0.0, 0.0, 0.0]   # 1/5 = 20% uncertain
+    assert fa.p_vector_is_degenerate(at_thresh) is False
+    # A stricter required share flips the same vector to degenerate.
+    assert fa.p_vector_is_degenerate(at_thresh, min_uncertain_share=0.5) is True
+
+
 def test_class_k_definition_frozen():
     # The forecaster does not get to invent its outcome vocabulary; the class is
     # the upstream-severity-stamped hazard catalogs.

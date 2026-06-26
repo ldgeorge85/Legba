@@ -148,7 +148,17 @@ pipeline:
         emit_graph_edges: false     # facts-first; AGE nexus edges off for now
         max_facts_per_signal: 30
     - kind: geocode
-      config: {}
+      config:
+        # D5: telegram messages carry their content in payload.text and the
+        # in-body place is surfaced by the upstream ner_multilingual filter
+        # (payload.entities) — both are in the geocode ladder's default
+        # infer_from, so the message's actual subject geo is resolved from the
+        # body. The publisher-origin (TLD) fallback is OFF here: the canonical
+        # URL host is `t.me`, whose `.me` ccTLD is Montenegro — the source of
+        # the spurious {ME} tag on every channel message. With it off, a
+        # message with no resolvable in-body place stays geo-unattributed
+        # (correct) rather than mis-tagged Montenegro.
+        tld_fallback: false
   media: reference
 
 deps:

@@ -83,6 +83,37 @@ _CADENCE_MIN_THRESHOLD_S = 90.0 * 60.0
 # 6-hourly source can't false-alarm.
 _SOURCE_CADENCE_MIN_THRESHOLD_S = 3.0 * 3600.0
 
+# OBS — per-SOURCE empty-streak escalation (D19). The cadence check above only
+# trips once a source crosses its (factor × poll-cron) signal-staleness window,
+# which for a 6-hourly source is many hours; meanwhile xinhua.world +
+# aljazeera.arabic sat returning HTTP-200-but-0-items for 15 DAYS while every
+# poll-outcome row logged health_state='healthy' — a slow-but-running feed that
+# is functionally DEAD. This check is the faster, source-specific signal: count
+# the source's most-recent CONSECUTIVE 'empty' poll outcomes (un-broken by any
+# productive poll or any 'error' row) and, once the run reaches
+# ``empty_streak_threshold``, emit a 'degraded'-flavoured alert (reusing the
+# analyst_outputs kind='alert' path — NO new table). It complements rather than
+# replaces the cadence check: a feed can be empty-streaked long before its
+# cadence window expires.
+_EMPTY_STREAK_ENV = "LEGBA_SOURCE_EMPTY_STREAK_THRESHOLD"
+_DEFAULT_EMPTY_STREAK = 5
+# How many recent poll-outcome rows per source the streak read pulls back. The
+# streak only counts leading 'empty' rows, so a window comfortably above the
+# threshold is enough to confirm the run and see the breaking row (if any).
+_EMPTY_STREAK_WINDOW = 20
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except ValueError:  # pragma: no cover — defensive
+        logger.warning("liveness_watchdog.bad_env %s=%r — using %s", name, raw, default)
+        return default
+
 
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name, "").strip()
@@ -106,6 +137,9 @@ class WatchdogConfig:
     # OBS: a per-analyst run is "stale" once it exceeds factor × its cron
     # interval (floored at _CADENCE_MIN_THRESHOLD_S).
     cadence_stall_factor: float = _DEFAULT_CADENCE_FACTOR
+    # OBS (D19): a source is escalated to 'degraded' once its most-recent
+    # consecutive 'empty' poll-outcome run reaches this length.
+    empty_streak_threshold: int = _DEFAULT_EMPTY_STREAK
 
     @classmethod
     def from_env(cls) -> "WatchdogConfig":
@@ -114,6 +148,7 @@ class WatchdogConfig:
             realert_every_s=_env_float(_REALERT_ENV, _DEFAULT_REALERT_MINUTES) * 60.0,
             check_interval_s=_env_float(_INTERVAL_ENV, _DEFAULT_CHECK_SECONDS),
             cadence_stall_factor=_env_float(_CADENCE_FACTOR_ENV, _DEFAULT_CADENCE_FACTOR),
+            empty_streak_threshold=_env_int(_EMPTY_STREAK_ENV, _DEFAULT_EMPTY_STREAK),
         )
 
 
@@ -155,6 +190,8 @@ class LivenessWatchdog:
         self._last_cadence_alert_at: dict[str, float] = {}
         # Per-source alert rate-limit (DQ-H5), keyed by source id → monotonic ts.
         self._last_source_alert_at: dict[str, float] = {}
+        # Per-source empty-streak alert rate-limit (D19), keyed by source id.
+        self._last_empty_streak_alert_at: dict[str, float] = {}
 
     # -- activity recording (subscription callbacks) --------------------
 
@@ -235,6 +272,15 @@ class LivenessWatchdog:
                     raise
                 except Exception as exc:  # pragma: no cover — never kill the loop
                     logger.warning("liveness_watchdog.source_check_error err=%s", exc)
+                # OBS — per-source empty-200 streak escalation (D19).
+                try:
+                    await self.check_source_empty_streak_once(time.monotonic())
+                except asyncio.CancelledError:  # pragma: no cover
+                    raise
+                except Exception as exc:  # pragma: no cover — never kill the loop
+                    logger.warning(
+                        "liveness_watchdog.empty_streak_check_error err=%s", exc
+                    )
 
     def _last_activity_at(self) -> float | None:
         candidates = [t for t in (self._last_signal_at, self._last_finding_at) if t is not None]
@@ -492,6 +538,167 @@ class LivenessWatchdog:
             source_id, age_h, thr_h,
         )
         await self._publish_alert(envelope)
+
+    # -- OBS: per-source empty-200 streak escalation (D19) ---------------
+
+    async def check_source_empty_streak_once(self, now_monotonic: float) -> list[str]:
+        """Escalate any source whose most-recent CONSECUTIVE 'empty' poll-outcome
+        run has reached ``empty_streak_threshold`` to a 'degraded' alert.
+
+        This catches the xinhua/aljazeera dead-15d class: a feed that keeps
+        firing HTTP-200-with-0-items, logs every poll health='healthy', and so
+        never registers as an error — yet is functionally dead. The cadence
+        check eventually trips on signal staleness, but for a 6-hourly source
+        that is many hours later; the empty-streak run reaches the threshold
+        much sooner. Leader-gated, boot-graced, rate-limited per source. Reuses
+        the analyst_outputs kind='alert' path — NO new table.
+        """
+        if self._pg is None:
+            return []
+        if self._is_leader is not None and not self._is_leader():
+            return []
+        if (now_monotonic - self._started_at) < self._cfg.stall_after_s:
+            return []
+        rows = await self._fetch_source_empty_streak_rows()
+        degraded = _evaluate_empty_streaks(
+            rows, threshold=self._cfg.empty_streak_threshold
+        )
+        alerted: list[str] = []
+        for source_id, streak, latest_at in degraded:
+            last = self._last_empty_streak_alert_at.get(source_id)
+            if last is not None and (now_monotonic - last) < self._cfg.realert_every_s:
+                continue
+            await self._emit_empty_streak_alert(source_id, streak, latest_at)
+            self._last_empty_streak_alert_at[source_id] = now_monotonic
+            alerted.append(source_id)
+        return alerted
+
+    async def _fetch_source_empty_streak_rows(self) -> list[dict[str, Any]]:
+        """The recent poll-outcome run per ACTIVE source, newest-first.
+
+        Pulls the last ``_EMPTY_STREAK_WINDOW`` ``source_poll_outcomes`` rows for
+        each active source (a productive poll writes no outcome row, so a
+        'success' breaks the empty run by ABSENCE — see _evaluate_empty_streaks
+        for why the signal feed is consulted, not just these rows). Each output
+        row is one outcome: ``{source_id, outcome, occurred_at}``.
+        """
+        # _EMPTY_STREAK_WINDOW is a trusted module-level int constant (not user
+        # input); inlined into the LATERAL LIMIT.
+        window = int(_EMPTY_STREAK_WINDOW)
+        async with self._pg.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT po.source_id    AS source_id,
+                       po.outcome      AS outcome,
+                       po.occurred_at  AS occurred_at,
+                       po.health_state AS health_state
+                FROM source_descriptors d
+                JOIN LATERAL (
+                    SELECT source_id, outcome, occurred_at, health_state
+                    FROM source_poll_outcomes
+                    WHERE source_id = d.descriptor_id
+                    ORDER BY occurred_at DESC
+                    LIMIT {window}
+                ) po ON TRUE
+                WHERE d.is_head AND d.state = 'active'
+                ORDER BY po.source_id, po.occurred_at DESC
+                """
+            )
+        return [dict(r) for r in rows]
+
+    async def _emit_empty_streak_alert(
+        self, source_id: str, streak: int, latest_at: Any
+    ) -> None:
+        when_s = ""
+        if isinstance(latest_at, datetime):
+            when_s = (
+                " (most recent empty poll "
+                f"{latest_at.astimezone(timezone.utc).isoformat(timespec='seconds')})"
+            )
+        title = f"Source degraded: {source_id} — {streak} consecutive empty polls"
+        body = (
+            f"Source '{source_id}' has returned {streak} consecutive empty polls "
+            f"(HTTP-200 but 0 new signals){when_s}, at/above the degraded "
+            f"threshold of {self._cfg.empty_streak_threshold}. Each poll logged "
+            "health='healthy', so it never registered as an error, but a feed "
+            "that keeps fetching cleanly and producing nothing is functionally "
+            "DEAD (the xinhua/aljazeera dead-15d class). Health state is "
+            "escalated to DEGRADED: re-probe the feed URL/cursor/filter — the "
+            "endpoint may have moved, the cursor may be over-trimming, or the "
+            "feed may genuinely be retired. Pause or repoint the source."
+        )
+        envelope = _cadence_envelope(
+            analyst_id=source_id, title=title, body=body, age_seconds=0.0
+        )
+        # Re-tag + carry the escalated health so subscribers can distinguish an
+        # empty-streak degradation from a hard cadence/source stall.
+        envelope["tags"] = [
+            "watchdog", "liveness", "source_degraded", "empty_streak", source_id,
+        ]
+        envelope["stale_source_id"] = source_id
+        envelope["health_state"] = "degraded"
+        envelope["empty_streak"] = int(streak)
+        # age_seconds isn't meaningful for a streak escalation — drop the field
+        # so it isn't misread as a 0-second-old signal.
+        envelope.pop("age_seconds", None)
+        logger.error(
+            "liveness_watchdog.source_degraded source=%s empty_streak=%d "
+            "threshold=%d — escalating to degraded",
+            source_id, streak, self._cfg.empty_streak_threshold,
+        )
+        await self._publish_alert(envelope)
+
+
+def _evaluate_empty_streaks(
+    rows: Any,
+    *,
+    threshold: int,
+) -> list[tuple[str, int, Any]]:
+    """Pure empty-streak decision over poll-outcome rows — no DB, unit-testable.
+
+    ``rows``: iterable of mappings with ``source_id``, ``outcome``
+    ('empty'|'error'), and ``occurred_at`` (tz-aware datetime), already grouped
+    per source and ordered NEWEST-FIRST (the SQL guarantees this). For each
+    source, count the leading run of consecutive 'empty' rows; the run breaks on
+    the first 'error' row. Returns ``(source_id, streak_len, newest_empty_at)``
+    for every source whose leading empty run is >= ``threshold``.
+
+    Note on 'success' polls: a PRODUCTIVE poll writes NO outcome row (it is
+    self-evidencing via its signals), so a recent success does not appear here
+    to break the run. That is acceptable for this detector by design — its whole
+    point is the xinhua/aljazeera case where there has been NO productive poll
+    for a long time; if a source were producing, the per-source cadence/signal
+    liveness would see fresh signals and this path is moot. We deliberately key
+    only on the contiguous-empty run so the detector stays a pure read over this
+    one table.
+    """
+    if threshold <= 0:
+        return []
+    degraded: list[tuple[str, int, Any]] = []
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for r in rows:
+        sid = r.get("source_id")
+        if not sid:
+            continue
+        if sid not in by_source:
+            by_source[sid] = []
+            order.append(sid)
+        by_source[sid].append(r)
+    for sid in order:
+        outcomes = by_source[sid]
+        # Rows already newest-first; count the leading 'empty' run.
+        streak = 0
+        newest_empty_at: Any = None
+        for r in outcomes:
+            if (r.get("outcome") or "") != "empty":
+                break
+            if newest_empty_at is None:
+                newest_empty_at = r.get("occurred_at")
+            streak += 1
+        if streak >= threshold:
+            degraded.append((sid, streak, newest_empty_at))
+    return degraded
 
 
 def _source_stall_diagnosis(row: dict[str, Any]) -> str:

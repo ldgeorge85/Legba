@@ -50,6 +50,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ._contract import Signal, SourceContext, SourceHealth
 from ._egress import guarded_async_client
+from ..filters._country_geometry import (
+    country_iso2_for_point,
+    representative_point,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -473,6 +477,15 @@ class GeoJSONSourceHandler:
         external_id = self._feature_external_id(feature, properties)
         title = _first_str(properties, _TITLE_KEYS) or external_id or "GeoJSON feature"
         geo_codes = _extract_geo(properties)
+        # D5: EONET (and other event feeds) ship an authoritative Point/Polygon
+        # geometry but NO ISO code in `properties` — so `_extract_geo` returned
+        # [] and `signal.geo` was empty for 694/697 EONET features. When the
+        # properties carry no geo code, reverse-geocode the feature geometry
+        # offline (point-in-country) and stamp the resolved ISO2.
+        if not geo_codes:
+            iso2 = _country_from_geometry(geometry)
+            if iso2:
+                geo_codes = [iso2]
         canonical = _first_str(properties, _URL_KEYS) or None
 
         # Re-wrap as a minimal, self-contained GeoJSON Feature so the UI
@@ -589,6 +602,23 @@ def _first_str(properties: dict[str, Any], keys: tuple[str, ...]) -> str:
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             return str(val)
     return ""
+
+
+def _country_from_geometry(geometry: Any) -> str | None:
+    """Reverse-geocode a GeoJSON geometry to an ISO-3166-1 alpha-2 country (D5).
+
+    Offline + deterministic (Natural-Earth admin-0 bbox + ray-casting, no
+    network). Used only as a fallback when the feature properties carry no ISO
+    geo code — e.g. NASA EONET, whose features are bare ``Point``s with an
+    event title but no country. Returns ``None`` for open-ocean / unmatched
+    points (a mid-Pacific cyclone has no country, which is correct).
+    """
+    if not isinstance(geometry, dict):
+        return None
+    pt = representative_point({"geometry": geometry})
+    if pt is None:
+        return None
+    return country_iso2_for_point(pt[0], pt[1])
 
 
 def _extract_geo(properties: dict[str, Any]) -> list[str]:

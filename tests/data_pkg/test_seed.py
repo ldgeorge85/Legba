@@ -140,6 +140,91 @@ def test_unknown_adapter_raises():
 
 
 # ---------------------------------------------------------------------------
+# D31 — coalition-aware conflicts: cross-side hostile, same-side allied (no DB)
+# ---------------------------------------------------------------------------
+
+
+async def _map_conflict_yaml(yaml_doc: str):
+    """Fetch+map an isolated conflict-only YAML through the adapter (no DB)."""
+    import tempfile
+    from pathlib import Path
+
+    from legba.data.seed import SeedContext
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "w.yaml"
+        p.write_text(yaml_doc, encoding="utf-8")
+        adapter = WorldBaselineSeedSource()
+        raw = await adapter.fetch(SeedContext(dry_run=True, options={"yaml_path": str(p)}))
+        return [x for x in adapter.map(raw) if isinstance(x, SeedNexus)]
+
+
+@pytest.mark.asyncio
+async def test_conflict_sides_no_within_side_hostile_edge():
+    """D31: the US-Israel-Iran war modelled with explicit ``sides`` emits HOSTILE
+    edges ONLY across sides (Iran vs US, Iran vs Israel) and NEVER between the
+    co-belligerent US + Israel — fixing the wrong "Israel in active conflict with
+    United States" nexuses. The same-side pair is ALLIED (+1) instead."""
+    nexuses = await _map_conflict_yaml(
+        "conflicts:\n"
+        "  - name: US-Israel-Iran war\n"
+        "    sides:\n"
+        "      - [Iran]\n"
+        "      - [United States, Israel]\n"
+        "    valid_from: 2026-02-28\n"
+    )
+    hostile = {
+        (n.subject.lower(), n.object.lower())
+        for n in nexuses
+        if n.rel_type == "InActiveConflictWith"
+    }
+    # Iran ↔ both belligerents (both directions) — the war is surfaced from any side.
+    assert ("iran", "united states") in hostile
+    assert ("iran", "israel") in hostile
+    assert ("united states", "iran") in hostile
+    assert ("israel", "iran") in hostile
+    # The 2 wrong edges are GONE: US and Israel are NOT at war with each other.
+    assert ("united states", "israel") not in hostile
+    assert ("israel", "united states") not in hostile
+    # Instead they are explicitly ALLIED (+1, both directions).
+    allied = {
+        (n.subject.lower(), n.object.lower())
+        for n in nexuses
+        if n.rel_type == "AlliedWith"
+    }
+    assert allied == {("united states", "israel"), ("israel", "united states")}
+    for n in nexuses:
+        if n.rel_type == "AlliedWith":
+            assert n.polarity == 1
+            assert n.intent == "alliance"
+        elif n.rel_type == "InActiveConflictWith":
+            assert n.polarity == -1
+            assert n.intent == "conflict"
+
+
+@pytest.mark.asyncio
+async def test_conflict_legacy_belligerents_still_all_pairs_hostile():
+    """D31 back-compat: the legacy flat ``belligerents`` form is unchanged —
+    every ordered pair is hostile (all-vs-all) and NO alliances are emitted."""
+    nexuses = await _map_conflict_yaml(
+        "conflicts:\n"
+        "  - name: All-vs-all\n"
+        "    belligerents: [A, B, C]\n"
+        "    valid_from: 2026-02-28\n"
+    )
+    hostile = {
+        (n.subject, n.object)
+        for n in nexuses
+        if n.rel_type == "InActiveConflictWith"
+    }
+    assert hostile == {
+        ("A", "B"), ("A", "C"), ("B", "A"),
+        ("B", "C"), ("C", "A"), ("C", "B"),
+    }
+    assert [n for n in nexuses if n.rel_type == "AlliedWith"] == []
+
+
+# ---------------------------------------------------------------------------
 # Migration 0034 — schema shape
 # ---------------------------------------------------------------------------
 

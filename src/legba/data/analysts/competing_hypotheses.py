@@ -181,6 +181,24 @@ _RESOLVED_BY_STATUS_TRANSITION: str = "status_transition"
 """The distinct, SELF-CONSISTENCY resolution-source label. NEVER conflated with
 the exogenous `subsequent_facts` / `operator:*` labels."""
 
+# D16 — the `subsequent_facts` resolver grades a forward-looking ("will…") ACH
+# thesis by a CHEAP LEXICAL PROXY: it scores the SUBSTRING direction (escalation
+# vs de-escalation vocabulary) of subsequent facts and matches it against the
+# thesis direction. That is NOT a falsifiable count over a frozen event class (as
+# the acute-forecast pilot is) — it is a keyword classifier that can confirm a
+# "will escalate" thesis purely because later headlines happen to contain
+# escalation words. So while it touches the world (unlike status_transition), it
+# is a WEAK/LEXICAL tier, not headline-exogenous. The calibration handler keys on
+# this exact label (`calibration_tracking._WEAK_LEXICAL_SOURCES`) to DEMOTE these
+# resolutions out of the headline exogenous Brier. The producer keeps the
+# existing ABSTAIN on undirected theses (below) so it never even MINTS a
+# lexically-graded outcome it cannot direction-classify.
+_RESOLVED_BY_SUBSEQUENT_FACTS: str = "subsequent_facts"
+"""WEAK / LEXICAL resolution-source label (D16). World-touching but graded by a
+substring direction proxy — DEMOTED out of the headline exogenous Brier by
+``calibration_tracking._WEAK_LEXICAL_SOURCES``. Distinct from the falsifiable
+`forecast_acute_exogenous` / `forecast_vs_actual` / `operator:*` sources."""
+
 # Consistency scale (Heuer's ACH notation mapped to integers). The LLM (or the
 # deterministic scorer) labels each (evidence, hypothesis) cell with one of these.
 _CONSISTENCY_SCALE: dict[str, int] = {
@@ -1010,7 +1028,8 @@ async def _resolve_hypotheses_against_subsequent_facts(
 ) -> tuple[int, int]:
     """Auto-resolve unresolved hypotheses against facts produced AFTER them.
 
-    This is the EXOGENOUS half of the calibration loop: an unresolved hypothesis
+    D16 — this is the WEAK/LEXICAL half of the calibration loop, NOT a falsifiable
+    exogenous grading: an unresolved hypothesis
     (``resolved_outcome IS NULL``) that is old enough (``RESOLUTION_MIN_AGE_DAYS``)
     is graded against the CURRENT facts about its entities that were produced
     SINCE the hypothesis was made — brand-new evidence the hypothesis was NOT
@@ -1019,10 +1038,13 @@ async def _resolve_hypotheses_against_subsequent_facts(
     came true (``resolved_outcome = 1``), if they oppose it did not
     (``resolved_outcome = 0``). Status-quo / undirected theses resolve as TRUE
     when the subsequent facts are directionally quiet, FALSE when they move
-    strongly. Stamped with ``resolved_by = 'subsequent_facts'`` and
+    strongly. Stamped with ``resolved_by = _RESOLVED_BY_SUBSEQUENT_FACTS``
+    (``'subsequent_facts'``, the WEAK/LEXICAL tier — demoted out of the headline
+    exogenous Brier by ``calibration_tracking._WEAK_LEXICAL_SOURCES``) and
     ``resolved_at = now``. An OPERATOR may instead stamp ``resolved_outcome``
-    directly (``resolved_by = 'operator:<id>'``) — this resolver never overwrites
-    an already-resolved row (the ``resolved_outcome IS NULL`` filter).
+    directly (``resolved_by = 'operator:<id>'``, a HEADLINE-exogenous source) —
+    this resolver never overwrites an already-resolved row (the
+    ``resolved_outcome IS NULL`` filter).
 
     Returns ``(resolved_count, scanned_count)``.
     """
@@ -1154,15 +1176,18 @@ async def _resolve_hypotheses_against_subsequent_facts(
 
         try:
             await conn.execute(
+                # D16 — stamped with the WEAK/LEXICAL label
+                # (`_RESOLVED_BY_SUBSEQUENT_FACTS`) so calibration_tracking
+                # DEMOTES it out of the headline exogenous Brier.
                 """
                 UPDATE hypotheses
                    SET resolved_outcome = $2,
                        resolved_at = $3,
-                       resolved_by = 'subsequent_facts',
+                       resolved_by = $4,
                        updated_at = $3
                  WHERE id = $1 AND resolved_outcome IS NULL
                 """,
-                hyp["id"], int(outcome), now,
+                hyp["id"], int(outcome), now, _RESOLVED_BY_SUBSEQUENT_FACTS,
             )
             resolved += 1
             resolved_true += int(outcome)

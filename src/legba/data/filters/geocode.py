@@ -41,22 +41,29 @@ Both backends are :mod:`geopy` clients wrapped in :func:`asyncio.to_thread`
 so the actor loop never blocks. The handler exposes a backend-agnostic
 :class:`GeocodeBackend` protocol so tests can inject deterministic stubs.
 
-Inference precedence
-====================
-``transform`` constructs a list of candidate query strings (in priority
-order) from the configured ``infer_from`` field list:
+Inference precedence (D5 ladder)
+================================
+The ladder is ordered so an IN-BODY place mention always beats the
+publisher's origin. ``transform`` runs, in order:
 
-1. **geo**: if ``signal.payload["geo"]["location_name"]`` is present,
-   geocode that directly.
-2. **title**: extract a country name (or ISO code) from
-   ``signal.payload["title"]`` via :mod:`pycountry`. Substring match
-   against the canonical country names + alpha-2 / alpha-3 codes.
-3. **raw_body**: same regex/pycountry sweep against the longer
-   ``raw_body`` field.
-4. **TLD fallback**: derive country from the ``signal.canonical_url`` (or
-   ``signal.payload["link"]``) — e.g. ``.br`` → Brazil. Honors
-   :data:`_TLD_TO_ISO2` plus the standard ccTLD mapping derivable from
-   :mod:`pycountry`.
+0. **geometry-first** (DQ-C1): an authoritative coordinate/geometry on the
+   payload (NWS Polygon, USGS/GDACS/NASA point) is attributed offline by
+   point-in-country and short-circuits everything below.
+1. **geo.location_name**: if ``signal.payload["geo"]["location_name"]`` is
+   present, geocode that directly.
+2. **entities** (in-body NER): the ``country`` / ``location`` -class
+   entities the upstream ner_multilingual filter stamped onto
+   ``payload.entities`` — the place the *story* is about.
+3. **title / text / raw_body** (in-body gazetteer): a country-name / ISO
+   sweep via :mod:`pycountry` over each configured text field — ``text`` is
+   the telegram/chat body. The first text hit wins.
+4. **TLD fallback (WEAK publisher-origin)**: ONLY when ``tld_fallback`` is
+   True AND every in-body candidate above failed. Derives country from the
+   ``signal.canonical_url`` (or ``payload["link"]``) ccTLD — e.g. ``.br`` →
+   Brazil. This is a deliberately demoted last resort: a ``.uk`` URL means
+   the *publisher* is British, and ``t.me`` (telegram) resolves to Montenegro
+   (``.me``) — neither describes the story, so it only fires when nothing
+   in the body resolved.
 
 The first candidate that the backend successfully resolves wins. If
 ``signal.payload["geo"]`` already has ``country`` + ``lat`` + ``lon``,
@@ -566,10 +573,29 @@ class GeocodeConfig(BaseModel):
 
     # Priority list of payload fields to search for location hints. Order
     # matters — earlier entries win.
+    #
+    # D5: ``entities`` and ``text`` are now in the default list. ``entities``
+    # reads the in-body NER place mentions (``country`` / ``location`` class
+    # entities stamped by the upstream ner_multilingual filter) and ``text``
+    # is the telegram/chat body field (telegram signals carry their content in
+    # ``payload.text``, not ``title``/``raw_body``). Sweeping an in-body place
+    # mention BEFORE the publisher-origin (TLD) fallback is what fixes the
+    # Venezuela-0/141 and the telegram-``{ME}`` mis-tags: the article is about
+    # Caracas, not about Montenegro (``t.me`` → ``.me``) or the BBC's ``.uk``.
     infer_from: list[str] = Field(
-        default_factory=lambda: ["geo", "title", "raw_body"],
+        default_factory=lambda: ["geo", "entities", "title", "text", "raw_body"],
         min_length=1,
     )
+
+    # D5: publisher-origin (URL ccTLD) is a WEAK signal — a ``.uk`` URL says
+    # the *publisher* is British, not that the *story* is about Britain, and a
+    # ``t.me`` URL says nothing about the message's subject at all. When True
+    # (default) the TLD is consulted ONLY after every in-body place candidate
+    # has failed to resolve; when False the publisher-origin fallback is off
+    # entirely (recommended for aggregator / chat sources like telegram whose
+    # canonical URL host carries no story-geo signal — operators flip this per
+    # descriptor). Set independently of ``infer_from``.
+    tld_fallback: bool = True
 
     # When True, skip the handler entirely for signals that already have
     # a populated geo block (default; idempotent stream).
@@ -591,6 +617,26 @@ _TLD_TO_ISO2: dict[str, str] = {
     "tv": "TV",         # Tuvalu
     "me": "ME",         # Montenegro
 }
+
+# D5: aggregator / chat / social hosts whose ccTLD is meaningful for the
+# PLATFORM but says nothing about a message's story-geo. ``t.me`` /
+# ``telegram.me`` resolve to Montenegro (``.me``) — the source of the spurious
+# {ME} tag on every telegram channel message. We skip the TLD-origin
+# derivation for these hosts entirely (the in-body NER ladder still runs).
+# Matched as a full host suffix, so ``t.me`` and ``www.t.me`` both hit.
+_NON_GEO_AGGREGATOR_HOSTS: frozenset[str] = frozenset({
+    "t.me",
+    "telegram.me",
+    "telegram.org",
+    "twitter.com",
+    "x.com",
+    "youtube.com",
+    "youtu.be",
+    "facebook.com",
+    "fb.com",
+    "reddit.com",
+    "medium.com",
+})
 
 # Allowed-list for the "very long" gTLDs we do NOT want to treat as ccTLDs.
 _NON_CC_TLD: frozenset[str] = frozenset({
@@ -713,6 +759,54 @@ def extract_country_iso2_from_text(text: str) -> str | None:
     return None
 
 
+# D5: NER entity classes whose text is a place we can hand to the geocoder.
+# ``country`` resolves to a nation directly; ``location`` is a city / region /
+# landmark the backend can resolve to a finer point. We deliberately exclude
+# ``person`` / ``organization`` / etc.
+_PLACE_ENTITY_CLASSES: frozenset[str] = frozenset({"country", "location"})
+
+
+def place_candidates_from_entities(entities: Any) -> list[str]:
+    """Extract in-body place mentions from an NER ``entities`` list.
+
+    Reads the ``payload.entities`` list the upstream ner_multilingual filter
+    stamps (each item ``{"class": ..., "text": ...}``). Returns the de-duped
+    place-bearing entity texts in list order, ``country``-class first (a named
+    country is a stronger, less ambiguous geocode query than a bare
+    ``location`` like "Springfield"). Non-place classes are ignored.
+
+    This is the step that fixes Venezuela-0/141: a Reuters / telegram story
+    *about* Caracas carries a ``location``/``country`` entity for it even when
+    the publisher origin (``.uk`` / ``t.me``) says nothing about the subject.
+    """
+    if not isinstance(entities, (list, tuple)):
+        return []
+    countries: list[str] = []
+    others: list[str] = []
+    seen: set[str] = set()
+    for ent in entities:
+        if not isinstance(ent, dict):
+            continue
+        cls = str(ent.get("class") or "").strip().lower()
+        if cls not in _PLACE_ENTITY_CLASSES:
+            continue
+        text = ent.get("text")
+        if not isinstance(text, str):
+            continue
+        text = text.strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if cls == "country":
+            countries.append(text)
+        else:
+            others.append(text)
+    return countries + others
+
+
 def country_iso2_from_tld(url: str | None) -> str | None:
     """Derive an ISO2 country from a URL's TLD.
 
@@ -729,7 +823,14 @@ def country_iso2_from_tld(url: str | None) -> str | None:
     host = (parsed.netloc or parsed.path or "").split(":", 1)[0].lower()
     if not host:
         return None
+    # D5: aggregator / chat / social hosts carry no story-geo in their ccTLD
+    # (``t.me`` → Montenegro). Skip the origin derivation for them — full-host
+    # OR registrable-suffix match so ``www.t.me`` and ``t.me`` both hit.
     parts = host.split(".")
+    if host in _NON_GEO_AGGREGATOR_HOSTS or (
+        len(parts) >= 2 and ".".join(parts[-2:]) in _NON_GEO_AGGREGATOR_HOSTS
+    ):
+        return None
     if len(parts) < 2:
         return None
     tld = parts[-1]
@@ -1054,52 +1155,72 @@ class GeocodeHandler:
         return None
 
     def _derive_candidates(self, signal: Signal) -> list[str]:
-        """Return a priority-ordered, de-duplicated candidate list."""
+        """Return a priority-ordered, de-duplicated candidate list.
+
+        D5 ordering: every in-body candidate (geo.location_name, NER place
+        entities, text-field country sweep) is appended FIRST, in the
+        configured ``infer_from`` order. The publisher-origin (TLD) fallback
+        is appended LAST and ONLY when ``tld_fallback`` is enabled — so a
+        ``.uk`` / ``t.me`` host can never beat an in-body place mention.
+        """
         out: list[str] = []
-        payload = signal.payload or {}
-        for field_name in self._config.infer_from:
-            candidate = self._candidate_for_field(field_name, signal, payload)
+
+        def _add(candidate: str | None) -> None:
             if candidate and candidate not in out:
                 out.append(candidate)
-        # Always try the TLD fallback last if nothing else hit.
-        tld_iso = country_iso2_from_tld(
-            signal.canonical_url or payload.get("link") or payload.get("source_url")
-        )
-        if tld_iso:
-            try:
-                c = pycountry.countries.get(alpha_2=tld_iso)
-                if c is not None and c.name not in out:
-                    out.append(c.name)
-            except (KeyError, AttributeError):                    # pragma: no cover
-                pass
+
+        payload = signal.payload or {}
+        for field_name in self._config.infer_from:
+            for candidate in self._candidates_for_field(field_name, signal, payload):
+                _add(candidate)
+
+        # WEAK publisher-origin fallback — last resort, opt-out-able.
+        if self._config.tld_fallback:
+            tld_iso = country_iso2_from_tld(
+                signal.canonical_url or payload.get("link") or payload.get("source_url")
+            )
+            if tld_iso:
+                try:
+                    c = pycountry.countries.get(alpha_2=tld_iso)
+                    if c is not None:
+                        _add(c.name)
+                except (KeyError, AttributeError):                # pragma: no cover
+                    pass
         return out
 
-    def _candidate_for_field(
+    def _candidates_for_field(
         self,
         field_name: str,
         signal: Signal,
         payload: dict[str, Any],
-    ) -> str | None:
+    ) -> list[str]:
+        """Return the (possibly multiple) candidate query strings for one
+        ``infer_from`` field, in priority order."""
         if field_name == "geo":
             geo = payload.get("geo")
             if isinstance(geo, dict):
                 loc = geo.get("location_name")
                 if isinstance(loc, str) and loc.strip():
-                    return loc.strip()
-            return None
-        # All other fields are text — sweep for country mentions.
+                    return [loc.strip()]
+            return []
+        if field_name == "entities":
+            # In-body NER place mentions — hand the raw place text to the
+            # backend (a city/region resolves to a finer point than the
+            # country-name sweep would). Country-class entities first.
+            return place_candidates_from_entities(payload.get("entities"))
+        # All other fields are text — sweep for a country mention.
         value = payload.get(field_name)
         if not isinstance(value, str) or not value.strip():
-            return None
+            return []
         iso = extract_country_iso2_from_text(value)
         if iso:
             try:
                 c = pycountry.countries.get(alpha_2=iso)
                 if c is not None:
-                    return c.name
+                    return [c.name]
             except (KeyError, AttributeError):                    # pragma: no cover
                 pass
-        return None
+        return []
 
     async def _lookup_cached(
         self,
@@ -1172,5 +1293,6 @@ __all__ = [
     "country_iso2_from_tld",
     "extract_country_iso2_from_text",
     "geocoder_contact_email",
+    "place_candidates_from_entities",
     "resolve_user_agent",
 ]

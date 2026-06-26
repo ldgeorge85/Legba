@@ -512,7 +512,10 @@ class TestConfig:
         assert cfg.backend == "nominatim"
         assert cfg.precision == "municipality"
         assert cfg.cache_ttl_seconds == 86_400
-        assert cfg.infer_from == ["geo", "title", "raw_body"]
+        # D5: in-body NER entities + chat-body `text` are now in the default
+        # ladder, ABOVE the (weak) publisher-origin TLD fallback.
+        assert cfg.infer_from == ["geo", "entities", "title", "text", "raw_body"]
+        assert cfg.tld_fallback is True
 
     def test_rejects_unknown_field(self):
         with pytest.raises(ValidationError):

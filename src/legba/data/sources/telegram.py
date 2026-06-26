@@ -743,6 +743,15 @@ class TelegramChannelSourceHandler:
                 "title": channel_info.get("title"),
             },
             "media_type": media_type,
+            # D5: a telegram message has NO inherent country. The old geo
+            # enrichment derived one from the canonical URL's TLD — but that
+            # host is `t.me` (Montenegro, `.me`), which tagged EVERY channel
+            # message {ME}. Geo for a telegram signal must come from the
+            # message BODY: `text` (above) feeds language_detect + the
+            # ner_multilingual filter, whose place entities the geocode ladder
+            # reads. This flag makes the "publisher origin is not story geo"
+            # contract explicit for any downstream consumer.
+            "publisher_origin_nongeo": True,
         }
         if cfg.include_media and media_descriptor is not None:
             payload["media"] = media_descriptor

@@ -30,6 +30,7 @@ from legba.runtime.liveness_watchdog import (
     LivenessWatchdog,
     WatchdogConfig,
     _evaluate_cadence_staleness,
+    _evaluate_empty_streaks,
     _source_stall_diagnosis,
 )
 
@@ -393,3 +394,111 @@ async def test_source_cadence_alert_body_flags_missing_outcome_row() -> None:
     assert await wd.check_source_cadence_once(now_monotonic=1000.0) == ["source.xinhua.world"]
     env = json.loads(nats.published_core[0][1])
     assert "may be dead" in env["body"]
+
+
+# ---------------------------------------------------------------------------
+# D19: per-source empty-200 streak escalation to 'degraded'
+# ---------------------------------------------------------------------------
+
+
+def _outcome(source_id: str, outcome: str, occurred_at):
+    return {"source_id": source_id, "outcome": outcome, "occurred_at": occurred_at}
+
+
+def _empty_run(source_id: str, n: int, *, start=_NOW):
+    # n consecutive 'empty' outcome rows, newest first (most recent at index 0).
+    return [
+        _outcome(source_id, "empty", start - timedelta(hours=i))
+        for i in range(n)
+    ]
+
+
+def test_empty_streak_eval_flags_a_long_run() -> None:
+    # xinhua/aljazeera class: a long run of clean-but-empty polls → degraded.
+    rows = _empty_run("source.xinhua.world", 8)
+    degraded = _evaluate_empty_streaks(rows, threshold=5)
+    assert [d[0] for d in degraded] == ["source.xinhua.world"]
+    sid, streak, newest_at = degraded[0]
+    assert streak == 8
+    assert newest_at == _NOW  # the most-recent empty row's timestamp
+
+
+def test_empty_streak_eval_below_threshold_does_not_flag() -> None:
+    rows = _empty_run("source.bbc.world", 4)
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+
+
+def test_empty_streak_eval_breaks_on_error_row() -> None:
+    # The leading run is only counted up to the first non-'empty' (error) row.
+    rows = [
+        _outcome("s", "empty", _NOW),
+        _outcome("s", "empty", _NOW - timedelta(hours=1)),
+        _outcome("s", "error", _NOW - timedelta(hours=2)),  # breaks the run
+        _outcome("s", "empty", _NOW - timedelta(hours=3)),
+        _outcome("s", "empty", _NOW - timedelta(hours=4)),
+    ]
+    # Leading run = 2 empties → below threshold 5 → not flagged.
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+    # And with threshold 2 it IS flagged, counting only the leading 2.
+    degraded = _evaluate_empty_streaks(rows, threshold=2)
+    assert degraded[0][1] == 2
+
+
+def test_empty_streak_eval_groups_per_source() -> None:
+    rows = _empty_run("source.a", 6) + _empty_run("source.b", 3)
+    degraded = _evaluate_empty_streaks(rows, threshold=5)
+    assert [d[0] for d in degraded] == ["source.a"]
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_check_emits_degraded_alert() -> None:
+    rows = _empty_run("source.aljazeera.arabic", 6)
+    nats = _RecordingNats()
+    cfg = WatchdogConfig(
+        stall_after_s=900.0, realert_every_s=1800.0,
+        check_interval_s=60.0, empty_streak_threshold=5,
+    )
+    wd = LivenessWatchdog(nats, cfg, pg_store=_FakePg(rows))
+    wd._started_at = 0.0  # type: ignore[attr-defined]
+    alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
+    assert alerted == ["source.aljazeera.arabic"]
+    assert len(nats.published_core) == 1
+    subject, payload = nats.published_core[0]
+    assert subject == STALL_ALERT_SUBJECT
+    env = json.loads(payload)
+    assert env["severity"] == "high"
+    assert env["health_state"] == "degraded"
+    assert "source_degraded" in env["tags"]
+    assert "empty_streak" in env["tags"]
+    assert env["empty_streak"] == 6
+    assert env["stale_source_id"] == "source.aljazeera.arabic"
+    # Must go out via core publish (legba.alerts.* has no JetStream stream).
+    assert nats.published_json == []
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_check_boot_grace_leader_and_rate_limit() -> None:
+    rows = _empty_run("source.xinhua.world", 6)
+    cfg = WatchdogConfig(
+        stall_after_s=900.0, realert_every_s=1800.0,
+        check_interval_s=60.0, empty_streak_threshold=5,
+    )
+    # Leader-gated off → silent.
+    nats_off = _RecordingNats()
+    wd_off = LivenessWatchdog(nats_off, cfg, pg_store=_FakePg(rows), is_leader=lambda: False)
+    wd_off._started_at = 0.0  # type: ignore[attr-defined]
+    assert await wd_off.check_source_empty_streak_once(now_monotonic=1000.0) == []
+    assert nats_off.published == []
+
+    nats = _RecordingNats()
+    wd = LivenessWatchdog(nats, cfg, pg_store=_FakePg(rows))
+    wd._started_at = 0.0  # type: ignore[attr-defined]
+    # Inside boot grace → no alert.
+    assert await wd.check_source_empty_streak_once(now_monotonic=500.0) == []
+    # Past grace → alert once, then rate-limited within the realert window.
+    assert await wd.check_source_empty_streak_once(now_monotonic=1000.0) == ["source.xinhua.world"]
+    assert await wd.check_source_empty_streak_once(now_monotonic=1500.0) == []
+    assert len(nats.published) == 1
+    # Past the realert window → heartbeat alert again.
+    assert await wd.check_source_empty_streak_once(now_monotonic=1000.0 + 1801.0) == ["source.xinhua.world"]
+    assert len(nats.published) == 2

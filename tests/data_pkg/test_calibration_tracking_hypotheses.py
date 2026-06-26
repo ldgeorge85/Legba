@@ -115,9 +115,11 @@ async def test_calibration_runs_over_seeded_hypotheses(pg_pool):
     # Claimed confidence derived from |evidence_balance| > 0.5.
     assert all(r["claimed_confidence"] > 0.5 for r in mine)
 
-    # The full handler runs and reports an EXOGENOUS Brier over a real sample.
-    # min_exogenous=1 so the 3 seeded subsequent_facts resolutions clear the
-    # headline threshold (the default 5 would honestly withhold it — DQ-H2).
+    # The full handler runs over a real sample. D16 — `subsequent_facts` is the
+    # WEAK/LEXICAL tier (a substring direction proxy), so these resolutions are
+    # DEMOTED out of the headline exogenous Brier: they land in the weak bucket,
+    # the headline stays withheld (insufficient_exogenous, no falsifiable rows),
+    # and the weak Brier carries the number.
     result = await cal.handle(
         inputs=[],
         options={"lookback_days": 365, "pull_from_substrate": True,
@@ -127,9 +129,12 @@ async def test_calibration_runs_over_seeded_hypotheses(pg_pool):
     data = result.finding.data
     assert data["sub_handler"] == "calibration_tracking"
     assert data["sample_size"] >= 3
-    # These are EXOGENOUS (resolved_by='subsequent_facts'), so the honest
-    # headline Brier is reported (not withheld).
-    assert data["brier"] is not None
-    assert data["insufficient_exogenous"] is False
+    # D16: subsequent_facts is WEAK — never headline. The headline exogenous
+    # Brier is None (no falsifiable resolutions), and the weak tier carries the
+    # 3 lexical resolutions with its own (diagnostic) Brier.
+    assert data["brier"] is None
+    assert data["insufficient_exogenous"] is True
+    assert data["weak_sample_size"] >= 3
+    assert data["brier_weak"] is not None
     # Per-analyst breakdown carries our analyst's Brier.
     assert analyst_id in data["per_analyst"]

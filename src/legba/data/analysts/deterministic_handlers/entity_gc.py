@@ -2,19 +2,29 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``entity_gc`` sub-handler — L-203 migration of ``legba.maintenance.entity_gc``.
 
-Entity garbage-collection family. No LLM. Four operations:
+Entity garbage-collection family. No LLM. Five operations:
 
   1. Mark entities with no signal_entity_links in 30d as ``gc_status=dormant``.
   2. Flag name-similar entity pairs (trigram similarity > 0.6) with
      co-occurring signals as ``duplicate_candidate``.
   3. Delete orphan signal_entity_links.
   4. Auto-pause sources with > 20 consecutive failures.
+  5. Quarantine orphan ``proposed_edges`` (D25) — pending edges whose
+     ``source_entity`` / ``target_entity`` has no matching
+     ``entity_profiles.canonical_name`` (the exact drift ``integrity_sweep``
+     COUNTS as ``orphan_proposed_edges_source`` / ``orphan_proposed_edges_target``
+     but never acts on). They can never promote into a CoOccursWith nexus
+     (governance keys on canonical entities), so they accrete as permanently
+     ``pending`` rows the sweep re-counts forever (406/678 and rising). We flip
+     them to ``status='orphaned'`` — non-destructive, removes them from the
+     governance ``status='pending'`` work-set, and clears the rising flag.
 
 Output ``data`` keys:
-    dormant_entities    int
-    duplicate_flags     int
-    orphan_edges        int
-    sources_paused      int
+    dormant_entities        int
+    duplicate_flags         int
+    orphan_edges            int
+    sources_paused          int
+    orphan_proposed_edges   int
 """
 
 from __future__ import annotations
@@ -161,6 +171,41 @@ async def _clean_orphan_edges(pool: Any) -> int:
     return removed
 
 
+async def _quarantine_orphan_proposed_edges(pool: Any) -> int:
+    """D25 — flip orphan ``pending`` proposed_edges to ``status='orphaned'``.
+
+    An orphan edge is one whose ``source_entity`` OR ``target_entity`` has no
+    matching ``entity_profiles.canonical_name`` — exactly the rows
+    ``integrity_sweep`` COUNTS (``orphan_proposed_edges_source`` /
+    ``orphan_proposed_edges_target``). Such an edge can never be promoted by
+    ``proposed_edge_governance`` (which keys on canonical entities), so it sits
+    ``pending`` forever and the sweep re-counts it every hour.
+
+    We only touch rows still ``status='pending'`` so we never disturb already-
+    promoted/rejected/orphaned edges or the supersession history. ``orphaned``
+    is a NEW terminal status outside the governance ``pending`` work-set —
+    non-destructive (the row is retained for audit, not deleted)."""
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE proposed_edges pe
+               SET status = 'orphaned', reviewed_at = now()
+             WHERE pe.status = 'pending'
+               AND (
+                   NOT EXISTS (
+                       SELECT 1 FROM entity_profiles ep
+                       WHERE ep.canonical_name = pe.source_entity
+                   )
+                   OR NOT EXISTS (
+                       SELECT 1 FROM entity_profiles ep
+                       WHERE ep.canonical_name = pe.target_entity
+                   )
+               )
+            """
+        )
+    return int(result.split()[-1]) if result else 0
+
+
 async def _pause_failing_sources(pool: Any) -> int:
     paused = 0
     async with pool.acquire() as conn:
@@ -214,11 +259,13 @@ def _build_finding(
     duplicate_flags: int,
     orphan_edges: int,
     sources_paused: int,
+    orphan_proposed_edges: int = 0,
     target_id: str | None,
 ) -> FindingPayload:
     title = (
         f"Entity GC: {dormant_entities} dormant, {duplicate_flags} duplicates, "
-        f"{orphan_edges} orphan edges, {sources_paused} sources paused"
+        f"{orphan_edges} orphan edges, {sources_paused} sources paused, "
+        f"{orphan_proposed_edges} orphan proposed-edges quarantined"
     )
     if target_id:
         title = f"{title} for {target_id}"
@@ -227,9 +274,16 @@ def _build_finding(
         f"duplicate_flags={duplicate_flags}",
         f"orphan_edges={orphan_edges}",
         f"sources_paused={sources_paused}",
+        f"orphan_proposed_edges={orphan_proposed_edges}",
     ])
     tags = ["deterministic", "entity_gc"]
-    if dormant_entities or duplicate_flags or orphan_edges or sources_paused:
+    if (
+        dormant_entities
+        or duplicate_flags
+        or orphan_edges
+        or sources_paused
+        or orphan_proposed_edges
+    ):
         tags.append("gc_actions_taken")
     return FindingPayload(
         title=title[:2048],
@@ -243,6 +297,7 @@ def _build_finding(
             "duplicate_flags": duplicate_flags,
             "orphan_edges": orphan_edges,
             "sources_paused": sources_paused,
+            "orphan_proposed_edges": orphan_proposed_edges,
         },
     )
 
@@ -262,6 +317,7 @@ async def handle(
     duplicates = 0
     orphans = 0
     paused = 0
+    orphan_proposed = 0
 
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is not None:
@@ -269,6 +325,7 @@ async def handle(
         run_duplicates = bool(options.get("run_duplicates", True))
         run_orphans = bool(options.get("run_orphans", True))
         run_pause = bool(options.get("run_source_pause", True))
+        run_orphan_edges = bool(options.get("run_orphan_proposed_edges", True))
         if run_dormant:
             try:
                 dormant = await _mark_dormant(pool)
@@ -289,12 +346,18 @@ async def handle(
                 paused = await _pause_failing_sources(pool)
             except Exception as exc:
                 logger.warning("entity_gc.source_pause_failed err=%s", exc)
+        if run_orphan_edges:
+            try:
+                orphan_proposed = await _quarantine_orphan_proposed_edges(pool)
+            except Exception as exc:
+                logger.warning("entity_gc.orphan_proposed_edges_failed err=%s", exc)
 
     finding = _build_finding(
         dormant_entities=dormant,
         duplicate_flags=duplicates,
         orphan_edges=orphans,
         sources_paused=paused,
+        orphan_proposed_edges=orphan_proposed,
         target_id=options.get("target_id"),
     )
     return AnalystMethodResult(

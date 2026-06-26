@@ -940,7 +940,18 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         # dropped (alert_sink_deliveries delivered 0). Route alert subjects to
         # core publish; durable substrate-write subjects (analyst.* / target.*
         # / legba.signals.*) keep JetStream.
-        if subject.startswith("legba.alerts."):
+        #
+        # D1 (W4 remediation): the STIX output sink emits on
+        # `legba.outputs.stix.<target_id>` (stix_bundle.NATS_SUBJECT_PATTERN),
+        # which — exactly like alerts — is an interest-only TAXII fan-out with
+        # NO JetStream stream provisioned. It therefore hit the same
+        # NoStreamResponseError ("no-stream") and every STIX bundle was silently
+        # dropped. Mirror the alert sink: route the STIX output subjects to core
+        # publish too (no new stream). Durable substrate-write subjects keep
+        # JetStream.
+        if subject.startswith("legba.alerts.") or subject.startswith(
+            "legba.outputs.stix."
+        ):
             await nats_store.publish_core(subject, payload)
         else:
             await nats_store.publish_json(subject, payload)

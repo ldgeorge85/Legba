@@ -79,6 +79,29 @@ CLIMATOLOGY_WEEKS = 52
 """Trailing weeks the per-country base rate p_base is computed over (capped to
 the observed record so we never divide by weeks before ingestion began)."""
 
+# --- D9: forecast-honesty knobs. ---
+P_EPSILON = 0.01
+"""Epsilon-clamp bound for the issued probability. A proper-scoring forecast
+NEVER asserts 0.0 or 1.0 certainty — a single counter-example yields an infinite
+penalty under log-loss and the worst possible Brier (1.0). We clamp every issued
+p into [P_EPSILON, 1 - P_EPSILON] so the producer cannot collapse to the
+degenerate {0, 1} certainties that made the live pilot a non-forecaster."""
+
+CLIMATOLOGY_SHRINK_W = 0.5
+"""Climatology-shrink weight for the de-rated rate. The raw recent-rate Poisson
+λ saturates to 1.0 for high-exposure countries (a large, seismically-active
+country accumulates events trivially). We shrink the model rate toward the
+per-country climatology expectation: λ_eff = (1-w)·λ_recent + w·λ_clim, so the
+issued p is pulled back from saturation toward the long-run base rate. w=0.5
+weights recent signal and climatology equally."""
+
+DEGENERACY_ABSTAIN_SHARE = 0.2
+"""Pre-issue ABSTAIN threshold. If the cross-country p-vector for a window is
+degenerate — i.e. the share of GENUINELY UNCERTAIN calls (p strictly inside
+(P_EPSILON, 1-P_EPSILON)) is below this — the batch is geography-dominated, not
+probabilistic forecasting, so the producer ABSTAINS (issues nothing) rather than
+minting a certainty vector that would earn unearned skill against climatology."""
+
 # The UPSTREAM event timestamp per source — quake origin time (epoch ms), NWS
 # alert onset/effective, NASA EONET event date — NEVER fetched_at. This is what
 # makes the resolution exogenous and removes the ingest-rate artifact.
@@ -96,10 +119,63 @@ END
 
 
 def poisson_tail_p(lmbda: float) -> float:
-    """P(>=1 event) for a Poisson rate λ over the window = 1 - exp(-λ). Clamped."""
+    """P(>=1 event) for a Poisson rate λ over the window = 1 - exp(-λ). Clamped
+    to [0, 1]. NOTE: this is the RAW tail probability; the issued forecast is the
+    epsilon-clamped :func:`clamp_p` of this value (D9) so a saturated λ never
+    yields a degenerate 0/1 certainty."""
     if lmbda <= 0.0:
         return 0.0
     return float(min(1.0, max(0.0, 1.0 - math.exp(-lmbda))))
+
+
+def clamp_p(p: float, *, epsilon: float = P_EPSILON) -> float:
+    """D9 epsilon-clamp: pull an issued probability into [epsilon, 1-epsilon] so
+    the producer can never assert a degenerate 0.0 / 1.0 certainty. A proper
+    forecast keeps a hedge — a single surprise against a 1.0 call is the worst
+    possible Brier (1.0); against a clamped 0.99 it is a bounded 0.0001 penalty."""
+    return float(min(1.0 - epsilon, max(epsilon, p)))
+
+
+def derate_lambda(
+    lam_recent: float, lam_clim: float, *, w: float = CLIMATOLOGY_SHRINK_W,
+) -> float:
+    """D9 climatology-shrink: blend the recent-rate Poisson λ toward the
+    per-country climatology rate so a high-exposure country's recent λ cannot
+    saturate the issued p to 1.0. λ_eff = (1-w)·λ_recent + w·λ_clim.
+
+    ``lam_clim`` is the climatology EXPECTED COUNT over the same 7-day window
+    (NOT the base-rate probability) — derived from p_base via the Poisson
+    inverse (see :func:`_lambda_from_p`). w defaults to ``CLIMATOLOGY_SHRINK_W``
+    (0.5 — equal weight). Negative inputs are floored at 0."""
+    lam_recent = max(0.0, float(lam_recent))
+    lam_clim = max(0.0, float(lam_clim))
+    w = min(1.0, max(0.0, float(w)))
+    return (1.0 - w) * lam_recent + w * lam_clim
+
+
+def _lambda_from_p(p: float) -> float:
+    """Inverse Poisson tail: the λ whose P(>=1 event) = p, i.e. λ = -ln(1-p).
+    Used to convert a climatology PROBABILITY (p_base) back into an expected
+    COUNT so it can be blended with the recent-rate λ on the same scale."""
+    p = min(1.0 - 1e-9, max(0.0, float(p)))
+    if p <= 0.0:
+        return 0.0
+    return float(-math.log(1.0 - p))
+
+
+def p_vector_is_degenerate(
+    ps: list[float], *, epsilon: float = P_EPSILON,
+    min_uncertain_share: float = DEGENERACY_ABSTAIN_SHARE,
+) -> bool:
+    """D9 pre-issue degeneracy check: True when the cross-country issued-p vector
+    collapses to (near-){0, 1} — i.e. the share of GENUINELY UNCERTAIN calls
+    (p strictly inside (epsilon, 1-epsilon)) is below ``min_uncertain_share``.
+    A degenerate batch is geography-dominated, not probabilistic forecasting, so
+    the producer ABSTAINS (issues nothing) rather than minting certainties."""
+    if not ps:
+        return True
+    uncertain = sum(1 for p in ps if epsilon < p < (1.0 - epsilon))
+    return (uncertain / len(ps)) < min_uncertain_share
 
 
 def _next_window(now: datetime) -> tuple[datetime, datetime]:
@@ -232,17 +308,58 @@ async def issue_weekly_forecasts(deps: Any, options: Mapping[str, Any]) -> int:
     now = datetime.now(timezone.utc)
     window_start, window_end = _next_window(now)
     issued = 0
+    shrink_w = float(options.get("climatology_shrink_w", CLIMATOLOGY_SHRINK_W))
+    epsilon = float(options.get("p_epsilon", P_EPSILON))
+    min_uncertain_share = float(
+        options.get("degeneracy_abstain_share", DEGENERACY_ABSTAIN_SHARE)
+    )
     try:
         async with pool.acquire() as conn:
             regions = await _g20_regions(conn)
             if not regions:
                 return 0
             total_weeks = await _total_observed_weeks(conn, now)
+            # PHASE 1 — compute the full cross-country forecast vector WITHOUT
+            # writing, so a degenerate (geography-dominated) batch can ABSTAIN as
+            # a whole rather than emitting a {0,1} certainty vector (D9).
+            staged: list[dict[str, Any]] = []
             for region, geo in regions:
                 try:
-                    lam = await _recent_lambda(conn, geo, now)
-                    p = poisson_tail_p(lam)
+                    lam_recent = await _recent_lambda(conn, geo, now)
                     p_base = await _climatology_base(conn, geo, now, total_weeks)
+                    # D9 climatology-shrink: blend the recent-rate λ toward the
+                    # climatology expected COUNT (p_base → λ via the Poisson
+                    # inverse) so high-exposure countries cannot saturate p to 1.
+                    lam_clim = _lambda_from_p(p_base)
+                    lam_eff = derate_lambda(lam_recent, lam_clim, w=shrink_w)
+                    # D9 epsilon-clamp: a forecast never asserts 0/1 certainty.
+                    p = clamp_p(poisson_tail_p(lam_eff), epsilon=epsilon)
+                    staged.append({
+                        "region": region, "p": float(p),
+                        "p_base": float(p_base), "lam_eff": float(lam_eff),
+                    })
+                except Exception as exc:  # noqa: BLE001 — one bad country never blocks the rest
+                    logger.debug("forecast_acute.compute_one_failed region=%s err=%s", region, exc)
+
+            # PHASE 2 — pre-issue degeneracy ABSTAIN (D9). If the cross-country
+            # p-vector collapses to near-{0,1}, this batch is geography, not a
+            # forecast; issue NOTHING this window.
+            p_vec = [s["p"] for s in staged]
+            if not staged or p_vector_is_degenerate(
+                p_vec, epsilon=epsilon, min_uncertain_share=min_uncertain_share
+            ):
+                uncertain = sum(1 for p in p_vec if epsilon < p < (1.0 - epsilon))
+                logger.info(
+                    "forecast_acute.abstain_degenerate n=%d uncertain=%d "
+                    "window=%s..%s class=%s",
+                    len(p_vec), uncertain,
+                    window_start.date().isoformat(),
+                    window_end.date().isoformat(), EVENT_CLASS,
+                )
+                return 0
+
+            for s in staged:
+                try:
                     res = await conn.execute(
                         """
                         INSERT INTO acute_forecasts
@@ -252,13 +369,14 @@ async def issue_weekly_forecasts(deps: Any, options: Mapping[str, Any]) -> int:
                         ON CONFLICT (region, event_class, window_start)
                             DO NOTHING
                         """,
-                        region, EVENT_CLASS, window_start, window_end,
-                        float(p), float(p_base), "recent_rate_poisson", float(lam),
+                        s["region"], EVENT_CLASS, window_start, window_end,
+                        s["p"], s["p_base"], "recent_rate_poisson_shrunk",
+                        s["lam_eff"],
                     )
                     if res and res.endswith("1"):
                         issued += 1
                 except Exception as exc:  # noqa: BLE001 — one bad country never blocks the rest
-                    logger.debug("forecast_acute.issue_one_failed region=%s err=%s", region, exc)
+                    logger.debug("forecast_acute.issue_one_failed region=%s err=%s", s["region"], exc)
     except Exception as exc:  # noqa: BLE001 — never break the calibration tick
         logger.warning("forecast_acute.issue_failed err=%s", exc)
     if issued:
@@ -412,7 +530,13 @@ __all__ = [
     "EVENT_CLASS",
     "HAZARD_SEVERE_SOURCES",
     "RESOLVED_BY",
+    "P_EPSILON",
+    "CLIMATOLOGY_SHRINK_W",
+    "DEGENERACY_ABSTAIN_SHARE",
     "poisson_tail_p",
+    "clamp_p",
+    "derate_lambda",
+    "p_vector_is_degenerate",
     "issue_weekly_forecasts",
     "resolve_open_acute_forecasts",
     "pull_resolved_acute_forecasts",

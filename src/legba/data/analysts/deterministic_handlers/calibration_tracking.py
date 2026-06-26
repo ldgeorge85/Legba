@@ -425,7 +425,8 @@ async def _pull_resolved_claims(
                     confidence AS claimed_confidence,
                     (data->>'resolved_outcome')::int AS outcome,
                     COALESCE(data->>'resolved_by', $2) AS resolved_by,
-                    data->>'resolved_at' AS resolved_at
+                    data->>'resolved_at' AS resolved_at,
+                    data->>'forecast_method' AS forecast_method
                 FROM analyst_outputs
                 WHERE kind = 'prediction'
                   AND data->>'resolved_outcome' IS NOT NULL
@@ -444,6 +445,12 @@ async def _pull_resolved_claims(
                 "outcome": int(row["outcome"]),
                 "resolved_at": row["resolved_at"],
                 "resolved_by": row["resolved_by"],
+                # D28: carry the writer's forecast_method through so the tiering
+                # predicate can DEMOTE a flat-line `naive_mean` prediction out of
+                # the headline exogenous Brier (a non-forecaster that nonetheless
+                # gets an exogenous CI-vs-actual resolution would otherwise inflate
+                # the honest headline sample).
+                "forecast_method": row["forecast_method"],
             })
     except Exception as exc:
         logger.warning("calibration_tracking.pull_predictions_failed err=%s", exc)
@@ -510,17 +517,60 @@ async def _pull_resolved_claims(
 # truth) — see competing_hypotheses._resolve_hypotheses_by_status_transition.
 _SELF_CONSISTENCY_SOURCES: frozenset[str] = frozenset({"status_transition"})
 
+# D16 — resolution sources that ARE "the world graded it" but only through a
+# CHEAP LEXICAL PROXY (a keyword/substring direction classifier over subsequent
+# facts), NOT a falsifiable count over a frozen event class. `subsequent_facts`
+# confirms forward-looking ("will…") ACH theses by matching escalation/de-
+# escalation vocabulary — a lexically-resolved outcome, not a real exogenous
+# grading. Such rows form a separate WEAK tier: reported, but DEMOTED out of the
+# headline exogenous Brier (which is reserved for falsifiable resolutions like
+# `forecast_acute_exogenous` / `forecast_vs_actual` / operator labels). The
+# project must never quote a Brier earned on a lexical proxy as calibration.
+_WEAK_LEXICAL_SOURCES: frozenset[str] = frozenset({"subsequent_facts"})
+
+# D28 — forecast methods that are NON-forecasters: a flat-line `naive_mean`
+# prediction carries an exogenous CI-vs-actual resolution (`forecast_vs_actual`),
+# so it would otherwise pass `_is_exogenous` and inflate the honest headline
+# exogenous sample with a predictor that fit no trend. We demote any prediction
+# whose `forecast_method` is in this set to the SAME weak tier as the lexical
+# resolutions — present, but never headline.
+_WEAK_FORECAST_METHODS: frozenset[str] = frozenset({"naive_mean"})
+
+
+def _is_weak_tier(row: Mapping[str, Any]) -> bool:
+    """True when a resolution is real-world-touching but only via a WEAK proxy
+    (D16 lexical `subsequent_facts`) OR was produced by a NON-forecaster (D28
+    `naive_mean`). Weak-tier rows are reported in their own bucket and are
+    DEMOTED out of the headline exogenous Brier. They are NOT self-consistency
+    (the system did not grade itself) — they are a distinct, lower-confidence
+    tier between exogenous and self-consistency."""
+    rb = str(row.get("resolved_by") or "").strip()
+    if rb in _WEAK_LEXICAL_SOURCES:
+        return True
+    fm = str(row.get("forecast_method") or "").strip()
+    if fm in _WEAK_FORECAST_METHODS:
+        return True
+    return False
+
 
 def _is_exogenous(row: Mapping[str, Any]) -> bool:
-    """A resolution is EXOGENOUS when the WORLD graded the claim (subsequent
-    facts, an operator label, or the forecast-vs-actual resolver), as opposed
-    to the system grading itself (status_transition). An unlabeled / unknown
-    source is treated conservatively as NON-exogenous so it can never inflate
-    the honest headline Brier."""
+    """A resolution is HEADLINE-EXOGENOUS when the WORLD graded the claim through
+    a FALSIFIABLE resolution (an operator label or the forecast-vs-actual /
+    acute-forecast resolvers that count a frozen event class), as opposed to the
+    system grading itself (status_transition, NON-exogenous) OR grading via a
+    cheap lexical proxy / non-forecaster (`subsequent_facts` / `naive_mean`,
+    DEMOTED to the weak tier — see :func:`_is_weak_tier`). An unlabeled / unknown
+    source is treated conservatively as NON-exogenous so it can never inflate the
+    honest headline Brier."""
     rb = str(row.get("resolved_by") or "").strip()
     if not rb or rb == "unknown":
         return False
-    return rb not in _SELF_CONSISTENCY_SOURCES
+    if rb in _SELF_CONSISTENCY_SOURCES:
+        return False
+    # D16 / D28 — weak-lexical or non-forecaster rows are NOT headline exogenous.
+    if _is_weak_tier(row):
+        return False
+    return True
 
 
 def _resolution_source_breakdown(
@@ -688,6 +738,9 @@ def _validate_rows(
             "outcome": out,
             "resolved_at": r.get("resolved_at"),
             "resolved_by": r.get("resolved_by"),
+            # D28 — preserved so the tiering predicate can demote `naive_mean`
+            # predictions to the weak tier even after validation.
+            "forecast_method": r.get("forecast_method"),
         })
     if drops:
         warnings.append(
@@ -721,6 +774,9 @@ def _build_finding(
     forecast_acute: dict[str, Any],
     warnings: list[str],
     target_id: str | None,
+    brier_weak: float | None = None,
+    weak_sample_size: int = 0,
+    weak_fraction: float = 0.0,
 ) -> FindingPayload:
     drift_alert = drift_z is not None and abs(drift_z) > drift_threshold
     # HONEST HEADLINE (DQ-H2): `brier` is the EXOGENOUS-only Brier — the only
@@ -747,6 +803,11 @@ def _build_finding(
         f"sample_size={sample_size}\n"
         f"headline_brier_exogenous_only={brier}\n"
         f"exogenous_sample_size={exogenous_sample_size}\n"
+        # D16/D28 — the weak tier (lexical `subsequent_facts` + `naive_mean`),
+        # reported separately and NEVER folded into the headline.
+        f"brier_weak_lexical={brier_weak}\n"
+        f"weak_sample_size={weak_sample_size}\n"
+        f"weak_fraction={weak_fraction:.4f}\n"
         f"brier_self_consistency={brier_self_consistency}\n"
         f"self_consistency_fraction={self_consistency_fraction:.4f}\n"
         f"insufficient_exogenous={insufficient_exogenous}\n"
@@ -782,6 +843,10 @@ def _build_finding(
         tags.append("brier_insufficient_exogenous")
     if self_consistency_only and sample_size > 0:
         tags.append("brier_self_consistency_only")
+    # D16/D28 — flag that the sample carries weak-tier (lexical / non-forecaster)
+    # resolutions so a consumer can see they were demoted, not headlined.
+    if weak_sample_size > 0:
+        tags.append("brier_weak_tier_present")
     return FindingPayload(
         title=title[:2048],
         body=body[:65536],
@@ -795,6 +860,12 @@ def _build_finding(
             # Briers are kept as DIAGNOSTICS, never as the headline.
             "brier": brier,
             "brier_exogenous": brier_exogenous,
+            # D16/D28 — the weak tier (lexical `subsequent_facts` + `naive_mean`
+            # non-forecaster predictions), kept as a DIAGNOSTIC and explicitly
+            # NOT pooled into the headline `brier`.
+            "brier_weak": brier_weak,
+            "weak_sample_size": weak_sample_size,
+            "weak_fraction": weak_fraction,
             "brier_self_consistency": brier_self_consistency,
             "brier_pooled": brier_pooled,
             "sample_size": sample_size,
@@ -893,12 +964,23 @@ async def handle(
     # status_transition (self-consistency) can no longer masquerade as
     # "calibrated" — the headline is None (insufficient_exogenous) until enough
     # of the WORLD's verdicts land.
+    #
+    # D16/D28 three-tier split:
+    #   * EXOGENOUS  — falsifiable world grading (operator / forecast-vs-actual /
+    #                  acute-forecast). The ONLY tier that feeds the headline.
+    #   * WEAK       — real-world-touching but via a lexical proxy
+    #                  (`subsequent_facts`) or a non-forecaster (`naive_mean`).
+    #                  Reported in its own bucket, NEVER headline.
+    #   * SELF-CONSISTENCY — the system graded itself (status_transition).
     exo_rows = [r for r in kept if _is_exogenous(r)]
+    weak_rows = [r for r in kept if _is_weak_tier(r)]
     sc_rows = [r for r in kept if not _is_exogenous(r)]
     brier_exogenous = _brier(exo_rows)
+    brier_weak = _brier(weak_rows)
     brier_self_consistency = _brier(sc_rows)
     brier_pooled = _brier(kept)
     self_consistency_fraction = (len(sc_rows) / sample_size) if sample_size else 0.0
+    weak_fraction = (len(weak_rows) / sample_size) if sample_size else 0.0
     min_exo = int(options.get("min_exogenous", _MIN_EXOGENOUS_FOR_BRIER))
     insufficient_exogenous = len(exo_rows) < min_exo
     headline_brier = None if insufficient_exogenous else brier_exogenous
@@ -931,6 +1013,9 @@ async def handle(
         forecast_acute=forecast_acute_metrics,
         warnings=warnings,
         target_id=options.get("target_id"),
+        brier_weak=brier_weak,
+        weak_sample_size=len(weak_rows),
+        weak_fraction=weak_fraction,
     )
     return AnalystMethodResult(
         finding=finding,

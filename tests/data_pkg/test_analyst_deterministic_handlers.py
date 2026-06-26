@@ -627,13 +627,109 @@ async def test_handler_shape_contract(handler_module, name):
 def test_calibration_is_exogenous_classifier():
     ex = calibration_tracking._is_exogenous
     assert ex({"resolved_by": "forecast_vs_actual"}) is True
-    assert ex({"resolved_by": "subsequent_facts"}) is True
     assert ex({"resolved_by": "operator:alice"}) is True
+    assert ex({"resolved_by": "forecast_acute_exogenous"}) is True
+    # D16 — subsequent_facts is now the WEAK/LEXICAL tier, NOT headline-exogenous.
+    assert ex({"resolved_by": "subsequent_facts"}) is False
+    # D28 — a naive_mean prediction is a non-forecaster: even with an exogenous
+    # CI-vs-actual resolution it is DEMOTED out of the headline exogenous tier.
+    assert ex({"resolved_by": "forecast_vs_actual",
+               "forecast_method": "naive_mean"}) is False
+    assert ex({"resolved_by": "forecast_vs_actual",
+               "forecast_method": "auto_arima"}) is True
     # Self-consistency + unlabeled are NOT exogenous (conservative).
     assert ex({"resolved_by": "status_transition"}) is False
     assert ex({"resolved_by": "unknown"}) is False
     assert ex({"resolved_by": None}) is False
     assert ex({}) is False
+
+
+def test_calibration_is_weak_tier_classifier():
+    """D16/D28 — the WEAK tier: lexical `subsequent_facts` + `naive_mean`
+    non-forecaster predictions. Weak ⇒ NOT headline-exogenous, NOT self-
+    consistency (the system did not grade itself)."""
+    weak = calibration_tracking._is_weak_tier
+    ex = calibration_tracking._is_exogenous
+    # D16 — lexical proxy is weak.
+    assert weak({"resolved_by": "subsequent_facts"}) is True
+    # D28 — naive_mean is weak regardless of the resolution source.
+    assert weak({"resolved_by": "forecast_vs_actual",
+                 "forecast_method": "naive_mean"}) is True
+    # A genuinely falsifiable, fitted forecast is NOT weak.
+    assert weak({"resolved_by": "forecast_vs_actual",
+                 "forecast_method": "auto_arima"}) is False
+    assert weak({"resolved_by": "operator:alice"}) is False
+    assert weak({"resolved_by": "forecast_acute_exogenous"}) is False
+    # Self-consistency is NOT weak (it is its own tier).
+    assert weak({"resolved_by": "status_transition"}) is False
+    assert weak({}) is False
+    # Mutual exclusivity: a weak row is never headline-exogenous.
+    for r in ({"resolved_by": "subsequent_facts"},
+              {"resolved_by": "forecast_vs_actual", "forecast_method": "naive_mean"}):
+        assert weak(r) is True and ex(r) is False
+
+
+@pytest.mark.asyncio
+async def test_calibration_weak_tier_demoted_from_headline():
+    """A mixed sample with falsifiable exogenous rows AND weak (lexical /
+    naive_mean) rows: the headline is the EXOGENOUS-only Brier; the weak rows
+    land in the weak bucket and never touch the headline."""
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc).isoformat()
+
+    def _row(cid, conf, out, by, method=None):
+        r = {"analyst_id": "a", "claim_id": cid, "claim_kind": "prediction",
+             "claimed_confidence": conf, "outcome": out, "resolved_at": base,
+             "resolved_by": by}
+        if method is not None:
+            r["forecast_method"] = method
+        return r
+
+    rows = [
+        _row("e1", 0.9, 1, "operator:alice"),        # exogenous, err 0.01
+        _row("e2", 0.1, 0, "operator:alice"),        # exogenous, err 0.01
+        _row("w1", 0.95, 0, "subsequent_facts"),     # D16 weak (lexical)
+        _row("w2", 0.2, 1, "forecast_vs_actual",     # D28 weak (naive_mean)
+             method="naive_mean"),
+    ]
+    result = await calibration_tracking.handle(
+        rows, {"sub_handler": "calibration_tracking", "min_exogenous": 1}, None,
+    )
+    data = result.finding.data
+    # Headline = exogenous-only = (0.01 + 0.01)/2 = 0.01.
+    assert abs(data["brier"] - 0.01) < 1e-9
+    assert data["exogenous_sample_size"] == 2
+    assert data["insufficient_exogenous"] is False
+    # Weak tier holds the 2 demoted rows with its own diagnostic Brier.
+    assert data["weak_sample_size"] == 2
+    assert data["brier_weak"] is not None
+    assert abs(data["weak_fraction"] - 0.5) < 1e-9
+    # The weak rows must NOT be in the headline exogenous Brier.
+    assert abs(data["brier_exogenous"] - 0.01) < 1e-9
+    assert "brier_weak_tier_present" in result.finding.tags
+
+
+@pytest.mark.asyncio
+async def test_calibration_all_weak_withholds_headline():
+    """When EVERY resolved row is weak-tier (no falsifiable exogenous rows), the
+    headline Brier is withheld (insufficient_exogenous) even though a number
+    could be computed — the honest outcome is INSUFFICIENT sample."""
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc).isoformat()
+    rows = [
+        {"analyst_id": "a", "claim_id": f"w{i}", "claim_kind": "hypothesis",
+         "claimed_confidence": 0.8, "outcome": i % 2, "resolved_at": base,
+         "resolved_by": "subsequent_facts"}
+        for i in range(6)
+    ]
+    result = await calibration_tracking.handle(
+        rows, {"sub_handler": "calibration_tracking", "min_exogenous": 1}, None,
+    )
+    data = result.finding.data
+    assert data["sample_size"] == 6
+    assert data["exogenous_sample_size"] == 0
+    assert data["insufficient_exogenous"] is True
+    assert data["brier"] is None              # headline withheld
+    assert data["weak_sample_size"] == 6
+    assert data["brier_weak"] is not None     # diagnostic only
 
 
 @pytest.mark.asyncio

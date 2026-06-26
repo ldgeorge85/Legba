@@ -1,0 +1,77 @@
+# Entity GC analyst descriptor (W4 remediation — defects D2 + D25).
+#
+# Activates the `entity_gc` deterministic sub-handler (already wired in
+# legba.data.analysts.deterministic.SUB_HANDLERS) on a cadence so the substrate's
+# entity garbage-collection runs unattended. Until now the handler existed and
+# was dispatchable but had NO active descriptor, so it never fired (D2: a built
+# deterministic leg with no cadence is a dark leg).
+#
+# The handler performs five non-destructive maintenance operations over the LIVE
+# substrate via deps.pg_pool:
+#   1. mark entities with no signal_entity_links in 30d as gc_status=dormant
+#   2. flag trigram-similar co-occurring entity pairs as duplicate_candidate
+#   3. delete orphan signal_entity_links (rows pointing at a missing entity, or
+#      at an entity already merged away)
+#   4. auto-pause sources past the consecutive-failure threshold
+#   5. (D25) quarantine orphan proposed_edges — flip `pending` edges whose
+#      source/target entity is absent from entity_profiles.canonical_name to
+#      status='orphaned'. These are exactly the rows integrity_sweep COUNTS as
+#      orphan_proposed_edges_source / _target (406/678 and rising) but never
+#      acted on; they can never promote, so they accreted forever. entity_gc now
+#      ACTS on the drift integrity_sweep flags.
+#
+# Modeled on analyst_integrity_sweep.yaml — a target-agnostic META deterministic
+# analyst: NO `targets` selector, so the cadence heartbeat is a SINGLE global run
+# over the whole substrate (not a per-target fan-out). The handler ignores the
+# materialized input slice and runs its SQL directly via deps.pg_pool.
+#
+# Registered via scripts/bringup_register_analysts.py (or the registry REST API)
+# at the operator deploy step — NOT inline through a test fixture.
+
+identity:
+  id: entity_gc
+  name: Entity GC
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: entity_gc
+
+subscription:
+  # No `targets` block → META analyst: one global GC pass per cadence tick over
+  # the whole substrate. The handler runs its maintenance SQL directly via
+  # deps.pg_pool (it ignores the materialized input slice / time window).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: entity_gc
+  # Deterministic kind carries no LLM block and no per-day token budget — the
+  # whole run is pure SQL over the live substrate (token usage always zero).
+
+cadence:
+  # "17 */6 * * *" — every 6h at :17, offset from integrity_sweep's hourly :41
+  # sweep so the auditor (integrity_sweep) and the actuator (entity_gc) don't
+  # contend. Entity drift / orphan-edge accretion is slow; 6h is ample and keeps
+  # the orphan_proposed_edges backlog drained between integrity sweeps.
+  fallback_schedule: "17 */6 * * *"
+  # 30-min floor; every operation is idempotent and non-destructive (or a
+  # delete of provably-orphaned rows), so re-running early is safe.
+  cooldown_seconds: 1800
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND for
+# entity_gc (TRACE_ONLY, per deterministic.OUTPUT_KIND_BY_SUB_HANDLER) records
+# the per-run GC summary into the run trace rather than spamming the findings
+# feed. The action is the substrate mutation; the trace is the audit record.
+outputs: []

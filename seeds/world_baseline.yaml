@@ -153,18 +153,29 @@ alliances:
     members:
       - { country: "Saudi Arabia", valid_from: "1981-05-25" }
 
-# --- Active conflicts -> signed -1 nexuses ---------------------------------
-# The CURRENT active-conflict layer (the piece that was missing). Each conflict
-# lists its belligerents; the adapter emits one signed -1 nexus per ORDERED
-# pair (subject=country, rel_type='InActiveConflictWith', object=belligerent)
+# --- Active conflicts -> signed nexuses ------------------------------------
+# The CURRENT active-conflict layer. Each conflict groups its belligerents into
+# ``sides`` (coalitions). The adapter emits one signed -1 'InActiveConflictWith'
+# nexus per ORDERED pair ACROSS distinct sides (subject=country, object=enemy)
 # so the grounding resolver — which matches on nexuses.subject — surfaces the
-# war whichever side a country analyst is scoped to. Distinct belligerent pairs
-# are distinct typed triples, so a country in several wars keeps one open edge
-# per opponent (no self-supersession). Adding a conflict (e.g. Russia-Ukraine)
-# is a one-line entry below. valid_from is the conflict-onset date; set
-# valid_until when a conflict ends (the edge then closes, dropping out of the
-# current-state grounding).
+# war whichever side a country analyst is scoped to; and a signed +1 'AlliedWith'
+# nexus per ordered pair WITHIN a multi-member side (co-belligerents are allies,
+# not at war with each other). Distinct typed triples never self-supersede, so a
+# country in several wars keeps one open edge per opponent. Adding a conflict is
+# a few lines below. valid_from is the conflict-onset date; set valid_until when
+# a conflict ends (the edges then close, dropping out of the current-state
+# grounding). The legacy flat ``belligerents:`` list (all-vs-all hostile, no
+# alliances) is still accepted for genuinely all-against-all conflicts.
 conflicts:
+  # D31: coalition-aware. ``sides`` groups co-belligerents so HOSTILE (-1)
+  # edges are emitted ONLY across sides — Iran vs {United States, Israel} — and
+  # never within a side. The US and Israel are ALLIED (+1) here, not at war with
+  # each other (the prior flat ``belligerents`` form wrongly asserted
+  # "Israel in active conflict with United States"). Use ``sides`` for any war
+  # with coalitions; the legacy flat ``belligerents`` form (all-vs-all) is still
+  # accepted for genuinely all-against-all conflicts.
   - name: "US-Israel-Iran war"
-    belligerents: ["Iran", "United States", "Israel"]
+    sides:
+      - ["Iran"]
+      - ["United States", "Israel"]
     valid_from: "2026-02-28"

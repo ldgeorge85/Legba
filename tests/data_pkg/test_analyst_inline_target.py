@@ -42,6 +42,8 @@ from legba.data.analysts.inline_target import (
     _coerce_finding,
     _orient,
     _render_user_prompt,
+    _title_from_text,
+    _unwrap_envelope_body,
     build_prompt_module,
     run_method,
 )
@@ -362,13 +364,28 @@ def test_coerce_finding_markdown_fenced_json():
 
 
 def test_coerce_finding_malformed_json():
-    """Bad JSON → "unstructured" finding with the raw body preserved."""
+    """Bad JSON → "unstructured" finding with the raw body preserved.
+
+    D27: the title is now LIFTED from the LLM prose (the first usable line)
+    rather than the static placeholder, so the product surface shows a real
+    headline instead of "Assessment for country_g20_XX". The placeholder is
+    only the last resort when no usable line exists.
+    """
     raw = "this is not json at all { incomplete"
     finding = _coerce_finding(raw, fallback_title="Default Title")
-    assert finding.title == "Default Title"
+    # Title derived from the prose (not the placeholder).
+    assert finding.title == raw
     assert raw in finding.body
     assert "unstructured" in finding.tags
     assert finding.confidence == 0.3
+
+
+def test_coerce_finding_whitespace_only_falls_back_to_placeholder():
+    """D27: only when the LLM produced no usable line at all does the static
+    fallback title surface."""
+    finding = _coerce_finding("   \n  \n", fallback_title="Default Title")
+    assert finding.title == "Default Title"
+    assert "unstructured" in finding.tags
 
 
 def test_coerce_finding_trailing_text():
@@ -391,6 +408,76 @@ def test_coerce_finding_non_object_json():
     raw = '["not", "a", "dict"]'
     finding = _coerce_finding(raw, fallback_title="fallback")
     assert "unstructured" in finding.tags
+
+
+# ---------------------------------------------------------------------------
+# D27 — product-surface: LLM-authored title fallback + JSON-envelope unwrap
+# ---------------------------------------------------------------------------
+
+
+def test_title_from_text_prefers_markdown_heading():
+    text = "## Turkey: rising lira pressure\n\nBody prose here."
+    assert _title_from_text(text, fallback_title="ph") == "Turkey: rising lira pressure"
+
+
+def test_title_from_text_strips_bluf_label():
+    text = "BLUF: India tightens export controls on rice.\nMore detail follows."
+    assert _title_from_text(text, fallback_title="ph") == (
+        "India tightens export controls on rice."
+    )
+
+
+def test_title_from_text_first_usable_line_and_skips_braces():
+    text = "{\n  Brazil fiscal outlook deteriorates\n}"
+    assert _title_from_text(text, fallback_title="ph") == (
+        "Brazil fiscal outlook deteriorates"
+    )
+
+
+def test_title_from_text_falls_back_when_empty():
+    assert _title_from_text("   \n\n", fallback_title="Assessment for x") == (
+        "Assessment for x"
+    )
+
+
+def test_unwrap_envelope_body_unwraps_double_wrapped_json():
+    inner = '{"title": "T", "body": "## Real markdown\\n- point"}'
+    assert _unwrap_envelope_body(inner) == "## Real markdown\n- point"
+
+
+def test_unwrap_envelope_body_unwraps_fenced_envelope():
+    inner = '```json\n{"title": "T", "body": "plain markdown body"}\n```'
+    assert _unwrap_envelope_body(inner) == "plain markdown body"
+
+
+def test_unwrap_envelope_body_passthrough_for_plain_markdown():
+    body = "## Heading\nNormal markdown, not an envelope."
+    assert _unwrap_envelope_body(body) == body
+
+
+def test_coerce_finding_unwraps_envelope_body_into_markdown():
+    """D27: a double-wrapped {title, body} in the body column is unwrapped so the
+    body holds rendered markdown, not raw JSON."""
+    raw = json.dumps(
+        {
+            "title": "Outer title",
+            "body": json.dumps({"title": "Inner", "body": "## Rendered\nmarkdown"}),
+            "confidence": 0.6,
+        }
+    )
+    finding = _coerce_finding(raw, fallback_title="ph")
+    assert finding.title == "Outer title"
+    assert finding.body == "## Rendered\nmarkdown"
+    assert "{" not in finding.body.splitlines()[0]
+
+
+def test_coerce_finding_lifts_title_when_body_present_but_title_missing():
+    """D27: a parsed dict with body but no title lifts the title from the body
+    markdown rather than using the static placeholder."""
+    raw = json.dumps({"body": "# Argentina inflation reaccelerates\nDetails."})
+    finding = _coerce_finding(raw, fallback_title="Assessment for country_g20_ar")
+    assert finding.title == "Argentina inflation reaccelerates"
+    assert finding.title != "Assessment for country_g20_ar"
 
 
 # ---------------------------------------------------------------------------
