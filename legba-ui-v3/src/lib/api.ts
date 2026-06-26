@@ -406,3 +406,50 @@ export async function fetchJournal(
   const qs = params.toString()
   return apiGet<JournalResponse>(`/journal${qs ? `?${qs}` : ''}`)
 }
+
+// ---------------------------------------------------------------------------
+// System Status panel (#89-adjacent ops surface) — the at-a-glance health view
+// the operator asked for: per-analyst cadence + per-source firing. These two
+// routes read the TRUTH tables (analyst_traces / signals) rather than
+// actor_state (whose last_run_at is NULL), so they reflect what actually ran /
+// fired. Mirrors the v3 routes added in `src/legba/data/registry`.
+// ---------------------------------------------------------------------------
+
+/** One per-analyst cadence row. Mirrors `GET /api/v1/v3/system/analyst-cadence`.
+ *  Sourced from analyst_traces GROUP BY analyst_id, max(run_started_at).
+ *  status: 'never' (0 runs) | 'stale' (age > 6h) | 'healthy'. */
+export interface AnalystCadenceRow {
+  analyst_id: string
+  last_run_at: string | null
+  age_seconds: number | null
+  runs_1h: number
+  runs_24h: number
+  last_outcome: string | null
+  status: 'never' | 'stale' | 'healthy' | string
+}
+
+/** One per-source firing row. Mirrors `GET /api/v1/v3/system/source-firing`.
+ *  signals (count + max fetched_at by source_id) LEFT JOIN source_poll_outcomes
+ *  + source_descriptors. status: 'firing' | 'silent' (active, 0 signals/24h) |
+ *  'error' (recent poll errors) | 'paused'. */
+export interface SourceFiringRow {
+  source_id: string
+  state: string | null
+  signals_24h: number
+  signals_7d: number
+  last_seen_at: string | null
+  age_seconds: number | null
+  last_poll_outcome: string | null
+  recent_error_count: number
+  status: 'firing' | 'silent' | 'error' | 'paused' | string
+}
+
+/** Per-analyst cadence truth (analyst_traces-backed). */
+export async function getSystemAnalystCadence(): Promise<AnalystCadenceRow[]> {
+  return apiGet<AnalystCadenceRow[]>('/v3/system/analyst-cadence')
+}
+
+/** Per-source firing matrix (signals + poll-outcome backed). */
+export async function getSystemSourceFiring(): Promise<SourceFiringRow[]> {
+  return apiGet<SourceFiringRow[]>('/v3/system/source-firing')
+}

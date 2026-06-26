@@ -56,6 +56,8 @@ export type PanelKind =
   | 'system.deep_consult'
   | 'system.backfill'
   | 'system.settings'
+  // System Status — at-a-glance per-layer health (acquisition/analysis/queues/infra)
+  | 'system.status'
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
   | 'system.entities'
   | 'system.entity_graph'

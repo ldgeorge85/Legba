@@ -81,6 +81,8 @@ const SystemGovernorEvents = lazy(() => import('@/panels/system/GovernorEvents')
 const SystemAuditChain = lazy(() => import('@/panels/system/AuditChain'))
 const SystemStreamLag = lazy(() => import('@/panels/system/StreamLag'))
 const SystemActorHealth = lazy(() => import('@/panels/system/ActorHealth'))
+// System Status — the at-a-glance per-layer health view (#89 ops surface).
+const SystemStatus = lazy(() => import('@/panels/system/SystemStatus'))
 // Product surfaces (UI-6 / Tier G — pivot)
 const SystemSearch = lazy(() => import('@/panels/system/Search'))
 const SystemEntities = lazy(() => import('@/panels/system/Entities'))
@@ -313,6 +315,13 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'system.actor_health': {
     definition: def('system.actor_health', 'system_actor_health', 'system', null, 'Actor Health', false, ['personal'], 'HeartPulse'),
     Component: SystemActorHealth,
+  },
+  // System Status — the at-a-glance per-layer health view (acquisition / analysis
+  // / queues / infra in one page) the operator has repeatedly asked for. Live
+  // tier; System group via the system.* → Operate prefix fallback (navGroups.ts).
+  'system.status': {
+    definition: def('system.status', 'system_status', 'system', null, 'System Status', false, ['personal'], 'Gauge'),
+    Component: SystemStatus,
   },
   // --- Product surfaces (UI-6 / Tier G — pivot) ---
   // System-category singletons; ship in personal + cis (the Travis-ASM

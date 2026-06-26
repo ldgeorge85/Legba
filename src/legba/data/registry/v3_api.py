@@ -96,6 +96,50 @@ class ConsumerLagRow(BaseModel):
     ack_floor_stream_seq: int | None = None
 
 
+class AnalystCadenceRow(BaseModel):
+    """One analyst's true cadence snapshot for the System Status panel.
+
+    Sourced from ``analyst_traces`` (GROUP BY analyst_id) — the AUTHORITATIVE
+    cadence truth, not ``actor_state`` whose ``last_run_at`` is NULL for the
+    LLM analyst path. ``status`` is derived purely from recency:
+
+      * ``never``   — zero traces for this analyst id
+      * ``stale``   — ``age_seconds`` > 21600 (6h since the last run started)
+      * ``healthy`` — ran within the last 6h
+    """
+    analyst_id: str
+    last_run_at: datetime | None = None
+    age_seconds: int | None = None
+    runs_1h: int = 0
+    runs_24h: int = 0
+    last_outcome: str | None = None
+    status: Literal["never", "stale", "healthy"] = "never"
+
+
+class SourceFiringRow(BaseModel):
+    """One source's firing snapshot for the System Status panel.
+
+    Composes ``signals`` (count + freshest ``fetched_at`` per ``source_id``),
+    ``source_poll_outcomes`` (latest poll outcome + recent error count — note
+    this table only logs ``empty``/``error`` polls, never successes), and the
+    head ``source_descriptors`` row (declared ``state``). ``status``:
+
+      * ``paused``  — descriptor state is paused/retired/draft/configured
+      * ``error``   — recent poll errors recorded
+      * ``silent``  — active head but zero signals in the last 24h
+      * ``firing``  — active and producing signals
+    """
+    source_id: str
+    state: str | None = None
+    signals_24h: int = 0
+    signals_7d: int = 0
+    last_seen_at: datetime | None = None
+    age_seconds: int | None = None
+    last_poll_outcome: str | None = None
+    recent_error_count: int = 0
+    status: Literal["firing", "silent", "error", "paused"] = "silent"
+
+
 class OptimizerCandidate(BaseModel):
     """One optimizer-emitted prompt-module candidate awaiting decision.
 
@@ -443,6 +487,214 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                 """
             )
         return [ActorRow(**dict(r)) for r in rows]
+
+    @router.get(
+        "/system/analyst-cadence",
+        response_model=list[AnalystCadenceRow],
+    )
+    async def system_analyst_cadence(
+        principal: str = Depends(require_bearer),
+    ) -> list[AnalystCadenceRow]:
+        """True per-analyst cadence from ``analyst_traces`` (System Status).
+
+        The felt gap this closes: the Actor Health roster reads
+        ``actor_state`` whose ``last_run_at`` is NULL for the LLM analyst
+        path, so it can't tell a healthy analyst from a dead one. The trace
+        log IS the cadence truth — GROUP BY analyst_id, max(run_started_at).
+
+        Fully defensive: any query failure returns an empty list (HTTP 200)
+        so the panel renders "no data" rather than polling a 500 every few
+        seconds.
+        """
+        try:
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    WITH agg AS (
+                        SELECT analyst_id,
+                               max(run_started_at) AS last_run_at,
+                               count(*) FILTER (
+                                   WHERE run_started_at > now()
+                                         - interval '1 hour'
+                               ) AS runs_1h,
+                               count(*) FILTER (
+                                   WHERE run_started_at > now()
+                                         - interval '24 hours'
+                               ) AS runs_24h
+                          FROM public.analyst_traces
+                         GROUP BY analyst_id
+                    ),
+                    latest AS (
+                        SELECT DISTINCT ON (analyst_id)
+                               analyst_id, status AS last_outcome
+                          FROM public.analyst_traces
+                         ORDER BY analyst_id, run_started_at DESC
+                    )
+                    SELECT a.analyst_id,
+                           a.last_run_at,
+                           EXTRACT(
+                               EPOCH FROM (now() - a.last_run_at)
+                           )::bigint AS age_seconds,
+                           a.runs_1h,
+                           a.runs_24h,
+                           l.last_outcome
+                      FROM agg a
+                      LEFT JOIN latest l USING (analyst_id)
+                     ORDER BY a.last_run_at DESC NULLS LAST
+                     LIMIT 500
+                    """
+                )
+        except Exception as exc:  # noqa: BLE001 — degrade to empty, HTTP 200
+            logger.info("v3.system.analyst_cadence.unavailable err=%s", exc)
+            return []
+
+        out: list[AnalystCadenceRow] = []
+        for r in rows:
+            age = r["age_seconds"]
+            age_int = int(age) if age is not None else None
+            if age_int is None:
+                status: str = "never"
+            elif age_int > 21600:
+                status = "stale"
+            else:
+                status = "healthy"
+            out.append(
+                AnalystCadenceRow(
+                    analyst_id=str(r["analyst_id"]),
+                    last_run_at=r["last_run_at"],
+                    age_seconds=age_int,
+                    runs_1h=int(r["runs_1h"] or 0),
+                    runs_24h=int(r["runs_24h"] or 0),
+                    last_outcome=r["last_outcome"],
+                    status=status,  # type: ignore[arg-type]
+                )
+            )
+        return out
+
+    @router.get(
+        "/system/source-firing",
+        response_model=list[SourceFiringRow],
+    )
+    async def system_source_firing(
+        principal: str = Depends(require_bearer),
+    ) -> list[SourceFiringRow]:
+        """Per-source firing health (System Status panel).
+
+        Composes signal flow (``signals`` count + freshest ``fetched_at`` per
+        source), the latest poll outcome + recent error count
+        (``source_poll_outcomes`` — note that table only records ``empty`` /
+        ``error`` polls, so absence of rows is normal for a firing source),
+        and the declared head descriptor ``state``
+        (``source_descriptors`` WHERE is_head).
+
+        ``status`` rules (first match wins):
+
+          * ``paused``  — descriptor state is not ``active``
+          * ``error``   — one or more poll errors in the last 24h
+          * ``silent``  — active head, zero signals in the last 24h
+          * ``firing``  — active and producing signals
+
+        Defensive: empty list (HTTP 200) on any query failure.
+        """
+        try:
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    WITH heads AS (
+                        SELECT descriptor_id AS source_id, state
+                          FROM public.source_descriptors
+                         WHERE is_head
+                    ),
+                    sig AS (
+                        SELECT source_id,
+                               count(*) FILTER (
+                                   WHERE fetched_at > now()
+                                         - interval '24 hours'
+                               ) AS signals_24h,
+                               count(*) FILTER (
+                                   WHERE fetched_at > now()
+                                         - interval '7 days'
+                               ) AS signals_7d,
+                               max(fetched_at) AS last_seen_at
+                          FROM public.signals
+                         GROUP BY source_id
+                    ),
+                    poll AS (
+                        SELECT source_id,
+                               count(*) FILTER (
+                                   WHERE outcome = 'error'
+                                     AND occurred_at > now()
+                                         - interval '24 hours'
+                               ) AS recent_error_count
+                          FROM public.source_poll_outcomes
+                         GROUP BY source_id
+                    ),
+                    latest_poll AS (
+                        SELECT DISTINCT ON (source_id)
+                               source_id, outcome AS last_poll_outcome
+                          FROM public.source_poll_outcomes
+                         ORDER BY source_id, occurred_at DESC
+                    ),
+                    ids AS (
+                        SELECT source_id FROM heads
+                        UNION
+                        SELECT source_id FROM sig
+                        UNION
+                        SELECT source_id FROM poll
+                    )
+                    SELECT i.source_id,
+                           h.state,
+                           COALESCE(s.signals_24h, 0) AS signals_24h,
+                           COALESCE(s.signals_7d, 0) AS signals_7d,
+                           s.last_seen_at,
+                           EXTRACT(
+                               EPOCH FROM (now() - s.last_seen_at)
+                           )::bigint AS age_seconds,
+                           lp.last_poll_outcome,
+                           COALESCE(p.recent_error_count, 0)
+                               AS recent_error_count
+                      FROM ids i
+                      LEFT JOIN heads h USING (source_id)
+                      LEFT JOIN sig s USING (source_id)
+                      LEFT JOIN poll p USING (source_id)
+                      LEFT JOIN latest_poll lp USING (source_id)
+                     ORDER BY signals_24h DESC, i.source_id
+                     LIMIT 1000
+                    """
+                )
+        except Exception as exc:  # noqa: BLE001 — degrade to empty, HTTP 200
+            logger.info("v3.system.source_firing.unavailable err=%s", exc)
+            return []
+
+        out: list[SourceFiringRow] = []
+        for r in rows:
+            state = r["state"]
+            signals_24h = int(r["signals_24h"] or 0)
+            recent_errors = int(r["recent_error_count"] or 0)
+            age = r["age_seconds"]
+            age_int = int(age) if age is not None else None
+            if state is not None and state != "active":
+                status: str = "paused"
+            elif recent_errors > 0:
+                status = "error"
+            elif signals_24h > 0:
+                status = "firing"
+            else:
+                status = "silent"
+            out.append(
+                SourceFiringRow(
+                    source_id=str(r["source_id"]),
+                    state=state,
+                    signals_24h=signals_24h,
+                    signals_7d=int(r["signals_7d"] or 0),
+                    last_seen_at=r["last_seen_at"],
+                    age_seconds=age_int,
+                    last_poll_outcome=r["last_poll_outcome"],
+                    recent_error_count=recent_errors,
+                    status=status,  # type: ignore[arg-type]
+                )
+            )
+        return out
 
     @router.get(
         "/optimizer/candidates", response_model=list[OptimizerCandidate],
