@@ -568,6 +568,16 @@ async def _resolve_batch(
                 signal_names.append(text)
 
             # Co-occurrence edges — pairwise among the signal's (capped) entities.
+            #
+            # D15 (upstream): STAMP the originating signal id into the edge's
+            # derived_from (uuid[]) at write time. The co_occurs edge is derived
+            # from THIS signal's co-mention — that signal id is the real lineage
+            # the relationship_reifier copies into the nexus (it reads
+            # pe.derived_from and populates BOTH the nexus derived_from +
+            # source_signal_ids). Without it ALL proposed_edges carried an empty
+            # array, so nothing propagated and agent nexuses had no provenance.
+            edge_sig = r["id"] if isinstance(r["id"], uuid.UUID) else None
+            edge_derived = [edge_sig] if edge_sig is not None else []
             names = sorted(set(signal_names))[:MAX_ENTITIES_PER_SIGNAL]
             for a, b in itertools.combinations(names, 2):
                 # Store the co-mention SNIPPET plus the OTHER entities co-named
@@ -584,13 +594,21 @@ async def _resolve_batch(
                     """
                     INSERT INTO proposed_edges
                         (source_entity, target_entity, relationship_type, confidence,
-                         evidence_text, status)
-                    VALUES ($1,$2,'co_occurs',0.4,$3,'pending')
+                         evidence_text, status, derived_from)
+                    VALUES ($1,$2,'co_occurs',0.4,$3,'pending',$4::uuid[])
                     ON CONFLICT (lower(source_entity), lower(target_entity), relationship_type)
                     DO UPDATE SET confidence = LEAST(1.0, proposed_edges.confidence + 0.05),
-                                 evidence_text = EXCLUDED.evidence_text
+                                 evidence_text = EXCLUDED.evidence_text,
+                                 -- D15: UNION the originating signal id (deduped),
+                                 -- so a re-corroborated edge accrues every signal
+                                 -- that produced it as lineage (never re-grows).
+                                 derived_from = (
+                                     SELECT COALESCE(array_agg(DISTINCT m), '{}'::uuid[])
+                                       FROM unnest(proposed_edges.derived_from
+                                                   || EXCLUDED.derived_from) AS m
+                                 )
                     """,
-                    a, b, evidence,
+                    a, b, evidence, edge_derived,
                 )
                 edges_upserted += 1
 

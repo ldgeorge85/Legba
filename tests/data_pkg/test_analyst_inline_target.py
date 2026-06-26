@@ -481,6 +481,97 @@ def test_coerce_finding_lifts_title_when_body_present_but_title_missing():
 
 
 # ---------------------------------------------------------------------------
+# D27 SECOND PASS — the live us/cn/fr/za case the W4 fix MISSED: the body
+# COLUMN is a JSON-STRINGIFIED envelope (a string that literally starts with
+# {"title": ...}), not a {title,body} dict whose body field is stringified.
+# Detect it, render the inner body as markdown, lift the inner title.
+# ---------------------------------------------------------------------------
+
+
+def test_unwrap_envelope_returns_inner_title_and_body():
+    """_unwrap_envelope lifts BOTH the inner body and the inner title."""
+    from legba.data.analysts.inline_target import _unwrap_envelope
+
+    inner = '{"title": "US: shutdown risk rises", "body": "## Markdown\\n- pt"}'
+    body, title = _unwrap_envelope(inner)
+    assert body == "## Markdown\n- pt"
+    assert title == "US: shutdown risk rises"
+
+
+def test_unwrap_envelope_passthrough_returns_none_title():
+    """Plain markdown is NOT an envelope → body unchanged, title None."""
+    from legba.data.analysts.inline_target import _unwrap_envelope
+
+    body, title = _unwrap_envelope("## Plain heading\nnot an envelope")
+    assert body == "## Plain heading\nnot an envelope"
+    assert title is None
+
+
+def test_coerce_finding_body_column_is_stringified_envelope_missing_outer_title():
+    """The verbatim live us/cn/fr/za defect: the outer dict's ``body`` field is
+    a JSON-STRINGIFIED ``{title, body}`` envelope and the OUTER title is
+    missing — the inner title must be lifted (not the static placeholder) and
+    the inner body rendered as markdown (no leading brace)."""
+    raw = json.dumps(
+        {
+            "body": json.dumps(
+                {
+                    "title": "France: pension reform standoff deepens",
+                    "body": "## Key developments\n- strikes widen [1]",
+                }
+            ),
+            "confidence": 0.55,
+        }
+    )
+    finding = _coerce_finding(raw, fallback_title="Assessment for country_g20_fr")
+    assert finding.title == "France: pension reform standoff deepens"
+    assert finding.title != "Assessment for country_g20_fr"
+    assert finding.body == "## Key developments\n- strikes widen [1]"
+    assert not finding.body.lstrip().startswith("{")
+
+
+def test_coerce_finding_stringified_envelope_outer_title_wins():
+    """When the OUTER title is present it wins over the inner envelope title,
+    but the body is still unwrapped to the inner markdown."""
+    raw = json.dumps(
+        {
+            "title": "South Africa: load-shedding eases",
+            "body": json.dumps({"title": "Inner ZA", "body": "## Body\nprose"}),
+        }
+    )
+    finding = _coerce_finding(raw, fallback_title="Assessment for country_g20_za")
+    assert finding.title == "South Africa: load-shedding eases"
+    assert finding.body == "## Body\nprose"
+
+
+def test_coerce_finding_stringified_envelope_no_inner_title_lifts_from_body():
+    """The CN case: body is a stringified envelope with NO inner title and NO
+    outer title → the title is lifted from the inner body markdown heading."""
+    raw = json.dumps(
+        {
+            "body": json.dumps({"body": "# China export curbs tighten\nDetails."}),
+        }
+    )
+    finding = _coerce_finding(raw, fallback_title="Assessment for country_g20_cn")
+    assert finding.title == "China export curbs tighten"
+    assert finding.title != "Assessment for country_g20_cn"
+    assert finding.body == "# China export curbs tighten\nDetails."
+
+
+def test_coerce_finding_stringified_fenced_envelope_body():
+    """The body column is a fenced ```json {title, body} ``` block — unwrap it
+    and lift the inner title."""
+    raw = json.dumps(
+        {
+            "body": '```json\n{"title": "US: rates held", "body": "plain body"}\n```',
+        }
+    )
+    finding = _coerce_finding(raw, fallback_title="ph")
+    assert finding.title == "US: rates held"
+    assert finding.body == "plain body"
+
+
+# ---------------------------------------------------------------------------
 # ORIENT — sorts produced_at descending, handles None
 # ---------------------------------------------------------------------------
 

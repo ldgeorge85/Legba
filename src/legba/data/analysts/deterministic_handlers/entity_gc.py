@@ -8,7 +8,16 @@ Entity garbage-collection family. No LLM. Five operations:
   2. Flag name-similar entity pairs (trigram similarity > 0.6) with
      co-occurring signals as ``duplicate_candidate``.
   3. Delete orphan signal_entity_links.
-  4. Auto-pause sources with > 20 consecutive failures.
+  4. Auto-pause sources with > 20 consecutive failed polls. The failure
+     signal is the contiguous leading run of ``outcome='error'`` rows in
+     ``source_poll_outcomes`` per ACTIVE ``source_descriptors`` head — there is
+     NO ``sources`` table / ``consecutive_failures`` column (the original query
+     hit a non-existent ``sources`` relation and logged
+     ``source_pause_failed err=relation "sources" does not exist`` on EVERY run,
+     D2). Pausing flips the head descriptor's lifecycle ``state`` 'active'→
+     'paused' (mirroring ``discovered_materializer._pause_discovery``) and
+     records the reason into ``body->>auto_paused_*``; the runtime actor loop
+     observes the state change and stops polling.
   5. Quarantine orphan ``proposed_edges`` (D25) — pending edges whose
      ``source_entity`` / ``target_entity`` has no matching
      ``entity_profiles.canonical_name`` (the exact drift ``integrity_sweep``
@@ -29,7 +38,6 @@ Output ``data`` keys:
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -43,6 +51,11 @@ _DORMANT_DAYS = 30
 _DUP_TRIGRAM_THRESHOLD = 0.6
 _DUP_MAX_PAIRS = 50
 _SOURCE_FAILURE_THRESHOLD = 20
+# How many recent poll-outcome rows per source the error-streak read pulls back.
+# Must exceed _SOURCE_FAILURE_THRESHOLD so a qualifying leading error-run is
+# never truncated by the LIMIT (a productive poll writes no outcome row, so the
+# window only ever holds non-productive — empty/error — polls).
+_SOURCE_STREAK_WINDOW = max(_SOURCE_FAILURE_THRESHOLD + 5, 25)
 
 
 # ---------------------------------------------------------------------------
@@ -206,43 +219,110 @@ async def _quarantine_orphan_proposed_edges(pool: Any) -> int:
     return int(result.split()[-1]) if result else 0
 
 
+def _consecutive_error_streaks(
+    rows: Any,
+    *,
+    threshold: int,
+) -> list[tuple[str, int]]:
+    """Pure per-source consecutive-``error``-poll decision — no DB, unit-testable.
+
+    ``rows``: iterable of mappings carrying ``source_id`` and ``outcome``
+    (``'error'`` | ``'empty'``), already grouped per source and ordered
+    NEWEST-FIRST (the SQL guarantees this, mirroring the liveness watchdog's
+    empty-streak read). For each source, count the contiguous LEADING run of
+    ``outcome='error'`` rows; the run breaks on the first non-error row (an
+    ``'empty'`` outcome, or — by ABSENCE — a productive poll, which writes no
+    outcome row at all). Returns ``(source_id, streak_len)`` for every source
+    whose leading error run is ``>= threshold``.
+
+    A PRODUCTIVE poll writes NO ``source_poll_outcomes`` row (it is
+    self-evidencing via its signals), so a recent success does not appear here
+    to break the run — acceptable for an auto-pause guard whose whole point is a
+    source that keeps ERRORING and never produces. The empty-streak (silent but
+    HTTP-200) case is owned by the liveness watchdog; this leg keys only on hard
+    errors so it never auto-pauses a merely-quiet feed."""
+    if threshold <= 0:
+        return []
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for r in rows:
+        sid = r.get("source_id")
+        if not sid:
+            continue
+        if sid not in by_source:
+            by_source[sid] = []
+            order.append(sid)
+        by_source[sid].append(r)
+    failing: list[tuple[str, int]] = []
+    for sid in order:
+        streak = 0
+        for r in by_source[sid]:
+            if (r.get("outcome") or "") != "error":
+                break
+            streak += 1
+        if streak >= threshold:
+            failing.append((sid, streak))
+    return failing
+
+
 async def _pause_failing_sources(pool: Any) -> int:
+    """Auto-pause ACTIVE sources with a leading run of >= threshold ``error``
+    polls.
+
+    There is NO ``sources`` table — the original query hit a non-existent
+    ``sources`` relation (D2). The failure signal lives in
+    ``source_poll_outcomes`` (one row per NON-productive poll, ``outcome`` in
+    ``'empty'`` / ``'error'``); a source is a descriptor in ``source_descriptors``
+    (head row keyed on ``descriptor_id`` + ``is_head``, lifecycle in ``state``,
+    metadata in ``body`` jsonb). We read the last ``_SOURCE_STREAK_WINDOW``
+    poll-outcomes per ACTIVE head source, compute the contiguous leading
+    ``error`` run in pure Python, and flip ``state`` 'active'→'paused' (recording
+    the reason in ``body``) for any source over threshold."""
     paused = 0
+    window = int(_SOURCE_STREAK_WINDOW)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
+            f"""
+            SELECT po.source_id   AS source_id,
+                   po.outcome     AS outcome,
+                   po.occurred_at AS occurred_at
+            FROM source_descriptors d
+            JOIN LATERAL (
+                SELECT source_id, outcome, occurred_at
+                FROM source_poll_outcomes
+                WHERE source_id = d.descriptor_id
+                ORDER BY occurred_at DESC
+                LIMIT {window}
+            ) po ON TRUE
+            WHERE d.is_head AND d.state = 'active'
+            ORDER BY po.source_id, po.occurred_at DESC
             """
-            SELECT id, name, consecutive_failures, data
-            FROM sources
-            WHERE status = 'active'
-              AND consecutive_failures > $1
-            """,
-            _SOURCE_FAILURE_THRESHOLD,
         )
-        for row in rows:
-            data = row["data"]
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except (json.JSONDecodeError, TypeError):
-                    data = {}
-            elif data is None:
-                data = {}
-            else:
-                data = dict(data)
-            data["auto_paused_at"] = datetime.now(timezone.utc).isoformat()
-            data["auto_paused_reason"] = (
-                f"Exceeded {_SOURCE_FAILURE_THRESHOLD} consecutive failures "
-                f"({row['consecutive_failures']})"
+        for source_id, streak in _consecutive_error_streaks(
+            [dict(r) for r in rows], threshold=_SOURCE_FAILURE_THRESHOLD
+        ):
+            reason = (
+                f"Exceeded {_SOURCE_FAILURE_THRESHOLD} consecutive failed polls "
+                f"({streak} error outcomes)"
             )
             await conn.execute(
                 """
-                UPDATE sources SET
-                    status = 'paused',
-                    data = $2,
-                    updated_at = NOW()
-                WHERE id = $1
+                UPDATE source_descriptors SET
+                    body = jsonb_set(
+                        jsonb_set(
+                            COALESCE(body, '{}'::jsonb),
+                            '{auto_paused_at}',
+                            to_jsonb($2::text)
+                        ),
+                        '{auto_paused_reason}',
+                        to_jsonb($3::text)
+                    ),
+                    state = 'paused'
+                WHERE descriptor_id = $1 AND is_head
                 """,
-                row["id"], json.dumps(data),
+                source_id,
+                datetime.now(timezone.utc).isoformat(),
+                reason,
             )
             paused += 1
     return paused

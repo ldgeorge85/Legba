@@ -51,6 +51,8 @@ from .._entity_canon import (
     canonicalize_entity,
     is_demonym,
     is_junk_entity,
+    is_org_surface,
+    is_place_surface,
 )
 from ..provenance.writes import supersede_prior_facts
 from ..sources._contract import Signal
@@ -390,6 +392,77 @@ _CONTINENTS_REGIONS: frozenset[str] = frozenset({
     "the eu", "european union", "the caribbean", "caribbean",
     "the gulf", "the levant", "the pacific", "the arctic",
 })
+
+#: Geographic-CONTAINMENT predicates whose VALUE must be a geographic container
+#: (a country / continent-region / place-surface / known place). A value that is
+#: a known NON-geographic ORGANISATION / brand / party ("Facebook located in
+#: Instagram", "Alternative for Germany located in AfD") is a two-entity
+#: inversion / acronym-self-reference artifact — you cannot be geographically
+#: "located in" an organisation. Lower-cased, canonical (post-normalize).
+_GEO_CONTAINMENT_PREDICATES: frozenset[str] = frozenset({
+    "located in", "headquartered in", "based in", "capital of",
+})
+
+#: KNOWN non-geographic organisations / brands / political parties NER routinely
+#: places as the VALUE of a geographic-containment relation (the social-media /
+#: acronym-expansion artifact). Curated + lower-cased — an unknown value flows
+#: through (the resolver/critic still see it). These are NEVER geographic
+#: containers, so a "<x> located in <one of these>" triple is a structural
+#: inversion / self-reference (the live D-class "Facebook located in Instagram"
+#: and "Alternative for Germany located in AfD").
+_KNOWN_NONGEO_ORGS: frozenset[str] = frozenset({
+    # social / tech platforms + parent brands
+    "facebook", "instagram", "whatsapp", "messenger", "threads", "meta",
+    "twitter", "x", "tiktok", "youtube", "snapchat", "linkedin", "reddit",
+    "pinterest", "telegram", "discord", "twitch", "google", "alphabet",
+    "apple", "microsoft", "amazon", "netflix", "spotify", "uber", "airbnb",
+    "paypal", "tesla", "openai", "anthropic", "nvidia", "oracle", "ibm",
+    "samsung", "huawei", "tencent", "alibaba", "wechat", "weibo", "baidu",
+    "bytedance",
+    # political parties / movements (full + acronym) NER pairs as containment
+    "afd", "alternative for germany", "spd", "cdu", "csu", "fdp",
+    "republican party", "democratic party", "labour party", "conservative party",
+    "fidesz", "syriza", "podemos", "vox", "rassemblement national",
+    "national rally", "five star movement", "bjp", "congress party",
+})
+
+
+def _is_nongeo_containment_inversion(subject: str, predicate: str, value: str) -> bool:
+    """True when a geographic-containment triple points at a NON-geographic
+    organisation / brand / party as the container — a two-entity inversion or
+    acronym-self-reference artifact.
+
+    Catches the live D-class garbage the country-subject inversion check misses
+    because neither endpoint is a country:
+      * "Facebook located in Instagram" — two peer organisations, no geography;
+      * "Alternative for Germany located in AfD" — full name + acronym of the
+        SAME party (self-reference), neither a place.
+
+    Deterministic + conservative. Fires ONLY when:
+      * the predicate is a geographic-containment relation; AND
+      * the VALUE is a KNOWN non-geographic org (the curated gazetteer) and is
+        NOT itself a country / continent-region / place-surface / known place
+        (so a brand that doubles as a place name can't be mis-dropped).
+
+    Relies on the curated gazetteers (NOT the noisy NER class), so a legit
+    "BBC located in United Kingdom" / "Eiffel Tower located in Paris" passes.
+    """
+    pred = normalize_predicate((predicate or "").strip().lower())
+    if pred not in _GEO_CONTAINMENT_PREDICATES:
+        return False
+    val_norm = " ".join(str(value or "").split()).strip()
+    val_low = val_norm.lower()
+    if val_low not in _KNOWN_NONGEO_ORGS:
+        return False
+    # Defensive: never drop when the value IS a recognised geographic surface
+    # (a brand that collides with a place name). The curated set excludes these
+    # already, but the gazetteers are authoritative.
+    _, val_cls = canonicalize_entity(val_norm, "entity")
+    if val_cls in ("country", "location"):
+        return False
+    if val_low in _CONTINENTS_REGIONS or is_place_surface(val_norm):
+        return False
+    return True
 
 
 def _is_adjective_or_demonymic_value(value: str) -> bool:
@@ -1140,6 +1213,13 @@ class FactExtractorHandler:
         # "Washington capital of US").
         if _is_inverted_relation(subject, predicate, value):
             return "inverted_relation"
+        # Two-entity inversion / acronym self-reference: a geographic-containment
+        # relation pointing at a known NON-geographic org/party as the container
+        # ("Facebook located in Instagram", "Alternative for Germany located in
+        # AfD"). Caught here because neither endpoint is a country, so the
+        # country-subject inversion check above misses it.
+        if _is_nongeo_containment_inversion(subject, predicate, value):
+            return "nongeo_containment_inversion"
         # Sports-roster shape ("Mbappe member of Iraq" / person member of
         # person) even when the text topic gate let a mixed signal through.
         if _is_roster_triple(subject, predicate, value):
@@ -1240,7 +1320,9 @@ class FactExtractorHandler:
                 _is_quantity_phrase(subject) or _is_quantity_phrase(value)
             ):
                 continue
-            conf = _resolve_ingestion_confidence(triple, cfg.backend)
+            conf, conf_components = _resolve_ingestion_confidence_components(
+                triple, cfg.backend
+            )
             if conf < cfg.min_confidence:
                 continue
             # Canonical relation type (shared with the AGE edge leg). When an
@@ -1265,6 +1347,9 @@ class FactExtractorHandler:
                 "predicate": predicate,
                 "value": value,
                 "confidence": conf,
+                # How the confidence was derived (extractor score vs heuristic
+                # floor) — provenanced into the fact's data.confidence_components.
+                "confidence_components": conf_components,
                 "subject_class": subj_class,
                 "value_class": val_class,
                 "relation_type": relation_type,
@@ -1293,6 +1378,11 @@ class FactExtractorHandler:
                     "ner_class_object": t["value_class"],
                     "relation_type": t["relation_type"],
                 }
+                # Confidence provenance (D6/D13): how the score was derived —
+                # the extractor's real per-triple score vs the documented
+                # heuristic floor — so the basis is never opaque.
+                if t.get("confidence_components") is not None:
+                    data["confidence_components"] = t["confidence_components"]
                 if t.get("slm_validated"):
                     # Provenance the SLM relationship-validation verdict.
                     data["slm_validated"] = True
@@ -1603,46 +1693,76 @@ def _clamp_conf(value: Any) -> float:
     return max(0.0, min(1.0, c))
 
 
-def _resolve_ingestion_confidence(triple: dict[str, Any], backend: str) -> float:
-    """Resolve a REAL per-triple confidence for an ingestion fact.
+def _resolve_ingestion_confidence_components(
+    triple: dict[str, Any], backend: str
+) -> tuple[float, dict[str, Any]]:
+    """Resolve a per-triple confidence AND its provenance breakdown.
 
-    The live relation backend (GLiREL) emits a real per-relation score, but the
-    reused entity payload often carries NO usable per-triple score, and the
-    historical REBEL backend stamped a synthetic 1.0 on every triple. Neither a
-    missing score nor an exact-1.0 sentinel is a real measurement, so we never
-    let those land at 1.0:
+    Replaces the historical flat constant: the EXTRACTOR's real per-relation
+    score is preferred whenever it is a genuine measurement; only when no real
+    score is available does the clearly-documented heuristic floor apply. The
+    returned ``components`` dict is provenanced into the fact's
+    ``data.confidence_components`` so the basis is never opaque:
 
-      * a missing score (``confidence`` absent / non-numeric) → the sane
-        default :data:`_INGESTION_DEFAULT_CONFIDENCE` (0.75, below seed/agent);
-      * on the ``relation`` backend, a score of EXACTLY 1.0 is treated as the
-        legacy "no real score" sentinel → also the default; a genuine sub-1.0
-        score (a real GLiREL relation score, e.g. 0.9) is kept;
-      * any other provided, in-range score (e.g. an ``llm``-backend 0.8) is
-        used as-is.
+      * ``source`` — ``"extractor_score"`` when a genuine per-triple score was
+        used, else ``"heuristic_floor"``;
+      * ``extractor_score`` — the raw per-triple score the extractor provided
+        (``None`` when absent / non-numeric);
+      * ``floor`` — :data:`_INGESTION_DEFAULT_CONFIDENCE`, the documented
+        conservative floor (machine-extracted ⇒ never as certain as a curated
+        seed/analyst assertion); recorded even when the score was used so the
+        floor in force is auditable;
+      * ``backend`` — which extraction backend produced the triple;
+      * ``note`` — the reason the floor was chosen, when it was.
 
-    FOLLOW-UP: now that GLiREL emits real per-relation scores, the exact-1.0
-    sentinel handling on the relation backend is a legacy/defensive guard
-    carried over from REBEL; reconciling it so a *genuine* GLiREL 1.0 isn't
-    collapsed to 0.75 is a tracked code follow-up. The logic below is unchanged.
+    Score handling (unchanged semantics, now explained in-band):
+      * missing / non-numeric score → the floor (``heuristic_floor``);
+      * ``relation`` backend + an EXACT 1.0 → the legacy REBEL "no real score"
+        sentinel → the floor; a genuine sub-1.0 GLiREL score is kept;
+      * any other in-range score → used as-is (``extractor_score``).
+
+    FOLLOW-UP (unchanged): on the relation backend the exact-1.0 sentinel guard
+    is a legacy carry-over from REBEL; reconciling it so a *genuine* GLiREL 1.0
+    isn't collapsed to the floor is a tracked code follow-up.
 
     The SLM relationship-validation stage (when on) already overrides via the
     verdict path upstream; this only governs the extractor's own score.
     """
+    floor = _INGESTION_DEFAULT_CONFIDENCE
+    components: dict[str, Any] = {
+        "backend": backend,
+        "floor": floor,
+        "extractor_score": None,
+        "source": "heuristic_floor",
+    }
     raw = triple.get("confidence", None)
     if raw is None:
-        return _INGESTION_DEFAULT_CONFIDENCE
+        components["note"] = "no extractor score provided"
+        return floor, components
     try:
         c = float(raw)
     except (TypeError, ValueError):
-        return _INGESTION_DEFAULT_CONFIDENCE
+        components["note"] = "extractor score not numeric"
+        return floor, components
+    components["extractor_score"] = c
     c = max(0.0, min(1.0, c))
     # Legacy/defensive (carried from the historical REBEL backend, which stamped
     # 1.0 on every triple): on the relation backend an exact 1.0 is treated as
     # "no real score" so it stops laundering 1.000s. GLiREL emits real scores —
     # see the FOLLOW-UP note above.
     if backend == "relation" and c >= 1.0:
-        return _INGESTION_DEFAULT_CONFIDENCE
-    return c
+        components["note"] = "relation-backend exact-1.0 sentinel → floor"
+        return floor, components
+    components["source"] = "extractor_score"
+    return c, components
+
+
+def _resolve_ingestion_confidence(triple: dict[str, Any], backend: str) -> float:
+    """Backward-compatible scalar wrapper over
+    :func:`_resolve_ingestion_confidence_components` (returns just the value).
+    Kept so existing callers / tests that read only the float are unchanged."""
+    conf, _ = _resolve_ingestion_confidence_components(triple, backend)
+    return conf
 
 
 __all__ = [

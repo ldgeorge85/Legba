@@ -469,17 +469,22 @@ def _title_from_text(text: str, *, fallback_title: str) -> str:
     return fallback_title[:2048]
 
 
-def _unwrap_envelope_body(body: str) -> str:
-    """D27: if a body string is itself a raw ``{title, body}`` JSON envelope,
-    unwrap it so the body column holds the rendered markdown, not the JSON.
+def _unwrap_envelope(body: str) -> tuple[str, str | None]:
+    """D27 (second pass): unwrap a body that is itself a stringified
+    ``{title, body}`` JSON envelope, returning ``(inner_body, inner_title)``.
 
-    Some LLM responses double-wrap: the outer parse succeeds but the ``body``
-    field is a stringified ``{"title": ..., "body": ...}`` object (or a fenced
-    JSON block). Returns the inner ``body`` (markdown) when that shape is
-    detected; otherwise returns the input unchanged.
+    The W4 D27 fix only handled the double-wrapped *dict* case
+    (``parsed["body"]`` is itself a stringified envelope). The live us/cn/fr/za
+    findings hit a wider shape: the ``body`` COLUMN is a JSON-stringified
+    envelope — a plain string that literally starts with ``{"title": ...}`` (or
+    a fenced ```` ```json ```` block of one). When that shape is detected this
+    parses it, returns the inner ``body`` (markdown) AND lifts the inner
+    ``title`` so the caller can prefer it over the static placeholder. When the
+    input is NOT such an envelope, returns ``(body, None)`` unchanged — the
+    plain-markdown / non-JSON path is byte-for-byte preserved.
     """
     if not body:
-        return body
+        return body, None
     candidate = body.strip()
     if candidate.startswith("```"):
         candidate = candidate.strip("`")
@@ -487,16 +492,35 @@ def _unwrap_envelope_body(body: str) -> str:
             candidate = candidate[4:]
         candidate = candidate.strip()
     if not candidate.startswith("{"):
-        return body
+        return body, None
     try:
         inner = json.loads(candidate)
     except (json.JSONDecodeError, ValueError):
-        return body
+        return body, None
     if isinstance(inner, dict) and "body" in inner:
         inner_body = inner.get("body")
         if isinstance(inner_body, str) and inner_body.strip():
-            return inner_body
-    return body
+            inner_title = inner.get("title")
+            title = (
+                inner_title.strip()
+                if isinstance(inner_title, str) and inner_title.strip()
+                else None
+            )
+            return inner_body, title
+    return body, None
+
+
+def _unwrap_envelope_body(body: str) -> str:
+    """D27: if a body string is itself a raw ``{title, body}`` JSON envelope,
+    unwrap it so the body column holds the rendered markdown, not the JSON.
+
+    Backward-compatible thin wrapper over :func:`_unwrap_envelope` that returns
+    only the inner body (markdown). Returns the input unchanged when no envelope
+    shape is detected. Use :func:`_unwrap_envelope` directly when you also need
+    the lifted inner title.
+    """
+    inner_body, _inner_title = _unwrap_envelope(body)
+    return inner_body
 
 
 def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
@@ -511,9 +535,10 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
 
     D27 (product surface): on every fallback path, derive the title from the
     LLM-authored prose (``_title_from_text``) instead of the static
-    "Assessment for country_g20_XX" placeholder; and unwrap a double-wrapped
-    ``{title, body}`` JSON envelope (``_unwrap_envelope_body``) so the body
-    column holds rendered markdown rather than raw JSON.
+    "Assessment for country_g20_XX" placeholder; and unwrap a body that is a
+    JSON-stringified ``{title, body}`` envelope (``_unwrap_envelope``) so the
+    body column holds rendered markdown rather than raw JSON — lifting the
+    inner envelope's title when the outer title is missing.
 
     Failure is non-fatal here on purpose: the runtime's
     ``write_analyst_output`` validates against the iglu schema and
@@ -566,10 +591,17 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         )
 
     try:
-        body = _unwrap_envelope_body(str(parsed.get("body") or ""))
-        # D27: if the LLM gave a usable title, keep it; otherwise lift one from
-        # the rendered body before falling back to the static placeholder.
+        # D27 (second pass): the live us/cn/fr/za findings carry a body that is
+        # itself a JSON-STRINGIFIED ``{title, body}`` envelope. Unwrap it to the
+        # inner markdown body AND lift its inner title so a real headline
+        # survives even when the OUTER title is missing/placeholder.
+        body, inner_title = _unwrap_envelope(str(parsed.get("body") or ""))
+        # Title precedence: the LLM's own outer title → the unwrapped inner
+        # envelope's title → a heading lifted from the rendered body → the
+        # static placeholder.
         title = str(parsed.get("title") or "").strip()
+        if not title and inner_title:
+            title = inner_title
         if not title:
             title = _title_from_text(body, fallback_title=fallback_title)
         return FindingPayload(
