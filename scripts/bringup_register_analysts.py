@@ -77,6 +77,7 @@ ANALYST_FILES = [
     "analyst_thematic_proposal.yaml",        # NEW — Phase 5b (propose thematic frames for uncovered hot situations)
     "analyst_journal_assessor.yaml",         # NEW — Journal Assessor Wave 0 (the 11th OutputKind producer; entry tier)
     "analyst_journal_consolidator.yaml",     # NEW — Journal Wave 2 (consolidation tier: SAME kind, distinct id, daily beat)
+    "analyst_entity_gc.yaml",                # NEW — health remediation D2 (deterministic GC of orphan entities/proposed_edges; drains the integrity_sweep-flagged backlog)
 ]
 
 # Journal Assessor (plan §4.8 leg 2): `journal_assessor` is a NEW analyst kind,
