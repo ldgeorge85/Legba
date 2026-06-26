@@ -44,8 +44,11 @@ from legba.data.sources._contract import (
 from legba.data.sources.rss import (
     RSSConfig,
     RSSSourceHandler,
+    _MAX_CONSECUTIVE_304,
     _RSS_CURSOR_KEY,
     _RSS_HEALTH_KEY,
+    _extract_published,
+    _parse_tolerant_datetime,
 )
 
 
@@ -551,6 +554,189 @@ def test_build_conditional_headers_partial_cursor():
     h = RSSSourceHandler._build_conditional_headers({"etag": "", "last_modified": "x"})
     assert "If-None-Match" not in h
     assert h["If-Modified-Since"] == "x"
+
+
+# ---------------------------------------------------------------------------
+# Fix A — date midnight-collapse recovery (pure, no network)
+#
+# Some feeds (observed: iaea.topnews) carry a date shape feedparser parses
+# only to DAY precision — a 2-digit year, no day-name, no timezone, often
+# double-spaced ("26-06-26  13:30"). feedparser sets published_parsed to
+# 00:00:00, silently dropping the real time-of-day; the cursor's strict-after
+# filter then drops every "midnight" item and the feed emits 0 forever.
+# These tests assert the real time is recovered, not collapsed to midnight.
+# ---------------------------------------------------------------------------
+
+
+def _entry_from_pubdate(pubdate: str):
+    """Build a real feedparser entry carrying ``pubdate`` in <pubDate>."""
+    import feedparser
+
+    xml = (
+        '<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>'
+        '<item><title>i</title><link>https://x.invalid/a</link>'
+        f"<guid>g1</guid><pubDate>{pubdate}</pubDate></item>"
+        "</channel></rss>"
+    )
+    return feedparser.parse(xml).entries[0]
+
+
+def test_parse_tolerant_recovers_iaea_double_spaced_2digit_year():
+    """The exact iaea shape: 2-digit year, no day-name, no tz, DOUBLE-spaced."""
+    dt = _parse_tolerant_datetime("26-06-26  13:30")
+    assert dt is not None
+    assert dt == datetime(2026, 6, 26, 13, 30, tzinfo=timezone.utc)
+
+
+def test_parse_tolerant_recovers_single_spaced_2digit_year():
+    dt = _parse_tolerant_datetime("26-06-26 13:30")
+    assert dt == datetime(2026, 6, 26, 13, 30, tzinfo=timezone.utc)
+
+
+def test_parse_tolerant_recovers_with_seconds():
+    dt = _parse_tolerant_datetime("26-06-26 13:30:45")
+    assert dt == datetime(2026, 6, 26, 13, 30, 45, tzinfo=timezone.utc)
+
+
+def test_parse_tolerant_recovers_4digit_year_naive():
+    dt = _parse_tolerant_datetime("2026-06-26 13:30")
+    assert dt == datetime(2026, 6, 26, 13, 30, tzinfo=timezone.utc)
+
+
+def test_parse_tolerant_returns_none_for_rfc822():
+    """A well-formed RFC822 string is NOT this parser's job (returns None)."""
+    assert _parse_tolerant_datetime("Mon, 19 May 2025 14:00:00 +0000") is None
+
+
+def test_extract_published_recovers_iaea_time_not_midnight():
+    """End-to-end: the iaea shape recovers 13:30Z via _extract_published,
+    NOT the midnight feedparser collapsed it to."""
+    entry = _entry_from_pubdate("26-06-26  13:30")
+    # Sanity: confirm feedparser DID collapse it to midnight (the bug).
+    assert entry.get("published_parsed").tm_hour == 0
+    assert entry.get("published_parsed").tm_min == 0
+    # The fix recovers the real time.
+    dt = _extract_published(entry)
+    assert dt == datetime(2026, 6, 26, 13, 30, tzinfo=timezone.utc)
+
+
+def test_extract_published_recovers_singlespace_iaea_variant():
+    entry = _entry_from_pubdate("26-06-26 13:30")
+    dt = _extract_published(entry)
+    assert dt == datetime(2026, 6, 26, 13, 30, tzinfo=timezone.utc)
+
+
+def test_extract_published_keeps_wellformed_rfc822_untouched():
+    """A well-formed RFC822 date is parsed by feedparser's struct_time and
+    must NOT be perturbed by the midnight-recovery path."""
+    entry = _entry_from_pubdate("Mon, 19 May 2025 14:00:00 +0000")
+    dt = _extract_published(entry)
+    assert dt == datetime(2025, 5, 19, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def test_extract_published_preserves_true_midnight():
+    """A feed that genuinely publishes at 00:00 keeps midnight (the raw string
+    has no non-midnight time-of-day, so recovery is not triggered)."""
+    entry = _entry_from_pubdate("Mon, 19 May 2025 00:00:00 +0000")
+    dt = _extract_published(entry)
+    assert dt == datetime(2025, 5, 19, 0, 0, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Fix C — stale-edge 304 pin guard
+#
+# A stale CDN edge (crisisgroup.latest behind Cloudflare) can pin a constant
+# ETag and return a perpetual 304 even as the origin changes, silencing the
+# feed forever. After K consecutive 304s the handler drops the conditional-GET
+# headers for ONE pull to force an unconditional refetch and break the pin.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consecutive_304_counter_increments_and_forces_refetch():
+    captured: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(304, request=req)
+
+    # Seed a populated cursor so conditional headers are sent.
+    state = InMemoryStateStore(
+        {_RSS_CURSOR_KEY: {"etag": '"pinned"', "last_modified": "", "consecutive_304": 0}}
+    )
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+
+    # Poll repeatedly. Each 304 increments the counter; once it reaches the
+    # threshold the NEXT pull must drop the conditional headers (force refetch).
+    for _ in range(_MAX_CONSECUTIVE_304):
+        await _collect(rss.pull(ctx))
+    # After _MAX_CONSECUTIVE_304 consecutive 304s, the counter sits at the
+    # threshold — every poll so far carried the conditional ETag header.
+    assert all(
+        r.headers.get("If-None-Match") == '"pinned"' for r in captured
+    )
+    cursor = state.snapshot()[_RSS_CURSOR_KEY]
+    assert cursor["consecutive_304"] == _MAX_CONSECUTIVE_304
+
+    # The NEXT pull must force an unconditional refetch (no conditional header).
+    await _collect(rss.pull(ctx))
+    await rss.aclose()
+    assert "If-None-Match" not in captured[-1].headers
+    assert "If-Modified-Since" not in captured[-1].headers
+    # A forced pull that still 304s resets the counter (origin truly unchanged).
+    cursor = state.snapshot()[_RSS_CURSOR_KEY]
+    assert cursor["consecutive_304"] == 0
+
+
+@pytest.mark.asyncio
+async def test_200_resets_consecutive_304_counter():
+    """A real 200 (fresh content) clears the stale-edge counter, so the
+    conditional-GET resumes normally on the next pull (no dup-storm)."""
+    state = InMemoryStateStore(
+        {_RSS_CURSOR_KEY: {"etag": '"e"', "last_modified": "", "consecutive_304": 5}}
+    )
+    ctx = _make_ctx(state)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text=SAMPLE_RSS_2, headers={"ETag": '"fresh"'}, request=req,
+        )
+
+    rss = _make_handler(handler)
+    signals = await _collect(rss.pull(ctx))
+    await rss.aclose()
+
+    assert len(signals) == 3
+    cursor = state.snapshot()[_RSS_CURSOR_KEY]
+    assert cursor["consecutive_304"] == 0
+    assert cursor["etag"] == '"fresh"'
+
+
+@pytest.mark.asyncio
+async def test_single_304_keeps_conditional_get():
+    """A handful of 304s (below threshold) must NOT drop conditional-GET —
+    the bandwidth optimization stays load-bearing for healthy feeds."""
+    captured: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(304, request=req)
+
+    state = InMemoryStateStore(
+        {_RSS_CURSOR_KEY: {"etag": '"e"', "last_modified": "", "consecutive_304": 0}}
+    )
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+
+    await _collect(rss.pull(ctx))
+    await _collect(rss.pull(ctx))
+    await rss.aclose()
+
+    # Both pulls (well below threshold) carried the conditional ETag.
+    assert captured[0].headers.get("If-None-Match") == '"e"'
+    assert captured[1].headers.get("If-None-Match") == '"e"'
+    assert state.snapshot()[_RSS_CURSOR_KEY]["consecutive_304"] == 2
 
 
 # ---------------------------------------------------------------------------

@@ -775,22 +775,33 @@ class SourceCore:
                 "source_actor.pull.error actor_id=%s err=%s", self.actor_id, exc,
             )
         finally:
-            # ALWAYS advance the cursor — even on a capped/partial pull — so the
-            # next poll makes forward progress. Cursor-advance policy:
+            # Advance the cursor along REAL forward progress only — never to a
+            # bare wall-clock NOW on a zero-yield pull. Cursor-advance policy:
             #   * hard fetch error  -> keep the prior position (retry the window).
-            #   * capped/timed-out WITH >=1 entry processed -> advance to the
+            #   * >=1 entry processed (capped OR complete) -> advance to the
             #     LAST PROCESSED entry's logical timestamp, NOT NOW. NOW would
             #     skip the unprocessed backlog past the cap; the last-processed
             #     timestamp keeps the forward-progress anti-trap WITHOUT skipping
-            #     live entries (Fix A — observed skipping behaviour).
-            #   * complete pull (not capped), OR a capped pull that processed
-            #     ZERO entries (a genuinely empty/at-head pull) -> advance to
-            #     NOW (the original anti-trap for empty/caught-up pulls).
-            # Downstream content-hash dedup makes any window overlap a no-op.
+            #     live entries (the observed skipping behaviour).
+            #   * ZERO entries processed (a genuinely empty/at-head/all-filtered
+            #     pull) -> LEAVE THE CURSOR UNCHANGED (keep ``since_iso``). The
+            #     prior policy advanced ``since`` to NOW here, but a feed that
+            #     misses every item one cycle (e.g. a transient parse/date bug
+            #     that drops the whole window, or a Cloudflare 304 pin) then has
+            #     its ``since`` march irreversibly forward and can NEVER catch up
+            #     — a permanent silent stall (Fix B). Holding the cursor lets the
+            #     next healthy pull re-see the same window; content-hash dedup
+            #     downstream makes the re-emit on recovery a harmless no-op, so
+            #     holding cannot cause a dup-storm.
+            # First-ever pull (no prior cursor, since_iso is None): there is no
+            # window to protect, so a zero-yield pull seeds the cursor at NOW to
+            # avoid re-walking from epoch on the next cycle.
             if errored is not None:
                 last_pulled_at = since_iso or _utcnow().isoformat()
-            elif capped and last_processed_ts is not None:
+            elif last_processed_ts is not None:
                 last_pulled_at = last_processed_ts.isoformat()
+            elif since_iso:
+                last_pulled_at = since_iso
             else:
                 last_pulled_at = _utcnow().isoformat()
             new_cursor = {

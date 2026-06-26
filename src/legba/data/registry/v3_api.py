@@ -119,15 +119,21 @@ class AnalystCadenceRow(BaseModel):
 class SourceFiringRow(BaseModel):
     """One source's firing snapshot for the System Status panel.
 
-    Composes ``signals`` (count + freshest ``fetched_at`` per ``source_id``),
+    Composes ``signals`` (count + freshest ``created_at`` per ``source_id``),
     ``source_poll_outcomes`` (latest poll outcome + recent error count — note
-    this table only logs ``empty``/``error`` polls, never successes), and the
-    head ``source_descriptors`` row (declared ``state``). ``status``:
+    this table is a FAILURE-ONLY ledger: it only logs ``empty``/``error``
+    polls, never successes, so its rows must NOT be the primary firing
+    signal), and the head ``source_descriptors`` row (declared ``state``).
 
-      * ``paused``  — descriptor state is paused/retired/draft/configured
-      * ``error``   — recent poll errors recorded
-      * ``silent``  — active head but zero signals in the last 24h
-      * ``firing``  — active and producing signals
+    ``status`` is derived PRIMARILY from actual signal production (recency),
+    with the poll ledger used only as a secondary error signal so a
+    genuinely-producing source is never mislabelled ``error``/``silent``:
+
+      * ``paused``  — descriptor state is not ``active``
+      * ``firing``  — produced a signal within the last 48h (regardless of
+        any recent ``empty``/``error`` poll rows)
+      * ``error``   — no recent signal AND recent hard poll errors
+      * ``silent``  — active head, no recent signal, no recent errors
     """
     source_id: str
     state: str | None = None
@@ -580,19 +586,29 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
     ) -> list[SourceFiringRow]:
         """Per-source firing health (System Status panel).
 
-        Composes signal flow (``signals`` count + freshest ``fetched_at`` per
+        Composes signal flow (``signals`` count + freshest ``created_at`` per
         source), the latest poll outcome + recent error count
-        (``source_poll_outcomes`` — note that table only records ``empty`` /
-        ``error`` polls, so absence of rows is normal for a firing source),
-        and the declared head descriptor ``state``
-        (``source_descriptors`` WHERE is_head).
+        (``source_poll_outcomes`` — a FAILURE-ONLY ledger that only records
+        ``empty`` / ``error`` polls; successes are never inserted, so absence
+        of rows is normal for a firing source and its rows must not flip a
+        producing source to ``error``/``silent``), and the declared head
+        descriptor ``state`` (``source_descriptors`` WHERE is_head).
 
-        ``status`` rules (first match wins):
+        ``status`` is derived PRIMARILY from real signal production and only
+        SECONDARILY from the poll ledger (first match wins):
 
           * ``paused``  — descriptor state is not ``active``
-          * ``error``   — one or more poll errors in the last 24h
-          * ``silent``  — active head, zero signals in the last 24h
-          * ``firing``  — active and producing signals
+          * ``firing``  — produced a signal within the last 48h, regardless
+            of any recent ``empty``/``error`` poll rows
+          * ``error``   — active head, no signal in 48h, AND ≥1 hard poll
+            error in the last 24h
+          * ``silent``  — active head, no signal in 48h, no recent errors
+
+        Obvious template / autowire junk descriptors
+        (``src_autowire_p13_%`` / ``src_locked_p13_%`` / ``src_template_p13_%``
+        / ``src_tmpl_aw_%`` / ``src_tmpl_ds_%`` / ``src_disc_%``) are excluded
+        from the matrix — they are retired separately and would otherwise read
+        as normal paused sources.
 
         Defensive: empty list (HTTP 200) on any query failure.
         """
@@ -604,22 +620,35 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                         SELECT descriptor_id AS source_id, state
                           FROM public.source_descriptors
                          WHERE is_head
+                           -- exclude retired template / autowire junk so it
+                           -- does not read as a normal paused source
+                           AND descriptor_id NOT LIKE 'src_autowire_p13_%'
+                           AND descriptor_id NOT LIKE 'src_locked_p13_%'
+                           AND descriptor_id NOT LIKE 'src_template_p13_%'
+                           AND descriptor_id NOT LIKE 'src_tmpl_aw_%'
+                           AND descriptor_id NOT LIKE 'src_tmpl_ds_%'
+                           AND descriptor_id NOT LIKE 'src_disc_%'
                     ),
                     sig AS (
+                        -- firing truth is ACTUAL signal production, keyed on
+                        -- created_at (when the row landed in the substrate)
                         SELECT source_id,
                                count(*) FILTER (
-                                   WHERE fetched_at > now()
+                                   WHERE created_at > now()
                                          - interval '24 hours'
                                ) AS signals_24h,
                                count(*) FILTER (
-                                   WHERE fetched_at > now()
+                                   WHERE created_at > now()
                                          - interval '7 days'
                                ) AS signals_7d,
-                               max(fetched_at) AS last_seen_at
+                               max(created_at) AS last_seen_at
                           FROM public.signals
                          GROUP BY source_id
                     ),
                     poll AS (
+                        -- SECONDARY only: source_poll_outcomes is a
+                        -- failure-only ledger (no success rows), so it informs
+                        -- error context but never primary firing state
                         SELECT source_id,
                                count(*) FILTER (
                                    WHERE outcome = 'error'
@@ -650,6 +679,12 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                            EXTRACT(
                                EPOCH FROM (now() - s.last_seen_at)
                            )::bigint AS age_seconds,
+                           -- primary firing flag: produced a signal recently
+                           -- (48h safe floor — covers a couple of cycles even
+                           -- for the slowest cron cadences)
+                           (s.last_seen_at IS NOT NULL
+                            AND s.last_seen_at > now()
+                                - interval '48 hours') AS signals_recent,
                            lp.last_poll_outcome,
                            COALESCE(p.recent_error_count, 0)
                                AS recent_error_count
@@ -658,7 +693,10 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                       LEFT JOIN sig s USING (source_id)
                       LEFT JOIN poll p USING (source_id)
                       LEFT JOIN latest_poll lp USING (source_id)
-                     ORDER BY signals_24h DESC, i.source_id
+                     -- only emit rows that resolve to a real (non-junk) head
+                     WHERE h.source_id IS NOT NULL
+                     ORDER BY signals_recent DESC, signals_24h DESC,
+                              i.source_id
                      LIMIT 1000
                     """
                 )
@@ -671,15 +709,23 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             state = r["state"]
             signals_24h = int(r["signals_24h"] or 0)
             recent_errors = int(r["recent_error_count"] or 0)
+            signals_recent = bool(r["signals_recent"])
             age = r["age_seconds"]
             age_int = int(age) if age is not None else None
+            # Firing state is AUTHORITATIVE from real signal production; the
+            # failure-only poll ledger is secondary and must not flip a
+            # genuinely-producing source to error/silent.
             if state is not None and state != "active":
                 status: str = "paused"
-            elif recent_errors > 0:
-                status = "error"
-            elif signals_24h > 0:
+            elif signals_recent:
+                # produced a signal within the 48h floor → firing, even if
+                # recent polls logged empty/error (NASA EONET case)
                 status = "firing"
+            elif recent_errors > 0:
+                # no recent signal AND hard poll errors → genuinely erroring
+                status = "error"
             else:
+                # active head, no recent signal, no recent errors → silent
                 status = "silent"
             out.append(
                 SourceFiringRow(

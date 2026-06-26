@@ -6,12 +6,15 @@ Covers the two 2026-06 source-cursor fixes, driven against an in-memory
 substrate (no live Postgres / Dapr — the cursor + offset logic is the unit
 under test, not the substrate write):
 
-  A. Capped/timed-out poll must advance the ``since`` cursor to the LAST
-     PROCESSED entry's logical timestamp — NOT NOW. The earlier NOW-advance
-     was an anti-trap that, on a capped pull, skipped the unprocessed backlog
-     past the cap (observed dropping live entries). Forward-progress is kept
-     (the cursor still moves) WITHOUT skipping; a genuinely empty / fully
-     drained pull still advances to NOW.
+  A. Any pull that processed >=1 entry (capped OR fully drained) advances the
+     ``since`` cursor to the LAST PROCESSED entry's logical timestamp — NOT
+     NOW. A bare NOW-advance skipped the unprocessed backlog past the cap
+     (observed dropping live entries) and skipped live entries published
+     between the last item consumed and NOW. Forward-progress is kept (the
+     cursor still moves) WITHOUT skipping. A ZERO-yield pull HOLDS the cursor
+     when a prior one exists (Fix B — never march ``since`` forward on a miss,
+     which would silently stall the feed forever); only the FIRST-EVER pull
+     with no prior cursor seeds it at NOW.
 
   B. ``bulk_highwater_advance`` — the pure high-water-mark cursor-advance for
      bulk dataset-streaming kinds (e.g. OpenSanctions ``bulk_csv``). The
@@ -248,9 +251,9 @@ async def test_capped_pull_resumes_backlog_on_next_pull(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_pull_advances_to_now(monkeypatch):
-    """A genuinely empty pull (zero entries) keeps the original anti-trap:
-    advance to NOW so a caught-up source doesn't re-grind an old window."""
+async def test_first_ever_empty_pull_seeds_now(monkeypatch):
+    """A genuinely empty pull with NO prior cursor seeds ``since`` at NOW so a
+    fresh source doesn't re-walk from epoch — there is no window to protect."""
     source_id = f"source.test.empty_{uuid4().hex[:8]}"
     sd = _poll_descriptor(source_id)
     deps = StandardDeps(pg_pool=_FakePool(), nats_publish=None)
@@ -265,13 +268,47 @@ async def test_empty_pull_advances_to_now(monkeypatch):
 
     cursor = await store.get("cursor")
     advanced = datetime.fromisoformat(cursor["last_pulled_at"])
-    assert before <= advanced <= after        # advanced to NOW
+    assert before <= advanced <= after        # seeded to NOW (no prior window)
 
 
 @pytest.mark.asyncio
-async def test_complete_uncapped_pull_advances_to_now(monkeypatch):
-    """A pull that drains the whole window (not capped) advances to NOW — the
-    last-processed-timestamp rule only kicks in on a CAPPED pull."""
+async def test_empty_pull_with_prior_cursor_holds_since(monkeypatch):
+    """Fix B — a zero-yield pull with an EXISTING cursor must HOLD ``since``,
+    never advance it to NOW. The old NOW-advance let a feed that misses one
+    cycle (a transient parse/date bug or a 304 edge pin) march ``since``
+    irreversibly forward and silently stall forever. Holding lets the next
+    healthy pull re-see the same window; content-hash dedup absorbs the
+    overlap, so holding can NOT cause a dup-storm."""
+    source_id = f"source.test.hold_{uuid4().hex[:8]}"
+    sd = _poll_descriptor(source_id)
+    deps = StandardDeps(pg_pool=_FakePool(), nats_publish=None)
+    core = SourceCore(f"source::{source_id}::hold", SourceDeps(descriptor=sd, deps=deps))
+
+    prior = datetime(2025, 6, 1, 12, 12, tzinfo=timezone.utc)
+    store = InMemoryStateStore({"cursor": {"last_pulled_at": prior.isoformat()}})
+    handler = _StubHandler([])      # zero entries this cycle (the "miss")
+    _wire_core(core, store, handler)
+
+    await core.pull_once()
+
+    cursor = await store.get("cursor")
+    held = datetime.fromisoformat(cursor["last_pulled_at"])
+    # The cursor did NOT advance — it is held at the prior position so the
+    # missed window can still be re-seen once the feed recovers.
+    assert held == prior
+    # The handler saw the held cursor as ``since`` (so it re-queries the window).
+    assert handler.seen_since == prior
+
+
+@pytest.mark.asyncio
+async def test_complete_uncapped_pull_advances_to_last_processed(monkeypatch):
+    """Fix B — a pull that drains the whole window (not capped) advances to the
+    LAST PROCESSED entry's logical timestamp, NOT a bare wall-clock NOW.
+    Advancing to NOW would skip any live entry published between the last item
+    we consumed and NOW that simply hadn't been fetched yet; advancing to the
+    last-processed ts keeps forward progress without that skip. The strict-after
+    ``since`` filter + content-hash dedup make the boundary entry a no-op on the
+    next pull (no dup-storm)."""
     import legba.runtime.source_actor as sa
 
     monkeypatch.setattr(sa, "_MAX_ENTRIES_PER_POLL", 100)
@@ -288,12 +325,13 @@ async def test_complete_uncapped_pull_advances_to_now(monkeypatch):
 
     before = datetime.now(tz=timezone.utc)
     result = await core.pull_once()
-    after = datetime.now(tz=timezone.utc)
 
     assert result["signals_written"] == 3
     cursor = await store.get("cursor")
     advanced = datetime.fromisoformat(cursor["last_pulled_at"])
-    assert before <= advanced <= after        # NOW, not the last entry ts
+    # Last of the 3 entries is base + 2min — the cursor advances there, NOT NOW.
+    assert advanced == base + timedelta(minutes=2)
+    assert advanced < before        # provably not NOW
 
 
 # ---------------------------------------------------------------------------

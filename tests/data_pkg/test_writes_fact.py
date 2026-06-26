@@ -10,7 +10,8 @@ Covers (plan §6.2-3):
   * FactPayload validation (required subject/predicate/value).
   * write_fact happy path → row in `facts` with analyst_id set.
   * bad payload → output_dead_letter (mirror the hypothesis write test).
-  * _insert_fact ON CONFLICT upsert (confidence=max, lineage unioned).
+  * _insert_fact ON CONFLICT upsert (confidence=noisy-OR agreement combine,
+    lineage unioned).
   * PIECE B supersession: a new value for an existing (subject, predicate)
     closes the prior open row (valid_until + superseded_by); same-value
     re-assert does NOT supersede.
@@ -195,7 +196,9 @@ async def test_write_fact_on_conflict_upserts(pg_conn):
         vf,
     )
     assert len(rows) == 1, "case-insensitive triple+valid_from must upsert to one row"
-    assert rows[0]["confidence"] == pytest.approx(0.9)
+    # Holes-A A2: agreement now combines via bounded noisy-OR, not MAX —
+    # 1-(1-0.4)(1-0.9) = 0.94 (two sources corroborating raise confidence).
+    assert rows[0]["confidence"] == pytest.approx(0.94)
     lineage = rows[0]["derived_from"]
     assert s1 in lineage and s2 in lineage
 
@@ -401,4 +404,6 @@ async def test_write_fact_camelcase_and_spaced_dedupe_to_one_open_row(pg_conn):
         subj,
     )
     assert len(rows) == 1, "CamelCase + spaced forms of one relation must upsert to ONE open row"
-    assert rows[0]["confidence"] == pytest.approx(0.9)
+    # Holes-A A2: agreement combines via bounded noisy-OR, not MAX —
+    # 1-(1-0.4)(1-0.9) = 0.94.
+    assert rows[0]["confidence"] == pytest.approx(0.94)

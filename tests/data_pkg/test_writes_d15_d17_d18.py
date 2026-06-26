@@ -32,7 +32,10 @@ from legba.data.provenance.writes import (
     _canonical_rel_type,
     _insert_fact,
     _insert_nexus,
+    _source_tier_rank,
     collapse_open_triple,
+    noisy_or_confidence,
+    supersede_prior_facts,
     write_nexus,
 )
 from legba.data.provenance._core import from_analyst
@@ -407,6 +410,288 @@ def test_d17_insert_fact_inserts_when_no_open_row():
         )
     )
     assert conn.n_facts_inserts == 1, "no open row → insert the fresh row"
+
+
+# ===========================================================================
+# Holes-A A1 — source-tier-aware supersession: an ingestion/agent fact must
+#        NOT close an open seed/curated fact; same-tier recency still wins.
+# ===========================================================================
+
+
+def test_a1_source_tier_total_order():
+    """The authority total order: seed == curated (2) outrank ingestion ==
+    agent (1); an unknown/None class is the machine-extracted rank (1) so it can
+    never masquerade as authoritative."""
+    assert _source_tier_rank("seed") == 2
+    assert _source_tier_rank("curated") == 2
+    assert _source_tier_rank("ingestion") == 1
+    assert _source_tier_rank("agent") == 1
+    # case / whitespace tolerant
+    assert _source_tier_rank("  Seed ") == 2
+    assert _source_tier_rank("CURATED") == 2
+    # unknown / None -> machine-extracted (1), never authoritative
+    assert _source_tier_rank("frobnicator") == 1
+    assert _source_tier_rank("") == 1
+    assert _source_tier_rank(None) == 1
+    # seed and curated are EQUAL (neither outranks the other), as are
+    # ingestion and agent — only the cross-tier comparison gates.
+    assert _source_tier_rank("seed") == _source_tier_rank("curated")
+    assert _source_tier_rank("ingestion") == _source_tier_rank("agent")
+
+
+def test_a1_ingestion_passes_machine_rank_into_guard():
+    """An incoming ingestion fact binds rank 1 as the guard param and the UPDATE
+    carries the CASE tier ladder + `<= $5` filter, so a prior seed/curated row
+    (rank 2) is excluded from the close set (2 <= 1 is false)."""
+    conn = RecordingConn()
+    asyncio.run(
+        supersede_prior_facts(
+            conn,
+            subject="Iran",
+            predicate="leader of",
+            value="Some Wrong Value",
+            new_fact_id=uuid4(),
+            incoming_source_type="ingestion",
+        )
+    )
+    assert len(conn.executes) == 1
+    sql, params = conn.executes[0]
+    assert "UPDATE facts" in sql and "superseded_by" in sql
+    # The source-tier guard is present and keyed on the rank bind param.
+    assert "$5::int IS NULL" in sql
+    assert "WHEN 'seed'      THEN 2" in sql
+    assert "WHEN 'curated'   THEN 2" in sql
+    assert "<= $5::int" in sql
+    # $5 (1-indexed) -> params[4] is the incoming machine rank = 1.
+    assert params[4] == 1, params
+
+
+def test_a1_agent_is_also_machine_rank():
+    """An analyst ('agent') emission binds the same machine rank 1 — it likewise
+    cannot close a seed/curated row."""
+    conn = RecordingConn()
+    asyncio.run(
+        supersede_prior_facts(
+            conn, subject="A", predicate="p", value="v",
+            new_fact_id=uuid4(), incoming_source_type="agent",
+        )
+    )
+    _, params = conn.executes[0]
+    assert params[4] == 1, params
+
+
+def test_a1_seed_incoming_binds_authoritative_rank():
+    """An incoming seed/curated fact binds rank 2, so the `tier <= 2` filter
+    admits prior rows of EVERY tier — an operator-blessed value supersedes
+    anything below or equal to it (authoritative writes are never gated out)."""
+    for st, expect in (("seed", 2), ("curated", 2)):
+        conn = RecordingConn()
+        asyncio.run(
+            supersede_prior_facts(
+                conn, subject="A", predicate="p", value="v",
+                new_fact_id=uuid4(), incoming_source_type=st,
+            )
+        )
+        _, params = conn.executes[0]
+        assert params[4] == expect, (st, params)
+
+
+def test_a1_none_source_type_disables_guard_backcompat():
+    """The historical / operator journal-correction caller passes no source_type
+    — the guard param binds NULL so `$5::int IS NULL` short-circuits the CASE and
+    NO tier filtering happens (unconditional close, exactly as before A1)."""
+    conn = RecordingConn()
+    asyncio.run(
+        supersede_prior_facts(
+            conn, subject="A", predicate="p", value="v", new_fact_id=uuid4(),
+        )
+    )
+    _, params = conn.executes[0]
+    assert params[4] is None, params
+
+
+def test_a1_same_tier_leader_change_still_supersedes():
+    """REGRESSION GUARD (the prompt's leader-change case): a NEW seed leader fact
+    superseding an OLD seed leader fact is a SAME-tier (2 vs 2) update — the
+    guard's `2 <= 2` admits the prior row, so legitimate recency-wins
+    supersession is NOT blocked. We assert the bound rank is 2 and the filter is
+    `<=` (inclusive), which is what lets equal tiers through.
+
+    The DB round-trip (an old seed 'Iran leader of X' actually closing when a new
+    seed 'Iran leader of Y' arrives) is exercised in the orchestrator's serial
+    integration run against a migrated Postgres; here we assert the SQL contract
+    that makes same-tier closes possible (inclusive `<=`, not strict `<`)."""
+    conn = RecordingConn()
+    asyncio.run(
+        supersede_prior_facts(
+            conn,
+            subject="Iran",
+            predicate="leader of",
+            value="New Leader",   # differs from the prior open seed value
+            new_fact_id=uuid4(),
+            incoming_source_type="seed",
+        )
+    )
+    sql, params = conn.executes[0]
+    # Inclusive `<=` is what admits an equal-tier prior row (2 <= 2 -> close);
+    # a strict `<` would WRONGLY block same-tier leader updates.
+    assert "<= $5::int" in sql
+    assert params[4] == 2, params
+    # The value-differs predicate is intact (a same-value re-assert never closes).
+    assert "lower(value)    <> lower($3)" in sql
+
+
+def test_a1_insert_fact_threads_payload_source_type_into_guard():
+    """_insert_fact must resolve the incoming fact's source_type and PASS IT to
+    supersede_prior_facts so the tier guard runs. An analyst FactPayload defaults
+    to 'agent' (rank 1) — the supersede UPDATE must bind rank 1, proving the
+    analyst path can't retire a seed/curated row."""
+    conn = RecordingConn(fetchval_results=[None])  # collapse misses -> insert
+    ctx = _ctx(target_id=None)
+    payload = FactPayload(
+        subject="Iran", predicate="leader of", value="Wrong",
+        confidence=0.6, valid_from=NOW,
+    )
+    asyncio.run(
+        _insert_fact(
+            conn,
+            row_id=uuid4(),
+            payload=payload,
+            prov=from_analyst(
+                ctx, schema_uri="iglu:legba/fact/jsonschema/2-0-0", derived_from=[]
+            ),
+            produced_at=NOW,
+            effective_schema_uri="iglu:legba/fact/jsonschema/2-0-0",
+        )
+    )
+    super_exec = next(
+        (p for sql, p in conn.executes if "UPDATE facts" in sql and "superseded_by" in sql),
+        None,
+    )
+    assert super_exec is not None, "supersede must run before insert"
+    assert super_exec[4] == 1, super_exec  # 'agent' default -> machine rank
+
+
+def test_a1_insert_fact_seed_override_binds_authoritative_rank():
+    """The curated-seeding path passes source_type='seed' to _insert_fact; that
+    override (not the payload) must drive the tier rank bound into supersede ->
+    rank 2 (authoritative), so a seed re-assert can supersede lower tiers."""
+    conn = RecordingConn(fetchval_results=[None])
+    ctx = _ctx(target_id=None)
+    payload = FactPayload(
+        subject="Iran", predicate="leader of", value="Correct",
+        confidence=0.9, valid_from=NOW,
+    )
+    asyncio.run(
+        _insert_fact(
+            conn,
+            row_id=uuid4(),
+            payload=payload,
+            prov=from_analyst(
+                ctx, schema_uri="iglu:legba/fact/jsonschema/2-0-0", derived_from=[]
+            ),
+            produced_at=NOW,
+            effective_schema_uri="iglu:legba/fact/jsonschema/2-0-0",
+            source_type="seed",
+        )
+    )
+    super_exec = next(
+        (p for sql, p in conn.executes if "UPDATE facts" in sql and "superseded_by" in sql),
+        None,
+    )
+    assert super_exec is not None
+    assert super_exec[4] == 2, super_exec  # 'seed' override -> authoritative rank
+
+
+# ===========================================================================
+# Holes-A A2 — confidence aggregation on agreement: bounded noisy-OR combine
+#        so N corroborating sources raise confidence above any single one,
+#        capped below certainty.
+# ===========================================================================
+
+
+def test_a2_noisy_or_raises_above_either_input():
+    """Two agreeing sources at 0.6 and 0.7 combine ABOVE both (and above the old
+    max=0.7): 1 - 0.4*0.3 = 0.88."""
+    combined = noisy_or_confidence(0.6, 0.7)
+    assert combined == pytest.approx(0.88)
+    assert combined > 0.7  # strictly above the plain max
+
+
+def test_a2_noisy_or_capped_below_certainty():
+    """Even two near-certain sources never reach 1.0 — clamped to the 0.99 cap so
+    corroboration asymptotes just below certainty."""
+    assert noisy_or_confidence(0.999, 0.999) == 0.99
+    assert noisy_or_confidence(1.0, 1.0) == 0.99
+    assert noisy_or_confidence(1.0, 0.5) == 0.99  # 1-(0)*(.5)=1.0 -> capped
+
+
+def test_a2_noisy_or_monotone_and_repeated_agreement_climbs():
+    """N repeated corroborations climb monotonically toward (never past) the
+    cap — the whole point of aggregation: more agreement -> more belief."""
+    c = 0.5
+    prev = c
+    for _ in range(20):
+        c = noisy_or_confidence(c, 0.5)
+        assert c >= prev          # never decreases
+        assert c <= 0.99          # never exceeds the cap
+        prev = c
+    assert c == pytest.approx(0.99)  # asymptotes to the cap
+
+
+def test_a2_noisy_or_clamps_malformed_inputs():
+    """Out-of-range inputs are clamped to [0,1] first so monotonicity holds even
+    on a malformed/overshooting confidence."""
+    assert noisy_or_confidence(-0.5, 0.5) == pytest.approx(0.5)   # -0.5 -> 0
+    assert noisy_or_confidence(0.5, 1.5) == 0.99                  # 1.5 -> 1 -> capped
+    assert 0.0 <= noisy_or_confidence(0.0, 0.0) <= 0.99
+
+
+def test_a2_collapse_open_triple_uses_noisy_or_in_sql():
+    """collapse_open_triple's UPDATE must combine confidence with the bounded
+    noisy-OR (capped at 0.99), NOT the old GREATEST(max). We assert the SQL shape
+    on the probe it issues."""
+    existing = uuid4()
+    conn = RecordingConn(fetchval_results=[existing])
+    asyncio.run(
+        collapse_open_triple(
+            conn, subject="A", predicate="p", value="v",
+            new_fact_id=uuid4(), confidence=0.8, derived_from=[], valid_from=NOW,
+        )
+    )
+    sql, _ = conn.fetchvals[0]
+    assert "1.0 - (1.0 - facts.confidence) * (1.0 - $4)" in sql
+    assert "LEAST(" in sql and "0.99" in sql
+    # The old max combine must be GONE from the confidence assignment.
+    assert "GREATEST(facts.confidence, $4)" not in sql
+
+
+def test_a2_insert_fact_on_conflict_uses_noisy_or_in_sql():
+    """_insert_fact's ON CONFLICT DO UPDATE must combine confidence with the
+    bounded noisy-OR over EXCLUDED.confidence, capped at 0.99 (was GREATEST)."""
+    conn = RecordingConn(fetchval_results=[None])  # collapse misses -> reach insert
+    ctx = _ctx(target_id=None)
+    payload = FactPayload(
+        subject="A", predicate="p", value="v", confidence=0.7, valid_from=NOW,
+    )
+    asyncio.run(
+        _insert_fact(
+            conn,
+            row_id=uuid4(),
+            payload=payload,
+            prov=from_analyst(
+                ctx, schema_uri="iglu:legba/fact/jsonschema/2-0-0", derived_from=[]
+            ),
+            produced_at=NOW,
+            effective_schema_uri="iglu:legba/fact/jsonschema/2-0-0",
+        )
+    )
+    ins = conn.insert_into("facts")
+    assert ins is not None
+    sql = ins[0]
+    assert "1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)" in sql
+    assert "LEAST(" in sql and "0.99" in sql
+    assert "GREATEST(facts.confidence, EXCLUDED.confidence)" not in sql
 
 
 if __name__ == "__main__":  # pragma: no cover

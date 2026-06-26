@@ -82,6 +82,67 @@ AgeEdgeHook = Callable[[UUID, list[UUID]], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
+# Source-tier precedence (Holes-A A1 — confidence-tier-aware supersession)
+# ---------------------------------------------------------------------------
+#
+# A fact's ``source_type`` is its provenance class. For auto-supersession we
+# rank those classes on a TOTAL ORDER of authority: an AUTHORITATIVE fact (a
+# human-curated seed) must NOT be closed by a lower-authority MACHINE-extracted
+# one (an ingestion-NER hit or an analyst LLM emission). Within the SAME tier
+# recency still wins — a NEW leader fact supersedes the OLD leader fact of the
+# same tier exactly as before.
+#
+# Total order (higher int = more authoritative):
+#   seed     == curated   -> 2   (AUTHORITATIVE: human/operator-owned ground truth)
+#   ingestion == agent    -> 1   (MACHINE-EXTRACTED: NER hit / LLM emission)
+#   <anything else / None>-> 1   (unknown class is treated as machine-extracted)
+#
+# ``seed`` and ``curated`` are deliberately the SAME rank (neither outranks the
+# other — both are operator-blessed); likewise ``ingestion`` and ``agent``. The
+# guard blocks ONLY a STRICT downgrade (incoming tier < prior row's tier), so
+# same-tier and upgrades pass through untouched.
+_SOURCE_TIER_RANK: dict[str, int] = {
+    "seed": 2,
+    "curated": 2,
+    "ingestion": 1,
+    "agent": 1,
+}
+_DEFAULT_SOURCE_TIER_RANK = 1
+
+
+def _source_tier_rank(source_type: str | None) -> int:
+    """Map a fact ``source_type`` onto its authority rank (see the table above).
+
+    An unknown / ``None`` class falls back to the MACHINE-extracted rank (1) so
+    an unrecognised producer can never masquerade as authoritative.
+    """
+    if not source_type:
+        return _DEFAULT_SOURCE_TIER_RANK
+    return _SOURCE_TIER_RANK.get(source_type.strip().lower(), _DEFAULT_SOURCE_TIER_RANK)
+
+
+def noisy_or_confidence(existing: float, incoming: float, *, cap: float = 0.99) -> float:
+    """Bounded noisy-OR combine of two AGREEING confidences (Holes-A A2).
+
+    When N independent sources corroborate the SAME (subject, predicate, value),
+    each adds evidence: the combined belief must RISE above any single source's
+    confidence yet never reach certainty. We use the standard noisy-OR::
+
+        combined = 1 - (1 - existing) * (1 - incoming)
+
+    clamped to ``cap`` (default 0.99) so repeated agreement asymptotes just
+    below 1.0 and never asserts impossible certainty. Inputs are clamped into
+    ``[0, 1]`` first so a malformed/overshooting confidence can't break the
+    monotonicity (the result is always >= max(existing, incoming) and < 1.0).
+    """
+    lo, hi = 0.0, 1.0
+    e = lo if existing < lo else hi if existing > hi else existing
+    i = lo if incoming < lo else hi if incoming > hi else incoming
+    combined = 1.0 - (1.0 - e) * (1.0 - i)
+    return combined if combined < cap else cap
+
+
+# ---------------------------------------------------------------------------
 # Return shapes
 # ---------------------------------------------------------------------------
 
@@ -828,9 +889,12 @@ async def supersede_prior_facts(
     predicate: str,
     value: str,
     new_fact_id: UUID,
+    incoming_source_type: str | None = None,
 ) -> int:
     """Close any open fact(s) for ``(lower(subject), lower(predicate))`` whose
-    VALUE differs from the incoming ``value``, pointing them at ``new_fact_id``.
+    VALUE differs from the incoming ``value``, pointing them at ``new_fact_id``
+    — UNLESS the prior row outranks the incoming fact on source authority
+    (Holes-A A1 — confidence-tier-aware supersession).
 
     This is the altitude-0 auto-supersession the old system had (PIECE B —
     temporal-fact hardening): the canonical "what is true now" for a
@@ -841,6 +905,17 @@ async def supersede_prior_facts(
     inserted open by the caller (``_insert_fact`` / ``_insert_ingestion_fact``).
 
     Contract / safety:
+      * **source-tier guard (A1)** — an incoming MACHINE-extracted fact
+        (``ingestion``/``agent``) does NOT close an open AUTHORITATIVE fact
+        (``seed``/``curated``) for the same subject+predicate. Authority ranks
+        on the total order in :data:`_SOURCE_TIER_RANK`
+        (``seed == curated > ingestion == agent``); the UPDATE skips any prior
+        row whose tier is STRICTLY higher than the incoming one. WITHIN the same
+        tier recency still wins, so a NEW leader fact supersedes the OLD leader
+        fact of the same tier exactly as before — the guard blocks only the
+        downgrade direction. When ``incoming_source_type`` is ``None`` (e.g. the
+        operator journal-correction caller, which is maximally authoritative) NO
+        tier filtering is applied and the historical behavior is preserved.
       * **value-differs only** — a re-assert of the SAME value is NOT a
         supersession; that path stays the ``idx_facts_temporal_triple_open``
         ``ON CONFLICT`` upsert (confidence lift + lineage union). The
@@ -854,8 +929,20 @@ async def supersede_prior_facts(
         (the dapr write path acquires one connection per output).
 
     Returns the number of prior rows closed (0 when this is the first
-    assertion of the subject+predicate, or a same-value re-assert).
+    assertion of the subject+predicate, a same-value re-assert, or every
+    differing-value prior row outranks the incoming fact on authority).
     """
+    # A1 — source-tier precedence. When the caller declares the incoming fact's
+    # source_type we forbid closing any prior row whose authority rank is
+    # STRICTLY higher (an ingestion/agent fact must not retire a seed/curated
+    # one). A NULL incoming rank disables the filter (historical / operator
+    # correction path stays unconditional). The guard is `source_type IS NULL`
+    # tolerant — a legacy untyped row is treated as the machine-extracted rank,
+    # so it can never silently outrank and block a legitimate supersession.
+    incoming_rank = (
+        None if incoming_source_type is None
+        else _source_tier_rank(incoming_source_type)
+    )
     result = await conn.execute(
         """
         UPDATE facts
@@ -868,11 +955,22 @@ async def supersede_prior_facts(
            AND valid_until IS NULL
            AND superseded_by IS NULL
            AND id <> $4
+           AND (
+                 $5::int IS NULL
+                 OR CASE lower(coalesce(source_type, ''))
+                        WHEN 'seed'      THEN 2
+                        WHEN 'curated'   THEN 2
+                        WHEN 'ingestion' THEN 1
+                        WHEN 'agent'     THEN 1
+                        ELSE 1
+                    END <= $5::int
+               )
         """,
         subject,
         predicate,
         value,
         new_fact_id,
+        incoming_rank,
     )
     try:
         return int(result.split()[-1]) if result else 0
@@ -906,7 +1004,8 @@ async def collapse_open_triple(
     This helper closes that dimension for SAME-value OPEN rows BEFORE the
     insert: if an open row for ``(lower(subject), lower(predicate),
     lower(value))`` already exists (ANY valid_from), it is refreshed in place
-    (confidence → max, lineage unioned, EARLIEST valid_from kept) and its id is
+    (confidence → noisy-OR combine capped at 0.99 per A2, lineage unioned,
+    EARLIEST valid_from kept) and its id is
     returned so the caller SKIPS the insert. Returns ``None`` when no open row
     exists (the caller proceeds to insert the fresh open row).
 
@@ -917,8 +1016,15 @@ async def collapse_open_triple(
       * **open-only** — only rows still open (``valid_until IS NULL AND
         superseded_by IS NULL``) are touched; a closed/superseded row is never
         resurrected (matches the partial index's WHERE).
-      * **idempotent** — a replay of the same triple lifts confidence to the
-        max + unions lineage; the row count is unchanged.
+      * **confidence aggregation on agreement (A2)** — a replay of the same
+        triple is CORROBORATION from another source, so confidence is combined
+        with a bounded noisy-OR (``1 - (1-existing)*(1-incoming)``, clamped to
+        ``<= 0.99``) rather than lifted to the plain max. N agreeing sources
+        therefore raise confidence ABOVE any single one yet never reach
+        certainty. Before this was ``GREATEST`` (max), which never rose above
+        the single most-confident source. Lineage is still unioned; the row
+        count is unchanged (idempotent in row terms, monotone-increasing in
+        confidence toward the 0.99 cap).
       * **deterministic pick** — when (legacy data) more than one open row for
         the triple exists, the EARLIEST (``valid_from ASC, created_at ASC``) is
         refreshed; the caller's :func:`supersede_prior_facts` already collapsed
@@ -932,7 +1038,13 @@ async def collapse_open_triple(
     existing_id = await conn.fetchval(
         """
         UPDATE facts
-           SET confidence   = GREATEST(facts.confidence, $4),
+           -- A2: bounded noisy-OR combine of agreeing confidences, capped at
+           -- 0.99 so corroboration raises belief above any single source but
+           -- never reaches certainty (was GREATEST/max).
+           SET confidence   = LEAST(
+                                 0.99,
+                                 1.0 - (1.0 - facts.confidence) * (1.0 - $4)
+                               ),
                derived_from = COALESCE((SELECT array_agg(DISTINCT e)
                                FROM unnest(facts.derived_from || $5::uuid[]) e),
                               '{}'::uuid[]),
@@ -991,9 +1103,10 @@ async def _insert_fact(
     only (``valid_until IS NULL AND superseded_by IS NULL``; migration 0032)
     — UNLIKE hypotheses, which have no unique constraint. So a second
     identical OPEN triple+valid_from would raise without ``ON CONFLICT``. We
-    upsert: lift confidence to the max and union the lineage arrays. This is
-    the same idempotency contract the ``fact_extractor`` stage uses, so the
-    analyst-emitted path and the ingest path agree.
+    upsert: combine confidence with a bounded noisy-OR (A2 — corroboration
+    raises belief above any single source, capped at 0.99) and union the
+    lineage arrays. This is the same idempotency contract the ``fact_extractor``
+    stage uses, so the analyst-emitted path and the ingest path agree.
 
     The conflict-inference ``WHERE valid_until IS NULL AND superseded_by IS
     NULL`` predicate matches the partial index so the upsert can ONLY land on
@@ -1005,8 +1118,11 @@ async def _insert_fact(
 
     Before the insert we run ``supersede_prior_facts`` so a value-CHANGE for an
     existing ``(subject, predicate)`` closes the prior open row(s) and opens
-    this one (PIECE B). A same-value re-assert closes nothing (the upsert
-    path owns it).
+    this one (PIECE B). The incoming fact's resolved ``source_type`` is passed
+    through so A1's source-tier guard refuses to close a higher-authority prior
+    row (an analyst/ingestion fact does not retire a seed/curated one), while
+    same-tier recency-wins updates (e.g. a new leader fact) still supersede. A
+    same-value re-assert closes nothing (the upsert path owns it).
     """
     p = payload                                          # type: ignore[assignment]
     data_payload = getattr(p, "data", {}) or {}
@@ -1017,21 +1133,28 @@ async def _insert_fact(
     # forms. Normalize to the canonical lowercase-spaced form so the
     # lower(predicate) supersession/dedup key lines up across both producers.
     predicate = normalize_predicate(getattr(p, "predicate"))
+    # Resolve the incoming fact's authority class BEFORE supersession so A1's
+    # source-tier guard can refuse to close a higher-tier prior row (an
+    # analyst/ingestion fact must not retire a seed/curated one). The override
+    # arg wins (curated-seeding passes 'seed'); else the payload's source_type
+    # (default 'agent').
+    effective_source_type = source_type or getattr(p, "source_type", "agent")
     await supersede_prior_facts(
         conn,
         subject=getattr(p, "subject"),
         predicate=predicate,
         value=getattr(p, "value"),
         new_fact_id=row_id,
+        incoming_source_type=effective_source_type,
     )
     # D17 — collapse a standing triple onto ONE open row regardless of
     # valid_from drift. The ON CONFLICT upsert below keys on the FULL quad
     # (including COALESCE(valid_from, '1970-01-01')), so the SAME triple
     # re-asserted across cycles with drifting valid_from accumulates duplicate
     # OPEN rows. collapse_open_triple refreshes the existing open row in place
-    # (confidence→max, lineage union, earliest valid_from) and, when it hits,
-    # we SKIP the insert — the analyst path now matches the ingest path's
-    # same-triple dedup so both producers keep one open row.
+    # (confidence→noisy-OR per A2, lineage union, earliest valid_from) and, when
+    # it hits, we SKIP the insert — the analyst path now matches the ingest
+    # path's same-triple dedup so both producers keep one open row.
     collapsed_into = await collapse_open_triple(
         conn,
         subject=getattr(p, "subject"),
@@ -1046,7 +1169,6 @@ async def _insert_fact(
         # An open row already carries this exact triple — refreshed in place,
         # no duplicate inserted (mirrors _insert_ingestion_fact).
         return
-    effective_source_type = source_type or getattr(p, "source_type", "agent")
     await conn.execute(
         """
         INSERT INTO facts (
@@ -1066,7 +1188,14 @@ async def _insert_fact(
                      COALESCE(valid_from, '1970-01-01 00:00:00+00'::timestamptz))
                  WHERE valid_until IS NULL AND superseded_by IS NULL
         DO UPDATE SET
-            confidence   = GREATEST(facts.confidence, EXCLUDED.confidence),
+            -- A2: same-triple re-assert is CORROBORATION — combine confidences
+            -- with a bounded noisy-OR (capped at 0.99) so N agreeing sources
+            -- raise belief above any single one without ever reaching
+            -- certainty (was GREATEST/max).
+            confidence   = LEAST(
+                             0.99,
+                             1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)
+                           ),
             -- COALESCE to '{}' — array_agg over zero rows is NULL, which would
             -- violate the derived_from NOT NULL when BOTH sides are empty (e.g.
             -- a seed-fact re-import, where lineage is empty on both rows). The

@@ -37,6 +37,7 @@ import asyncio
 import calendar
 import hashlib
 import logging
+import re
 from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from time import struct_time
@@ -85,6 +86,16 @@ _RSS_HEALTH_KEY = "rss_health"
 _DEFAULT_TIMEOUT_S = 30
 _DEFAULT_RETRIES_FOR_TRANSIENT = 1
 _TRANSIENT_STATUS = {502, 503, 504}
+
+# Conditional-GET stale-edge guard (Fix C). A stale CDN edge (observed:
+# Cloudflare on crisisgroup.latest) can pin a CONSTANT ETag and return a
+# perpetual 304 even as the origin content changes, silencing the feed
+# forever. After this many CONSECUTIVE 304s we drop the conditional-GET
+# headers for ONE pull to force an unconditional refetch, so a pinned edge
+# ETag can't permanently mute the feed. Conditional-GET is otherwise kept
+# (it is load-bearing for bandwidth); the forced refetch is the exception,
+# not the rule. The consecutive-304 count is persisted in the cursor.
+_MAX_CONSECUTIVE_304 = 12
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +164,27 @@ class RSSSourceHandler:
         emitted. The downstream dedupe filter handles overlap.
 
         State:
-          ``ctx.state_store[_RSS_CURSOR_KEY] = {"etag", "last_modified"}``
+          ``ctx.state_store[_RSS_CURSOR_KEY] =
+            {"etag", "last_modified", "consecutive_304"}``
         """
         cursor = await self._load_cursor(ctx)
-        headers = self._build_conditional_headers(cursor)
+
+        # Fix C — stale-edge guard. If we've taken too many CONSECUTIVE 304s a
+        # CDN edge may be pinning a constant ETag/Last-Modified and muting an
+        # actually-changing origin. Force ONE unconditional refetch (drop the
+        # conditional-GET headers) to break the pin. Conditional-GET resumes on
+        # the next pull from whatever the unconditional response validates to.
+        consecutive_304 = _coerce_int(cursor.get("consecutive_304"))
+        force_unconditional = consecutive_304 >= _MAX_CONSECUTIVE_304
+        if force_unconditional:
+            headers: dict[str, str] = {}
+            ctx.logger.info(
+                "rss.conditional.force_refetch url=%s consecutive_304=%d "
+                "(stale-edge guard)",
+                self._config.url, consecutive_304,
+            )
+        else:
+            headers = self._build_conditional_headers(cursor)
 
         response = await self._fetch_with_retry(headers=headers, ctx=ctx)
         if response is None:
@@ -164,11 +192,27 @@ class RSSSourceHandler:
             return
 
         if response.status_code == 304:
+            # Count consecutive 304s so the stale-edge guard above can fire.
+            # A forced (unconditional) pull that STILL 304s is genuinely
+            # unchanged — reset the counter so we don't refetch every pull.
+            next_304 = 0 if force_unconditional else consecutive_304 + 1
+            await ctx.state_store.set(
+                _RSS_CURSOR_KEY,
+                {
+                    "etag": str(cursor.get("etag") or ""),
+                    "last_modified": str(cursor.get("last_modified") or ""),
+                    "consecutive_304": next_304,
+                },
+            )
             await self._record_health(
                 ctx,
                 state="healthy",
                 last_success_at=datetime.now(tz=timezone.utc),
-                detail={"status": 304, "note": "not modified"},
+                detail={
+                    "status": 304,
+                    "note": "not modified",
+                    "consecutive_304": next_304,
+                },
             )
             return
 
@@ -202,10 +246,12 @@ class RSSSourceHandler:
             emitted += 1
             yield signal
 
-        # Update cursor with whatever the server gave us (only on 200).
+        # Update cursor with whatever the server gave us (only on 200). A 200
+        # is fresh content, so the consecutive-304 stale-edge counter resets.
         new_cursor = {
             "etag": response.headers.get("etag", "") or "",
             "last_modified": response.headers.get("last-modified", "") or "",
+            "consecutive_304": 0,
         }
         await ctx.state_store.set(_RSS_CURSOR_KEY, new_cursor)
         await self._record_health(
@@ -315,18 +361,19 @@ class RSSSourceHandler:
         merged.setdefault("User-Agent", self._config.user_agent)
         return merged
 
-    async def _load_cursor(self, ctx: SourceContext) -> dict[str, str]:
+    async def _load_cursor(self, ctx: SourceContext) -> dict[str, Any]:
         raw = await ctx.state_store.get(_RSS_CURSOR_KEY)
         if not isinstance(raw, dict):
             return {}
-        # Defensive: only carry strings forward.
+        # Defensive: only carry strings forward (plus the int 304 counter).
         return {
             "etag": str(raw.get("etag") or ""),
             "last_modified": str(raw.get("last_modified") or ""),
+            "consecutive_304": _coerce_int(raw.get("consecutive_304")),
         }
 
     @staticmethod
-    def _build_conditional_headers(cursor: dict[str, str]) -> dict[str, str]:
+    def _build_conditional_headers(cursor: dict[str, Any]) -> dict[str, str]:
         headers: dict[str, str] = {}
         etag = cursor.get("etag") or ""
         last_modified = cursor.get("last_modified") or ""
@@ -533,6 +580,19 @@ def _is_not_after(signal: Signal, since: datetime) -> bool:
     return False
 
 
+def _coerce_int(val: Any) -> int:
+    """Coerce a (possibly stringified / absent) counter to a non-negative int.
+
+    State-store backends may round-trip the consecutive-304 counter through
+    JSON; tolerate ints, numeric strings, and missing/garbage values (→ 0).
+    """
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
 def _safe_str(entry: Any, key: str) -> str:
     """Safely read a string-like field off a feedparser entry."""
     if entry is None:
@@ -553,20 +613,114 @@ def _safe_str(entry: Any, key: str) -> str:
     return str(val)
 
 
+# Map each feedparser ``*_parsed`` struct_time field to the raw-string field
+# it was parsed from, so the midnight-collapse recovery (below) can re-parse
+# the SAME field's raw text when feedparser dropped the time-of-day.
+_PARSED_TO_RAW = {
+    "published_parsed": "published",
+    "updated_parsed": "updated",
+    "created_parsed": "created",
+}
+
+# An explicit clock time anywhere in a raw date string — e.g. "13:30" in the
+# iaea "26-06-26  13:30" shape. A trailing all-zero time ("00:00[:00]") is
+# excluded so a feed that really publishes at midnight is NOT mistaken for a
+# time feedparser lost (it would re-parse to the same midnight anyway, but we
+# avoid the extra work + keep the struct_time fast path for true-midnight).
+_HHMM_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b")
+
+
+def _struct_time_is_midnight(st: struct_time) -> bool:
+    """True iff a feedparser struct_time sits at exactly 00:00:00.
+
+    This is the signature of feedparser dropping the time-of-day on a date
+    shape it parsed only to day precision (the iaea ``YY-MM-DD  HH:MM`` case).
+    """
+    return st.tm_hour == 0 and st.tm_min == 0 and st.tm_sec == 0
+
+
+def _raw_has_explicit_time(raw: str) -> bool:
+    """True iff the raw string carries an explicit, non-midnight HH:MM."""
+    m = _HHMM_RE.search(raw)
+    if m is None:
+        return False
+    hh, mm, ss = m.group(1), m.group(2), m.group(3)
+    return not (hh in ("0", "00") and mm == "00" and (ss in (None, "00")))
+
+
+def _parse_tolerant_datetime(raw: str) -> datetime | None:
+    """Best-effort parse for whitespace-mangled / 2-digit-year date shapes.
+
+    Recovers the iaea-style ``"26-06-26  13:30"`` (2-digit year, no day-name,
+    no timezone, double-spaced) that feedparser collapses to midnight. The
+    string is whitespace-normalized, then matched against a small set of
+    explicit ``strptime`` patterns. A bare 2-digit year is expanded to 20YY
+    (these are current-news feeds — a 2-digit year is this century). Returns a
+    UTC-aware datetime, or ``None`` when no pattern matches (caller falls
+    through to the standard RFC822 / ISO parsers).
+    """
+    if not raw:
+        return None
+    # Collapse runs of whitespace (the iaea shape is double-spaced) and trim.
+    norm = re.sub(r"\s+", " ", raw).strip()
+    if not norm:
+        return None
+
+    # Patterns are tried most-specific first. Each is a (strptime fmt,
+    # two_digit_year) pair; the flag tells us to expand a %y century-window
+    # ambiguity deterministically to 20YY rather than rely on strptime's
+    # 1969-cutover pivot.
+    patterns: tuple[tuple[str, bool], ...] = (
+        ("%y-%m-%d %H:%M:%S", True),
+        ("%y-%m-%d %H:%M", True),
+        ("%Y-%m-%d %H:%M:%S", False),
+        ("%Y-%m-%d %H:%M", False),
+        ("%d-%m-%y %H:%M:%S", True),
+        ("%d-%m-%y %H:%M", True),
+    )
+    for fmt, two_digit_year in patterns:
+        try:
+            dt = datetime.strptime(norm, fmt)
+        except ValueError:
+            continue
+        if two_digit_year and dt.year < 100:
+            # strptime already pivots %y, but pin to this century explicitly so
+            # a "26" can never resolve to 1926 across a future strptime change.
+            dt = dt.replace(year=2000 + (dt.year % 100))
+        return dt.replace(tzinfo=timezone.utc)
+    return None
+
+
 def _extract_published(entry: Any) -> datetime | None:
     """Pull a UTC-aware datetime from feedparser's various published fields."""
     # 1) The struct_time fields (feedparser populates these from the wire).
     #    feedparser documents these as UTC struct_time, so use
     #    ``calendar.timegm`` (UTC-correct) rather than ``time.mktime``
     #    (which treats input as local time and would skew by tz offset).
+    #
+    #    MIDNIGHT-COLLAPSE RECOVERY (Fix A): some feeds carry a date shape
+    #    feedparser parses only to DAY precision (e.g. iaea ``YY-MM-DD HH:MM``,
+    #    2-digit year, no day-name, no tz, double-spaced) — it sets the
+    #    struct_time to 00:00:00, silently dropping the real time-of-day. When
+    #    the struct_time is exactly midnight AND the field's raw string carries
+    #    an explicit non-midnight HH:MM, we re-parse the raw text with a
+    #    tolerant parser to recover the true time. A well-formed feed (the time
+    #    survived in the struct_time, or it genuinely publishes at 00:00) keeps
+    #    the existing fast path unchanged.
     for st_field in ("published_parsed", "updated_parsed", "created_parsed"):
         st = getattr(entry, st_field, None)
-        if isinstance(st, struct_time):
-            return datetime.fromtimestamp(calendar.timegm(st), tz=timezone.utc)
-        if isinstance(entry, dict) and isinstance(entry.get(st_field), struct_time):
-            return datetime.fromtimestamp(
-                calendar.timegm(entry[st_field]), tz=timezone.utc
-            )
+        if not isinstance(st, struct_time) and isinstance(entry, dict):
+            cand = entry.get(st_field)
+            st = cand if isinstance(cand, struct_time) else None
+        if not isinstance(st, struct_time):
+            continue
+        if _struct_time_is_midnight(st):
+            raw = _safe_str(entry, _PARSED_TO_RAW[st_field])
+            if raw and _raw_has_explicit_time(raw):
+                recovered = _parse_tolerant_datetime(raw)
+                if recovered is not None:
+                    return recovered.astimezone(timezone.utc)
+        return datetime.fromtimestamp(calendar.timegm(st), tz=timezone.utc)
     # 2) Fall back to the raw string fields parsed via email.utils.
     for s_field in ("published", "updated", "created"):
         raw = _safe_str(entry, s_field)
@@ -579,7 +733,7 @@ def _extract_published(entry: Any) -> datetime | None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 return dt.astimezone(timezone.utc)
         except (TypeError, ValueError):
-            continue
+            pass
         # Try ISO-8601 (Atom).
         try:
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -587,7 +741,12 @@ def _extract_published(entry: Any) -> datetime | None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc)
         except ValueError:
-            continue
+            pass
+        # Last resort: the tolerant parser for whitespace-mangled / 2-digit-year
+        # shapes that arrive ONLY as a raw string (no struct_time at all).
+        recovered = _parse_tolerant_datetime(raw)
+        if recovered is not None:
+            return recovered.astimezone(timezone.utc)
     return None
 
 
