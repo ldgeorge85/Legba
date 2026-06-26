@@ -16,9 +16,31 @@ only runs **future** (`0054`+) migrations.
 1. **Public-schema DDL** — all relational tables, types/enums, sequences,
    indexes, constraints, and functions, taken verbatim from a
    `pg_dump --schema-only` of the canonical reference DB. The `CREATE EXTENSION`
-   lines are kept (`plpgsql`, `pgcrypto`, `pg_trgm`, `uuid-ossp`, `age`).
-   `plpgsql` — a Postgres default that `pg_dump` omits — is added back
-   explicitly.
+   lines are kept (all `IF NOT EXISTS`: `plpgsql`, `pgcrypto`, `pg_trgm`,
+   `uuid-ossp`, `age`). `plpgsql` — a Postgres default that `pg_dump` omits — is
+   added back explicitly.
+
+   **`ag_catalog` is extension-provided, not dumped.** `pg_dump --schema-only`
+   emits an explicit `CREATE SCHEMA ag_catalog;` (+ `ALTER SCHEMA … OWNER`) and,
+   on some dumps, the `ag_catalog.*` object DDL. All of that is **stripped** from
+   this baseline — the `age` extension OWNS the `ag_catalog` schema and creates
+   it (and every object in it) as part of `CREATE EXTENSION`. The `age` line is
+   written as `CREATE EXTENSION IF NOT EXISTS age;` with **no**
+   `WITH SCHEMA ag_catalog` clause, because AGE always installs into
+   `ag_catalog` and creates that schema itself. Why this matters:
+   - On images that **pre-install** AGE (e.g. `apache/age`, where the default DB
+     already has `age` + `ag_catalog`, and a DB cloned from such a template
+     inherits them), a dumped `CREATE SCHEMA ag_catalog;` fails with
+     `ERROR: schema "ag_catalog" already exists`.
+   - On a **clean** DB (no pre-installed AGE), a `WITH SCHEMA ag_catalog` clause
+     fails with `ERROR: schema "ag_catalog" does not exist` (we no longer
+     pre-create it).
+
+   Dropping the dumped `ag_catalog` DDL and the `WITH SCHEMA` clause makes the
+   single `CREATE EXTENSION IF NOT EXISTS age;` line correct in **both**
+   environments. The public DDL has zero dependencies on `ag_catalog` types
+   (`agtype`/`graphid`/`_label_id`), so this is safe. This is the same
+   stanza-filter treatment already applied to the `legba_graph` schema (see §2).
 
 2. **A correct Apache AGE graph block.** The `pg_dump --schema-only` AGE output
    is unusable: it recreates the per-label tables with
@@ -62,9 +84,17 @@ psql -U legba -d <db> -v ON_ERROR_STOP=1 -f deploy/baseline/0001_baseline.sql
 
 ## Verification results
 
-Built from the canonical reference DB and proven against a fresh
-`legba_baseline_verify` DB; every gate was re-run from a clean drop/recreate to
-prove the file is idempotent:
+Built from the canonical reference DB and proven in **two** environments, each
+from a clean drop/recreate:
+
+- **A — clean env** (a fresh DB on a Postgres instance that does *not*
+  pre-install AGE): apply + full diff vs the reference DB `legba_baseline_ref`.
+- **B — the `apache/age` env** (a fresh DB that *already* carries `age` +
+  `ag_catalog`, the env that exposed the `schema "ag_catalog" already exists`
+  collision): apply + cypher smoke. The pre-fix baseline reproducibly failed
+  here; the fixed baseline applies with zero errors.
+
+The gates below were proven in both A and B:
 
 | Gate | Check | Result |
 |------|-------|--------|

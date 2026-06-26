@@ -20,19 +20,24 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- Name: ag_catalog; Type: SCHEMA; Schema: -; Owner: legba
---
-
-CREATE SCHEMA ag_catalog;
-
-
-ALTER SCHEMA ag_catalog OWNER TO legba;
-
---
 -- Name: age; Type: EXTENSION; Schema: -; Owner: -
 --
+-- NOTE: the explicit `CREATE SCHEMA ag_catalog;` that pg_dump emits is
+-- intentionally dropped here. The `age` extension OWNS and creates the
+-- ag_catalog schema (and all its objects) as part of CREATE EXTENSION, so
+-- dumping/recreating it collides on images that pre-install AGE (e.g.
+-- apache/age, where a freshly CREATE DATABASE'd DB inherits AGE + ag_catalog
+-- from template1) with `ERROR: schema "ag_catalog" already exists`. The line
+-- below alone provides ag_catalog.
+--
+-- It is `CREATE EXTENSION IF NOT EXISTS age;` with NO `WITH SCHEMA ag_catalog`
+-- on purpose: AGE always installs into ag_catalog and creates that schema
+-- itself. On a clean DB (no pre-installed AGE) `WITH SCHEMA ag_catalog` would
+-- instead require the schema to already exist and fail with
+-- `ERROR: schema "ag_catalog" does not exist` (we no longer pre-create it).
+--
 
-CREATE EXTENSION IF NOT EXISTS age WITH SCHEMA ag_catalog;
+CREATE EXTENSION IF NOT EXISTS age;
 
 
 --
