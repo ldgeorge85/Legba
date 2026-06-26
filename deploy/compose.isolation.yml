@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# deploy/compose.isolation.yml — DATA-ISOLATION OVERRIDE for non-`legba` stacks.
+#
+# ============================================================================
+# WHY THIS FILE EXISTS (the data-bleed firewall)
+# ============================================================================
+# docker-compose.yml HARDCODES every persistent volume to a `legba_*` name
+# (`volumes:` block, e.g. `name: legba_postgres_data`) and binds the Dapr
+# scheduler's durable etcd store to a fixed HOST PATH (`./deploy/dapr-scheduler-data`).
+#
+# Compose normally prefixes anonymous volumes with the project name, BUT an
+# explicit `name:` OPTS OUT of that prefixing — so a second stack brought up with
+# `docker compose -p legba_val ...` would STILL mount the REAL `legba_postgres_data`
+# volume and the REAL scheduler host-bind. That is silent data bleed into — and
+# corruption of — the only production datastore.
+#
+# This override RE-DECLARES every named volume and BOTH scheduler bind mounts with
+# a project-scoped name derived from ${LEGBA_ISO_PROJECT}, so a non-`legba` project
+# is FULLY volume-isolated from the real instance.
+#
+# ============================================================================
+# HOW COMPOSE MERGES THIS (verified by `docker compose ... config`)
+# ============================================================================
+#   * Top-level `volumes.<vol>.name:` — the LAST file wins, so the project-scoped
+#     name here overrides the base file's `legba_*` literal.
+#   * Service `volumes:` list entries MERGE BY TARGET PATH — re-declaring a bind
+#     with the same container target but a new host source REPLACES the source.
+#
+# ============================================================================
+# USAGE (never use this for the real `legba` project)
+# ============================================================================
+#   export LEGBA_ISO_PROJECT=legba_val
+#   docker compose -p "$LEGBA_ISO_PROJECT" \
+#       -f docker-compose.yml -f deploy/compose.isolation.yml \
+#       --profile runtime config        # render + grep BEFORE up
+#
+# deploy/deploy.sh wires this automatically for any --project other than `legba`
+# (it sets LEGBA_ISO_PROJECT, renders, and HARD-GATES on a grep that proves zero
+# real `legba_*_data` volume hits before it ever runs `up`).
+#
+# `${LEGBA_ISO_PROJECT:?...}` is a REQUIRED-variable guard: rendering this file
+# with LEGBA_ISO_PROJECT unset fails loudly rather than silently falling back to
+# the real names.
+#
+# ============================================================================
+# WHAT IS *NOT* ISOLATED HERE (documented assumption)
+# ============================================================================
+#   * HOST PORTS are left as the base-file literals. The deploy model stops the
+#     ORIGINAL `legba` stack first (Phase D quiesce), so the isolated stack reuses
+#     the same loopback ports + caddy 80/443 with no collision. If you ever need
+#     TWO stacks UP at once, add a ports override too (see docker-compose.replicas.yml
+#     for the 3501/50011/6091 alternate-port pattern) — that is out of scope for
+#     the validation-then-teardown flow.
+#   * The Dapr APP-ID (`legba-runtime`) + placement/scheduler service NAMES are
+#     reused for the same reason: only one stack is up at a time, so the two
+#     sidecars are never simultaneously members of one actor cluster. (Were both
+#     up at once with a shared app-id, placement would consistent-hash actor IDs
+#     ACROSS them — exactly how docker-compose.replicas.yml intentionally builds a
+#     2-replica cluster. The isolation guarantee here is VOLUMES, not app-id.)
+#   * Cross-service DNS names (`postgres`, `nats`, `legba-registry:8090`, …) are
+#     per-network and already project-scoped by compose — untouched, safe.
+#
+# The `dapr` DATABASE lives inside the project-scoped `postgres_data` volume (this
+# override isolates that volume), so the isolated stack's actor state is its own.
+
+volumes:
+  redis_data:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_redis_data
+  postgres_data:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_postgres_data
+  qdrant_data:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_qdrant_data
+  nats_data:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_nats_data
+  ui_dist:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_ui_dist
+  caddy_data:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_caddy_data
+  caddy_config:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_caddy_config
+  media_data:
+    name: ${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}_media_data
+
+services:
+  # The Dapr scheduler's durable etcd store is a HOST BIND, not a named volume —
+  # so it is NOT covered by the volumes block above. Re-bind BOTH the init job
+  # (target /scheduler-data) and the scheduler (target /var/lib/dapr-scheduler-data)
+  # to a project-scoped host path so two stacks never share one etcd data dir.
+  dapr-scheduler-init:
+    volumes:
+      - ./deploy/${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}-scheduler-data:/scheduler-data
+  dapr-scheduler:
+    volumes:
+      - ./deploy/${LEGBA_ISO_PROJECT:?LEGBA_ISO_PROJECT must be set for an isolated (non-legba) stack}-scheduler-data:/var/lib/dapr-scheduler-data

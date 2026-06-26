@@ -81,6 +81,22 @@ alternative in section 13.
 
 ## 2. Bring up everything (canonical, container-mode)
 
+> **Canonical one-command bring-up: [`deploy/deploy.sh`](../deploy/deploy.sh).**
+> After building the images, it runs the entire phased, idempotent, boot-verified
+> sequence (schema via the single baseline → ordered registrars → optional seeds →
+> runtime → verify). The `up -d` form below brings the **already-provisioned** stack
+> up; on a FRESH/empty substrate use the script (or follow §3–§7 in order — ordering
+> is load-bearing, the runtime must boot LAST against a seeded registry).
+> ```
+> docker compose --profile runtime build      # build images first (one-time)
+> deploy/deploy.sh                             # provision + boot + verify (project legba)
+> ```
+> For a throwaway clean-slate validation stack that is fully data-isolated from the
+> real `legba` volumes: `deploy/deploy.sh --project legba_val --no-caddy --seed`,
+> torn down with `deploy/deploy.sh --project legba_val --teardown` (which `down -v`s
+> only the `legba_val_*` volumes). On the real `legba` project, `--teardown` only
+> `stop`s — it refuses `down -v` (the only-instance rule).
+
 ```
 cd /usr/local/deployments/active/legba
 
@@ -89,6 +105,8 @@ cd /usr/local/deployments/active/legba
 docker compose --profile runtime build
 
 # Start substrate + dapr + app services in one go.
+# (On an ALREADY-PROVISIONED stack. For a fresh substrate use deploy/deploy.sh
+#  or §3–§7 below — the runtime must boot last against a seeded registry.)
 docker compose --profile runtime up -d
 ```
 

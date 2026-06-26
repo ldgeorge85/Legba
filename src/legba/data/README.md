@@ -125,9 +125,15 @@ LEGBA_DATA_DEFAULT_EMBEDDING=embed.primary.openai_compat
 ## Running migrations
 
 ```
-python -m legba.data.migrate                   # apply the primary chain
+python -m legba.data.migrate                   # apply pending migrations
 python -m legba.data.migrate --dry-run         # discover but don't apply
 ```
+
+`--dry-run` is the **only** CLI flag (no `--primary-only` — that flag does not
+exist). A fresh deploy applies the single proven baseline
+(`deploy/baseline/0001_baseline.sql`, which pre-seeds the ledger to head `0053`)
+and then this runner applies any future (`0054`+) migrations. The canonical
+one-command path that does both is `deploy/deploy.sh`.
 
 ## Running the smoke test
 

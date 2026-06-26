@@ -49,6 +49,20 @@ Legba draws a hard line between what is the **proven product** and what is **bui
 
 Canonical bring-up is container-mode. The substrate is always-on; Dapr and the app images activate under the `runtime` profile. **Ordering is load-bearing: migrate → register the stack → register the working set → *then* boot (or `--force-recreate`) the runtime.** The runtime builds its NLP / embedding clients **once at boot** from the registered stack; bring it up against an un-seeded registry and `nlp_client` stays `None` for the whole process lifetime — signals land with no geo/entities and geo-scoped analysts never match. Read [docs/RUNBOOK.md](docs/RUNBOOK.md) **§0 (critical operator notes)** first, then §2–§9 for the full procedure.
 
+> **Canonical one-command deploy: [`deploy/deploy.sh`](deploy/deploy.sh).** It runs
+> the entire phased, idempotent bring-up below — preflight → schema (the single
+> proven baseline `deploy/baseline/0001_baseline.sql`) → the ordered registrars →
+> optional seeds → runtime → boot-verify — in the proven load-bearing order:
+> ```bash
+> docker compose --profile runtime build      # one-time image build
+> deploy/deploy.sh                             # real stack (project legba), no seeds
+> deploy/deploy.sh --seed                      # + curated knowledge seeds
+> ```
+> The manual steps below are the same sequence the script automates, kept for
+> reference / partial re-runs. For a throwaway clean-slate validation stack on
+> the same host, use `--project legba_val --no-caddy` (data-isolated; see
+> [docs/SETUP.md](docs/SETUP.md) and [docs/RUNBOOK.md](docs/RUNBOOK.md)).
+
 ```bash
 cd /usr/local/deployments/active/legba
 
@@ -61,7 +75,8 @@ docker compose up -d                              # redis / postgres / qdrant / 
 docker compose up -d legba-registry               # registry API (no runtime actor host)
 
 # 3. Apply migrations (idempotent; runs against the substrate Postgres).
-docker exec legba-legba-registry-1 python -m legba.data.migrate --primary-only
+#    The only CLI flag is --dry-run; there is NO --primary-only flag.
+docker exec legba-legba-registry-1 python -m legba.data.migrate
 
 # 4. Load credentials into the encrypted vault + register the substrate stack.
 docker exec legba-legba-registry-1 python scripts/bringup_vault_load.py

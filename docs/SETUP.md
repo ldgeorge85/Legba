@@ -10,6 +10,21 @@ the architecture read [ARCHITECTURE.md](ARCHITECTURE.md) and the
 [README](../README.md). Before you start, skim **RUNBOOK §0 (critical operator
 notes)** — it carries the hard-won "do not do this" rules this guide assumes.
 
+> **Canonical one-command path: [`deploy/deploy.sh`](../deploy/deploy.sh).** After
+> building the images (`docker compose --profile runtime build`), the entire
+> ordered sequence in §3–§11 below runs as one idempotent, boot-verified command:
+> ```
+> deploy/deploy.sh            # real stack (project legba)
+> deploy/deploy.sh --seed     # + the curated knowledge seeds (§10)
+> ```
+> It applies the single proven baseline (`deploy/baseline/0001_baseline.sql`)
+> rather than the 23-file history, runs the registrars in the order below, then
+> boots the runtime and verifies. The numbered manual steps that follow are the
+> same sequence — kept as the explanation of what the script does and for partial
+> re-runs. For a **throwaway clean-slate validation stack** on the same host, use
+> `deploy/deploy.sh --project legba_val --no-caddy` (fully data-isolated from the
+> real `legba` volumes; teardown with `deploy/deploy.sh --project legba_val --teardown`).
+
 > **Clean-slate only — no migration path from pre-pivot Legba.** This is a
 > complete refactor from the v1/v2 target-first design; the data model, substrate
 > schema, and APIs are incompatible with pre-pivot instances. Stand up a fresh
@@ -119,18 +134,28 @@ Idempotent; runs against the substrate Postgres (ledger:
 `legba_data_migrations`).
 
 ```
-docker exec legba-legba-registry-1 python -m legba.data.migrate --primary-only
+docker exec legba-legba-registry-1 python -m legba.data.migrate
 ```
 
+> The only CLI flag is `--dry-run` (discover-but-don't-apply). There is **no**
+> `--primary-only` flag — a stale earlier draft of these docs referenced one;
+> passing it makes argparse exit 2.
+>
 > At a true cold-start where the registry container isn't up yet, use the
 > repo-mounted one-off form instead:
 > `docker compose run --rm --no-deps --entrypoint python legba-registry -m legba.data.migrate`
+>
+> A fresh deploy applies the single proven baseline
+> (`deploy/baseline/0001_baseline.sql`) and then this runner applies any FUTURE
+> (`0054`+) migrations. The baseline pre-seeds the ledger to head `0053`, so on a
+> baseline-provisioned DB `migrate` reports nothing pending. (`deploy/deploy.sh`
+> does both steps for you.)
 
-Verify (migration head should be **0047**; ISO countries table fully seeded):
+Verify (migration head should be **0053**; ISO countries table fully seeded):
 
 ```
 docker exec legba-postgres-1 psql -U legba -d legba \
-    -c "SELECT name FROM legba_data_migrations ORDER BY name"   # head 0047
+    -c "SELECT name FROM legba_data_migrations ORDER BY name"   # head 0053
 docker exec legba-postgres-1 psql -U legba -d legba \
     -c "SELECT count(*) FROM iso_countries"                     # expect 249
 ```
