@@ -172,8 +172,10 @@ and signed nexuses, seeded from the curated `world_baseline` adapter and the liv
 `wikidata_leaders` adapter, hold the temporally-honest "who holds office now". An
 opt-in **GROUND phase** runs between PLAN and REASON for `inline_target` analysts that
 declare `grounding.enabled: true`, prepending a dated "AUTHORITATIVE CURRENT CONTEXT"
-preamble — restricted to `source_type IN ('seed','curated')`, because raw ingestion
-confidence is poisoned at 1.0 and a whitelist of dirty facts would be unsafe. Off
+preamble — restricted to `source_type IN ('seed','curated')`. Machine-extracted
+ingestion facts are floored at a conservative `_INGESTION_DEFAULT_CONFIDENCE` (~0.5,
+below the 0.95 curated seed), so the gate still prefers seed/curated ground truth
+over a hallucinated live fact rather than admitting a whitelist of dirty facts. Off
 (byte-for-byte unchanged) for any analyst that does not opt in. See `FLOWS.md` Flow
 10 and `ANALYSIS.md` §7.9.
 

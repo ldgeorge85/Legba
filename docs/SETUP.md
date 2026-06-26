@@ -46,10 +46,12 @@ most common bootstrap mistake:
 The 3 RSS feeds are a deliberately small, easily-verified **cold-start smoke
 test** — they prove the source → enrich → fan-out → assess pipeline lights up.
 They are **NOT** the deployed scope. The 46-source catalog is how you reach
-current/full scope, and it is **not auto-run on deploy** and **not part of the
-working-set bringup** — it is the separate step in **§8**. **If you stop at the
-working set you will sit at 3 feeds** (this is exactly why reviews correctly say
-"only 3 RSS feeds" of an under-bootstrapped instance). Do not skip §8.
+current/full scope. **The one-command `deploy/deploy.sh` registers the full
+catalog for you** (Phase 5). On the **manual path**, however, it is **not part of
+the working-set bringup** — it is the separate step in **§8**. **If you take the
+manual path and stop at the working set you will sit at 3 feeds** (this is exactly
+why reviews correctly say "only 3 RSS feeds" of an under-bootstrapped instance).
+On the manual path, do not skip §8.
 
 For reference, the live production instance reaches **~49 distinct
 signal-producing sources** (the 46 catalog sources plus seed/baseline adapters).

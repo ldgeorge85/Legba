@@ -921,12 +921,22 @@ after a quiet window, contradiction override, corroboration boost, temporal
 expiration on `valid_until`, supersession of a same-subject/predicate fact). The
 relevant decay sub-handlers are `fact_decay` and `nexus_decay`.
 
-> **Live fact write-path caveats (2026-06-17) — see §7.8.** Two of these mechanics
-> are weaker in practice than the formula implies: ingestion fact confidence is
-> currently a **hardcoded 1.0** (so it carries no information), and supersession
-> keys on **subject + predicate latest-wins**, NOT the full subject/predicate/object
-> triple — so identical triples are not deduped and accumulate. The fact write-path
-> also does **not** yet gate NER junk the way the signal layer does. These are open.
+> **Fact write-path supersession model (updated 2026-06-26 — task #101 Holes-A;
+> see §7.8).** Supersession is **single-winner-by-recency within a source tier**,
+> NOT a contested-claim arbiter. Two refinements landed: (1) it is **source-tier-
+> aware** — a machine-extracted ingestion/agent fact no longer closes (supersedes)
+> an open human-curated `seed`/`curated` fact (`seed == curated > ingestion ==
+> agent`); same-tier recency still wins, so a legitimate leader change of the same
+> tier supersedes as before; (2) when N sources **agree** on the same
+> `(subject, predicate, value)`, confidence aggregates via a bounded **noisy-OR**
+> (cap 0.99) rather than MAX, so corroboration raises belief. The model is still
+> **single-winner**: it keys on `(subject, predicate)` latest-wins (the leader-change
+> semantics §7.9 relies on), does not keep coexisting disputed values, and has no
+> credibility-weighted arbitration. That full **contested-claim arbiter** (disputed
+> values kept alive at the fact layer + a credibility-weighted surfaced winner) is
+> **designed, not built** — `planning/CONTESTED_CLAIMS_PLAN.md`. Machine-extracted
+> ingestion fact confidence is floored conservatively (`_INGESTION_DEFAULT_CONFIDENCE`
+> ~0.5, below the 0.95 curated seed), not the old hardcoded 1.0.
 
 ### 7.3 The entity knowledge graph and structural balance
 
@@ -1107,6 +1117,14 @@ more-finished than the data.
   now deduped on write rather than accumulating. (Supersession still keys on
   subject+predicate latest-wins by design — that is the leader-change semantics §7.9
   relies on; the deduped-write is what stops redundant identical rows piling up.)
+- **Fact supersession is now source-tier-aware + agreement aggregates confidence
+  (2026-06-26, task #101 Holes-A)** — a machine-extracted ingestion/agent fact no
+  longer closes an open human-curated `seed`/`curated` fact (`seed == curated >
+  ingestion == agent`; same-tier recency still wins); and N agreeing sources on a
+  `(subject, predicate, value)` combine confidence via a bounded noisy-OR (cap 0.99),
+  not MAX. **Still single-winner-by-recency within a tier** — coexisting disputed
+  values and credibility-weighted arbitration are **designed, not built**
+  (`planning/CONTESTED_CLAIMS_PLAN.md`).
 - ~~**Predicate vocabulary unreconciled**~~ — **FIXED (Phase B)**:
   `vocabulary.normalize_predicate` converges both write paths on the canonical
   lowercase-spaced form.

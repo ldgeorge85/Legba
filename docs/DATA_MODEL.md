@@ -173,6 +173,14 @@ descriptors + audit log; the universal `derived_from[]` lineage column.
   (polarity/label change), `journal_entries` `consolidation` rows
   (a newer consolidation supersedes the prior open one) — new open row, old row
   closed; `facts`/`nexuses` also decay open rows.
+  - **Fact supersession is single-winner-by-recency *within a source tier*** (task
+    #101 Holes-A): a machine-extracted `ingestion`/`agent` fact does **not** close an
+    open human-curated `seed`/`curated` fact (`seed == curated > ingestion == agent`);
+    same-tier recency still wins. Agreement on a `(subject, predicate, value)`
+    aggregates confidence via a bounded noisy-OR (cap 0.99), not MAX. The model keeps
+    **no coexisting disputed values** and does **no** credibility-weighted
+    arbitration — that contested-claim arbiter is **designed, not built**
+    (`planning/CONTESTED_CLAIMS_PLAN.md`).
 - **Mutate-in-place:** `signals` enrichment + later merge re-update (the one
   non-append substrate table), `entity_profiles`, `proposed_edges`,
   `hypotheses`/`situations` *status*, `journal_proposals` *status*

@@ -47,9 +47,9 @@ specs under `docs/` for context.
 
 - **⚠️ The journal needs its OWN dead-analyst canaries — two of them.** The journal assessor (Legba's first-person reflective voice) runs as **two META single-global-run analysts** (`target_filter=None`, like `world_assessor`) that SHARE one extension analyst kind, `journal_assessor` (registered via `register_analyst_kind` + the vocabulary-entries family — NOT a built-in `AnalystKind`; the built-in-kind count is unchanged): the **entry tier** (`journal_assessor`, descriptor `descriptors/analyst_journal_assessor.yaml`, cadence `0 0,12 * * *` = every 12h) and the **consolidation tier** (`journal_consolidator`, `descriptors/analyst_journal_consolidator.yaml`, cadence `0 2 * * *` = daily 02:00 UTC). Each global-run analyst can go silently dead WITHOUT a target to flag it, so **each needs its OWN activation canary** — the entry-tier canary exercises a DIFFERENT actor id than the consolidator, so a green entry tier does NOT prove the consolidator is alive. **The daily consolidator hides death the LONGEST** (a 24h beat); watch its `produced_at` directly. Producer output lands in the dedicated `journal_entries` table (migration **0048**, which also adds `journal_proposals`) — NOT `analyst_outputs` — and is **OFF the fact/finding/nexus chain**: a journal row is a *perspective OVER* the provenance chain, carrying an always-empty `derived_from` and deliberately excluded from the lineage catalog, so a `GET /api/v1/lineage/...` walk can never surface it. The two analysts are granted ONLY the `journal_read` (14 read tools incl. 9 self-instruments) + `journal_propose` packs (both non-write-fact — the grant-layer backstop for the never-write-a-fact invariant). Register them with `scripts/bringup_register_action_packs.py` (packs) + `scripts/bringup_register_analysts.py` (descriptors + the `journal_assessor` kind). The journal writes ONLY its own entries/consolidations directly; every outward effect (a correction, a change, or a self-revision) goes to the **human-gated `journal_proposals` queue**, never a live table — operator review happens via the accept/reject routes (`GET /api/v1/journal_proposals?status=pending`, `POST /api/v1/journal_proposals/{id}/accept`, `POST /api/v1/journal_proposals/{id}/reject` — reject REQUIRES a `decision_reason`; a `self_revision` touching a protected section auto-rejects on accept). Entries themselves render via `GET /api/v1/journal` + the `system.journal` UI panel.
 
-- **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~49 live sources including seed/baseline). To stand a fresh instance up to current scope:
-  1. Empty substrate up + migrations `0001_baseline` forward (§2–§3; migration head is **0046**).
-  2. Vault + stack components (§6–§7), then the source-first working set (§7 `bringup_register_p17_workingset.py`) — packs, the 3 minimal sources, 19 G20 targets, the 4 analysts.
+- **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~49 live sources including seed/baseline). To stand a fresh instance up to current scope:
+  1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations.
+  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts (`deploy.sh` registers these via the split registrars; the combined `scripts/bringup_register_p17_workingset.py` covers the same set in one pass).
   3. **Then the FULL source catalog** — run `scripts/bringup_register_source_catalog.py` to register the 46-source catalog (this is what takes the instance from the 3-feed cold-start to current scope), plus the deterministic cadence analysts + the budget envelope (§7).
   4. Seed the knowledge roots (§7.2) and verify ingestion (§9). A current-scope instance reaches order-of-magnitude tens-of-thousands of signals and tens-of-thousands of findings — the 3-feed set will not.
 
@@ -126,6 +126,38 @@ docker compose up -d                              # substrate only
 docker compose --profile dapr up -d               # + dapr sidecar
 ```
 
+### 2.1 Throwaway validation stack + teardown safety
+
+`deploy/deploy.sh --project <NAME>` (any name **other** than `legba`) stands up a
+**fully data-isolated** clean-slate stack for validation on the same host. The
+`deploy/compose.isolation.yml` override re-declares every named volume and the Dapr
+scheduler host-bind with a project-scoped name, so the validation stack physically
+**cannot** touch the real `legba_*` volumes. `deploy.sh` **hard-gates** on a
+config-render grep before it ever runs `up`: it renders the compose config and aborts
+if any reference to a real `legba_*_data` volume (or the real scheduler bind) survives.
+A validation stack reuses the same loopback ports, so the model is one stack up at a
+time — bring it up with `--no-caddy` to skip the TLS edge:
+
+```
+deploy/deploy.sh --project legba_val --no-caddy --seed     # isolated clean-slate stack
+deploy/deploy.sh --project legba_val --teardown            # down -v ONLY the legba_val_* volumes
+```
+
+**Teardown safety (the only-instance rule).** `--teardown` is destructive **only**
+for a non-`legba` project, and even then only after `deploy.sh` re-confirms the
+isolation grep. On the **real `legba` project** `--teardown` is **stop-only** — it
+`stop`s every container in the project (volumes preserved) and **refuses `down -v`**.
+The live `legba` volumes are never destroyed by this tool.
+
+> **Honesty note.** The single baseline schema (`deploy/baseline/0001_baseline.sql`)
+> and the data-isolation firewall are round-trip-proven (the baseline against a fresh
+> `apache/age` DB — see `deploy/baseline/README.md`; isolation by the config-render
+> gate). `deploy.sh` is the canonical, intended bring-up and wraps the same
+> load-bearing ordering this runbook describes, but a full clean-slate fresh deploy
+> end-to-end through registrars → app boot has **not** yet been validated start to
+> finish on a fresh empty stack. Treat it as the canonical path, not as a fully
+> battle-tested one-shot.
+
 ## 3. Apply migrations
 
 Migrations run on the substrate Postgres; they don't depend on the
@@ -144,6 +176,13 @@ python3 -m legba.data.migrate
 
 Idempotent. Re-runs skip already-applied migrations
 (ledger: `legba_data_migrations`).
+
+> A **fresh deploy** does not replay the 23-file migration history: it applies the
+> single round-trip-proven baseline `deploy/baseline/0001_baseline.sql` (which builds
+> the schema + AGE graph and pre-seeds the ledger to head **0053**), then `migrate`
+> only applies any **future** (`0054`+) migrations — currently a no-op. The
+> `migrate`-only path above is for an instance whose schema already exists.
+> `deploy/deploy.sh` does both steps for you.
 
 Verify:
 
