@@ -39,6 +39,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
 import type { Severity } from '@/v4/world/types'
@@ -56,6 +57,7 @@ import {
   loadSavedViews,
   mapTailEnvelope,
   persistSavedViews,
+  relativeTime,
   removeView,
   rowDedupKey,
   signalRestToRow,
@@ -87,6 +89,27 @@ interface SignalsResponse {
 type SourceFilter = 'all' | 'findings' | 'signals'
 
 const SEVERITY_OPTIONS = ['all', 'low', 'medium', 'high', 'critical'] as const
+
+/**
+ * The left at-a-glance severity rail colour (the old numbered feed's key scan
+ * channel): critical=red, high=amber, medium=yellow, low/none=slate. Returns a
+ * `border-l` colour class applied to the 3px rail on every FeedCard. Signals
+ * carry no severity → slate.
+ */
+function severityRailClass(severity: string | null | undefined): string {
+  switch (severity) {
+    case 'critical':
+      return 'border-l-accent-critical'
+    case 'high':
+      return 'border-l-accent-warning'
+    case 'medium':
+      return 'border-l-severity-medium'
+    case 'low':
+      return 'border-l-accent-ok'
+    default:
+      return 'border-l-slate-700'
+  }
+}
 
 /** Stamp a REST findings row as a unified finding row. */
 function stampFinding(r: FindingRestRow): UnifiedRow {
@@ -125,6 +148,10 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
   const [groupBySituation, setGroupBySituation] = useState(true)
   const [textFilter, setTextFilter] = useState('')
   const [views, setViews] = useState<SavedView[]>(() => loadSavedViews())
+  // Advanced filters / saved-views are tucked behind a disclosure so the list
+  // reclaims the vertical room the old multi-row filter bar + tall sparkline
+  // ate. The primary controls (source, search, live) stay always-visible.
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   // Live OFF clears the live buffers so a paused feed never shows stale
   // `live`-badged rows; the REST seed + 30s poll is the stable surface.
@@ -438,42 +465,11 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         signalsQ.refetch()
       }}
     >
-      {/* hourly volume sparkline (findings) */}
-      <div className="h-[60px] mb-2" data-testid="findings-sparkline">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={hourly} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-            <defs>
-              <linearGradient id="findings-spark" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#34d399" stopOpacity={0.6} />
-                <stop offset="100%" stopColor="#34d399" stopOpacity={0.05} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="label" hide />
-            <YAxis hide allowDecimals={false} />
-            <Tooltip
-              contentStyle={{
-                background: '#1e293b',
-                border: '1px solid #334155',
-                borderRadius: 4,
-                fontSize: 11,
-              }}
-              labelStyle={{ color: '#cbd5e1' }}
-              formatter={(value: unknown) => [String(value), 'findings']}
-            />
-            <Area
-              type="monotone"
-              dataKey="count"
-              stroke="#34d399"
-              strokeWidth={1.5}
-              fill="url(#findings-spark)"
-              isAnimationActive={false}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* filters row */}
-      <div className="flex items-center gap-2 mb-2 text-xs flex-wrap">
+      {/* Compact toolbar — the old tall sparkline + multi-row filter bar fold
+          into ONE thin row so the list gets the room. Primary controls (source,
+          search, clustered/flat, live) stay visible; everything else (sparkline,
+          target/analyst/severity/sort, saved views) tucks behind the disclosure. */}
+      <div className="flex items-center gap-2 mb-2 text-label flex-wrap">
         {/* Source — gates which kinds stream (data-layer). */}
         <div
           className="inline-flex rounded border border-slate-700 overflow-hidden"
@@ -508,157 +504,238 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
           onChange={(e) => setTextFilter(e.target.value)}
           data-testid="findings-text-filter"
         />
-        <input
-          className="flex-1 min-w-[120px] bg-surface-200 border border-slate-700 rounded p-1 px-2"
-          placeholder="target_id filter…"
-          value={filter.target_id}
-          onChange={(e) => setFilter((f) => ({ ...f, target_id: e.target.value }))}
-          data-testid="findings-target-filter"
-        />
-        <input
-          className="flex-1 min-w-[120px] bg-surface-200 border border-slate-700 rounded p-1 px-2 disabled:opacity-40"
-          placeholder="analyst_id filter…"
-          value={filter.analyst_id}
-          disabled={sevDisabled}
-          title={sevDisabled ? 'signals carry no analyst' : undefined}
-          onChange={(e) => setFilter((f) => ({ ...f, analyst_id: e.target.value }))}
-          data-testid="findings-analyst-filter"
-        />
-        <select
-          className="bg-surface-200 border border-slate-700 rounded p-1 px-2 disabled:opacity-40"
-          value={filter.severity}
-          disabled={sevDisabled}
-          title={sevDisabled ? 'signals carry no severity' : undefined}
-          onChange={(e) => setFilter((f) => ({ ...f, severity: e.target.value }))}
-          data-testid="findings-severity-filter"
+        {/* flat ⇄ clustered toggle — findings-only; "latest per situation" default */}
+        <div
+          className="inline-flex rounded border border-slate-700 overflow-hidden"
+          role="group"
+          aria-label="findings grouping"
         >
-          {SEVERITY_OPTIONS.map((s) => (
-            <option key={s} value={s}>
-              severity: {s}
-            </option>
-          ))}
-        </select>
-        <select
-          className="bg-surface-200 border border-slate-700 rounded p-1 px-2"
-          value={filter.sort}
-          onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value as SortMode }))}
-          data-testid="findings-sort"
+          <button
+            className={`px-1.5 py-0.5 ${
+              groupBySituation ? 'bg-surface-300 text-slate-200' : 'text-slate-500'
+            }`}
+            onClick={() => setGroupBySituation(true)}
+            data-testid="findings-mode-clustered"
+            title="Latest per situation — near-dup findings collapse under their situation"
+          >
+            clustered
+          </button>
+          <button
+            className={`px-1.5 py-0.5 border-l border-slate-700 ${
+              !groupBySituation ? 'bg-surface-300 text-slate-200' : 'text-slate-500'
+            }`}
+            onClick={() => setGroupBySituation(false)}
+            data-testid="findings-mode-flat"
+            title="Flat — every row, no situation grouping"
+          >
+            flat
+          </button>
+        </div>
+        {/* keep the canonical checkbox toggle (test + a11y) — visually hidden, still wired */}
+        <label className="sr-only">
+          <input
+            type="checkbox"
+            checked={groupBySituation}
+            onChange={(e) => setGroupBySituation(e.target.checked)}
+            data-testid="findings-group-toggle"
+          />
+          latest per situation
+        </label>
+        {/* advanced-filters disclosure — sparkline, target/analyst/severity/sort, saved views */}
+        <button
+          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${
+            showAdvanced
+              ? 'border-slate-600 text-slate-200 bg-surface-300'
+              : 'border-slate-700 text-slate-400 hover:text-slate-200'
+          }`}
+          onClick={() => setShowAdvanced((v) => !v)}
+          data-testid="findings-advanced-toggle"
+          aria-expanded={showAdvanced}
+          title="advanced filters, sort & saved views"
         >
-          <option value="recency">sort: recency</option>
-          <option value="severity">sort: severity</option>
-        </select>
+          <SlidersHorizontal className="h-3 w-3" />
+          filters
+          {showAdvanced ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </button>
         {isFetching && <span className="text-slate-500">loading…</span>}
       </div>
 
-      {/* saved views + group toggle */}
-      <div className="flex items-center gap-2 mb-2 text-label flex-wrap">
-        <span className="text-slate-500">views:</span>
-        {views.length === 0 && <span className="text-slate-600">none saved</span>}
-        {views.map((v) => (
-          <span
-            key={v.name}
-            className="inline-flex items-center gap-1 bg-surface-200 border border-slate-700 rounded px-1.5 py-0.5"
-            data-testid={`findings-view-${v.name}`}
-          >
-            <button
-              className="text-slate-300 hover:text-slate-100"
-              onClick={() => applyView(v.name)}
-              data-testid={`findings-view-apply-${v.name}`}
-            >
-              {v.name}
-            </button>
-            <button
-              className="text-slate-600 hover:text-rose-400"
-              onClick={() => deleteView(v.name)}
-              title="delete view"
-              data-testid={`findings-view-delete-${v.name}`}
-            >
-              ×
-            </button>
-          </span>
-        ))}
-        <button
-          className="text-slate-400 hover:text-slate-200 underline"
-          onClick={saveCurrentView}
-          data-testid="findings-save-view"
+      {/* Always mounted (controls stay reachable + queryable) but visually
+          collapsed via `hidden` until the disclosure is opened — so the list
+          reclaims the room without losing a11y/test reach of the controls. */}
+      <div className={showAdvanced ? '' : 'hidden'}>
+        <div
+          className="mb-2 rounded border border-slate-800 bg-surf-2 p-2 space-y-2"
+          data-testid="findings-advanced"
         >
-          + save view
-        </button>
-        <div className="ml-auto inline-flex items-center gap-2 text-slate-400">
-          {/* flat ⇄ clustered toggle — findings-only; "latest per situation" default */}
-          <div
-            className="inline-flex rounded border border-slate-700 overflow-hidden"
-            role="group"
-            aria-label="findings grouping"
-          >
-            <button
-              className={`px-1.5 py-0.5 ${
-                groupBySituation ? 'bg-surface-300 text-slate-200' : 'text-slate-500'
-              }`}
-              onClick={() => setGroupBySituation(true)}
-              data-testid="findings-mode-clustered"
-              title="Latest per situation — near-dup findings collapse under their situation"
-            >
-              clustered
-            </button>
-            <button
-              className={`px-1.5 py-0.5 border-l border-slate-700 ${
-                !groupBySituation ? 'bg-surface-300 text-slate-200' : 'text-slate-500'
-              }`}
-              onClick={() => setGroupBySituation(false)}
-              data-testid="findings-mode-flat"
-              title="Flat — every row, no situation grouping"
-            >
-              flat
-            </button>
+          {/* hourly volume sparkline (findings) — denser, inside the disclosure */}
+          <div className="h-[44px]" data-testid="findings-sparkline">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={hourly} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="findings-spark" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#34d399" stopOpacity={0.6} />
+                    <stop offset="100%" stopColor="#34d399" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="label" hide />
+                <YAxis hide allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{
+                    background: '#1e293b',
+                    border: '1px solid #334155',
+                    borderRadius: 4,
+                    fontSize: 11,
+                  }}
+                  labelStyle={{ color: '#cbd5e1' }}
+                  formatter={(value: unknown) => [String(value), 'findings']}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="count"
+                  stroke="#34d399"
+                  strokeWidth={1.5}
+                  fill="url(#findings-spark)"
+                  isAnimationActive={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
-          {/* keep the original checkbox as the canonical toggle (test + a11y) */}
-          <label className="inline-flex items-center gap-1">
+
+          {/* target / analyst / severity / sort filters */}
+          <div className="flex items-center gap-2 text-xs flex-wrap">
             <input
-              type="checkbox"
-              checked={groupBySituation}
-              onChange={(e) => setGroupBySituation(e.target.checked)}
-              data-testid="findings-group-toggle"
+              className="flex-1 min-w-[120px] bg-surface-200 border border-slate-700 rounded p-1 px-2"
+              placeholder="target_id filter…"
+              value={filter.target_id}
+              onChange={(e) => setFilter((f) => ({ ...f, target_id: e.target.value }))}
+              data-testid="findings-target-filter"
             />
-            latest per situation
-          </label>
-          {source === 'signals' && (
-            <span className="text-slate-600" title="Clustering groups findings; signals are atomic">
-              (clustering applies to findings)
-            </span>
-          )}
-          {source !== 'signals' && !clustered && groupBySituation && findingRows.length > 0 && (
-            <span className="text-slate-600" title="No situation-bearing findings on this page">
-              (flat — no clustering data)
-            </span>
-          )}
+            <input
+              className="flex-1 min-w-[120px] bg-surface-200 border border-slate-700 rounded p-1 px-2 disabled:opacity-40"
+              placeholder="analyst_id filter…"
+              value={filter.analyst_id}
+              disabled={sevDisabled}
+              title={sevDisabled ? 'signals carry no analyst' : undefined}
+              onChange={(e) => setFilter((f) => ({ ...f, analyst_id: e.target.value }))}
+              data-testid="findings-analyst-filter"
+            />
+            <select
+              className="bg-surface-200 border border-slate-700 rounded p-1 px-2 disabled:opacity-40"
+              value={filter.severity}
+              disabled={sevDisabled}
+              title={sevDisabled ? 'signals carry no severity' : undefined}
+              onChange={(e) => setFilter((f) => ({ ...f, severity: e.target.value }))}
+              data-testid="findings-severity-filter"
+            >
+              {SEVERITY_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  severity: {s}
+                </option>
+              ))}
+            </select>
+            <select
+              className="bg-surface-200 border border-slate-700 rounded p-1 px-2"
+              value={filter.sort}
+              onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value as SortMode }))}
+              data-testid="findings-sort"
+            >
+              <option value="recency">sort: recency</option>
+              <option value="severity">sort: severity</option>
+            </select>
+          </div>
+
+          {/* saved views */}
+          <div className="flex items-center gap-2 text-label flex-wrap">
+            <span className="text-slate-500">views:</span>
+            {views.length === 0 && <span className="text-slate-600">none saved</span>}
+            {views.map((v) => (
+              <span
+                key={v.name}
+                className="inline-flex items-center gap-1 bg-surface-200 border border-slate-700 rounded px-1.5 py-0.5"
+                data-testid={`findings-view-${v.name}`}
+              >
+                <button
+                  className="text-slate-300 hover:text-slate-100"
+                  onClick={() => applyView(v.name)}
+                  data-testid={`findings-view-apply-${v.name}`}
+                >
+                  {v.name}
+                </button>
+                <button
+                  className="text-slate-600 hover:text-rose-400"
+                  onClick={() => deleteView(v.name)}
+                  title="delete view"
+                  data-testid={`findings-view-delete-${v.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <button
+              className="text-slate-400 hover:text-slate-200 underline"
+              onClick={saveCurrentView}
+              data-testid="findings-save-view"
+            >
+              + save view
+            </button>
+            {source === 'signals' && (
+              <span
+                className="text-slate-600 ml-auto"
+                title="Clustering groups findings; signals are atomic"
+              >
+                (clustering applies to findings)
+              </span>
+            )}
+            {source !== 'signals' && !clustered && groupBySituation && findingRows.length > 0 && (
+              <span
+                className="text-slate-600 ml-auto"
+                title="No situation-bearing findings on this page"
+              >
+                (flat — no clustering data)
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       {isLoading && <div className="text-slate-500 text-sm">loading feed…</div>}
       {error && <div className="text-rose-400 text-sm">error: {error.message}</div>}
 
-      <div className="flex-1 overflow-auto space-y-2 text-xs" data-testid="findings-list">
-        {clusters.map((cluster) =>
-          cluster.flat ? (
-            <div
-              key={cluster.situation_id}
-              data-testid={`findings-cluster-${cluster.situation_id}`}
-              className="space-y-1"
-            >
-              {cluster.rows.map((row) => (
-                <FeedCard key={rowDedupKey(row)} row={row} onOpen={() => openRow(row)} />
-              ))}
-            </div>
-          ) : (
-            <ClusterBlock
-              key={cluster.situation_id}
-              cluster={cluster}
-              onOpenRow={openRow}
-              onOpenSituation={openSituationLineage}
-            />
-          ),
-        )}
+      <div className="flex-1 overflow-auto space-y-1 text-xs" data-testid="findings-list">
+        {(() => {
+          // Running 1-based index for the tight numbered feed (the old at-a-glance
+          // row number). Counts every rendered row top-to-bottom — flat rows, each
+          // cluster's canonical row, then the signals tail — so the numbers read
+          // as one continuous list regardless of clustering.
+          let rowNo = 0
+          return clusters.map((cluster) =>
+            cluster.flat ? (
+              <div
+                key={cluster.situation_id}
+                data-testid={`findings-cluster-${cluster.situation_id}`}
+                className="space-y-1"
+              >
+                {cluster.rows.map((row) => (
+                  <FeedCard
+                    key={rowDedupKey(row)}
+                    row={row}
+                    index={++rowNo}
+                    onOpen={() => openRow(row)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <ClusterBlock
+                key={cluster.situation_id}
+                cluster={cluster}
+                index={++rowNo}
+                onOpenRow={openRow}
+                onOpenSituation={openSituationLineage}
+              />
+            ),
+          )
+        })()}
 
         {/* signals flat block — only when clustering findings (Cluster ON);
             when flat, signals already interleave in the single flat cluster. */}
@@ -667,8 +744,13 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
             <div className="text-label text-ink-3 uppercase tracking-wide pt-1">
               signals ({signalRows.length})
             </div>
-            {signalRows.map((row) => (
-              <FeedCard key={rowDedupKey(row)} row={row} onOpen={() => openRow(row)} />
+            {signalRows.map((row, i) => (
+              <FeedCard
+                key={rowDedupKey(row)}
+                row={row}
+                index={i + 1}
+                onOpen={() => openRow(row)}
+              />
             ))}
           </div>
         )}
@@ -699,10 +781,12 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
  */
 function ClusterBlock({
   cluster,
+  index,
   onOpenRow,
   onOpenSituation,
 }: {
   cluster: FindingsCluster<UnifiedRow>
+  index?: number
   onOpenRow: (row: UnifiedRow) => void
   onOpenSituation: (cluster: FindingsCluster<UnifiedRow>) => void
 }) {
@@ -714,12 +798,14 @@ function ClusterBlock({
     ? cluster.situation_id.slice(4)
     : cluster.situation_id.replace(/^sig:/, '')
 
+  // Lightened: a thin left accent (coloured by the canonical row's severity) +
+  // a compact one-line header — no nested bordered card (no boxes-in-boxes).
   return (
     <div
       data-testid={`findings-cluster-${cluster.situation_id}`}
-      className="border border-slate-800 rounded"
+      className={`border-l-2 ${severityRailClass(latest.severity)} pl-2`}
     >
-      <div className="flex items-center gap-2 px-2 py-1 bg-surf-2 text-label border-b border-line">
+      <div className="flex items-center gap-2 text-label pb-0.5">
         <button
           className="text-accent-info hover:text-blue-300 font-mono truncate max-w-[40%] text-left"
           onClick={() => onOpenSituation(cluster)}
@@ -749,12 +835,10 @@ function ClusterBlock({
         <span className="text-slate-500 ml-auto">latest of {cluster.rows.length}</span>
       </div>
 
-      <div className="p-1">
-        <FeedCard row={latest} onOpen={() => onOpenRow(latest)} />
-      </div>
+      <FeedCard row={latest} index={index} onOpen={() => onOpenRow(latest)} />
 
       {history.length > 0 && (
-        <div className="px-1 pb-1">
+        <div className="pt-0.5">
           <button
             className="w-full text-left text-label text-ink-2 hover:text-ink-1 py-0.5"
             onClick={() => setOpen((v) => !v)}
@@ -787,24 +871,37 @@ function ClusterBlock({
  */
 function FeedCard({
   row,
+  index,
   onOpen,
   superseded = false,
 }: {
   row: UnifiedRow
+  index?: number
   onOpen: () => void
   superseded?: boolean
 }) {
   const isSignal = row.source === 'signal'
+  // The tight numbered-row layout: a left severity colour rail + muted row index,
+  // a bold title line that carries the at-a-glance scan, and ONE muted meta line
+  // (target/analyst or source/geo) with a relative-time stamp on the right.
   return (
     <button
       onClick={onOpen}
-      className="w-full text-left bg-surf-2 hover:bg-surf-1 border border-line rounded pad-density cursor-pointer block text-body"
+      className={`group w-full text-left bg-surf-2 hover:bg-surf-1 border-l-2 ${severityRailClass(
+        row.severity,
+      )} pl-2 pr-2 py-1 cursor-pointer block text-body`}
       data-testid={isSignal ? `signal-${row.id}` : `finding-${row.id}`}
     >
-      <div className="flex flex-wrap items-center gap-2">
+      {/* title row: index · badges · bold title … relative time */}
+      <div className="flex items-baseline gap-2">
+        {index != null && (
+          <span className="shrink-0 text-ink-3 text-label tabular-nums w-6 text-right">
+            {index}.
+          </span>
+        )}
         {row.live && (
           <span
-            className="shrink-0 rounded px-1 text-label bg-emerald-900 text-emerald-200"
+            className="shrink-0 self-center rounded px-1 text-label bg-emerald-900 text-emerald-200"
             data-testid={`${isSignal ? 'signal' : 'finding'}-live-${row.id}`}
           >
             live
@@ -812,7 +909,7 @@ function FeedCard({
         )}
         {isSignal && (
           <span
-            className="shrink-0 rounded px-1 text-label bg-sky-950 text-sky-300 uppercase tracking-wide"
+            className="shrink-0 self-center rounded px-1 text-label bg-sky-950 text-sky-300 uppercase tracking-wide"
             data-testid={`signal-badge-${row.id}`}
           >
             signal
@@ -820,60 +917,65 @@ function FeedCard({
         )}
         {superseded && (
           <span
-            className="shrink-0 rounded px-1 text-label bg-surf-1 text-ink-3"
+            className="shrink-0 self-center rounded px-1 text-label bg-surf-1 text-ink-3"
             title="superseded by a newer finding for this situation"
             data-testid={`finding-superseded-${row.id}`}
           >
             superseded
           </span>
         )}
+        <span
+          className={`min-w-0 flex-1 truncate font-semibold ${
+            superseded ? 'text-ink-2 line-through' : 'text-ink-1'
+          }`}
+          title={row.title ?? ''}
+        >
+          {row.title}
+        </span>
+        {row.severity && (
+          <SeverityBadge severity={row.severity as Severity} className="shrink-0 self-center" />
+        )}
+        <span
+          className="shrink-0 self-center text-ink-3 text-label"
+          title={new Date(row.produced_at).toLocaleString()}
+        >
+          {relativeTime(row.produced_at)}
+        </span>
+      </div>
+
+      {/* ONE muted meta line: target/analyst (findings) or source/geo (signals) */}
+      <div className="mt-0.5 flex items-center gap-2 text-label text-ink-3 overflow-hidden whitespace-nowrap">
         {isSignal ? (
           <>
-            <span className="text-ink-2 shrink-0 max-w-[12rem] truncate" title={row.source_id ?? ''}>
+            <span className="truncate" title={row.source_id ?? ''}>
               {row.source_id ?? '(source)'}
             </span>
             {(row.geo ?? []).slice(0, 3).map((g) => (
-              <span key={g} className="shrink-0 rounded bg-surf-1 px-1 text-ink-3">
-                {g}
+              <span key={g} className="shrink-0">
+                · {g}
               </span>
             ))}
+            {row.confidence !== null && <span className="shrink-0">· c={row.confidence.toFixed(2)}</span>}
+            {(row.tags ?? []).length > 0 && (
+              <span className="shrink-0 truncate">· {(row.tags ?? []).slice(0, 4).join(' ')}</span>
+            )}
           </>
         ) : (
           <>
-            <span className="text-ink-2 shrink-0 w-32 truncate">{row.target_id ?? '(no target)'}</span>
-            <span className="text-ink-3 shrink-0 w-32 truncate">
-              {row.analyst_id ?? '(no analyst)'}
-            </span>
+            <span className="truncate">{row.target_id ?? '(no target)'}</span>
+            <span className="shrink-0">·</span>
+            <span className="truncate">{row.analyst_id ?? '(no analyst)'}</span>
+            {row.confidence !== null && <span className="shrink-0">· c={row.confidence.toFixed(2)}</span>}
+            {row.derived_from.length > 0 && (
+              <span className="shrink-0">
+                · ←{row.derived_from.length} input{row.derived_from.length === 1 ? '' : 's'}
+              </span>
+            )}
           </>
         )}
-        {row.severity && <SeverityBadge severity={row.severity as Severity} className="shrink-0" />}
-        {row.confidence !== null && (
-          <span className="shrink-0 text-ink-3">c={row.confidence.toFixed(2)}</span>
-        )}
-        <span className="shrink-0 text-ink-3 text-label">
-          {new Date(row.produced_at).toLocaleString()}
-        </span>
       </div>
-      <div
-        className={`mt-1 font-medium ${superseded ? 'text-ink-2 line-through' : 'text-ink-1'}`}
-      >
-        {row.title}
-      </div>
-      {row.body && <div className="mt-1 text-ink-2 line-clamp-3">{row.body}</div>}
-      {!isSignal && row.derived_from.length > 0 && (
-        <div className="mt-1 text-ink-3 text-label">
-          ← {row.derived_from.length} input{row.derived_from.length === 1 ? '' : 's'}
-        </div>
-      )}
-      {isSignal && (row.tags ?? []).length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-1 text-label text-ink-3">
-          {(row.tags ?? []).slice(0, 5).map((t) => (
-            <span key={t} className="rounded bg-surf-1 px-1">
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
+
+      {row.body && <div className="mt-0.5 text-ink-2 line-clamp-2">{row.body}</div>}
     </button>
   )
 }

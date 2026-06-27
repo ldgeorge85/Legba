@@ -1,12 +1,23 @@
 /**
  * Entity Graph (`system.entity_graph`) — the entity knowledge-graph viz.
  *
- * Source-first analogue of v2's Sigma.js knowledge graph. Renders
- * GET /api/v1/entities/graph (entity_profiles nodes + proposed_edges
- * co-occurrence relationships) with Cytoscape:
- *   - nodes colored by entity_class, sized by mention count
+ * Source-first analogue of v2's Sigma.js knowledge graph (the old "Knowledge
+ * Graph" — recovered screenshot 19). Renders GET /api/v1/entities/graph
+ * (entity_profiles nodes + proposed_edges relationships) with Cytoscape:
+ *   - NODES coloured by entity_class, sized by degree; labels gated to hubs
+ *   - EDGES coloured by relationship_type, with a matching colour legend
+ *   - entity-type FILTER CHIPS toggle node classes (and their dangling edges)
+ *   - degree-0 orphans dropped by default (toggle to show) so it reads as a
+ *     connected network, not confetti
  *   - top-N densest subgraph by default; click a node to ego-center on it
- *   - listens for `legba:open-entity-graph` (from the Entities panel) to center
+ *   - listens for the shared selection (entity) to center
+ *
+ * The shaping (orphan drop, degree sizing, class/rel filtering) lives in the
+ * pure `buildEntityGraphElements` in `@/lib/graphModel`; the chips/legend/zoom
+ * chrome is the shared `GraphControls`. The cytoscape mount itself is unchanged
+ * from the #90 crash fix: a stable no-op preset mount layout + the real `cose`
+ * run from the resize observer (attachFitOnResize) once the container is sized,
+ * gated on `useVisibleSize`.
  */
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -14,9 +25,19 @@ import type cytoscape from 'cytoscape'
 import type { Core, ElementDefinition, StylesheetStyle } from 'cytoscape'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { PanelChrome } from '@/components/PanelChrome'
+import { GraphControls } from '@/components/GraphControls'
 import { apiGet } from '@/lib/api'
 import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { isCountry } from '@/lib/countryGeo'
+import {
+  buildEntityGraphElements,
+  entityClassColor,
+  presentEntityClasses,
+  presentRelationshipTypes,
+  relationshipColor,
+  type EntityGraphEdge,
+  type EntityGraphNode,
+} from '@/lib/graphModel'
 import type { PanelProps } from '@/types'
 import { useSelection } from '@/state/selection'
 
@@ -37,35 +58,35 @@ interface GraphResp {
   edges: GEdge[]
 }
 
-const CLASS_COLOR: Record<string, string> = {
-  person: '#f59e0b',
-  organization: '#60a5fa',
-  location: '#10b981',
-  event: '#a78bfa',
-  entity: '#94a3b8',
-}
-
 const STYLESHEET: StylesheetStyle[] = [
   {
     selector: 'node',
     style: {
       'background-color': 'data(color)',
+      // Labels only render for hub nodes (the projection sets an empty label on
+      // low-degree nodes via `show_label`), so a dense graph isn't a text wall.
       label: 'data(label)',
-      'font-size': 9,
-      color: '#cbd5e1',
+      'font-size': 10,
+      color: '#e2e8f0', // ink-1
       'text-valign': 'bottom',
-      'text-margin-y': 2,
+      'text-halign': 'center',
+      'text-margin-y': 3,
+      'text-outline-color': '#0a0c10', // surf-base
+      'text-outline-width': 2,
+      'min-zoomed-font-size': 8,
       width: 'data(size)',
       height: 'data(size)',
+      'border-width': 1,
+      'border-color': '#1e293b', // slate-800
     },
   },
   {
     selector: 'edge',
     style: {
       width: 'data(w)',
-      'line-color': '#334155',
+      'line-color': 'data(color)',
       'curve-style': 'haystack',
-      opacity: 0.6,
+      opacity: 0.55,
     },
   },
   { selector: 'node:selected', style: { 'border-width': 2, 'border-color': '#e2e8f0' } },
@@ -82,6 +103,11 @@ const COSE_LAYOUT = { name: 'cose', animate: false, idealEdgeLength: 80 } as cyt
 
 export default function EntityGraphPanel({ registration }: PanelProps) {
   const [center, setCenter] = useState<string | null>(null)
+  // Filter state: hidden entity classes + show-orphans toggle. `null` ⇒ no class
+  // is hidden (all chips active) — the default.
+  const [hiddenClasses, setHiddenClasses] = useState<Set<string>>(() => new Set())
+  const [showOrphans, setShowOrphans] = useState(false)
+  const cyRef = useRef<Core | null>(null)
   const fitCleanup = useRef<(() => void) | null>(null)
   // #90 — don't construct cytoscape until this Dockview tab is on-screen + sized,
   // else its auto-run default layout reads a detached 0×0 box → `reading 'h'`.
@@ -106,38 +132,76 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
     refetchInterval: 120_000,
   })
 
-  const elements = useMemo<ElementDefinition[]>(() => {
+  // Normalise the raw response into the projector's structural node/edge shape.
+  // NER classes country mentions as generic `entity`; recolor recognized
+  // countries as `country` (lib/countryGeo) so the graph isn't all grey.
+  const { rawNodes, rawEdges } = useMemo(() => {
     const g = graphQ.data
-    if (!g) return []
-    const ids = new Set(g.nodes.map((n) => n.canonical_name))
-    const nodeEls: ElementDefinition[] = g.nodes.map((n) => {
-      // NER classes country mentions as generic `entity`; recolor recognized
-      // countries as `location` (lib/countryGeo) so the graph isn't all grey.
-      const cls = n.entity_class === 'entity' && isCountry(n.canonical_name) ? 'location' : n.entity_class
-      return {
-        data: {
-          id: n.canonical_name,
-          label: n.canonical_name.length > 22 ? n.canonical_name.slice(0, 21) + '…' : n.canonical_name,
-          color: CLASS_COLOR[cls] ?? '#94a3b8',
-          size: Math.min(46, 14 + Math.sqrt(n.mentions) * 4),
-        },
-      }
-    })
-    const edgeEls: ElementDefinition[] = g.edges
-      .filter((e) => ids.has(e.source) && ids.has(e.target) && e.source !== e.target)
-      .map((e, i) => ({
-        data: { id: `e${i}`, source: e.source, target: e.target, w: 1 + e.confidence * 3 },
-      }))
-    return [...nodeEls, ...edgeEls]
+    if (!g) return { rawNodes: [] as EntityGraphNode[], rawEdges: [] as EntityGraphEdge[] }
+    const rawNodes: EntityGraphNode[] = g.nodes.map((n) => ({
+      id: n.canonical_name,
+      label: n.canonical_name,
+      entity_class:
+        n.entity_class === 'entity' && isCountry(n.canonical_name) ? 'country' : n.entity_class,
+      mentions: n.mentions,
+    }))
+    const rawEdges: EntityGraphEdge[] = g.edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      relationship_type: e.relationship_type,
+      confidence: e.confidence,
+    }))
+    return { rawNodes, rawEdges }
   }, [graphQ.data])
+
+  // Chips read the FULL (unfiltered) class set so a class never vanishes from the
+  // chip row just because it's currently toggled off. The legend reads the
+  // currently-rendered edges so it tracks what's on screen.
+  const allClasses = useMemo(() => presentEntityClasses(rawNodes), [rawNodes])
+  const visibleClasses = useMemo(
+    () => new Set(allClasses.filter((c) => !hiddenClasses.has(c))),
+    [allClasses, hiddenClasses],
+  )
+
+  const graph = useMemo(
+    () =>
+      buildEntityGraphElements(rawNodes, rawEdges, {
+        visibleClasses: hiddenClasses.size > 0 ? visibleClasses : undefined,
+        showOrphans,
+      }),
+    [rawNodes, rawEdges, hiddenClasses, visibleClasses, showOrphans],
+  )
+
+  const elements = useMemo<ElementDefinition[]>(
+    () => [
+      ...graph.nodes.map((n) => ({
+        data: { ...n.data, label: n.data.show_label ? n.data.label : '' },
+      })),
+      ...graph.edges.map((e) => ({ data: e.data })),
+    ],
+    [graph],
+  )
+
+  const presentRels = useMemo(
+    () => presentRelationshipTypes(graph.edges.map((e) => e.data)),
+    [graph.edges],
+  )
+
+  const toggleClass = (id: string) =>
+    setHiddenClasses((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   return (
     <PanelChrome
       registration={registration}
       subtitle={
         center
-          ? `ego: ${center} · ${elements.filter((e) => !('source' in (e.data as object))).length} nodes`
-          : `top subgraph · ${graphQ.data?.nodes.length ?? 0} nodes / ${graphQ.data?.edges.length ?? 0} edges`
+          ? `ego: ${center} · ${graph.nodes.length} nodes`
+          : `top subgraph · ${graph.nodes.length} nodes / ${graph.edges.length} edges`
       }
       onRefresh={() => graphQ.refetch()}
       actions={
@@ -161,6 +225,24 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
             no entity relationships yet
           </div>
         )}
+        {/* Chips + legend + zoom overlay — rendered whenever there's a graph. */}
+        {!graphQ.isLoading && elements.length > 0 && (
+          <GraphControls
+            chipsLabel="Types"
+            legendLabel="Edges"
+            chips={allClasses.map((c) => ({ id: c, color: entityClassColor(c) }))}
+            activeChips={visibleClasses}
+            onToggleChip={toggleClass}
+            onSelectAllChips={() => setHiddenClasses(new Set())}
+            onClearChips={() => setHiddenClasses(new Set(allClasses))}
+            legend={presentRels.map((r) => ({ id: r, color: relationshipColor(r) }))}
+            showOrphans={showOrphans}
+            onToggleOrphans={() => setShowOrphans((v) => !v)}
+            onZoomIn={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.3)}
+            onZoomOut={() => cyRef.current?.zoom(cyRef.current.zoom() / 1.3)}
+            onFit={() => cyRef.current?.fit(undefined, 30)}
+          />
+        )}
         {/* #90 — construct cytoscape only once the tab is visible+sized (useVisibleSize);
             a fresh mount in a hidden 0×0 Dockview tab auto-runs cytoscape's default
             layout against a detached box → `reading 'h'`. Once mounted, the real
@@ -173,9 +255,12 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
             // at 0×0); the real `cose` runs from the resize observer once sized.
             layout={PRESET_NOOP}
             style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            userZoomingEnabled
+            userPanningEnabled
             minZoom={0.2}
             maxZoom={3}
             cy={(cy: Core) => {
+              cyRef.current = cy
               cy.removeListener('tap', 'node')
               cy.on('tap', 'node', (evt) => setCenter(evt.target.id()))
               // #90 — size/fit to the Dockview tab + run the real layout once sized.

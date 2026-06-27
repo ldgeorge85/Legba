@@ -85,6 +85,116 @@ export function kindColor(kind: string): string {
   return KIND_COLORS[kind] ?? KIND_DEFAULT_COLOR
 }
 
+// ---------------------------------------------------------------------------
+// Entity knowledge-graph palettes (the old "Knowledge Graph" — screenshot 19).
+//
+// The entity graph (`GET /entities/graph`) carries a node `entity_class` and an
+// edge `relationship_type` drawn from the substrate vocabulary
+// (`legba.data.vocabulary` — ENTITY_CLASSES / RELATIONSHIP_TYPES). The old KG
+// coloured NODES by entity class and EDGES by relationship type, with a chip
+// row per node class and a colour legend per relationship type. These palettes
+// are the single home for that mapping so the cytoscape stylesheets (which
+// bypass PostCSS — hex only) and the React GraphControls (chips + legend) stay
+// in lock-step. Hex values mirror the dark old-KG palette.
+// ---------------------------------------------------------------------------
+
+/** Node colour keyed by entity_class — the substrate ENTITY_CLASSES vocabulary
+ *  plus the UI-recolored `country` (NER tags countries `entity`; the panels
+ *  promote recognized countries to a distinct class for legibility). */
+export const ENTITY_CLASS_COLORS: Record<string, string> = {
+  country: '#38bdf8', // sky-400  — nation states (the dense hubs)
+  person: '#f59e0b', // amber-500
+  organization: '#60a5fa', // blue-400
+  event: '#a78bfa', // violet-400
+  location: '#34d399', // emerald-400
+  region: '#2dd4bf', // teal-400
+  concept: '#f472b6', // pink-400
+  corporation: '#818cf8', // indigo-400
+  software: '#22d3ee', // cyan-400
+  entity: '#94a3b8', // slate-400 — the generic / unclassified bucket
+}
+export const ENTITY_CLASS_DEFAULT_COLOR = '#94a3b8' // slate-400
+
+/** Canonical render order for the entity-class chip row (hubs first, generic
+ *  last), mirroring the substrate vocabulary ordering. */
+export const ENTITY_CLASS_ORDER = [
+  'country',
+  'person',
+  'organization',
+  'event',
+  'location',
+  'region',
+  'concept',
+  'corporation',
+  'software',
+  'entity',
+] as const
+
+export function entityClassColor(entityClass: string): string {
+  return ENTITY_CLASS_COLORS[entityClass] ?? ENTITY_CLASS_DEFAULT_COLOR
+}
+
+/** Edge colour keyed by relationship_type — the substrate RELATIONSHIP_TYPES
+ *  vocabulary. Distinct hues so a dense graph reads as a coloured network, with
+ *  the alliance/hostility pair anchored green/red (the old-KG convention). */
+export const RELATIONSHIP_COLORS: Record<string, string> = {
+  AlliedWith: '#34d399', // emerald-400 — cooperation
+  HostileTo: '#f87171', // red-400     — conflict
+  Targets: '#fb7185', // rose-400
+  SuppliesWeaponsTo: '#fbbf24', // amber-400
+  PartyTo: '#c084fc', // purple-400
+  ConductedVia: '#a78bfa', // violet-400
+  LeaderOf: '#fcd34d', // amber-300
+  MemberOf: '#60a5fa', // blue-400
+  AffiliatedWith: '#818cf8', // indigo-400
+  OperatesIn: '#2dd4bf', // teal-400
+  LocatedIn: '#22d3ee', // cyan-400
+  PartOf: '#38bdf8', // sky-400
+  InvolvedIn: '#f472b6', // pink-400
+  CoOccursWith: '#94a3b8', // slate-400 — the weak co-occurrence default
+}
+export const RELATIONSHIP_DEFAULT_COLOR = '#64748b' // slate-500
+
+/** Canonical render order for the relationship legend (mirrors the substrate
+ *  RELATIONSHIP_TYPES tuple). */
+export const RELATIONSHIP_ORDER = [
+  'AlliedWith',
+  'HostileTo',
+  'Targets',
+  'SuppliesWeaponsTo',
+  'PartyTo',
+  'ConductedVia',
+  'LeaderOf',
+  'MemberOf',
+  'AffiliatedWith',
+  'OperatesIn',
+  'LocatedIn',
+  'PartOf',
+  'InvolvedIn',
+  'CoOccursWith',
+] as const
+
+export function relationshipColor(relType: string): string {
+  return RELATIONSHIP_COLORS[relType] ?? RELATIONSHIP_DEFAULT_COLOR
+}
+
+/**
+ * Order a set of present values by a canonical reference order, with any
+ * leftover (vocabulary-drift) values appended alphabetically — so a chip/legend
+ * row reads in the familiar order yet never silently drops an unknown value.
+ */
+export function orderByReference(present: Iterable<string>, reference: readonly string[]): string[] {
+  const set = new Set(present)
+  const ordered: string[] = []
+  for (const r of reference) {
+    if (set.has(r)) {
+      ordered.push(r)
+      set.delete(r)
+    }
+  }
+  return [...ordered, ...[...set].sort((a, b) => a.localeCompare(b))]
+}
+
 export interface GraphNodeData {
   id: string
   label: string
@@ -115,6 +225,206 @@ export interface GraphElements {
 export function truncate(s: string | null | undefined, n: number): string {
   if (!s) return ''
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`
+}
+
+// ---------------------------------------------------------------------------
+// Entity knowledge-graph projection (the old "Knowledge Graph").
+//
+// The entity graph endpoint returns plain nodes (class + mention count) and
+// co-occurrence-style edges (relationship_type + confidence). The old KG read
+// as a *connected network*, not confetti: degree-0 singletons were dropped,
+// nodes were sized by degree, and only hubs were labelled. This pure projector
+// is the single home for that shaping so the panels stay thin + it's testable
+// without a DOM (mirrors the lineage `projectGraph`).
+// ---------------------------------------------------------------------------
+
+/** Minimal entity node the projector needs — a structural subset of the
+ *  endpoint's `EntityNode` (the panels pass the live rows straight through). */
+export interface EntityGraphNode {
+  /** Cytoscape id = canonical name (edge endpoints reference it). */
+  id: string
+  label: string
+  entity_class: string
+  /** Mention count — a secondary size signal (degree is primary). */
+  mentions?: number
+}
+
+/** Minimal entity edge — a structural subset of the endpoint's `GraphEdge`. */
+export interface EntityGraphEdge {
+  source: string
+  target: string
+  relationship_type: string
+  confidence: number
+}
+
+export interface EntityNodeData {
+  id: string
+  label: string
+  /** Full (untruncated) name for tooltips / selection labels. */
+  name: string
+  entity_class: string
+  /** Incident-edge count (after orphan drop). Drives node size + label gating. */
+  degree: number
+  /** Node diameter in px (degree-scaled). */
+  size: number
+  /** Whether this node's label should render (hubs only, to avoid clutter). */
+  show_label: boolean
+  color: string
+}
+
+export interface EntityEdgeData {
+  id: string
+  source: string
+  target: string
+  relationship_type: string
+  /** Edge width (confidence-scaled). */
+  w: number
+  color: string
+}
+
+export interface EntityGraphElements {
+  nodes: Array<{ data: EntityNodeData }>
+  edges: Array<{ data: EntityEdgeData }>
+}
+
+export interface BuildEntityGraphOpts {
+  /** Entity classes to render. Undefined ⇒ all. A node whose class is filtered
+   *  out is dropped (along with its now-dangling edges). */
+  visibleClasses?: ReadonlySet<string>
+  /** Relationship types to render. Undefined ⇒ all. */
+  visibleRels?: ReadonlySet<string>
+  /** Keep degree-0 singletons (default false — the old KG dropped the ~70
+   *  scattered dots so it read as a connected network, not confetti). */
+  showOrphans?: boolean
+  /** A node id to always keep + emphasise (the ego centre, for the Why graph).
+   *  It renders even at degree 0 so the ego view never goes blank. */
+  centerId?: string
+}
+
+/** Distinct entity classes present across a node list, in canonical order. */
+export function presentEntityClasses(nodes: ReadonlyArray<{ entity_class: string }>): string[] {
+  return orderByReference(
+    nodes.map((n) => n.entity_class),
+    ENTITY_CLASS_ORDER,
+  )
+}
+
+/** Distinct relationship types present across an edge list, in canonical order. */
+export function presentRelationshipTypes(
+  edges: ReadonlyArray<{ relationship_type: string }>,
+): string[] {
+  return orderByReference(
+    edges.map((e) => e.relationship_type),
+    RELATIONSHIP_ORDER,
+  )
+}
+
+/** Map a degree onto a node diameter (~16–58px), sqrt-scaled so a few huge hubs
+ *  don't dwarf the rest. The ego centre gets a fixed emphasis bump elsewhere. */
+function degreeSize(degree: number): number {
+  return Math.min(58, 16 + Math.sqrt(degree) * 7)
+}
+
+/** Map a confidence (0..1) onto an edge width (~1–4px). */
+function confidenceWidth(confidence: number): number {
+  const c = Number.isFinite(confidence) ? Math.min(Math.max(confidence, 0), 1) : 0
+  return 1 + c * 3
+}
+
+/**
+ * Project raw entity nodes + edges into cytoscape-ready element data, honoring
+ * class/relationship allowlists, dropping degree-0 orphans (unless asked to
+ * keep them), sizing nodes by degree, and gating labels to hubs (degree above
+ * a small threshold) so a dense graph stays legible. Pure + DOM-free.
+ */
+export function buildEntityGraphElements(
+  rawNodes: ReadonlyArray<EntityGraphNode>,
+  rawEdges: ReadonlyArray<EntityGraphEdge>,
+  opts: BuildEntityGraphOpts = {},
+): EntityGraphElements {
+  const { visibleClasses, visibleRels, showOrphans = false, centerId } = opts
+
+  // 1. Class filter — drop hidden-class nodes up front so their edges dangle.
+  const classKept = new Map<string, EntityGraphNode>()
+  for (const n of rawNodes) {
+    if (visibleClasses && !visibleClasses.has(n.entity_class)) continue
+    classKept.set(n.id, n)
+  }
+
+  // 2. Edge filter — both endpoints must survive the class filter, no
+  //    self-loops, and the relationship type must pass the rel allowlist.
+  const keptEdges: EntityGraphEdge[] = []
+  for (const e of rawEdges) {
+    if (e.source === e.target) continue
+    if (!classKept.has(e.source) || !classKept.has(e.target)) continue
+    if (visibleRels && !visibleRels.has(e.relationship_type)) continue
+    keptEdges.push(e)
+  }
+
+  // 3. Degree (after all filtering) — drives size, label gating, orphan drop.
+  const degree = new Map<string, number>()
+  for (const id of classKept.keys()) degree.set(id, 0)
+  for (const e of keptEdges) {
+    degree.set(e.source, (degree.get(e.source) ?? 0) + 1)
+    degree.set(e.target, (degree.get(e.target) ?? 0) + 1)
+  }
+
+  // 4. Orphan drop — unless asked to show them, or the node is the ego centre.
+  const renderIds = new Set<string>()
+  for (const [id] of classKept) {
+    const d = degree.get(id) ?? 0
+    if (showOrphans || d > 0 || id === centerId) renderIds.add(id)
+  }
+  // The ego centre always renders even if its class was filtered out.
+  if (centerId) renderIds.add(centerId)
+
+  // Label gating: only label nodes at/above a degree threshold (hubs) so the
+  // graph isn't a wall of text. Scale the threshold to the graph's own top
+  // degree so a sparse ego graph still labels its handful of neighbours.
+  const maxDeg = Math.max(0, ...[...renderIds].map((id) => degree.get(id) ?? 0))
+  const labelThreshold = maxDeg <= 6 ? 1 : Math.max(2, Math.ceil(maxDeg * 0.15))
+
+  const nodes: EntityGraphElements['nodes'] = []
+  for (const id of renderIds) {
+    const n = classKept.get(id)
+    // The ego centre can be referenced by an edge but absent from the class-kept
+    // map (its class was filtered) — fall back to a minimal synthetic node.
+    const entity_class = n?.entity_class ?? 'entity'
+    const name = n?.label ?? id
+    const d = degree.get(id) ?? 0
+    const isCenter = id === centerId
+    nodes.push({
+      data: {
+        id,
+        label: truncate(name, 24),
+        name,
+        entity_class,
+        degree: d,
+        size: isCenter ? Math.max(34, degreeSize(d)) : degreeSize(d),
+        show_label: isCenter || d >= labelThreshold,
+        color: entityClassColor(entity_class),
+      },
+    })
+  }
+
+  // Edges last — only those whose endpoints both survived the orphan drop.
+  const edges: EntityGraphElements['edges'] = []
+  let i = 0
+  for (const e of keptEdges) {
+    if (!renderIds.has(e.source) || !renderIds.has(e.target)) continue
+    edges.push({
+      data: {
+        id: `e${i++}`,
+        source: e.source,
+        target: e.target,
+        relationship_type: e.relationship_type,
+        w: confidenceWidth(e.confidence),
+        color: relationshipColor(e.relationship_type),
+      },
+    })
+  }
+
+  return { nodes, edges }
 }
 
 /**

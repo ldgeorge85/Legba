@@ -3,8 +3,10 @@
  *
  * Ego-centers the entity knowledge graph on a single entity and renders its
  * immediate relationship neighbourhood with Cytoscape. The `center` entity is
- * emphasised (larger, accent-coloured); each edge is labelled by its
- * relationship type and weighted by confidence.
+ * emphasised (larger, accent-coloured); each edge is coloured + labelled by its
+ * relationship type. Entity-type FILTER CHIPS toggle neighbour classes, a
+ * relationship colour LEGEND keys the edges, and zoom +/−/fit buttons sit over
+ * the canvas — the shared old-KG controls (screenshot 19), via `GraphControls`.
  *
  * Data source — GET /api/v1/entities/graph?center=<name>&limit=60, served by
  * `legba.data.registry.entities_api.build_entities_router`. The response is the
@@ -19,19 +21,32 @@
  * (the SQL `source_entity` / `target_entity` columns are mapped into the model's
  * `source` / `target` fields), and the ego `center` is matched against a node's
  * `canonical_name`. Cytoscape node ids are therefore the canonical names so the
- * edges resolve. `kindColor` (from @/lib/graphModel) tints neighbour nodes by
- * entity_class for cross-room styling consistency.
+ * edges resolve. The shaping (class filter, degree size, ego centre always
+ * kept) lives in the pure `buildEntityGraphElements` (@/lib/graphModel).
  *
  * This endpoint may not be wired in every deployment; a 404 / any error degrades
  * to a graceful centered empty state rather than crashing the room.
+ *
+ * The cytoscape mount is unchanged from the #90 crash fix: a stable no-op preset
+ * mount layout + the real `concentric` run from the resize observer
+ * (attachFitOnResize) once sized, gated on `useVisibleSize`.
  */
 import { useQuery } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type cytoscape from 'cytoscape'
 import type { Core, ElementDefinition, StylesheetStyle } from 'cytoscape'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { apiGet, ApiError } from '@/lib/api'
-import { kindColor } from '@/lib/graphModel'
+import {
+  buildEntityGraphElements,
+  entityClassColor,
+  presentEntityClasses,
+  presentRelationshipTypes,
+  relationshipColor,
+  type EntityGraphEdge,
+  type EntityGraphNode,
+} from '@/lib/graphModel'
+import { GraphControls } from '@/components/GraphControls'
 import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { useSelection } from '@/state/selection'
 import { cn } from '@/lib/cn'
@@ -63,17 +78,6 @@ interface EntityGraph {
 /** Accent for the emphasised ego centre — Tailwind `accent.info` (#3b82f6).
  *  Cytoscape's stylesheet bypasses PostCSS so the token is inlined as hex. */
 const CENTER_COLOR = '#3b82f6'
-const NEIGHBOUR_DEFAULT = '#94a3b8' // slate-400 (kindColor fallback)
-
-/** Map confidence (0..1) onto an edge width of ~1–4px. */
-function edgeWidth(confidence: number): number {
-  const c = Number.isFinite(confidence) ? Math.min(Math.max(confidence, 0), 1) : 0
-  return 1 + c * 3
-}
-
-function truncate(s: string, n: number): string {
-  return s.length <= n ? s : `${s.slice(0, n - 1)}…`
-}
 
 const STYLESHEET: StylesheetStyle[] = [
   {
@@ -88,19 +92,18 @@ const STYLESHEET: StylesheetStyle[] = [
       'text-margin-y': 3,
       'text-outline-color': '#0f1115', // surface-200
       'text-outline-width': 2,
-      width: 18,
-      height: 18,
+      'min-zoomed-font-size': 7,
+      width: 'data(size)',
+      height: 'data(size)',
       'border-width': 1,
       'border-color': '#1e293b', // slate-800
     },
   },
   {
-    // The ego centre — larger + accent-coloured + emphasised border.
+    // The ego centre — accent-coloured + emphasised border (size set in data).
     selector: 'node[?is_center]',
     style: {
       'background-color': CENTER_COLOR,
-      width: 34,
-      height: 34,
       'border-width': 2,
       'border-color': '#bfdbfe', // blue-200
       'font-size': 12,
@@ -113,13 +116,14 @@ const STYLESHEET: StylesheetStyle[] = [
     style: {
       width: 'data(w)',
       label: 'data(label)',
-      'line-color': '#475569', // slate-600
+      'line-color': 'data(color)',
       'curve-style': 'bezier',
       'font-size': 8,
       color: '#94a3b8', // slate-400 edge labels
       'text-rotation': 'autorotate',
       'text-outline-color': '#0f1115',
       'text-outline-width': 2,
+      'min-zoomed-font-size': 9,
       opacity: 0.85,
     },
   },
@@ -148,6 +152,7 @@ export default function EntityGraph({ center }: { center: string }) {
   const select = useSelection((s) => s.select)
   const cyRef = useRef<Core | null>(null)
   const fitCleanup = useRef<(() => void) | null>(null)
+  const [hiddenClasses, setHiddenClasses] = useState<Set<string>>(() => new Set())
   // #90 — defer constructing cytoscape until this surface is on-screen + sized
   // (the Why panel is often a hidden background tab brushed by a selection made
   // elsewhere); a fresh mount in a 0×0 container crashes on the auto-layout.
@@ -172,43 +177,82 @@ export default function EntityGraph({ center }: { center: string }) {
     retry: false,
   })
 
-  const elements = useMemo<ElementDefinition[]>(() => {
-    const g = graphQ.data
-    if (!g) return []
-    const centerLc = center.trim().toLowerCase()
+  const centerLc = center.trim().toLowerCase()
+  // Resolve the actual centre node id (canonical name) so the projector can keep
+  // + emphasise it; matched case-insensitively against the served nodes.
+  const centerId = useMemo(() => {
+    const hit = graphQ.data?.nodes.find((n) => n.canonical_name.toLowerCase() === centerLc)
+    return hit?.canonical_name ?? center
+  }, [graphQ.data, centerLc, center])
 
-    const nodeEls: ElementDefinition[] = g.nodes.map((n) => {
-      const isCenter = n.canonical_name.toLowerCase() === centerLc
-      return {
+  const { rawNodes, rawEdges } = useMemo(() => {
+    const g = graphQ.data
+    if (!g) return { rawNodes: [] as EntityGraphNode[], rawEdges: [] as EntityGraphEdge[] }
+    const rawNodes: EntityGraphNode[] = g.nodes.map((n) => ({
+      id: n.canonical_name,
+      label: n.canonical_name,
+      entity_class: n.entity_class,
+      mentions: n.mentions,
+    }))
+    const rawEdges: EntityGraphEdge[] = g.edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      relationship_type: e.relationship_type,
+      confidence: e.confidence,
+    }))
+    return { rawNodes, rawEdges }
+  }, [graphQ.data])
+
+  const allClasses = useMemo(() => presentEntityClasses(rawNodes), [rawNodes])
+  const visibleClasses = useMemo(
+    () => new Set(allClasses.filter((c) => !hiddenClasses.has(c))),
+    [allClasses, hiddenClasses],
+  )
+
+  const graph = useMemo(
+    () =>
+      buildEntityGraphElements(rawNodes, rawEdges, {
+        visibleClasses: hiddenClasses.size > 0 ? visibleClasses : undefined,
+        // The ego graph keeps everything served (the neighbourhood is already
+        // scoped) — but always keeps + emphasises the centre.
+        showOrphans: true,
+        centerId,
+      }),
+    [rawNodes, rawEdges, hiddenClasses, visibleClasses, centerId],
+  )
+
+  const elements = useMemo<ElementDefinition[]>(
+    () => [
+      ...graph.nodes.map((n) => ({
         group: 'nodes' as const,
         data: {
-          id: n.canonical_name,
-          label: truncate(n.canonical_name, 24),
-          entity_class: n.entity_class,
-          is_center: isCenter,
-          color: isCenter ? CENTER_COLOR : kindColor(n.entity_class) || NEIGHBOUR_DEFAULT,
+          ...n.data,
+          // In the focused ego view every neighbour is labelled (the set is small).
+          label: n.data.label,
+          is_center: n.data.id === centerId,
+          color: n.data.id === centerId ? CENTER_COLOR : n.data.color,
         },
-      }
-    })
-
-    // Only keep edges whose endpoints both resolved to a rendered node, and
-    // drop self-loops. Edge ids are positional (edge endpoints aren't unique).
-    const ids = new Set(g.nodes.map((n) => n.canonical_name))
-    const edgeEls: ElementDefinition[] = g.edges
-      .filter((e) => ids.has(e.source) && ids.has(e.target) && e.source !== e.target)
-      .map((e, i) => ({
+      })),
+      ...graph.edges.map((e) => ({
         group: 'edges' as const,
-        data: {
-          id: `e${i}`,
-          source: e.source,
-          target: e.target,
-          label: e.relationship_type,
-          w: edgeWidth(e.confidence),
-        },
-      }))
+        data: { ...e.data, label: e.data.relationship_type },
+      })),
+    ],
+    [graph, centerId],
+  )
 
-    return [...nodeEls, ...edgeEls]
-  }, [graphQ.data, center])
+  const presentRels = useMemo(
+    () => presentRelationshipTypes(graph.edges.map((e) => e.data)),
+    [graph.edges],
+  )
+
+  const toggleClass = (id: string) =>
+    setHiddenClasses((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   const onCyReady = useCallback(
     (cy: Core) => {
@@ -219,7 +263,7 @@ export default function EntityGraph({ center }: { center: string }) {
         select({
           kind: 'entity',
           id: node.data('id'),
-          label: node.data('label'),
+          label: node.data('name') ?? node.data('label'),
         })
       })
       // #90 — size/fit to the Dockview tab + run the real layout once sized. The
@@ -256,6 +300,20 @@ export default function EntityGraph({ center }: { center: string }) {
 
   return (
     <div ref={canvasRef} className="relative h-full w-full min-h-[300px] bg-surface-200" data-testid="why-entity-graph">
+      <GraphControls
+        chipsLabel="Types"
+        legendLabel="Edges"
+        variant="light"
+        chips={allClasses.map((c) => ({ id: c, color: entityClassColor(c) }))}
+        activeChips={visibleClasses}
+        onToggleChip={toggleClass}
+        onSelectAllChips={() => setHiddenClasses(new Set())}
+        onClearChips={() => setHiddenClasses(new Set(allClasses))}
+        legend={presentRels.map((r) => ({ id: r, color: relationshipColor(r) }))}
+        onZoomIn={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.3)}
+        onZoomOut={() => cyRef.current?.zoom(cyRef.current.zoom() / 1.3)}
+        onFit={() => cyRef.current?.fit(undefined, 24)}
+      />
       {visible && (
         <CytoscapeComponent
           cy={onCyReady}
@@ -265,6 +323,8 @@ export default function EntityGraph({ center }: { center: string }) {
           // once from the resize observer, after the tab is sized.
           layout={PRESET_NOOP}
           style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+          userZoomingEnabled
+          userPanningEnabled
           minZoom={0.2}
           maxZoom={3}
         />

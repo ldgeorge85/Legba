@@ -30,6 +30,7 @@ import {
 } from './mapData'
 import { useWorldState } from './worldState'
 import { useSelection } from '@/state/selection'
+import { cn } from '@/lib/cn'
 import {
   SEVERITY_COLOR,
   SITUATION_COLOR,
@@ -45,11 +46,14 @@ const SEVERITY_RANK: Record<Severity, number> = {
   info: 0,
 }
 
+// Dark land on a near-black void with faint muted borders, so the
+// severity-colored markers dominate (matches the old map's subtle graticule —
+// the prior #3a4965 borders read a touch too bright/blue against the markers).
 const LAND_STYLE: PathOptions = {
   fillColor: '#1b2433',
   fillOpacity: 1,
-  color: '#3a4965',
-  weight: 0.6,
+  color: '#2a3346',
+  weight: 0.5,
 }
 
 /**
@@ -103,6 +107,38 @@ function ResizeFix() {
     }
   }, [map])
   return null
+}
+
+/** Severity ramp shown on the map, high→low — mirrors the marker encoding and
+ *  the feed's severity colors so the dots read at a glance (matches the old map's
+ *  corner legend). Static; reads the same SEVERITY_COLOR source as the markers. */
+const LEGEND_ORDER: Severity[] = ['critical', 'high', 'medium', 'low', 'info']
+
+function SeverityLegend() {
+  return (
+    <div
+      className={cn(
+        'pointer-events-none absolute bottom-3 right-3 z-10 rounded-lg',
+        'border border-slate-800 bg-surface-200/95 px-3 py-2 shadow-lg backdrop-blur-sm',
+      )}
+    >
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        Severity
+      </div>
+      <ul className="space-y-1">
+        {LEGEND_ORDER.map((sev) => (
+          <li key={sev} className="flex items-center gap-2">
+            <span
+              aria-hidden
+              className="h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: SEVERITY_COLOR[sev] }}
+            />
+            <span className="text-xs capitalize text-slate-300">{sev}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }
 
 export default function LeafletWorldMap() {
@@ -333,6 +369,7 @@ export default function LeafletWorldMap() {
             )
           })}
       </MapContainer>
+      <SeverityLegend />
     </div>
   )
 }

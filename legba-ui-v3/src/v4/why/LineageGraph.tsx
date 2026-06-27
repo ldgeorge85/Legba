@@ -8,22 +8,31 @@
  * (signal → finding → situation …), an edge is a *real* parent→child
  * derivation tuple (NOT synthesized).
  *
- * Reuse: projection + palette live in `@/lib/graphModel` (`projectGraph`,
- * `kindColor`, `GraphNodeData` / `GraphEdgeData`). The cytoscape stylesheet +
- * layout mirror the Tier-B Target Graph panel (`src/panels/target/Graph.tsx`)
- * so this reads as native, swapping that panel's cross-window `legba:*` event
- * for the v4 shared selection store (`@/state/selection`).
+ * Reuse: projection + palette live in `@/lib/graphModel`
+ * (`buildLineageElements` for the depth/kind-filtered projection, `kindColor`,
+ * `presentRowKinds`, `relationshipTypes`). The cytoscape stylesheet + layout
+ * mirror the Tier-B Target Graph panel (`src/panels/target/Graph.tsx`) so this
+ * reads as native, swapping that panel's cross-window `legba:*` event for the
+ * v4 shared selection store (`@/state/selection`). A lighter `GraphControls`
+ * overlay supplies row-kind filter chips + a derivation-step legend + zoom.
  */
 
 import { useQuery } from '@tanstack/react-query'
 import type { Core, ElementDefinition, LayoutOptions, StylesheetStyle } from 'cytoscape'
 import { Loader2, GitBranch } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { apiGet, ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
-import { projectGraph, type LineageReport } from '@/lib/graphModel'
+import { GraphControls } from '@/components/GraphControls'
+import {
+  buildLineageElements,
+  kindColor,
+  presentRowKinds,
+  relationshipTypes,
+  type LineageReport,
+} from '@/lib/graphModel'
 import { useSelection, type SelectionKind } from '@/state/selection'
 
 interface LineageGraphProps {
@@ -127,6 +136,10 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
   const select = useSelection((s) => s.select)
   const cyRef = useRef<Core | null>(null)
   const fitCleanup = useRef<(() => void) | null>(null)
+  // Lineage row-kind filter (the lighter chip row): hidden row_kinds. The root
+  // always renders; hiding an intermediate kind re-parents its children to the
+  // nearest visible ancestor (buildLineageElements) so the DAG stays connected.
+  const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(() => new Set())
   // #90 — defer constructing cytoscape until this surface is on-screen + sized;
   // a fresh mount in a hidden 0×0 Dockview tab crashes on the auto-layout.
   const { ref: canvasRef, visible } = useVisibleSize<HTMLDivElement>()
@@ -151,13 +164,41 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
 
   const report = lineageQ.data
 
-  const elements = useMemo<ElementDefinition[]>(() => {
-    const g = projectGraph(report)
-    return [
-      ...g.nodes.map((n) => ({ group: 'nodes' as const, data: n.data })),
-      ...g.edges.map((e) => ({ group: 'edges' as const, data: e.data })),
-    ]
-  }, [report])
+  // The FULL row-kind set (drives the chip row) is read from the report so a
+  // kind never vanishes from the chips just because it's toggled off.
+  const allKinds = useMemo(() => presentRowKinds(report), [report])
+  const visibleKinds = useMemo(
+    () => new Set(allKinds.filter((k) => !hiddenKinds.has(k))),
+    [allKinds, hiddenKinds],
+  )
+
+  const graph = useMemo(
+    () =>
+      buildLineageElements(report, {
+        visibleKinds: hiddenKinds.size > 0 ? visibleKinds : undefined,
+      }),
+    [report, hiddenKinds, visibleKinds],
+  )
+
+  const elements = useMemo<ElementDefinition[]>(
+    () => [
+      ...graph.nodes.map((n) => ({ group: 'nodes' as const, data: n.data })),
+      ...graph.edges.map((e) => ({ group: 'edges' as const, data: e.data })),
+    ],
+    [graph],
+  )
+
+  // The legend keys to lineage edge kinds (a derivation edge's type = the child
+  // row_kind that was produced), filtered to what's actually present.
+  const presentRels = useMemo(() => relationshipTypes(report), [report])
+
+  const toggleKind = (k: string) =>
+    setHiddenKinds((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
 
   const layout = useMemo(() => layoutFor(report?.root.id), [report?.root.id])
   // `onCyReady` is a stable callback ([select]); keep a ref to the current layout
@@ -213,6 +254,25 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
       {/* #90 — construct cytoscape only once the tab is visible+sized; a fresh
           mount in a hidden 0×0 Dockview tab auto-runs cytoscape's default layout
           against a detached box → `reading 'h'`. The overlays below sit on top. */}
+      {/* Lighter old-KG controls for the DAG: the "chips" are lineage row-kinds
+          and the legend keys to lineage edge kinds (the produced row_kind). */}
+      {hasElements && (
+        <GraphControls
+          variant="light"
+          chipsLabel="Kinds"
+          legendLabel="Steps"
+          chips={allKinds.map((k) => ({ id: k, color: kindColor(k) }))}
+          activeChips={visibleKinds}
+          onToggleChip={toggleKind}
+          onSelectAllChips={() => setHiddenKinds(new Set())}
+          onClearChips={() => setHiddenKinds(new Set(allKinds))}
+          legend={presentRels.map((r) => ({ id: r, color: kindColor(r) }))}
+          onZoomIn={() => cyRef.current?.zoom(cyRef.current.zoom() * 1.3)}
+          onZoomOut={() => cyRef.current?.zoom(cyRef.current.zoom() / 1.3)}
+          onFit={() => cyRef.current?.fit(undefined, 24)}
+        />
+      )}
+
       {visible && hasElements && (
         <CytoscapeComponent
           cy={onCyReady}
@@ -222,6 +282,8 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
           // runs once from the resize observer, after the tab sizes.
           layout={PRESET_NOOP}
           style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+          userZoomingEnabled
+          userPanningEnabled
           minZoom={0.2}
           maxZoom={3}
         />

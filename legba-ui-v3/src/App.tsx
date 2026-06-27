@@ -170,12 +170,14 @@ export function App() {
   //   |  scan; the room it deserves      |   (detail/drill) |
   //   +----------------------------------+   selection →    |
   //   |  World map (demoted strip ~28%)  |   detail         |
-  //   |  + Why tabbed — brushed by sel   |                  |
+  //   |                                  |                  |
   //   +----------------------------------+------------------+
   //
-  // The map no longer anchors the canvas (it ate ~70% before); the live feed
-  // is the anchor and the Inspector is a first-class ~35% right rail. The map
-  // is demoted to a bottom strip — situational context, not the whole screen.
+  // The Why room is tabbed in the FEED group (not the short map strip) so its
+  // graph + provenance surfaces get real vertical room; the feed is the default
+  // active tab. The map no longer anchors the canvas (it ate ~70% before); the
+  // live feed is the anchor and the Inspector is a first-class ~35% right rail.
+  // The map is demoted to a bottom strip — situational context, not the screen.
   // Group sizes are pinned after seeding so the split isn't a naive 50/50.
   useEffect(() => {
     if (!dockApi || seededRef.current) return
@@ -194,15 +196,24 @@ export function App() {
       referencePanel: 'system.findings',
       direction: 'below',
     })
+    // The Why room (graph + provenance) needs real vertical room — the old
+    // Knowledge Graph filled the whole canvas. Seeding it `within` the demoted
+    // ~28%-tall map strip cramped its lineage/ego graphs to a sliver. Tab it in
+    // the FEED group instead (the dominant ~65%-wide, ~72%-tall surface), so The
+    // Why opens at full feed height. The feed stays the active default tab; the
+    // map keeps its bottom strip and the Inspector its ~35% right rail.
     addSingleton(dockApi, 'v4.why', mode, {
-      referencePanel: 'v4.map',
+      referencePanel: 'system.findings',
       direction: 'within',
     })
+    // Adding v4.why `within` the feed group makes it the active tab; the live
+    // feed is the boot anchor, so restore it as the default-focused tab.
+    feed?.api.setActive()
 
     // Pin the rebalanced proportions (Dockview defaults to ~50/50 per split):
     // Inspector ≈ 35% width (the research target for a detail pane), the map a
     // demoted ≈ 28%-tall bottom strip, leaving the feed the dominant surface.
-    void feed // anchor; sized implicitly by the inspector/map weights below
+    // (the feed anchor is sized implicitly by the inspector/map weights below)
     sizeWorkspace(dockApi, { inspector, map })
   }, [dockApi, mode])
 
