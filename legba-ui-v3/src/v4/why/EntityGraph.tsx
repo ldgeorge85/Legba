@@ -26,13 +26,13 @@
  * to a graceful centered empty state rather than crashing the room.
  */
 import { useQuery } from '@tanstack/react-query'
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type cytoscape from 'cytoscape'
 import type { Core, ElementDefinition, StylesheetStyle } from 'cytoscape'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { apiGet, ApiError } from '@/lib/api'
 import { kindColor } from '@/lib/graphModel'
-import { attachFitOnResize } from '@/lib/cytoscapeFit'
+import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { useSelection } from '@/state/selection'
 import { cn } from '@/lib/cn'
 
@@ -129,10 +129,29 @@ const STYLESHEET: StylesheetStyle[] = [
   },
 ]
 
+// #90 — stable no-op mount layout (fit:false so it can't dereference the bounding
+// box at 0×0 → no `reading 'h'` crash). Module constant so react-cytoscapejs's
+// `patchLayout` doesn't re-run it every render. The real `concentric` runs from
+// the resize observer (attachFitOnResize) once the container has a size.
+const PRESET_NOOP = { name: 'preset', fit: false, animate: false } as cytoscape.LayoutOptions
+const CONCENTRIC_LAYOUT = {
+  name: 'concentric',
+  animate: false,
+  // Pull the ego centre into the middle ring; neighbours fan out.
+  concentric: (node: cytoscape.NodeSingular) => (node.data('is_center') ? 2 : 1),
+  levelWidth: () => 1,
+  minNodeSpacing: 40,
+  padding: 24,
+} as cytoscape.LayoutOptions
+
 export default function EntityGraph({ center }: { center: string }) {
   const select = useSelection((s) => s.select)
   const cyRef = useRef<Core | null>(null)
   const fitCleanup = useRef<(() => void) | null>(null)
+  // #90 — defer constructing cytoscape until this surface is on-screen + sized
+  // (the Why panel is often a hidden background tab brushed by a selection made
+  // elsewhere); a fresh mount in a 0×0 container crashes on the auto-layout.
+  const { ref: canvasRef, visible } = useVisibleSize<HTMLDivElement>()
 
   const graphQ = useQuery<EntityGraph>({
     enabled: !!center,
@@ -203,12 +222,18 @@ export default function EntityGraph({ center }: { center: string }) {
           label: node.data('label'),
         })
       })
-      // #90 — keep the canvas sized/fitted to its Dockview tab (fixes blank graph).
+      // #90 — size/fit to the Dockview tab + run the real layout once sized. The
+      // measuring `concentric` layout can't run at 0×0 (it would crash on the
+      // undefined bounding box), so it runs from the resize observer, not at mount.
       fitCleanup.current?.()
-      fitCleanup.current = attachFitOnResize(cy)
+      fitCleanup.current = attachFitOnResize(cy, { layout: CONCENTRIC_LAYOUT, padding: 24 })
     },
     [select],
   )
+
+  // #90 — disconnect the resize observer on unmount so a pending tick never
+  // touches a destroyed cy (the canvas unmounts when the selection clears/changes).
+  useEffect(() => () => fitCleanup.current?.(), [])
 
   // --- States -------------------------------------------------------------
   // Failure other than a caught 404 (e.g. 500, network) ⇒ unavailable.
@@ -230,26 +255,20 @@ export default function EntityGraph({ center }: { center: string }) {
   }
 
   return (
-    <div className="h-full w-full bg-surface-200" data-testid="why-entity-graph">
-      <CytoscapeComponent
-        cy={onCyReady}
-        elements={elements}
-        stylesheet={STYLESHEET}
-        layout={
-          {
-            name: 'concentric',
-            animate: false,
-            // Pull the ego centre into the middle ring; neighbours fan out.
-            concentric: (node: cytoscape.NodeSingular) => (node.data('is_center') ? 2 : 1),
-            levelWidth: () => 1,
-            minNodeSpacing: 40,
-            padding: 24,
-          } as cytoscape.LayoutOptions
-        }
-        style={{ width: '100%', height: '100%' }}
-        minZoom={0.2}
-        maxZoom={3}
-      />
+    <div ref={canvasRef} className="relative h-full w-full min-h-[300px] bg-surface-200" data-testid="why-entity-graph">
+      {visible && (
+        <CytoscapeComponent
+          cy={onCyReady}
+          elements={elements}
+          stylesheet={STYLESHEET}
+          // #90 — stable no-op mount layout (fit:false); the real `concentric` runs
+          // once from the resize observer, after the tab is sized.
+          layout={PRESET_NOOP}
+          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+          minZoom={0.2}
+          maxZoom={3}
+        />
+      )}
     </div>
   )
 }

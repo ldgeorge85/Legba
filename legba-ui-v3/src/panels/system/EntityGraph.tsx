@@ -15,7 +15,7 @@ import type { Core, ElementDefinition, StylesheetStyle } from 'cytoscape'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet } from '@/lib/api'
-import { attachFitOnResize } from '@/lib/cytoscapeFit'
+import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { isCountry } from '@/lib/countryGeo'
 import type { PanelProps } from '@/types'
 import { useSelection } from '@/state/selection'
@@ -71,9 +71,21 @@ const STYLESHEET: StylesheetStyle[] = [
   { selector: 'node:selected', style: { 'border-width': 2, 'border-color': '#e2e8f0' } },
 ]
 
+// #90 — a STABLE no-op mount layout. `preset` with the default `fit:true` calls
+// `cy.fit()` which dereferences the (undefined) bounding box at 0×0 → the same
+// `reading 'h'` crash; `fit:false` makes it inert. Must be a module constant so
+// react-cytoscapejs's `patchLayout` doesn't re-run it on every render (a fresh
+// inline object literal diffs as "changed" each time). The REAL `cose` runs from
+// the resize observer (attachFitOnResize) once the container has a size.
+const PRESET_NOOP = { name: 'preset', fit: false, animate: false } as cytoscape.LayoutOptions
+const COSE_LAYOUT = { name: 'cose', animate: false, idealEdgeLength: 80 } as cytoscape.LayoutOptions
+
 export default function EntityGraphPanel({ registration }: PanelProps) {
   const [center, setCenter] = useState<string | null>(null)
   const fitCleanup = useRef<(() => void) | null>(null)
+  // #90 — don't construct cytoscape until this Dockview tab is on-screen + sized,
+  // else its auto-run default layout reads a detached 0×0 box → `reading 'h'`.
+  const { ref: canvasRef, visible } = useVisibleSize<HTMLDivElement>()
 
   // Redesign Move 2: center on the shared selection when it's an entity
   // (replaces the legacy `legba:open-entity-graph` window listener).
@@ -81,6 +93,11 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
   useEffect(() => {
     if (selection?.kind === 'entity') setCenter(selection.id)
   }, [selection])
+
+  // #90 — disconnect the resize observer on unmount (the cytoscape canvas is
+  // unmounted whenever the element set empties during a re-center re-query, and
+  // when the panel tab closes), so a pending tick never touches a destroyed cy.
+  useEffect(() => () => fitCleanup.current?.(), [])
 
   const graphQ = useQuery<GraphResp>({
     queryKey: ['entity-graph', center],
@@ -135,29 +152,35 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
         ) : undefined
       }
     >
-      <div className="relative flex-1 min-h-[300px]" data-testid="entity-graph-canvas">
+      <div ref={canvasRef} className="relative flex-1 min-h-[300px]" data-testid="entity-graph-canvas">
         {graphQ.isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">loading graph…</div>
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-slate-500 text-sm">loading graph…</div>
         )}
         {!graphQ.isLoading && elements.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm" data-testid="entity-graph-empty">
+          <div className="absolute inset-0 z-10 flex items-center justify-center text-slate-500 text-sm" data-testid="entity-graph-empty">
             no entity relationships yet
           </div>
         )}
-        {elements.length > 0 && (
+        {/* #90 — construct cytoscape only once the tab is visible+sized (useVisibleSize);
+            a fresh mount in a hidden 0×0 Dockview tab auto-runs cytoscape's default
+            layout against a detached box → `reading 'h'`. Once mounted, the real
+            `cose` runs from the resize observer (attachFitOnResize). */}
+        {visible && elements.length > 0 && (
           <CytoscapeComponent
             elements={elements}
             stylesheet={STYLESHEET}
-            layout={{ name: 'cose', animate: false, idealEdgeLength: 80 } as cytoscape.LayoutOptions}
-            style={{ width: '100%', height: '100%' }}
+            // Stable no-op mount layout (fit:false so it can't touch the bounding box
+            // at 0×0); the real `cose` runs from the resize observer once sized.
+            layout={PRESET_NOOP}
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
             minZoom={0.2}
             maxZoom={3}
             cy={(cy: Core) => {
               cy.removeListener('tap', 'node')
               cy.on('tap', 'node', (evt) => setCenter(evt.target.id()))
-              // #90 — keep the canvas sized/fitted to its Dockview tab (fixes blank graph).
+              // #90 — size/fit to the Dockview tab + run the real layout once sized.
               fitCleanup.current?.()
-              fitCleanup.current = attachFitOnResize(cy)
+              fitCleanup.current = attachFitOnResize(cy, { layout: COSE_LAYOUT, padding: 30 })
             }}
           />
         )}

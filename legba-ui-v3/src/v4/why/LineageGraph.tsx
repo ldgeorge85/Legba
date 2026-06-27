@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { apiGet, ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
-import { attachFitOnResize } from '@/lib/cytoscapeFit'
+import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { projectGraph, type LineageReport } from '@/lib/graphModel'
 import { useSelection, type SelectionKind } from '@/state/selection'
 
@@ -103,6 +103,12 @@ const STYLESHEET: StylesheetStyle[] = [
   },
 ]
 
+// #90 — stable no-op mount layout (fit:false so it can't dereference the bounding
+// box at 0×0 → no `reading 'h'` crash). Module constant so react-cytoscapejs's
+// `patchLayout` doesn't re-run it every render. The real `breadthfirst` runs from
+// the resize observer (attachFitOnResize) + the size-guarded re-root effect.
+const PRESET_NOOP = { name: 'preset', fit: false, animate: false } as LayoutOptions
+
 /** Breadthfirst rooted at the report root reads the provenance DAG top-down;
  *  cytoscape falls back gracefully when the root id is absent. */
 function layoutFor(rootId: string | undefined): LayoutOptions {
@@ -121,6 +127,9 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
   const select = useSelection((s) => s.select)
   const cyRef = useRef<Core | null>(null)
   const fitCleanup = useRef<(() => void) | null>(null)
+  // #90 — defer constructing cytoscape until this surface is on-screen + sized;
+  // a fresh mount in a hidden 0×0 Dockview tab crashes on the auto-layout.
+  const { ref: canvasRef, visible } = useVisibleSize<HTMLDivElement>()
 
   const lineageQ = useQuery<LineageReport | undefined>({
     enabled: !!kind && !!id,
@@ -151,14 +160,28 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
   }, [report])
 
   const layout = useMemo(() => layoutFor(report?.root.id), [report?.root.id])
+  // `onCyReady` is a stable callback ([select]); keep a ref to the current layout
+  // so the resize observer's one-time first run uses the live (current-root) one.
+  const layoutRef = useRef<LayoutOptions>(layout)
+  layoutRef.current = layout
 
   // CytoscapeComponent only applies `layout` on mount; re-run it whenever the
-  // element set changes so a re-rooted walk relays out + fits.
+  // element set changes so a re-rooted walk relays out + fits. Guarded on a
+  // non-zero container size: running a measuring layout at 0×0 (Dockview tab not
+  // laid out yet) crashes on the undefined bounding box (#90). On the first
+  // sized tick the resize observer runs the layout, so this is the re-root path.
   useEffect(() => {
     const cy = cyRef.current
     if (!cy || elements.length === 0) return
+    const el = cy.container()
+    if (!el || el.clientWidth === 0 || el.clientHeight === 0) return
     cy.layout(layout).run()
+    cy.fit(undefined, 24)
   }, [elements, layout])
+
+  // #90 — disconnect the resize observer on unmount so a pending tick never
+  // touches a destroyed cy (the canvas unmounts when there are no elements).
+  useEffect(() => () => fitCleanup.current?.(), [])
 
   const onCyReady = useCallback(
     (cy: Core) => {
@@ -173,9 +196,12 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
           label: String(node.data('title') ?? node.data('label') ?? node.data('id')),
         })
       })
-      // #90 — keep the canvas sized/fitted to its Dockview tab (fixes blank graph).
+      // #90 — size/fit to the Dockview tab + run the real `breadthfirst` layout
+      // once sized (running it at 0×0 crashes on the undefined bounding box). The
+      // re-root path is the guarded useEffect above; `layoutRef` keeps that and
+      // the resize-observer's first run pointed at the same (current-root) layout.
       fitCleanup.current?.()
-      fitCleanup.current = attachFitOnResize(cy)
+      fitCleanup.current = attachFitOnResize(cy, { layout: layoutRef.current, padding: 24 })
     },
     [select],
   )
@@ -183,16 +209,19 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
   const hasElements = elements.length > 0
 
   return (
-    <div className="relative h-full w-full bg-surface-300 border border-slate-800 rounded overflow-hidden">
-      {/* Canvas — always mounted so cytoscape has a sized container; the
-          overlays below sit on top for loading / empty / error. */}
-      {hasElements && (
+    <div ref={canvasRef} className="relative h-full w-full min-h-[300px] bg-surface-300 border border-slate-800 rounded overflow-hidden">
+      {/* #90 — construct cytoscape only once the tab is visible+sized; a fresh
+          mount in a hidden 0×0 Dockview tab auto-runs cytoscape's default layout
+          against a detached box → `reading 'h'`. The overlays below sit on top. */}
+      {visible && hasElements && (
         <CytoscapeComponent
           cy={onCyReady}
           elements={elements}
           stylesheet={STYLESHEET}
-          layout={layout}
-          style={{ width: '100%', height: '100%' }}
+          // #90 — stable no-op mount layout (fit:false); the real `breadthfirst`
+          // runs once from the resize observer, after the tab sizes.
+          layout={PRESET_NOOP}
+          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
           minZoom={0.2}
           maxZoom={3}
         />
