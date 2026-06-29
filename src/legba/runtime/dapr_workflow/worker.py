@@ -47,6 +47,71 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# Default max gRPC message size for the durabletask channel (16 MiB) — well
+# above daprd's 4 MB default so a workflow-input / activity-payload spike
+# degrades gracefully instead of wedging the orchestrator with
+# RESOURCE_EXHAUSTED. Defense-in-depth: the PRIMARY fix is pass-by-reference
+# (the worker re-fetches the training set; see gepa.materialize_training_set).
+# Env-overridable to mirror the daprd `-max-body-size` lever in compose.
+_DEFAULT_GRPC_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
+
+
+def _grpc_max_message_bytes() -> int:
+    raw = os.environ.get("LEGBA_DAPR_WORKFLOW_GRPC_MAX_BYTES")
+    if not raw:
+        return _DEFAULT_GRPC_MAX_MESSAGE_BYTES
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_GRPC_MAX_MESSAGE_BYTES
+    return n if n > 0 else _DEFAULT_GRPC_MAX_MESSAGE_BYTES
+
+
+def _raise_worker_grpc_limit(runtime: Any) -> None:
+    """Best-effort: raise the durabletask worker's gRPC channel size cap.
+
+    GUARDRAIL (fix #1, secondary). ``dapr.ext.workflow.WorkflowRuntime`` does
+    NOT expose the underlying durabletask ``TaskHubGrpcWorker``'s
+    ``channel_options`` (the public wrapper only forwards host/port/logger/
+    concurrency). The durabletask worker, however, reads ``self._channel_options``
+    LAZILY when it (re)builds its gRPC channel at ``start()`` — so injecting the
+    options on that object BEFORE ``runtime.start()`` is honoured.
+
+    This reaches the wrapper's name-mangled ``__worker`` attribute
+    (``_WorkflowRuntime__worker``). That's a private of a pinned dependency
+    (daprio/dapr 1.17.9 ↔ dapr-ext-workflow), so it's guarded: any shape change
+    (attr renamed / options field gone) logs + no-ops rather than crashing the
+    worker — the daprd ``-max-body-size`` flag is the independent, supported
+    lever, and pass-by-reference means the payload no longer needs the headroom.
+    """
+    max_bytes = _grpc_max_message_bytes()
+    options = [
+        ("grpc.max_receive_message_length", max_bytes),
+        ("grpc.max_send_message_length", max_bytes),
+    ]
+    try:
+        worker = getattr(runtime, "_WorkflowRuntime__worker", None)
+        if worker is None or not hasattr(worker, "_channel_options"):
+            logger.info(
+                "dapr_workflow_worker.grpc_limit.skipped reason=no reachable "
+                "channel_options on durabletask worker (relying on daprd "
+                "-max-body-size)",
+            )
+            return
+        existing = list(getattr(worker, "_channel_options", None) or [])
+        keys = {k for k, _ in existing}
+        existing.extend(o for o in options if o[0] not in keys)
+        worker._channel_options = existing
+        logger.info(
+            "dapr_workflow_worker.grpc_limit.set max_bytes=%d", max_bytes,
+        )
+    except Exception as exc:  # noqa: BLE001 — never block worker startup
+        logger.warning(
+            "dapr_workflow_worker.grpc_limit.failed err=%r "
+            "(relying on daprd -max-body-size + pass-by-reference)", exc,
+        )
+
+
 def _configure_logging() -> None:
     level = os.environ.get("LEGBA_LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
@@ -120,6 +185,10 @@ def build_workflow_runtime(
         optimizer_workflow.__name__, deep_consult_workflow.__name__,
         resolved_host, resolved_port,
     )
+    # Guardrail (fix #1): raise the durabletask channel's gRPC message cap
+    # BEFORE start() builds the channel. Best-effort + guarded — the supported
+    # daprd `-max-body-size` flag is the independent lever.
+    _raise_worker_grpc_limit(runtime)
     return runtime
 
 

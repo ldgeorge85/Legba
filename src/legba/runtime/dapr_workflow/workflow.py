@@ -53,6 +53,7 @@ from .gepa import (
     OptimizerWorkflowInput,
     OptimizerWorkflowResult,
     _run_gepa_loop,
+    materialize_training_set,
     validate_training_set_activity as _validate_async,
 )
 
@@ -104,9 +105,18 @@ def validate_training_set_activity(
     Delegates to the shared async validator so the validation logic is
     identical to the in-process path.  Returns the same status dict shape:
     ``{"ok": bool, "training_size": int, "reason": str}``.
+
+    PASS-BY-REFERENCE: when the input carries only a ``training_set_ref``
+    (the production path — the rows are NOT inlined across the gRPC channel,
+    or they'd overflow Dapr's 4 MB cap), re-materialize the rows inside this
+    activity FIRST so the row count the validator checks is the real one.
     """
-    payload = OptimizerWorkflowInput(**wf_input)
-    return asyncio.run(_validate_async(payload))
+
+    async def _go() -> dict[str, Any]:
+        payload = await materialize_training_set(OptimizerWorkflowInput(**wf_input))
+        return await _validate_async(payload)
+
+    return asyncio.run(_go())
 
 
 def compile_candidate_activity(
@@ -120,10 +130,22 @@ def compile_candidate_activity(
     same as the in-process fallback's.  Any dspy/GEPA failure raises; the
     engine's retry policy (set on the ``call_activity`` in the workflow
     body) catches + retries.
+
+    PASS-BY-REFERENCE: re-materialize the training set from its small
+    reference (see :func:`materialize_training_set`) inside this activity —
+    the rows are re-fetched from the substrate here rather than carried
+    across the workflow's internal gRPC channel (which capped at 4 MB and
+    wedged the orchestrator when ~500 rows were inlined). Each activity
+    re-fetches independently (validate + compile are separate work items);
+    the ``until_ts`` window-pin makes both fetches return the same rows.
     """
-    payload = OptimizerWorkflowInput(**wf_input)
-    result: OptimizerWorkflowResult = asyncio.run(_run_gepa_loop(payload))
-    return asdict(result)
+
+    async def _go() -> dict[str, Any]:
+        payload = await materialize_training_set(OptimizerWorkflowInput(**wf_input))
+        result: OptimizerWorkflowResult = await _run_gepa_loop(payload)
+        return asdict(result)
+
+    return asyncio.run(_go())
 
 
 # ---------------------------------------------------------------------------

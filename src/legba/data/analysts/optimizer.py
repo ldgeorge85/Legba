@@ -40,6 +40,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
@@ -49,8 +50,10 @@ from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload, PromptModuleCandidatePayload
 from ...runtime.analyst_method import AnalystMethodResult
 from ...runtime.dapr_workflow.gepa import (
+    InProcessWorkflowClient,
     OptimizerWorkflowInput,
     OptimizerWorkflowResult,
+    TrainingSetRef,
     build_default_client,
 )
 
@@ -147,6 +150,7 @@ async def read_traces_and_critiques(
     analyzed_analyst_version: str | None = None,
     read_window_days: int = DEFAULT_READ_WINDOW_DAYS,
     limit: int = MAX_TRAINING_ROWS,
+    until_ts: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch the GEPA training set for the analyst being optimized.
 
@@ -176,6 +180,21 @@ async def read_traces_and_critiques(
       * ``analyzed_analyst_id`` / ``analyzed_analyst_version`` — pass-
         through so the workflow can audit-trail.
 
+    Window anchoring (``until_ts``)
+    -------------------------------
+    The recent end of the read window is normally ``NOW()`` — fine for the
+    READ_SLICE path (the host reads the slice once, immediately before the
+    run). But the GEPA workflow worker RE-fetches this exact training set
+    by reference (the rows are no longer inlined across the Dapr gRPC
+    channel — they'd overflow the 4 MB cap). The re-fetch happens seconds
+    to minutes after the original read, so a bare ``NOW()`` would float the
+    window and a freshly-landed trace could shift which rows fall inside
+    ``LIMIT`` (DESC + LIMIT pushes out the oldest). Passing ``until_ts``
+    pins the recent end to the original read's wall-clock instant
+    (``run_started_at <= until_ts``), so the re-fetch returns the IDENTICAL
+    row set regardless of inserts in between — the transport refactor stays
+    a pure transport refactor (byte-for-byte equivalent training set).
+
     Empty result is meaningful — the workflow will short-circuit with
     a "no training data" candidate (zero delta) which the kind module
     then writes as an audit row anyway, so an operator can see the
@@ -185,6 +204,17 @@ async def read_traces_and_critiques(
         return []
 
     params: list[Any] = [analyzed_analyst_id, int(read_window_days)]
+    # Recent-end bound: pinned to ``until_ts`` for the re-fetch path (window
+    # anchoring, above), else open-ended ``NOW()`` for the live READ_SLICE.
+    if until_ts is not None:
+        params.append(until_ts)
+        recent_bound = (
+            f"AND t.run_started_at <= ${len(params)} "
+            f"AND t.run_started_at > ${len(params)} - make_interval(days => $2)"
+        )
+    else:
+        recent_bound = "AND t.run_started_at > NOW() - make_interval(days => $2)"
+
     version_filter = ""
     if analyzed_analyst_version:
         params.append(analyzed_analyst_version)
@@ -207,7 +237,7 @@ async def read_traces_and_critiques(
         FROM analyst_traces t
         LEFT JOIN analyst_critiques c ON c.trace_id = t.run_id
         WHERE t.analyst_id = $1
-          AND t.run_started_at > NOW() - make_interval(days => $2)
+          {recent_bound}
           {version_filter}
         ORDER BY t.run_started_at DESC
         LIMIT {int(limit)}
@@ -519,11 +549,31 @@ async def run_method(
     )
     promotion_policy = str(options.get("promotion_policy") or "human_gated")
 
+    # PASS-BY-REFERENCE (Dapr-Workflow payload-size fix)
+    # --------------------------------------------------
+    # The training set is up to MAX_TRAINING_ROWS (500) joined trace+critique
+    # rows of ~8 KiB text each. Inlining the whole list into the workflow input
+    # and serializing it across the Dapr Workflow internal gRPC channel blows
+    # the default 4 MB message cap (RESOURCE_EXHAUSTED 4234332 vs 4194304) — the
+    # orchestrator then never resumes and the stuck workflow leaks orphan actor
+    # reminders. So for the durable (Dapr) backend we pass only a small
+    # TrainingSetRef; the workflow worker re-fetches the IDENTICAL rows inside
+    # the activity (materialize_training_set, mirroring deep_consult). The
+    # in-process backend has no gRPC hop (+ is the test path), so it still gets
+    # the rows inlined and never re-fetches — keeping that path byte-identical.
+    use_in_process = isinstance(deps.temporal_client, InProcessWorkflowClient)
+    training_set_ref = _build_training_set_ref(
+        inputs,
+        analyzed_analyst_id=str(analyzed_analyst_id),
+        analyzed_analyst_version=str(analyzed_analyst_version or "") or None,
+    )
     workflow_input = OptimizerWorkflowInput(
         analyst_id=str(analyzed_analyst_id),
         analyst_version=str(analyzed_analyst_version or ""),
         parent_prompt_module_path=str(parent_path),
-        training_set=_shape_training_set(inputs),
+        # Inline ONLY for the in-process path; the Dapr path carries the ref.
+        training_set=_shape_training_set(inputs) if use_in_process else [],
+        training_set_ref=None if use_in_process else training_set_ref,
         max_generations=int(deps.max_generations),
         reflection_minibatch_size=int(deps.reflection_minibatch_size),
         auto=str(deps.auto_mode),
@@ -550,6 +600,9 @@ async def run_method(
     )
     workflow_result, workflow_meta = await _dispatch_workflow(
         deps.temporal_client, workflow_input, workflow_id=workflow_id,
+        # The Dapr path leaves training_set empty (passed by reference); give
+        # the timeout-synthesis path the true row count from the host's fetch.
+        training_size_hint=len(inputs),
     )
 
     # G5 — surface the workflow's REAL token usage so the actor records spend
@@ -704,6 +757,47 @@ def _resolve_analyzed_identity(
     return None, None
 
 
+def _build_training_set_ref(
+    inputs: list[Mapping[str, Any]] | Sequence[Mapping[str, Any]],
+    *,
+    analyzed_analyst_id: str,
+    analyzed_analyst_version: str | None,
+) -> TrainingSetRef:
+    """Build the small re-fetch handle the workflow worker materializes from.
+
+    Carries the SAME parameters READ_SLICE keyed on
+    (``analyzed_analyst_id`` / version + the default
+    ``DEFAULT_READ_WINDOW_DAYS`` window + ``MAX_TRAINING_ROWS`` limit — the
+    host calls READ_SLICE with only ``conn``/``descriptor``/``target_filter``,
+    so the window + limit ARE those defaults) PLUS ``until_ts`` — the recent-
+    end anchor.
+
+    ``until_ts`` is pinned to the NEWEST ``run_started_at`` present in the rows
+    the host already fetched (not ``now``): the original READ ordered
+    ``run_started_at DESC LIMIT N`` up to its ``NOW()``, so the newest fetched
+    row IS that window's recent edge. Re-fetching with
+    ``run_started_at <= until_ts`` therefore returns the EXACT same row set even
+    if newer traces landed between READ and the worker's re-fetch (those would
+    be ``> until_ts`` and excluded) — the invariant that keeps this a pure
+    transport refactor. Falls back to ``now`` only when no row carries a usable
+    timestamp (degenerate; the set is tiny or empty anyway).
+    """
+    max_ts: datetime | None = None
+    for row in inputs:
+        ts = row.get("run_started_at")
+        if isinstance(ts, datetime) and (max_ts is None or ts > max_ts):
+            max_ts = ts
+    if max_ts is None:
+        max_ts = datetime.now(timezone.utc)
+    return TrainingSetRef(
+        analyzed_analyst_id=analyzed_analyst_id,
+        analyzed_analyst_version=analyzed_analyst_version,
+        read_window_days=DEFAULT_READ_WINDOW_DAYS,
+        limit=MAX_TRAINING_ROWS,
+        until_ts=max_ts.isoformat(),
+    )
+
+
 def _shape_training_set(
     inputs: list[Mapping[str, Any]] | Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -845,6 +939,7 @@ async def _dispatch_workflow(
     workflow_input: OptimizerWorkflowInput,
     *,
     workflow_id: str,
+    training_size_hint: int | None = None,
 ) -> tuple[OptimizerWorkflowResult, dict[str, Any]]:
     """Start the workflow + await its result.
 
@@ -852,12 +947,22 @@ async def _dispatch_workflow(
     ``workflow_id`` + ``run_id`` for the candidate payload to record.
     Failures bubble up — the actor's failure-classification path
     handles them.
+
+    ``training_size_hint`` — the row count the worker will re-fetch (the
+    host's fetched-rows count). Used only to populate the synthesized
+    timeout result's ``training_set_size`` since, on the pass-by-reference
+    Dapr path, ``workflow_input.training_set`` is intentionally empty.
     """
     handle = await temporal_client.start_optimizer_workflow(
         workflow_input, workflow_id=workflow_id,
     )
     in_process = type(temporal_client).__name__ == "InProcessWorkflowClient"
     timeout_s = _dispatch_timeout_s()
+    timeout_size = (
+        training_size_hint
+        if training_size_hint is not None
+        else len(workflow_input.training_set)
+    )
     try:
         result = await asyncio.wait_for(handle.result(), timeout=timeout_s)
     except (asyncio.TimeoutError, TimeoutError):
@@ -877,7 +982,7 @@ async def _dispatch_workflow(
             candidate_prompt_module_text=(
                 f"<<workflow_timeout: exceeded {timeout_s}s>>"
             ),
-            training_set_size=len(workflow_input.training_set),
+            training_set_size=timeout_size,
             eval_score=0.0,
             eval_score_delta=0.0,
             gepa_generation=0,

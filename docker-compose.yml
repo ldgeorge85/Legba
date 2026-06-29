@@ -261,6 +261,20 @@ services:
       - "/dapr/components"
       - "-config"
       - "/dapr/components/configuration.yaml"
+      # GUARDRAIL (defense-in-depth for the GEPA workflow payload overflow):
+      # daprd's default gRPC/HTTP body cap is 4 MB. The optimizer's GEPA
+      # workflow used to inline ~500 trace+critique rows into the workflow
+      # input and overflow the workflow engine's internal gRPC channel
+      # (RESOURCE_EXHAUSTED: message larger than max 4234332 vs 4194304) —
+      # wedging the orchestrator + leaking orphan reminders. The PRIMARY fix is
+      # pass-by-reference (the worker re-fetches the rows; see
+      # legba.runtime.dapr_workflow.gepa.materialize_training_set), but raise
+      # the cap well above 4 MB too so a future payload spike degrades
+      # gracefully instead of wedging. `-max-body-size` applies to HTTP + gRPC
+      # (incl. the actor/workflow gRPC client, honoured since Dapr v1.15.1) and
+      # supersedes the deprecated `-dapr-http-max-request-size`. Env-overridable.
+      - "-max-body-size"
+      - "${LEGBA_DAPR_MAX_BODY_SIZE:-16Mi}"
       - "-log-level"
       - "info"
     ports:
