@@ -121,6 +121,89 @@ def _source_tier_rank(source_type: str | None) -> int:
     return _SOURCE_TIER_RANK.get(source_type.strip().lower(), _DEFAULT_SOURCE_TIER_RANK)
 
 
+# ---------------------------------------------------------------------------
+# Per-fact source credibility (Holes-B Wave 0 — facts.source_credibility)
+# ---------------------------------------------------------------------------
+#
+# Each ``facts`` row carries a ``source_credibility real`` (0..1) so the
+# contested-claims arbiter (Holes-B, #101) can weight competing values by how
+# trustworthy the asserting source is. The nominal is a coarse per-TIER prior
+# (operator-blessed ground truth is more credible than a machine extraction);
+# the real per-host score from ``signals.source_credibility`` overrides it when
+# the fact is backed by signal lineage (the ingestion path) — see
+# :func:`resolve_fact_source_credibility`.
+#
+# Decided 2026-06-29 (Lewis): seed/curated -> 0.9, agent/ingestion -> 0.5
+# (host-tier weighting + state-affiliation down-weight are a follow-up).
+_SOURCE_TIER_CREDIBILITY: dict[str, float] = {
+    "seed": 0.9,
+    "curated": 0.9,
+    "ingestion": 0.5,
+    "agent": 0.5,
+}
+_DEFAULT_SOURCE_CREDIBILITY = 0.5
+
+
+def source_tier_credibility(source_type: str | None) -> float:
+    """Map a fact ``source_type`` onto its nominal credibility prior (0..1).
+
+    An unknown / ``None`` class falls back to the machine-extracted nominal
+    (0.5) — same conservative default as :func:`_source_tier_rank`, so an
+    unrecognised producer is never treated as authoritative-credible.
+    """
+    if not source_type:
+        return _DEFAULT_SOURCE_CREDIBILITY
+    return _SOURCE_TIER_CREDIBILITY.get(
+        source_type.strip().lower(), _DEFAULT_SOURCE_CREDIBILITY
+    )
+
+
+async def max_signal_credibility(
+    conn: asyncpg.Connection, signal_ids: Sequence[UUID]
+) -> float | None:
+    """MAX ``signals.source_credibility`` over the backing signal ids, or ``None``.
+
+    ``signals.source_credibility`` is already backfilled at signal write
+    (runtime/source_actor.py), so we read the column directly rather than
+    re-resolving the host at fact-write time. Returns ``None`` when ``signal_ids``
+    is empty or every backing signal is unscored (all NULL) — the caller then
+    falls back to the tier nominal. The aggregate ignores NULLs (Postgres
+    ``max`` skips them) so one scored signal among unscored siblings still wins.
+    """
+    if not signal_ids:
+        return None
+    val = await conn.fetchval(
+        """
+        SELECT max(source_credibility)
+          FROM signals
+         WHERE id = ANY($1::uuid[])
+        """,
+        list(signal_ids),
+    )
+    return None if val is None else float(val)
+
+
+async def resolve_fact_source_credibility(
+    conn: asyncpg.Connection,
+    *,
+    source_type: str | None,
+    derived_from: Sequence[UUID],
+) -> float:
+    """Resolve a fact's ``source_credibility`` (Holes-B Wave 0).
+
+    The real per-host score from the backing signals wins: take the MAX over
+    ``signals.source_credibility`` for the ``derived_from`` signal ids (the most
+    credible source backing the fact). When the fact has no signal lineage, or
+    every backing signal is unscored, fall back to the TIER NOMINAL for the
+    fact's ``source_type`` (seed/curated 0.9, agent/ingestion 0.5). Always
+    returns a non-NULL float so the column is populated on every fresh write.
+    """
+    backed = await max_signal_credibility(conn, derived_from)
+    if backed is not None:
+        return backed
+    return source_tier_credibility(source_type)
+
+
 def noisy_or_confidence(existing: float, incoming: float, *, cap: float = 0.99) -> float:
     """Bounded noisy-OR combine of two AGREEING confidences (Holes-A A2).
 
@@ -988,6 +1071,7 @@ async def collapse_open_triple(
     confidence: float,
     derived_from: Sequence[UUID],
     valid_from: datetime | None = None,
+    source_credibility: float | None = None,
 ) -> UUID | None:
     """Collapse a standing fact triple onto ONE open row regardless of
     ``valid_from`` drift (D17 — full-triple supersession leaked open duplicates
@@ -1052,6 +1136,10 @@ async def collapse_open_triple(
                -- are NULL), so this keeps the EARLIEST known valid_from and is
                -- a no-op when either side is NULL — matches the ingest path.
                valid_from   = LEAST(facts.valid_from, $6),
+               -- Holes-B Wave 0: a corroborating re-assert keeps the MOST
+               -- credible backing source. GREATEST skips NULLs, so an unscored
+               -- side never lowers a known credibility; NULL only if both NULL.
+               source_credibility = GREATEST(facts.source_credibility, $8),
                updated_at   = now()
          WHERE id = (
                  SELECT id FROM facts
@@ -1073,6 +1161,7 @@ async def collapse_open_triple(
         list(derived_from),
         valid_from,
         new_fact_id,
+        source_credibility,
     )
     return existing_id
 
@@ -1139,6 +1228,16 @@ async def _insert_fact(
     # arg wins (curated-seeding passes 'seed'); else the payload's source_type
     # (default 'agent').
     effective_source_type = source_type or getattr(p, "source_type", "agent")
+    # Holes-B Wave 0 — resolve this fact's source_credibility BEFORE the write.
+    # The backing-signal MAX (signals.source_credibility) wins; else the tier
+    # nominal for effective_source_type (seed/curated 0.9, agent/ingestion 0.5).
+    # An analyst emission usually has no signal lineage, so it lands on the tier
+    # nominal — but a signal-derived analyst fact gets the real host score.
+    source_credibility = await resolve_fact_source_credibility(
+        conn,
+        source_type=effective_source_type,
+        derived_from=prov.derived_from,
+    )
     await supersede_prior_facts(
         conn,
         subject=getattr(p, "subject"),
@@ -1164,6 +1263,7 @@ async def _insert_fact(
         confidence=float(getattr(p, "confidence", 1.0)),
         derived_from=list(prov.derived_from),
         valid_from=getattr(p, "valid_from", None),
+        source_credibility=source_credibility,
     )
     if collapsed_into is not None:
         # An open row already carries this exact triple — refreshed in place,
@@ -1176,13 +1276,13 @@ async def _insert_fact(
             source_cycle, valid_from, valid_until, geo_lat, geo_lon, data,
             evidence_set, target_id, target_version, analyst_id,
             analyst_version, produced_at, derived_from, schema_uri, run_id,
-            seed_batch_id
+            seed_batch_id, source_credibility
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9, $10, $11, $12::jsonb,
             $13::jsonb, $14, $15, $16,
             $17, $18, $19, $20, $21,
-            $22
+            $22, $23
         )
         ON CONFLICT (lower(subject), lower(predicate), lower(value),
                      COALESCE(valid_from, '1970-01-01 00:00:00+00'::timestamptz))
@@ -1208,6 +1308,11 @@ async def _insert_fact(
             -- conflict target is OPEN rows only, so this can never overwrite a
             -- supersession close — those rows are not visible to ON CONFLICT).
             valid_until  = COALESCE(EXCLUDED.valid_until, facts.valid_until),
+            -- Holes-B Wave 0: a corroborating re-assert keeps the MOST credible
+            -- backing source. GREATEST skips NULLs, so an unscored side never
+            -- lowers a known credibility (NULL only when both sides are NULL).
+            source_credibility = GREATEST(facts.source_credibility,
+                                          EXCLUDED.source_credibility),
             updated_at   = now()
         """,
         row_id,
@@ -1232,6 +1337,7 @@ async def _insert_fact(
         effective_schema_uri,
         prov.run_id,
         seed_batch_id,
+        source_credibility,
     )
 
 

@@ -95,6 +95,9 @@ from .writes import (
     supersede_prior_facts,
     supersede_prior_nexuses,
     supersede_prior_consolidation,
+    source_tier_credibility,
+    max_signal_credibility,
+    resolve_fact_source_credibility,
 )
 from .budget import BudgetLedgerRow, compute_cost_usd, record_budget
 from .dlq import OutputDeadLetterEntry, route_to_output_dead_letter
@@ -169,6 +172,10 @@ __all__ = [
     "supersede_prior_facts",
     "supersede_prior_nexuses",
     "supersede_prior_consolidation",
+    # Holes-B Wave 0 — per-fact source credibility
+    "source_tier_credibility",
+    "max_signal_credibility",
+    "resolve_fact_source_credibility",
     # L-114 — DLQ
     "OutputDeadLetterEntry",
     "route_to_output_dead_letter",
