@@ -1,0 +1,38 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0054_facts_source_credibility.sql
+--
+-- Holes-B Wave 0 — carry a per-fact `source_credibility` onto the `facts`
+-- table so the contested-claims arbiter (Holes-B, #101) can weight competing
+-- (subject, predicate) values by how trustworthy the asserting source is.
+--
+-- WHY:
+--   `signals.source_credibility` (0001_baseline.sql, signals at :695) scores a
+--   signal's host (wire/gov/aggregator/thinktank/social → 0..1, backfilled at
+--   signal write in runtime/source_actor.py). But that score never propagated
+--   to the FACTS extracted from those signals, so the arbiter's Q·C·R·F scoring
+--   had no per-fact credibility term to read. Both fact producers now STAMP this
+--   column at write time (Wave 0): the ingestion path takes the MAX over its
+--   backing signals' `source_credibility` (else the ingestion tier nominal 0.5),
+--   and the analyst path takes the source-tier nominal (seed/curated 0.9,
+--   agent/ingestion 0.5), overridden by the backing-signal max when present.
+--
+-- WHAT:
+--   One nullable column on `public.facts`:
+--     * `source_credibility real` — 0..1 trust score of the most credible
+--       source backing this fact. NULL = unscored (a pre-0054 row, or a write
+--       with no resolvable credibility); the arbiter treats NULL as "unknown",
+--       not zero.
+--
+-- SAFETY (idempotent, additive, NULL-default — no data repair, no rewrite):
+--   `ADD COLUMN IF NOT EXISTS` is a no-op on re-apply and on a fresh cold-start
+--   substrate. The column is nullable with no default, so every existing row is
+--   left `source_credibility IS NULL` (unscored) and no row is rewritten — this
+--   is a metadata-only catalog change, not a table rewrite. No existing column
+--   or index is touched. CREATE-only/clean-slate policy honored (no data
+--   migration). NO index in this wave — the arbiter's read path is added in a
+--   later wave; an index can land with it once the access pattern is fixed.
+
+ALTER TABLE public.facts
+    ADD COLUMN IF NOT EXISTS source_credibility real;

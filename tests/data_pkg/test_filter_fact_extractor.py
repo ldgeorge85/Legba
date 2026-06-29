@@ -15,7 +15,8 @@ Covers (mirrors the plan's test plan §6.1):
     derived_from=[signal_id].
   * /extract fallback when payload['entities'] is empty.
   * non-entity rejection ("50%" / "June 2026" dropped via _is_nonentity_candidate).
-  * idempotency: same triple twice → ONE row, confidence=max, lineage unioned.
+  * idempotency: same triple twice → ONE row, confidence combined via the
+    bounded noisy-OR (Holes-A A2 / Holes-B Wave 0; was max), lineage unioned.
   * PIECE B supersession: a new value for an existing (subject, predicate)
     closes the prior open row (valid_until + superseded_by) and opens the new
     one; an identical-triple re-assert does NOT supersede (upsert only).
@@ -568,7 +569,10 @@ async def test_idempotent_upsert(pg_pool):
             pub,
         )
     assert len(rows) == 1, "duplicate triple must upsert to ONE row"
-    assert rows[0]["confidence"] == pytest.approx(0.9)
+    # Holes-B Wave 0: same-value re-assert now combines confidence via the
+    # bounded noisy-OR (corroboration), NOT GREATEST/max. 0.5 then 0.9 ->
+    # 1-(1-0.5)*(1-0.9) = 0.95 (above the old max of 0.9).
+    assert rows[0]["confidence"] == pytest.approx(0.95)
     lineage = [str(u) for u in rows[0]["derived_from"]]
     assert str(s1.signal_id) in lineage and str(s2.signal_id) in lineage
 
@@ -654,7 +658,9 @@ async def test_identical_triple_does_not_supersede(pg_pool):
     assert len(rows) == 1, "identical triple must upsert to ONE row (no spurious supersession)"
     assert rows[0]["valid_until"] is None, "same-value re-assert must NOT close the row"
     assert rows[0]["superseded_by"] is None
-    assert rows[0]["confidence"] == pytest.approx(0.9)
+    # Holes-B Wave 0: corroboration combines via bounded noisy-OR (was max).
+    # 0.4 then 0.9 -> 1-(1-0.4)*(1-0.9) = 0.94 (above the old max of 0.9).
+    assert rows[0]["confidence"] == pytest.approx(0.94)
 
 
 @pytest.mark.integration

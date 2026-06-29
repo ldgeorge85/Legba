@@ -54,7 +54,10 @@ from .._entity_canon import (
     is_org_surface,
     is_place_surface,
 )
-from ..provenance.writes import supersede_prior_facts
+from ..provenance.writes import (
+    resolve_fact_source_credibility,
+    supersede_prior_facts,
+)
 from ..sources._contract import Signal
 from ..vocabulary import normalize_predicate
 from ..stack.nlp_service import (
@@ -1479,18 +1482,27 @@ async def _insert_ingestion_fact(
 ) -> None:
     """Write one source-owned ('ingestion') fact via the §3 ON CONFLICT upsert.
 
-    Re-ingest of the same triple+valid_from is idempotent: confidence lifts to
-    the max, lineage unions — the substrate idempotency contract the filters
-    already honor. ``source_type`` is the constant ``'ingestion'``; analyst_id /
+    Re-ingest of the same triple+valid_from is idempotent: confidence combines
+    via the bounded noisy-OR (Holes-A A2 — corroboration raises belief above any
+    single source, capped 0.99, matching the analyst path; was GREATEST/max),
+    lineage unions. ``source_type`` is the constant ``'ingestion'``; analyst_id /
     target_id / run_id are NULL (ingestion facts are source-owned).
 
     Before the insert we close any prior OPEN fact for the same
     ``(lower(subject), lower(predicate))`` whose value DIFFERS (PIECE B
     auto-supersession): the prior row gets ``valid_until=now()`` +
     ``superseded_by=<this id>`` so the canonical "what is true now" is the
-    single open row. A same-value re-assert closes nothing (the upsert owns
-    it). Shares the exact write contract the analyst path uses
-    (``provenance.writes.supersede_prior_facts``) so both producers agree.
+    single open row. The incoming ``'ingestion'`` source_type is threaded into
+    ``supersede_prior_facts`` so Holes-A's A1 tier guard engages — an ingestion
+    fact can NO LONGER close an open seed/curated (authoritative) row (it was
+    bypassed before because this caller omitted ``incoming_source_type``). A
+    same-value re-assert closes nothing (the upsert owns it). Shares the exact
+    write contract the analyst path uses (``provenance.writes``) so both
+    producers agree.
+
+    Holes-B Wave 0: the row's ``source_credibility`` is stamped = MAX over the
+    backing signals' ``signals.source_credibility`` (the ``derived_from`` signal
+    ids), falling back to the ingestion tier nominal (0.5) when unscored.
     """
     # Ingestion facts MUST carry an event-time. `_event_time` always returns a
     # tz-aware datetime (payload logical-ts precedence → signal.fetched_at), so
@@ -1503,12 +1515,26 @@ async def _insert_ingestion_fact(
             f"(subject={subject!r} predicate={predicate!r}); "
             "_event_time must stamp an event-time"
         )
+    # Holes-B Wave 0 — resolve this ingestion fact's source_credibility: MAX
+    # over the backing signals' signals.source_credibility (already backfilled
+    # at signal write), else the ingestion tier nominal (0.5).
+    source_credibility = await resolve_fact_source_credibility(
+        conn,
+        source_type="ingestion",
+        derived_from=derived_from,
+    )
+    # A1 tier guard (Holes-A) — declare the incoming source_type so an ingestion
+    # fact can NOT close an open seed/curated (authoritative) row. This caller
+    # previously omitted the arg, silently DISABLING the guard on the ingestion
+    # path; a same-tier (ingestion vs ingestion/agent) value-change still
+    # supersedes by recency exactly as before.
     await supersede_prior_facts(
         conn,
         subject=subject,
         predicate=predicate,
         value=value,
         new_fact_id=fact_id,
+        incoming_source_type="ingestion",
     )
     # Identical-triple dedupe (PIECE B data quality): the 0032 open-row unique
     # index keys on the FULL quad INCLUDING valid_from, so the same
@@ -1518,16 +1544,27 @@ async def _insert_ingestion_fact(
     # (a DIFFERENT value still supersedes via supersede_prior_facts above) — by
     # collapsing the valid_from dimension for SAME-value open rows: if an open
     # row for this triple already exists (any valid_from), refresh it
-    # (confidence→max, lineage union, earliest valid_from kept) and skip the
-    # insert. A no-op for the row count; never resurrects a closed row (the
-    # filter is open-only, matching the partial index's WHERE).
+    # (confidence→noisy-OR per A2, lineage union, earliest valid_from kept,
+    # source_credibility→max) and skip the insert. A no-op for the row count;
+    # never resurrects a closed row (the filter is open-only, matching the
+    # partial index's WHERE).
     existing_id = await conn.fetchval(
         """
         UPDATE facts
-           SET confidence   = GREATEST(facts.confidence, $4),
+           -- A2: same-triple re-assert is CORROBORATION — combine confidences
+           -- with a bounded noisy-OR (capped 0.99) so N agreeing sources raise
+           -- belief above any single one (was GREATEST/max; now matches the
+           -- analyst collapse_open_triple path so both producers agree).
+           SET confidence   = LEAST(
+                                0.99,
+                                1.0 - (1.0 - facts.confidence) * (1.0 - $4)
+                              ),
                derived_from = (SELECT array_agg(DISTINCT e)
                                FROM unnest(facts.derived_from || $5::uuid[]) e),
                valid_from   = LEAST(facts.valid_from, $6),
+               -- Holes-B Wave 0: keep the MOST credible backing source.
+               -- GREATEST skips NULLs (NULL only if both NULL).
+               source_credibility = GREATEST(facts.source_credibility, $7),
                updated_at   = now()
          WHERE id = (
                  SELECT id FROM facts
@@ -1547,6 +1584,7 @@ async def _insert_ingestion_fact(
         float(confidence),
         list(derived_from),
         valid_from,
+        source_credibility,
     )
     if existing_id is not None:
         # An open row already carries this exact triple — refreshed in place,
@@ -1557,19 +1595,27 @@ async def _insert_ingestion_fact(
         INSERT INTO facts (
             id, subject, predicate, value, confidence, source_type,
             valid_from, geo_lat, geo_lon, data, evidence_set,
-            derived_from, schema_uri
+            derived_from, schema_uri, source_credibility
         ) VALUES (
             $1, $2, $3, $4, $5, 'ingestion',
             $6, $7, $8, $9::jsonb, $10::jsonb,
-            $11, 'iglu:legba/fact/jsonschema/2-0-0'
+            $11, 'iglu:legba/fact/jsonschema/2-0-0', $12
         )
         ON CONFLICT (lower(subject), lower(predicate), lower(value),
                      COALESCE(valid_from, '1970-01-01 00:00:00+00'::timestamptz))
                  WHERE valid_until IS NULL AND superseded_by IS NULL
         DO UPDATE SET
-            confidence   = GREATEST(facts.confidence, EXCLUDED.confidence),
+            -- A2: corroboration combines via bounded noisy-OR (capped 0.99),
+            -- matching the analyst ON CONFLICT path (was GREATEST/max).
+            confidence   = LEAST(
+                             0.99,
+                             1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)
+                           ),
             derived_from = (SELECT array_agg(DISTINCT e)
                             FROM unnest(facts.derived_from || EXCLUDED.derived_from) e),
+            -- Holes-B Wave 0: keep the MOST credible backing source.
+            source_credibility = GREATEST(facts.source_credibility,
+                                          EXCLUDED.source_credibility),
             updated_at   = now()
         """,
         fact_id,
@@ -1583,6 +1629,7 @@ async def _insert_ingestion_fact(
         json.dumps(data),
         json.dumps(evidence_set),
         list(derived_from),
+        source_credibility,
     )
 
 
