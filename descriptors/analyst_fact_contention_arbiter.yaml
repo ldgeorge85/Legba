@@ -1,0 +1,70 @@
+# fact_contention_arbiter — the contested-claims referee (Holes-B Wave 2, #101).
+#
+# A `deterministic`-kind META analyst over the shared `facts` table — modeled on
+# analyst_fact_decay.yaml (the sibling deterministic facts-maintenance descriptor
+# that wires its built-but-uninvoked sub_handler). The handler is fully built at
+# legba.data.analysts.deterministic_handlers.fact_contention_arbiter.
+#
+# DETECT-ONLY (invariant B15): per hourly pass it scans OPEN facts, groups by
+# (lower(subject), normalize_predicate(lower(predicate))), fuzzy-clusters each
+# group's values (canon + tight normalized-Levenshtein), junk-gates every cluster
+# via the existing fact_extractor gates (Poland -> {Berlin, Russian} `located in`
+# is junk-dropped, NOT a dispute), and for a triple with >=2 non-junk clusters
+# builds/refreshes the fact_contention + fact_contention_values sidecar, scores
+# each cluster Q·C·R·F, and surfaces at most ONE winner (or abstains on a
+# near-tie). It NEVER closes, supersedes, or rewrites a fact row — it only stamps
+# the thin facts markers (contested / contention_id / surfaced_winner) + the
+# sidecar. The write-path coexistence change is the separate, flag-gated Wave 4.
+#
+# The per-run summary FindingPayload (groups_open / abstained / junk_excluded /
+# values_total / groups_collapsed) is the cadence receipt — exactly how
+# fact_decay / hypothesis_lifecycle keep a FINDING summary while side-writing
+# rows directly. fact_contention_arbiter is marked TRACE_ONLY in deterministic.py
+# (its real product is the sidecar), so the receipt lands in the trace, not in
+# analyst_outputs.
+
+identity:
+  id: fact_contention_arbiter
+  name: Fact Contested-Claims Arbiter (detect-only)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: fact_contention_arbiter_activation
+
+subscription:
+  # META analyst: one global sweep per tick directly over the `facts` table via
+  # deps.pg_pool (the fact_decay / hypothesis_lifecycle precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: fact_contention_arbiter
+  # No LLM block, no token budget — pure Python over the `facts` table + the
+  # fact_contention* sidecar. The deterministic Q·C·R·F arbiter has no model call;
+  # the LLM tie-break is a LATER Wave 2b, not wired here.
+
+cadence:
+  # Every hour at :37 — the arbiter is cheap (a bounded open-facts scan + the
+  # fuzzy clustering) and idempotent, so hourly keeps the sidecar fresh as facts
+  # land. The :37 minute is OFFSET from the other hourly/short deterministic
+  # maintenance analysts so they do not all fire on the same tick:
+  #   integrity_sweep "41 */1"  · situation_clustering "5-59/20"
+  #   hypothesis_lifecycle "10-59/20"  · fact_decay "23 */8"
+  #   fact_contention_arbiter (this) "37 */1"
+  fallback_schedule: "37 */1 * * *"
+  # Idempotent recompute-from-open-rows — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+outputs: []

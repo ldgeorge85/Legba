@@ -68,6 +68,7 @@ ANALYST_FILES = [
     "analyst_competing_hypotheses.yaml",      # NEW — PIECE C (the ACH hypotheses producer)
     "analyst_calibration_tracking.yaml",      # NEW — PIECE C (Brier-calibration feedback loop)
     "analyst_fact_decay.yaml",                # NEW — facts-table temporal-lifecycle maintenance (audit fix)
+    "analyst_fact_contention_arbiter.yaml",   # NEW — Holes-B Wave 2 (#101) — contested-claims arbiter (DETECT-ONLY)
     "analyst_deep_consult.yaml",              # NEW — Piece 4 (deep-consult workflow bridge)
     "analyst_relationship_reifier.yaml",      # NEW — PIECE A (the reified typed-Nexus producer)
     "analyst_structural_balance.yaml",        # NEW — PIECE A consumer (signed-triad balance over nexuses)
