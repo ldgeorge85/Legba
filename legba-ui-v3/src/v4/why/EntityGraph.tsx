@@ -92,7 +92,8 @@ const STYLESHEET: StylesheetStyle[] = [
       'text-margin-y': 3,
       'text-outline-color': '#0f1115', // surface-200
       'text-outline-width': 2,
-      'min-zoomed-font-size': 7,
+      // Low threshold so the ego neighbourhood's labels render at fit-zoom.
+      'min-zoomed-font-size': 4,
       width: 'data(size)',
       height: 'data(size)',
       'border-width': 1,
@@ -118,12 +119,12 @@ const STYLESHEET: StylesheetStyle[] = [
       label: 'data(label)',
       'line-color': 'data(color)',
       'curve-style': 'bezier',
-      'font-size': 8,
-      color: '#94a3b8', // slate-400 edge labels
+      'font-size': 9,
+      color: '#cbd5e1', // slate-300 edge labels
       'text-rotation': 'autorotate',
       'text-outline-color': '#0f1115',
       'text-outline-width': 2,
-      'min-zoomed-font-size': 9,
+      'min-zoomed-font-size': 4,
       opacity: 0.85,
     },
   },

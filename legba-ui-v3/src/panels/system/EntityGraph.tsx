@@ -63,8 +63,9 @@ const STYLESHEET: StylesheetStyle[] = [
     selector: 'node',
     style: {
       'background-color': 'data(color)',
-      // Labels only render for hub nodes (the projection sets an empty label on
-      // low-degree nodes via `show_label`), so a dense graph isn't a text wall.
+      // Every node carries its label; `min-zoomed-font-size` declutters by hiding
+      // labels when the graph is zoomed out, rather than dropping them outright for
+      // low-degree nodes (which left most of the graph unlabelled).
       label: 'data(label)',
       'font-size': 10,
       color: '#e2e8f0', // ink-1
@@ -73,7 +74,9 @@ const STYLESHEET: StylesheetStyle[] = [
       'text-margin-y': 3,
       'text-outline-color': '#0a0c10', // surf-base
       'text-outline-width': 2,
-      'min-zoomed-font-size': 8,
+      // Low threshold so the hub labels (full graph) and every label (ego view)
+      // actually render at the graph's fit-zoom instead of being culled.
+      'min-zoomed-font-size': 4,
       width: 'data(size)',
       height: 'data(size)',
       'border-width': 1,
@@ -84,9 +87,18 @@ const STYLESHEET: StylesheetStyle[] = [
     selector: 'edge',
     style: {
       width: 'data(w)',
+      // Relationship label (set per-edge: only in ego view). bezier, not haystack
+      // — haystack edges have no midpoint so they can't carry a label.
+      label: 'data(label)',
       'line-color': 'data(color)',
-      'curve-style': 'haystack',
-      opacity: 0.55,
+      'curve-style': 'bezier',
+      'font-size': 9,
+      color: '#cbd5e1', // slate-300 edge labels
+      'text-rotation': 'autorotate',
+      'text-outline-color': '#0a0c10', // surf-base
+      'text-outline-width': 2,
+      'min-zoomed-font-size': 4,
+      opacity: 0.7,
     },
   },
   { selector: 'node:selected', style: { 'border-width': 2, 'border-color': '#e2e8f0' } },
@@ -175,11 +187,18 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
   const elements = useMemo<ElementDefinition[]>(
     () => [
       ...graph.nodes.map((n) => ({
-        data: { ...n.data, label: n.data.show_label ? n.data.label : '' },
+        // Full graph: label hubs only (the overview stays legible). Ego view (a
+        // node is centred): label EVERY node — it's the focused detail view the
+        // operator drilled into. min-zoomed-font-size still gates legibility.
+        data: { ...n.data, label: center || n.data.show_label ? n.data.label : '' },
       })),
-      ...graph.edges.map((e) => ({ data: e.data })),
+      ...graph.edges.map((e) => ({
+        // Relationship labels only in the focused ego view — labelling every edge
+        // of the full top-subgraph would be an unreadable wall.
+        data: { ...e.data, label: center ? e.data.relationship_type : '' },
+      })),
     ],
-    [graph],
+    [graph, center],
   )
 
   const presentRels = useMemo(
@@ -216,7 +235,7 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
         ) : undefined
       }
     >
-      <div ref={canvasRef} className="relative flex-1 min-h-[300px]" data-testid="entity-graph-canvas">
+      <div ref={canvasRef} className="relative h-full w-full min-h-[300px]" data-testid="entity-graph-canvas">
         {graphQ.isLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center text-slate-500 text-sm">loading graph…</div>
         )}
