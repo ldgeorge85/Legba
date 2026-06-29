@@ -828,7 +828,10 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
     async def pause(self) -> dict[str, Any]:
         rec = await self._get_record()
         if rec is None:
-            raise RuntimeError(f"target actor {self.id.id} not found")
+            # No record = the target actor was never created (a descriptor
+            # transitioned straight to paused). Nothing to park; no-op rather
+            # than 500 (mirrors retire()'s no-record path).
+            return {"actor_id": self.id.id, "lifecycle": PAUSED}
         # Idempotent — re-pausing a paused target no-ops rather than 500'ing.
         fsm = LifecycleFSM(state=rec["lifecycle"])
         fsm.transition_idempotent(LifecycleEvent.PAUSE, initiated_by="actor_pause")
@@ -843,7 +846,9 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
         an already-active record; raises on a genuinely-illegal source state."""
         rec = await self._get_record()
         if rec is None:
-            raise RuntimeError(f"target actor {self.id.id} not found")
+            # No record = never created; the descriptor head wants it ACTIVE —
+            # create + activate fresh rather than 500.
+            return await self.activate()
         fsm = LifecycleFSM(state=rec["lifecycle"])
         fsm.transition_idempotent(LifecycleEvent.RESUME, initiated_by="actor_resume")
         rec["lifecycle"] = fsm.state
@@ -1556,7 +1561,13 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
     async def pause(self) -> dict[str, Any]:
         rec = await self._get_record()
         if rec is None:
-            raise RuntimeError(f"analyst actor {self.id.id} not found")
+            # No record = the actor was never created (a descriptor transitioned
+            # straight to paused — that version never had an active actor).
+            # Nothing to park; no-op rather than 500 (mirrors retire()'s no-record
+            # path). Fixes the reconcile.failed-on-paused symptom where the
+            # reconciler pauses a never-activated paused-head version.
+            await self._unregister_cadence_reminder(reason="pause_no_record")
+            return {"actor_id": self.id.id, "lifecycle": PAUSED}
         # Idempotent: pausing an already-paused actor is a no-op (the reconcile
         # / operator path can re-issue pause without a 500). transition_idempotent
         # returns None when already PAUSED — we still re-assert the reminder
@@ -1576,7 +1587,11 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         source state (e.g. draft)."""
         rec = await self._get_record()
         if rec is None:
-            raise RuntimeError(f"analyst actor {self.id.id} not found")
+            # No record = the actor was never created. The descriptor head wants
+            # it ACTIVE (that's why resume was routed here) — create + activate
+            # fresh rather than 500 (activate() runs _on_activate, which creates
+            # the record + re-registers the cadence reminder).
+            return await self.activate()
         fsm = LifecycleFSM(state=rec["lifecycle"])
         fsm.transition_idempotent(LifecycleEvent.RESUME, initiated_by="actor_resume")
         rec["lifecycle"] = fsm.state
