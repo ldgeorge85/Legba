@@ -106,3 +106,58 @@ def test_legal_events_from_active() -> None:
     assert LifecycleEvent.RETIRE in legal
     assert LifecycleEvent.ERROR in legal
     assert LifecycleEvent.RESUME not in legal
+
+
+# ---------------------------------------------------------------------------
+# Same-state idempotency (the runtime lifecycle-bug fix). transition_idempotent
+# no-ops when already at the event's target, but a genuinely-illegal move (no
+# edge AND not same-state) still raises — the FSM's real semantics are intact.
+# ---------------------------------------------------------------------------
+
+
+def test_transition_idempotent_noops_at_target_state() -> None:
+    # retire-on-retired, pause-on-paused, activate/resume-on-active all no-op.
+    cases = [
+        (RETIRED, LifecycleEvent.RETIRE),
+        (PAUSED, LifecycleEvent.PAUSE),
+        (ACTIVE, LifecycleEvent.ACTIVATE),
+        (ACTIVE, LifecycleEvent.RESUME),
+        (CONFIGURED, LifecycleEvent.CONFIGURE),
+    ]
+    for start, ev in cases:
+        fsm = LifecycleFSM(state=start)
+        rec = fsm.transition_idempotent(ev)
+        assert rec is None, f"{start}/{ev} should no-op"
+        assert fsm.state == start
+        assert fsm.history == []
+
+
+def test_transition_idempotent_applies_real_transition() -> None:
+    fsm = LifecycleFSM(state=ACTIVE)
+    rec = fsm.transition_idempotent(LifecycleEvent.PAUSE)
+    assert rec is not None
+    assert fsm.state == PAUSED
+    assert rec.from_state == ACTIVE and rec.to_state == PAUSED
+    # And resume back.
+    rec2 = fsm.transition_idempotent(LifecycleEvent.RESUME)
+    assert rec2 is not None
+    assert fsm.state == ACTIVE
+
+
+def test_transition_idempotent_still_rejects_illegal() -> None:
+    # draft -> RETIRE has no edge AND draft != retired, so it must still raise
+    # (idempotency relaxes ONLY same-state, never a genuinely-illegal move).
+    fsm = LifecycleFSM(state=DRAFT)
+    with pytest.raises(IllegalTransition):
+        fsm.transition_idempotent(LifecycleEvent.RETIRE)
+    # error is not reachable from retired even via the idempotent helper.
+    fsm_retired = LifecycleFSM(state=RETIRED)
+    with pytest.raises(IllegalTransition):
+        fsm_retired.transition_idempotent(LifecycleEvent.ERROR)
+
+
+def test_is_noop_does_not_mutate() -> None:
+    fsm = LifecycleFSM(state=PAUSED)
+    assert fsm.is_noop(LifecycleEvent.PAUSE) is True
+    assert fsm.is_noop(LifecycleEvent.RESUME) is False
+    assert fsm.state == PAUSED

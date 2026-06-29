@@ -625,6 +625,9 @@ class TargetActorInterface(ActorInterface):
     @actormethod(name="pause")
     async def pause(self) -> dict[str, Any]: ...
 
+    @actormethod(name="resume")
+    async def resume(self) -> dict[str, Any]: ...
+
     @actormethod(name="retire")
     async def retire(self) -> dict[str, Any]: ...
 
@@ -641,6 +644,9 @@ class AnalystActorInterface(ActorInterface):
 
     @actormethod(name="pause")
     async def pause(self) -> dict[str, Any]: ...
+
+    @actormethod(name="resume")
+    async def resume(self) -> dict[str, Any]: ...
 
     @actormethod(name="retire")
     async def retire(self) -> dict[str, Any]: ...
@@ -793,21 +799,53 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
     # ------------------------------------------------------------------ ActorInterface methods
 
     async def activate(self) -> dict[str, Any]:
-        """Explicit activate — idempotent, returns the current state record."""
+        """Explicit activate — idempotent, returns the current state record.
+
+        Also resurrects a PAUSED/RETIRED record to ACTIVE: activate() is only
+        ever driven when the descriptor head declares this version active, so a
+        parked record (operator-paused then re-activated, or a superseded
+        version restored as head via rollback) is brought back to ACTIVE. The
+        NORMAL supersede path drives RETIRE_ACTOR (retire()) and stays terminal.
+        """
         rec = await self._get_record()
         if rec is None:
             # _on_activate hasn't run yet (shouldn't happen since Dapr calls
             # it before any method, but defensive); kick it now.
             await self._on_activate()
             rec = await self._get_record()
+        if rec is not None and rec.get("lifecycle") in (PAUSED, RETIRED):
+            prior = rec["lifecycle"]
+            rec["lifecycle"] = ACTIVE
+            await self._set_record(rec)
+            await self._state_manager.save_state()
+            logger.info(
+                "dapr_actors.target.resurrect actor_id=%s from=%s -> active "
+                "(descriptor head declares active)",
+                self.id.id, prior,
+            )
         return rec or {}
 
     async def pause(self) -> dict[str, Any]:
         rec = await self._get_record()
         if rec is None:
             raise RuntimeError(f"target actor {self.id.id} not found")
+        # Idempotent — re-pausing a paused target no-ops rather than 500'ing.
         fsm = LifecycleFSM(state=rec["lifecycle"])
-        fsm.transition(LifecycleEvent.PAUSE, initiated_by="actor_pause")
+        fsm.transition_idempotent(LifecycleEvent.PAUSE, initiated_by="actor_pause")
+        rec["lifecycle"] = fsm.state
+        await self._set_record(rec)
+        await self._state_manager.save_state()
+        return rec
+
+    async def resume(self) -> dict[str, Any]:
+        """PAUSED → ACTIVE (RESUME). A passive-subscriber target carries no
+        reminder, so resume only flips the lifecycle record back. Idempotent on
+        an already-active record; raises on a genuinely-illegal source state."""
+        rec = await self._get_record()
+        if rec is None:
+            raise RuntimeError(f"target actor {self.id.id} not found")
+        fsm = LifecycleFSM(state=rec["lifecycle"])
+        fsm.transition_idempotent(LifecycleEvent.RESUME, initiated_by="actor_resume")
         rec["lifecycle"] = fsm.state
         await self._set_record(rec)
         await self._state_manager.save_state()
@@ -827,8 +865,9 @@ class TargetActor(Actor, TargetActorInterface, Remindable):
                 "lifecycle": RETIRED,
             }
         else:
+            # Idempotent — re-retiring an already-retired target no-ops.
             fsm = LifecycleFSM(state=rec["lifecycle"])
-            fsm.transition(LifecycleEvent.RETIRE, initiated_by="actor_retire")
+            fsm.transition_idempotent(LifecycleEvent.RETIRE, initiated_by="actor_retire")
             rec["lifecycle"] = fsm.state
         await self._set_record(rec)
         await self._state_manager.save_state()
@@ -1474,7 +1513,28 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         # activate() on a warm actor would just reset the idle timer — keeping a
         # reminder-less actor alive forever without ever re-registering.
         await self._on_activate()
-        return await self._get_record() or {}
+        # RESURRECT-ON-RESTORE: activate() is only ever driven (reconcile
+        # ENSURE_ACTIVE / TRANSITION_LIFECYCLE→active / CREATE→active) when the
+        # descriptor head DECLARES this version active. If the actor's own record
+        # is parked at PAUSED (operator-paused, then descriptor flipped back) or
+        # RETIRED (a superseded version restored as head via rollback), the
+        # declared-active head is authoritative — bring the record back to ACTIVE
+        # so the run path stops NOOP'ing `lifecycle=paused/retired`. _on_activate
+        # already (re-)registered the reminder above. This is scoped to the
+        # head-is-active reconcile path only; the NORMAL supersede still drives
+        # RETIRE_ACTOR (retire()), which stays terminal for that record.
+        rec = await self._get_record()
+        if rec is not None and rec.get("lifecycle") in (PAUSED, RETIRED):
+            prior = rec["lifecycle"]
+            rec["lifecycle"] = ACTIVE
+            await self._set_record(rec)
+            await self._state_manager.save_state()
+            logger.info(
+                "dapr_actors.analyst.resurrect actor_id=%s from=%s -> active "
+                "(descriptor head declares active)",
+                self.id.id, prior,
+            )
+        return rec or {}
 
     async def _unregister_cadence_reminder(self, *, reason: str) -> None:
         """Drop the ``run_cadence`` reminder. A paused/retired analyst whose
@@ -1497,12 +1557,35 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         rec = await self._get_record()
         if rec is None:
             raise RuntimeError(f"analyst actor {self.id.id} not found")
+        # Idempotent: pausing an already-paused actor is a no-op (the reconcile
+        # / operator path can re-issue pause without a 500). transition_idempotent
+        # returns None when already PAUSED — we still re-assert the reminder
+        # unregister so a redundant pause heals a stray reminder.
         fsm = LifecycleFSM(state=rec["lifecycle"])
-        fsm.transition(LifecycleEvent.PAUSE, initiated_by="actor_pause")
+        fsm.transition_idempotent(LifecycleEvent.PAUSE, initiated_by="actor_pause")
         rec["lifecycle"] = fsm.state
         await self._set_record(rec)
         await self._state_manager.save_state()
         await self._unregister_cadence_reminder(reason="pause")
+        return rec
+
+    async def resume(self) -> dict[str, Any]:
+        """PAUSED → ACTIVE (RESUME). Symmetric with :meth:`pause`: re-registers
+        the cadence reminder that pause unregistered. Idempotent on an already
+        ACTIVE actor (no-op transition); raises only on a genuinely-illegal
+        source state (e.g. draft)."""
+        rec = await self._get_record()
+        if rec is None:
+            raise RuntimeError(f"analyst actor {self.id.id} not found")
+        fsm = LifecycleFSM(state=rec["lifecycle"])
+        fsm.transition_idempotent(LifecycleEvent.RESUME, initiated_by="actor_resume")
+        rec["lifecycle"] = fsm.state
+        await self._set_record(rec)
+        await self._state_manager.save_state()
+        # Re-arm the cadence heartbeat exactly as _on_activate does (and as
+        # pause tore down). _on_activate is idempotent on an existing record —
+        # it skips record creation and only (re-)registers the reminder.
+        await self._on_activate()
         return rec
 
     async def retire(self) -> dict[str, Any]:
@@ -1510,8 +1593,12 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         if rec is None:
             await self._unregister_cadence_reminder(reason="retire_no_record")
             return {"actor_id": self.id.id, "lifecycle": RETIRED}
+        # Idempotent: retiring an already-retired actor is a no-op — the live
+        # version-drift sweep can re-issue RETIRE_ACTOR on a sibling that was
+        # already retired without tripping a 500 (the reconcile.version_drift
+        # .retire_failed symptom). transition_idempotent returns None at RETIRED.
         fsm = LifecycleFSM(state=rec["lifecycle"])
-        fsm.transition(LifecycleEvent.RETIRE, initiated_by="actor_retire")
+        fsm.transition_idempotent(LifecycleEvent.RETIRE, initiated_by="actor_retire")
         rec["lifecycle"] = fsm.state
         await self._set_record(rec)
         await self._state_manager.save_state()

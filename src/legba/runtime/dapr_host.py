@@ -330,7 +330,16 @@ async def execute_reconcile_action(
     elif action.kind == ActionKind.TRANSITION_LIFECYCLE:
         target_lc = (detail.get("to") or "").lower()
         if target_lc == "active":
-            await proxy.activate()
+            # PAUSED → active is a RESUME: re-register the cadence reminder
+            # that pause() unregistered (proxy.resume() mirrors pause()).
+            # Any other source state (incl. a rollback-restored retired head)
+            # routes through activate(), which re-runs _on_activate and
+            # resurrects a parked record to active.
+            from_lc = (detail.get("from") or "").lower()
+            if from_lc == "paused":
+                await proxy.resume()
+            else:
+                await proxy.activate()
             await _analyst_went_live()
             if actor_kind == "analyst" and register_a2a_skills is not None:
                 await register_a2a_skills(
