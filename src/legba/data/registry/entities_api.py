@@ -203,28 +203,39 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
 
     @router.get("/entities/{entity_id}", response_model=EntityDetail)
     async def entity_detail(
-        entity_id: UUID,
+        entity_id: str,
         signal_limit: int = Query(default=25),
         principal: str = Depends(require_bearer),
     ) -> EntityDetail:
         signal_limit = min(max(signal_limit, 1), 200)
+        # Accept EITHER the entity UUID or its canonical_name. The knowledge-graph
+        # keys cytoscape nodes by canonical_name (edges reference names), so a
+        # node-click selects by name, not id — the old bare-UUID route 422'd on it.
+        try:
+            as_uuid: UUID | None = UUID(entity_id)
+        except ValueError:
+            as_uuid = None
+        node_sql = """
+            SELECT ep.id, ep.canonical_name, ep.entity_class, ep.entity_type,
+                   ep.geo_lat, ep.geo_lon, ep.geo_country, ep.completeness_score,
+                   count(sel.signal_id) AS mentions
+              FROM entity_profiles ep
+              LEFT JOIN signal_entity_links sel ON sel.entity_id = ep.id
+             WHERE {pred}
+             GROUP BY ep.id
+        """
         async with deps.descriptor_registry.pg.acquire() as conn:
-            node_row = await conn.fetchrow(
-                """
-                SELECT ep.id, ep.canonical_name, ep.entity_class, ep.entity_type,
-                       ep.geo_lat, ep.geo_lon, ep.geo_country, ep.completeness_score,
-                       count(sel.signal_id) AS mentions
-                  FROM entity_profiles ep
-                  LEFT JOIN signal_entity_links sel ON sel.entity_id = ep.id
-                 WHERE ep.id = $1
-                 GROUP BY ep.id
-                """,
-                entity_id,
-            )
+            if as_uuid is not None:
+                node_row = await conn.fetchrow(node_sql.format(pred="ep.id = $1"), as_uuid)
+            else:
+                node_row = await conn.fetchrow(
+                    node_sql.format(pred="lower(ep.canonical_name) = lower($1)"), entity_id,
+                )
             if node_row is None:
                 from fastapi import HTTPException, status
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="entity not found")
             node = _node(node_row)
+            resolved_id = node_row["id"]  # the actual UUID, for the signals join below
             sig_rows = await conn.fetch(
                 """
                 SELECT s.id, s.payload->>'title' AS title, s.source_id,
@@ -235,7 +246,7 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
                  ORDER BY s.fetched_at DESC
                  LIMIT $2
                 """,
-                entity_id, signal_limit,
+                resolved_id, signal_limit,
             )
             signals = [
                 EntitySignalRef(
