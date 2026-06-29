@@ -45,6 +45,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,39 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Workflow I/O dataclasses (shared with workflow.py + client.py)
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class TrainingSetRef:
+    """A small re-fetchable handle to the GEPA training set.
+
+    PAYLOAD-SIZE FIX (pass-by-reference)
+    ------------------------------------
+    The training set is up to ``MAX_TRAINING_ROWS`` (500) joined
+    trace+critique rows, each carrying ~8 KiB of ``input``/``gold`` text —
+    inlining the whole list into :class:`OptimizerWorkflowInput` and
+    serializing it across the Dapr Workflow internal gRPC channel blows the
+    default 4 MB message cap (``RESOURCE_EXHAUSTED: message larger than max
+    4234332 vs 4194304``), so the orchestrator never resumes and the stuck
+    workflow leaks orphan actor reminders. Instead of the rows, the input
+    carries THIS small reference; the workflow worker re-materializes the
+    identical rows inside the compile activity (mirroring deep_consult's
+    ``resolve_*_stage_deps`` — the worker has substrate access) via
+    :func:`materialize_training_set`.
+
+    The fields are exactly the parameters
+    :func:`legba.data.analysts.optimizer.read_traces_and_critiques` keys on
+    PLUS ``until_ts`` (the original read's wall-clock instant) to pin the
+    recent end of the read window — so the re-fetch returns the byte-for-byte
+    same row set even though traces may have landed in between (see that
+    function's window-anchoring note). All JSON-serializable.
+    """
+
+    analyzed_analyst_id: str
+    analyzed_analyst_version: str | None = None
+    read_window_days: int = 30
+    limit: int = 500
+    until_ts: str | None = None  # ISO-8601; the original read's wall clock
 
 
 @dataclass
@@ -69,11 +103,26 @@ class OptimizerWorkflowInput:
     analyst_version: str
     parent_prompt_module_path: str
 
-    # Training set — serialized rows the worker fetches into Examples.
-    # Each row carries the joined trace+critique fields the workflow
-    # needs to score candidates.  Lists of dicts because workflow inputs
-    # must be JSON-serializable.
+    # Training set — the GEPA loop consumes ``training_set`` (list of joined
+    # trace+critique row dicts).  TWO ways it gets populated:
+    #
+    #   * PASS-BY-REFERENCE (production Dapr-Workflow path): the runtime
+    #     leaves ``training_set`` EMPTY and supplies ``training_set_ref`` — a
+    #     small re-fetch handle. The workflow worker calls
+    #     :func:`materialize_training_set` inside the compile activity to
+    #     re-fetch the identical rows. This keeps the serialized input well
+    #     under Dapr's 4 MB gRPC message cap (the bug this fixes — inlining
+    #     ~500 × ~8 KiB rows overflowed it and wedged the orchestrator).
+    #
+    #   * INLINE (in-process fallback + tests): ``training_set`` carries the
+    #     rows directly (no gRPC hop, no size limit). ``training_set_ref`` is
+    #     None and the loop uses the inlined rows as-is.
+    #
+    # The loop reads ``training_set`` either way; the activity is responsible
+    # for hydrating it from the ref BEFORE the loop runs. Lists of dicts
+    # because workflow inputs must be JSON-serializable.
     training_set: list[dict[str, Any]] = field(default_factory=list)
+    training_set_ref: TrainingSetRef | None = None
 
     # GEPA hyperparameters per L-105 §4.  Defaults are the per-2026-05-16
     # ratified values; descriptors override via ``eval.optimizer`` dict.
@@ -96,6 +145,15 @@ class OptimizerWorkflowInput:
     # Per-2026-05-16 decision: 50 GT rows default per analyst.
     min_traces_required: int = 50
     min_critiques_required: int = 0
+
+    def __post_init__(self) -> None:
+        # ``OptimizerWorkflowInput(**wf_input)`` (workflow.py rehydrates the
+        # activity payload this way) and ``dataclasses.asdict`` (the client
+        # serializes this way) flatten the nested ``TrainingSetRef`` to a
+        # plain dict on the round-trip. Coerce it back so worker-side code
+        # can read ``ref.analyzed_analyst_id`` rather than ``ref["..."]``.
+        if isinstance(self.training_set_ref, dict):
+            self.training_set_ref = TrainingSetRef(**self.training_set_ref)
 
 
 @dataclass
@@ -211,6 +269,109 @@ def build_default_client(*, force_in_process: bool = False) -> Any:
     :class:`InProcessWorkflowClient`.
     """
     return InProcessWorkflowClient()
+
+
+# ---------------------------------------------------------------------------
+# Training-set materialization — the worker-side re-fetch (pass-by-reference)
+# ---------------------------------------------------------------------------
+
+
+async def materialize_training_set(
+    workflow_input: OptimizerWorkflowInput,
+) -> OptimizerWorkflowInput:
+    """Hydrate ``workflow_input.training_set`` from its small reference.
+
+    PASS-BY-REFERENCE re-fetch.  When the runtime dispatched the workflow it
+    left ``training_set`` empty and carried only a :class:`TrainingSetRef`
+    (so the serialized input stays well under Dapr's 4 MB gRPC cap — the bug
+    this fixes).  The workflow worker calls THIS inside the compile +
+    validate activities to pull the IDENTICAL rows back out of the substrate
+    — exactly mirroring how deep_consult's activities call
+    ``resolve_deep_consult_stage_deps`` to do their I/O inside the activity.
+
+    Single source of truth for the row shape: it re-runs the kind's own
+    :func:`legba.data.analysts.optimizer.read_traces_and_critiques` (window
+    pinned via ``until_ts``) and projects with the kind's own
+    ``_shape_training_set`` — the SAME two functions the runtime used to build
+    the rows it would otherwise have inlined — so the worker-side training set
+    is byte-for-byte equivalent to the inline path (same rows, same order,
+    same per-field truncation).
+
+    Returns the SAME ``workflow_input`` with ``training_set`` filled and
+    ``training_set_ref`` cleared (so a downstream re-entry can't double-fetch).
+    No-ops (returns the input untouched) when:
+
+      * there's no ref (the inline / in-process path — ``training_set`` is
+        already populated), or
+      * ``training_set`` is already non-empty (idempotent — validate may have
+        materialized it before compile runs), or
+      * the ref can't be resolved to a substrate pool (degrades to the empty-
+        training path, which the loop already handles as a noop candidate).
+    """
+    ref = workflow_input.training_set_ref
+    if ref is None or workflow_input.training_set:
+        return workflow_input
+
+    pg_store = None
+    try:
+        from ...data.postgres import PostgresStore
+        from ...data.analysts.optimizer import (
+            _shape_training_set,
+            read_traces_and_critiques,
+        )
+
+        until_ts: datetime | None = None
+        if ref.until_ts:
+            try:
+                until_ts = datetime.fromisoformat(ref.until_ts)
+            except ValueError:
+                logger.warning(
+                    "optimizer.materialize.bad_until_ts value=%r — "
+                    "falling back to NOW() window",
+                    ref.until_ts,
+                )
+
+        pg_store = PostgresStore.from_env()
+        await pg_store.connect()
+        async with pg_store.pool.acquire() as conn:
+            rows = await read_traces_and_critiques(
+                conn,
+                analyzed_analyst_id=str(ref.analyzed_analyst_id),
+                analyzed_analyst_version=(
+                    str(ref.analyzed_analyst_version)
+                    if ref.analyzed_analyst_version
+                    else None
+                ),
+                read_window_days=int(ref.read_window_days),
+                limit=int(ref.limit),
+                until_ts=until_ts,
+            )
+        workflow_input.training_set = _shape_training_set(rows)
+        workflow_input.training_set_ref = None
+        logger.info(
+            "optimizer.materialize.ok analyst=%s rows=%d until_ts=%s",
+            ref.analyzed_analyst_id, len(workflow_input.training_set),
+            ref.until_ts,
+        )
+    except Exception as exc:  # noqa: BLE001 — never wedge the activity
+        # A re-fetch failure must NOT crash the workflow (that would re-create
+        # the silent-death class). Leave training_set empty → the loop returns
+        # the noop_empty_training candidate, which the kind records as a
+        # visible audit row.
+        logger.warning(
+            "optimizer.materialize.failed analyst=%s err=%r — "
+            "proceeding with empty training set (noop candidate)",
+            getattr(ref, "analyzed_analyst_id", "?"), exc,
+        )
+        workflow_input.training_set = []
+        workflow_input.training_set_ref = None
+    finally:
+        if pg_store is not None:
+            try:
+                await pg_store.close()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
+    return workflow_input
 
 
 # ---------------------------------------------------------------------------
@@ -949,7 +1110,12 @@ async def run_optimizer_in_process(
     Validates the training set up front — under-trained analysts
     short-circuit with a zero-delta result (the kind module's
     promotion gate filters these out downstream).
+
+    Production routes inline rows here (the in-process fallback has no gRPC
+    hop), but honour a ``training_set_ref`` too: re-materialize it first so
+    this path is correct regardless of how the input was shaped.
     """
+    workflow_input = await materialize_training_set(workflow_input)
     validation = await validate_training_set_activity(workflow_input)
     if not validation.get("ok"):
         return OptimizerWorkflowResult(
@@ -973,8 +1139,10 @@ __all__ = [
     "OptimizerWorkflowInput",
     "OptimizerWorkflowResult",
     "StubWorkflowHandle",
+    "TrainingSetRef",
     "WorkflowHandleLike",
     "build_default_client",
+    "materialize_training_set",
     "run_optimizer_in_process",
     "validate_training_set_activity",
 ]

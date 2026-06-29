@@ -216,6 +216,16 @@ class DaprOptimizerWorkflowClient:
                 "dapr-ext-workflow or set LEGBA_OPTIMIZER_IN_PROCESS=1 "
                 "to use the in-process fallback path",
             )
+        # Fix #1 channel-side note: ``dapr.ext.workflow.DaprWorkflowClient``
+        # builds its underlying durabletask gRPC channel EAGERLY in __init__
+        # and exposes no ``channel_options`` parameter, so (unlike the worker,
+        # whose channel is lazy at start() — see worker._raise_worker_grpc_limit)
+        # there is no clean seam to raise this client's gRPC message cap without
+        # rebuilding a private channel. We deliberately DON'T poke the private
+        # here: the client only SENDS the (now tiny, pass-by-reference) workflow
+        # input and RECEIVES the small result dict — neither approaches 4 MB once
+        # the training rows are no longer inlined. The daprd ``-max-body-size``
+        # flag (docker-compose) remains the supported sidecar-side guardrail.
         self._client = DaprWorkflowClient(
             host=self._config.host, port=self._config.port,
         )
