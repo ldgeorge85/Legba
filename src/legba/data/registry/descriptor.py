@@ -567,6 +567,22 @@ class DescriptorRegistry:
                 )
                 return await self._fetch_row(family, descriptor_id, new_hash)
 
+            # Content-addressable idempotency: the recomputed hash may already
+            # exist as a PRIOR (is_head=false) version. The canonical case is a
+            # round-trip transition — active → paused → active recomputes the
+            # ORIGINAL active hash (state is part of content_hash), and that row
+            # is still present. Re-INSERTing that (descriptor_id, version) PK
+            # would raise UniqueViolation → HTTP 500. Instead SHIFT THE HEAD
+            # POINTER to the existing version (same mechanic as rollback/promote
+            # via _set_head). No INSERT, no _sync_ui_panels rebuild (the row's
+            # panels already exist from when it was first written).
+            existing = await conn.fetchrow(
+                f"SELECT version FROM {family.table} "
+                f"WHERE descriptor_id = $1 AND version = $2",
+                descriptor_id,
+                new_hash,
+            )
+
             # Demote the prior head.
             await conn.execute(
                 f"UPDATE {family.table} SET is_head = false "
@@ -574,10 +590,22 @@ class DescriptorRegistry:
                 descriptor_id,
                 from_version,
             )
-            await self._insert_row(conn, family, new_descriptor, new_hash, body)
+            if existing is not None:
+                # Re-promote the existing version as head (its body/state are
+                # already correct — they ARE the content hash we recomputed).
+                await conn.execute(
+                    f"UPDATE {family.table} SET is_head = true "
+                    f"WHERE descriptor_id = $1 AND version = $2",
+                    descriptor_id,
+                    new_hash,
+                )
+            else:
+                await self._insert_row(conn, family, new_descriptor, new_hash, body)
             # L-192: refresh the UI panel registrations. With
             # retire_prior_versions=True (the default), this also retires
-            # any active panel rows owned by the prior content-hash.
+            # any active panel rows owned by the prior content-hash. Idempotent
+            # for the head-shift branch (retires the demoted head's panels,
+            # re-asserts the restored version's).
             await self._sync_ui_panels(
                 conn,
                 family=family,
@@ -588,6 +616,8 @@ class DescriptorRegistry:
             change_summary = _diff_summary(
                 _json_loads_maybe(head["body"]), body
             )
+            if existing is not None:
+                change_summary = {**change_summary, "head_shift": True}
             await self._write_audit(
                 conn,
                 action="update",

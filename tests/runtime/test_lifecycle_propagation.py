@@ -64,6 +64,10 @@ class FakeProxy:
         self._calls.append((self._actor_id, "pause"))
         return {"lifecycle": PAUSED}
 
+    async def resume(self) -> dict:
+        self._calls.append((self._actor_id, "resume"))
+        return {"lifecycle": ACTIVE}
+
     async def retire(self) -> dict:
         self._calls.append((self._actor_id, "retire"))
         return {"lifecycle": RETIRED}
@@ -464,6 +468,34 @@ async def test_g1_lost_pause_reasserts_on_resync() -> None:
     assert action.kind == ActionKind.TRANSITION_LIFECYCLE
     assert h.store.rows[aid].lifecycle == PAUSED
     assert h.proxy_calls == [(aid, "pause")]
+
+
+@pytest.mark.asyncio
+async def test_resume_paused_to_active_routes_to_resume() -> None:
+    # The inverse of the pause path: observed PAUSED, head flipped back to
+    # ACTIVE → TRANSITION(to=active, from=paused). The executor must route to
+    # proxy.resume() (which re-registers the cadence reminder pause tore down)
+    # — NOT a bare activate — and re-remember the analyst as live so reactive
+    # fires dispatch again.
+    h = Harness()
+    aid = _default_actor_id("analyst", "an_x", "a" * 64)
+    h.store.rows[aid] = ActorStateRecord(
+        actor_id=aid, actor_kind="analyst", descriptor_id="an_x",
+        descriptor_version="a" * 64, lifecycle=PAUSED,
+    )
+    desired = {
+        "an_x": DesiredState(
+            descriptor_id="an_x", descriptor_kind="analyst",
+            descriptor_version="a" * 64, lifecycle_target=ACTIVE,
+        ),
+    }
+    action = await _loop_for(h, desired).run_once("an_x")
+    assert action.kind == ActionKind.TRANSITION_LIFECYCLE
+    assert action.detail["from"] == PAUSED
+    assert action.detail["to"] == ACTIVE
+    assert h.proxy_calls == [(aid, "resume")]
+    assert h.store.rows[aid].lifecycle == ACTIVE
+    assert h.remembered == [("an_x", aid)]      # back in the live-set
 
 
 def test_g1_reconcilable_states_include_non_active_exclude_pre_activation() -> None:

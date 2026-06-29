@@ -399,6 +399,59 @@ async def test_target_promote_and_rollback(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_transition_round_trip_is_idempotent(
+    registry_no_nats: DescriptorRegistry,
+):
+    """active → paused → active must NOT 500 on the second transition.
+
+    State is part of content_hash, so the active→active round-trip recomputes
+    the ORIGINAL active version, which is still present as a prior row. The fix
+    SHIFTs the head pointer to that existing version instead of re-INSERTing the
+    (descriptor_id, version) PK (which raised UniqueViolationError → HTTP 500
+    live). Head ends ACTIVE on the original version; no duplicate row.
+    """
+    reg = registry_no_nats
+    desc_id = f"t_rt_{uuid4().hex[:8]}"
+    active_v = await reg.register(
+        _draft_target(descriptor_id=desc_id, state=LifecycleState.ACTIVE),
+        actor="lewis@local",
+    )
+    assert active_v.state == "active"
+
+    def _restamp(row_state: LifecycleState) -> TargetDescriptor:
+        # Mirror api.transition_descriptor: re-stamp identity.state then update.
+        # The body/sources differ between active+paused only by the state stamp,
+        # so the active hash is reproducible on the way back.
+        return _draft_target(descriptor_id=desc_id, state=row_state)
+
+    # active → paused (mints/inserts a NEW paused version, head shifts).
+    paused = await reg.update(
+        desc_id, _restamp(LifecycleState.PAUSED), actor="lewis@local",
+    )
+    assert paused.state == "paused"
+    assert paused.version != active_v.version
+
+    # paused → active: recomputes the ORIGINAL active hash, which already
+    # exists. Pre-fix this raised UniqueViolationError (asyncpg) → 500.
+    re_active = await reg.update(
+        desc_id, _restamp(LifecycleState.ACTIVE), actor="lewis@local",
+    )
+    assert re_active.state == "active"
+    # Head is back on the ORIGINAL active version — no new row minted.
+    assert re_active.version == active_v.version
+    assert re_active.is_head is True
+
+    # History holds exactly the two distinct versions (active + paused); the
+    # round-trip did NOT insert a third (duplicate) active row.
+    history = await reg.query_history(desc_id, family=Family.TARGET)
+    versions = {r.version for r in history}
+    assert versions == {active_v.version, paused.version}
+    heads = [r for r in history if r.is_head]
+    assert len(heads) == 1 and heads[0].version == active_v.version
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_target_get_typed_returns_pydantic_model(
     registry_no_nats: DescriptorRegistry,
 ):

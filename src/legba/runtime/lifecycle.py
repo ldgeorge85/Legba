@@ -59,6 +59,22 @@ _TRANSITIONS: dict[tuple[str, LifecycleEvent], str] = {
 # `error` is reachable from ANY non-retired state on an ERROR event.
 _ERROR_REACHABLE = {DRAFT, CONFIGURED, ACTIVE, PAUSED}
 
+# The state a given event drives TOWARD, used only to recognise a no-op
+# (the actor is already in/at the event's target state). This is a pure
+# same-state idempotency map — it does NOT add any new edges to
+# `_TRANSITIONS`; a genuinely-illegal cross-state move (e.g. draft -> RETIRE)
+# still raises. Kept separate from `_TRANSITIONS` so the real transition
+# table stays authoritative for actual state changes.
+_EVENT_TARGET: dict[LifecycleEvent, str] = {
+    LifecycleEvent.CONFIGURE: CONFIGURED,
+    LifecycleEvent.ACTIVATE: ACTIVE,
+    LifecycleEvent.PAUSE: PAUSED,
+    LifecycleEvent.RESUME: ACTIVE,
+    LifecycleEvent.RETIRE: RETIRED,
+    LifecycleEvent.ERROR: ERROR,
+    LifecycleEvent.RESET: CONFIGURED,
+}
+
 
 class IllegalTransition(Exception):
     """Raised when (from_state, event) has no defined target."""
@@ -129,6 +145,37 @@ class LifecycleFSM:
         self.state = target
         self.history.append(rec)
         return rec
+
+    def is_noop(self, event: LifecycleEvent) -> bool:
+        """True if the current state already equals `event`'s target state.
+
+        Used by the actor lifecycle methods (and the reconcile-driven paths)
+        to make same-state transitions idempotent — invoking `retire` on an
+        already-retired actor, `pause` on a paused one, or `activate`/`resume`
+        on an active one is a no-op, NOT an :class:`IllegalTransition`. This
+        does not relax the FSM for real cross-state moves: an event whose
+        target differs from the current state still routes through
+        :meth:`transition` and raises if illegal.
+        """
+        return self.state == _EVENT_TARGET.get(event)
+
+    def transition_idempotent(
+        self,
+        event: LifecycleEvent,
+        *,
+        initiated_by: str = "system",
+        detail: str = "",
+    ) -> Transition | None:
+        """Apply `event`, no-op'ing when already at the target state.
+
+        Returns the :class:`Transition` on a real state change, or ``None``
+        when the actor was already in the event's target state (idempotent
+        no-op). A genuinely-illegal transition (no edge AND not same-state)
+        still raises :class:`IllegalTransition`.
+        """
+        if self.is_noop(event):
+            return None
+        return self.transition(event, initiated_by=initiated_by, detail=detail)
 
     def legal_events(self) -> Iterable[LifecycleEvent]:
         """Yield the events that are legal from the current state."""
