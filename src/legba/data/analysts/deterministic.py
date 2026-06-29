@@ -71,6 +71,7 @@ from .deterministic_handlers import (
     cross_source_dedup,
     entity_gc,
     entity_resolution,
+    fact_contention_arbiter,
     fact_decay,
     finding_supersession,
     hypothesis_lifecycle,
@@ -142,6 +143,10 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     "entity_gc": TRACE_ONLY,
     "entity_resolution": TRACE_ONLY,
     "fact_decay": TRACE_ONLY,
+    # Holes-B contested-claims arbiter (#101) — DETECT-ONLY. Its real product is
+    # side-written (the fact_contention* sidecar + the facts marker columns); the
+    # per-run counts (groups open / abstained / junk-excluded) live in the trace.
+    "fact_contention_arbiter": TRACE_ONLY,
     "nexus_decay": TRACE_ONLY,
     # P-09 cross-source dedup (PIVOT §4.3 / P-02) — links/marks duplicate
     # signals; the dedup counts live in the trace.
@@ -179,6 +184,9 @@ SUB_HANDLERS: dict[str, Any] = {
     "entity_gc": entity_gc.handle,
     "entity_resolution": entity_resolution.handle,
     "fact_decay": fact_decay.handle,
+    # Holes-B contested-claims arbiter (#101, DETECT-ONLY) — builds the
+    # fact_contention* sidecar + stamps the facts markers; never closes a fact.
+    "fact_contention_arbiter": fact_contention_arbiter.handle,
     "nexus_decay": nexus_decay.handle,
     # P-09 cross-source dedup (PIVOT §4.3 / P-02)
     "cross_source_dedup": cross_source_dedup.handle,
