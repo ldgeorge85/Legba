@@ -803,6 +803,7 @@ async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
         "abstained": 0,
         "junk_excluded": 0,
         "llm_tiebreaks": 0,
+        "llm_tiebreak_calls": 0,
     }
     now = _now()
     llm_tiebreaks_left = MAX_LLM_TIEBREAKS if llm is not None else 0
@@ -839,8 +840,19 @@ async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
                 and _abstain_cause(non_junk, scores) == "near_tie"
             ):
                 llm_tiebreaks_left -= 1
+                counts["llm_tiebreak_calls"] += 1
                 llm_winner = await _llm_tiebreak(
                     llm, subject_key, predicate_key, non_junk, scores, now,
+                )
+                # Observable BOTH ways: a near-tie that consults the LLM logs
+                # here even when the LLM ABSTAINS (returns None) — so "consulted
+                # + abstained" is never mistaken for "never consulted" (the
+                # ``llm_tiebreaks`` receipt counts only SUCCESSFUL picks).
+                logger.info(
+                    "fact_contention_arbiter.llm_tiebreak subject=%r predicate=%r "
+                    "outcome=%s",
+                    subject_key, predicate_key,
+                    f"pick:{llm_winner.value_key}" if llm_winner is not None else "abstain",
                 )
                 if llm_winner is not None:
                     winner = llm_winner
@@ -883,7 +895,8 @@ def _build_finding(counts: Mapping[str, int], target_id: str | None) -> FindingP
         f"values_total={counts['values_total']}\n"
         f"abstained={counts['abstained']}\n"
         f"junk_excluded={counts['junk_excluded']}\n"
-        f"llm_tiebreaks={counts.get('llm_tiebreaks', 0)}"
+        f"llm_tiebreaks={counts.get('llm_tiebreaks', 0)}\n"
+        f"llm_tiebreak_calls={counts.get('llm_tiebreak_calls', 0)}"
     )
     tags = ["deterministic", "fact_contention_arbiter", "detect_only"]
     if counts["groups_open"]:
@@ -929,6 +942,7 @@ async def handle(
         "abstained": 0,
         "junk_excluded": 0,
         "llm_tiebreaks": 0,
+        "llm_tiebreak_calls": 0,
     }
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is not None:

@@ -266,6 +266,10 @@ def test_stub_abstain_reply_keeps_abstain(monkeypatch):
     conn, counts = _run(_near_tie_rows(), llm)
     assert len(llm.calls) == 1
     assert counts["llm_tiebreaks"] == 0
+    # Observability: the LLM WAS consulted (one call) even though it abstained,
+    # so ``llm_tiebreak_calls`` separates "consulted + abstained" from "never
+    # consulted" — the ``llm_tiebreaks`` (successful-pick) counter alone hides it.
+    assert counts["llm_tiebreak_calls"] == 1
     assert counts["abstained"] == 1
     assert _surfaced_winner_keys(conn) == []
 

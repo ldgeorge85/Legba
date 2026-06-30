@@ -363,6 +363,53 @@ async def test_deterministic_builds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deterministic_wires_llm_tiebreak_when_flag_on(monkeypatch) -> None:
+    """Wave 2b (#101): flag ON + method.llm.primary -> the self-hosted vLLM
+    tie-break handler is injected into kind_deps.extras AND survives the run-time
+    resolve in fact_contention_arbiter.handle()."""
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION_LLM_TIEBREAK", "1")
+    descriptor = AnalystDescriptor(
+        identity=_identity(AnalystKind.DETERMINISTIC),
+        subscription=SubscriptionBlock(),
+        mapping=MappingBlock(),
+        method=MethodBlock(
+            kind="deterministic",
+            impl="legba.data.analysts.deterministic.run_method",
+            llm=_llm_block(),
+        ),
+        cadence=CadenceBlock(fallback_schedule="0 0 1 1 *"),
+    )
+    llm = _StubLLMHandler()
+    run_method, kind_deps, *_ = await build_analyst_run_method(
+        descriptor,
+        deps=_standard_deps(),
+        registry_client=RegistryHTTPClient(base_url="http://invalid"),
+        pg_pool=object(),  # type: ignore[arg-type]
+        llm_handler_factory=AsyncMock(return_value=llm),
+    )
+    from legba.data.analysts.deterministic_handlers.fact_contention_arbiter import (
+        LLM_DEPS_EXTRA_KEY,
+        _resolve_tiebreak_llm,
+    )
+    # (1) the build injected the handler into the kind_deps extras
+    assert kind_deps.extras.get(LLM_DEPS_EXTRA_KEY) is llm
+    # (2) the handler survives the actor's run-time resolve (flag still ON)
+    assert _resolve_tiebreak_llm(kind_deps) is llm
+    # (3) the handler survives storage in the Pydantic _AnalystDeps bundle the
+    #     actor caches + dispatches from (the live-specific hop: Any-typed
+    #     kind_deps must not be copied/stripped by Pydantic).
+    from legba.runtime.dapr_actors import _AnalystDeps
+
+    bundle = _AnalystDeps(
+        descriptor=descriptor,
+        deps=_standard_deps(),
+        run_method=run_method,
+        kind_deps=kind_deps,
+    )
+    assert _resolve_tiebreak_llm(bundle.kind_deps) is llm
+
+
+@pytest.mark.asyncio
 async def test_predictor_builds_with_llm() -> None:
     descriptor = _llm_descriptor(
         AnalystKind.PREDICTOR, method_kind="stat_forecaster",
