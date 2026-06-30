@@ -77,7 +77,8 @@ export interface ContentionView {
   isLive: boolean
   /** The arbiter's current winner value, or null when it ABSTAINED. */
   surfacedValue: string | null
-  /** Distinct NON-junk competing values (the "N sources disagree" N). */
+  /** Distinct NON-junk competing VALUE clusters (the "N competing values" N).
+   *  NOT a source count — distinct sources are a per-value field. */
   valueCount: number
   /** Junk-gated clusters excluded from the dispute (operator-reportable). */
   junkCount: number
@@ -156,6 +157,22 @@ export function toContentions(rows: ContentionRow[]): ContentionView[] {
 export function contentionForFact(page: ContentionPage | undefined): ContentionView | null {
   const first = page?.data?.[0]
   return first ? toContention(first) : null
+}
+
+/** Pick the dispute to surface for a subject-keyed lookup (the Claims view
+ *  fetches `?subject=<lowercased>`, which can return ONE group per disputed
+ *  predicate on that subject). With no fact id in hand we surface the first
+ *  LIVE group (contested / surfaced) — i.e. the badge lights up iff the
+ *  subject has at least one live dispute. Returns null when none is live. */
+export function contentionForSubject(
+  page: ContentionPage | undefined,
+): ContentionView | null {
+  const rows = page?.data ?? []
+  for (const row of rows) {
+    const view = toContention(row)
+    if (view.isLive) return view
+  }
+  return null
 }
 
 /** A compact one-line badge label for a contested fact. */

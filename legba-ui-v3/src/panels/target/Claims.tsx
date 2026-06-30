@@ -21,6 +21,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
+import ContestedBadge from '@/v4/components/ContestedBadge'
 import { apiGet, ApiError } from '@/lib/api'
 import type { PanelProps } from '@/types'
 import { cn } from '@/lib/cn'
@@ -268,6 +269,13 @@ function ClaimItem({
       {expanded && (
         <div className="ml-4 mt-1 p-2 bg-surface-50/40 rounded text-xs space-y-2">
           {c.body && <div className="text-slate-300">{c.body}</div>}
+
+          {/* #101 contested-claims surface. Findings carry no real `facts.id`,
+              so we look the dispute up by the claim's subject (statement),
+              lower-cased server-side via `?subject=`. Renders nothing when the
+              subject has no live dispute (the common case → zero noise). */}
+          <ContestedBadge subject={c.statement} />
+
 
           {tags.length > 0 && (
             <div className="flex flex-wrap gap-1" data-testid={`target-claim-tags-${c.id}`}>

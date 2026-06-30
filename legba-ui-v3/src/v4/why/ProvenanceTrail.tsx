@@ -31,6 +31,7 @@ import type { LineageNode, LineageReport } from '@/lib/graphModel'
 import { useSelection, type Selection, type SelectionKind } from '@/state/selection'
 import type { ProvenanceRef } from './types'
 import ProvenanceChip from '@/v4/components/ProvenanceChip'
+import ContestedBadge from '@/v4/components/ContestedBadge'
 
 /** Selection kinds that map to a lineage-walkable substrate row.
  *  `signal` is not a `SelectionKind` per se but the lineage API + the chips
@@ -242,6 +243,15 @@ export default function ProvenanceTrail({ selection }: ProvenanceTrailProps) {
           </div>
         ))}
       </div>
+
+      {/* #101 contested-claims surface: any trail step that IS a fact carries a
+          true `facts.id`, so we can precisely look up whether that fact belongs
+          to a live dispute. Renders nothing when uncontested (the common case). */}
+      {steps
+        .filter((step) => step.node.row_kind === 'fact')
+        .map((step) => (
+          <ContestedBadge key={`contested-${step.node.id}`} factId={step.node.id} />
+        ))}
 
       {hardError && (
         <p className="text-[10px] text-slate-500">

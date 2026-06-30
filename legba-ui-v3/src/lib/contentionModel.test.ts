@@ -3,6 +3,7 @@ import {
   toContention,
   toContentions,
   contentionForFact,
+  contentionForSubject,
   badgeLabel,
   type ContentionRow,
   type ContentionValueRow,
@@ -139,12 +140,43 @@ describe('contentionForFact', () => {
   })
 })
 
+describe('contentionForSubject', () => {
+  it('surfaces the first LIVE group from a subject page', () => {
+    const view = contentionForSubject({
+      data: [
+        group({ id: 'collapsed-1', status: 'collapsed' }),
+        group({ id: 'live-1', status: 'contested', surfaced_value: null }),
+      ],
+      next_cursor: null,
+    })
+    expect(view?.id).toBe('live-1')
+    expect(view?.isLive).toBe(true)
+  })
+  it('returns null when no group on the subject is live', () => {
+    expect(
+      contentionForSubject({
+        data: [group({ status: 'collapsed' })],
+        next_cursor: null,
+      }),
+    ).toBeNull()
+  })
+  it('returns null for an empty / missing page (uncontested subject)', () => {
+    expect(contentionForSubject({ data: [], next_cursor: null })).toBeNull()
+    expect(contentionForSubject(undefined)).toBeNull()
+  })
+})
+
 describe('badgeLabel', () => {
   it('labels a surfaced dispute by value count', () => {
     expect(badgeLabel(toContention(group()))).toBe('Contested — 2 values')
   })
   it('labels an abstained dispute as no-winner', () => {
-    const v = toContention(group({ status: 'contested', surfaced_value: null }))
+    const v = toContention(group({
+      status: 'contested',
+      surfaced_value: null,
+      values: [value({ value_key: 'alpha', surfaced_winner: false }),
+               value({ value_key: 'beta', surfaced_winner: false, arbiter_score: 0.4 })],
+    }))
     expect(badgeLabel(v)).toBe('Contested — 2 values, no winner')
   })
 })

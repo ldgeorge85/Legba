@@ -2,41 +2,55 @@
  * ContestedBadge — the contested-claim surface (Holes-B Wave 5, #101).
  *
  * Makes the already-populated `fact_contention` sidecar VISIBLE on the fact /
- * Why provenance view. Given a `factId` (a `facts.id`) it fetches the dispute
- * that fact belongs to (`GET /api/v1/contention?fact_id=…` → 0 or 1 group) and,
- * when the fact is contested, renders:
+ * Why provenance view AND on the findings-backed Claims panel. It looks the
+ * dispute up by EITHER:
+ *
+ *   * `factId` — a true `facts.id` (e.g. a lineage node whose `row_kind` is
+ *     `fact`). Precise: `GET /api/v1/contention?fact_id=…` → 0 or 1 group; OR
+ *   * `subject` — a lower-cased subject string (e.g. a finding statement). The
+ *     Claims/findings views render FINDINGS, which carry NO real `facts.id`,
+ *     so the only handle there is the subject: `?subject=<lowercased>` → 0..N
+ *     groups (one per disputed predicate); we surface the first LIVE one.
+ *
+ * When the claim is contested it renders:
  *
  *   * a small "Contested" badge (or "Contested — no winner" when the arbiter
  *     ABSTAINED on a near-tie), and
- *   * a per-value SUPPORT PANEL: each competing value with its distinct-source
- *     count, its share of the group's source-credibility, the arbiter score,
- *     and a surfaced-winner flag — so the operator sees WHY one value was
- *     surfaced over the others (or why none was).
+ *   * a per-value SUPPORT PANEL: each competing VALUE cluster with its
+ *     distinct-source count, its share of the group's source-credibility, the
+ *     arbiter score, and a surfaced-winner flag — so the operator sees WHY one
+ *     value was surfaced over the others (or why none was).
  *
- * Self-contained: it owns its own query, renders nothing when the fact is not
- * contested (the common case), and reads through the pure, unit-tested
- * `@/lib/contentionModel` — no DOM math here. Read-only: it never mutates a
- * fact, a group, or a marker.
+ * Self-contained: it owns its own query, renders nothing when the claim is not
+ * contested (the common case → zero visual noise), and reads through the pure,
+ * unit-tested `@/lib/contentionModel` — no DOM math here. Read-only: it never
+ * mutates a fact, a group, or a marker. A LOOKUP FAILURE (5xx) is NOT silently
+ * masked as "uncontested" — it shows a subtle, non-intrusive affordance.
  *
- * INTEGRATION: drop `<ContestedBadge factId={fact.id} />` next to a rendered
- * fact line / claim row in the Why provenance view (or the Claims panel). A
- * `subject`/`predicate` variant can fetch `?subject=` instead when no fact id
- * is in hand; here we use the precise `fact_id` lookup.
+ * INTEGRATION: in the Why provenance trail, drop `<ContestedBadge factId={…} />`
+ * on a lineage node with `row_kind === 'fact'`; in the Claims panel (findings,
+ * no fact id), use `<ContestedBadge subject={claim.statement} />`.
  */
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, AlertCircle } from 'lucide-react'
 import { apiGet, ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import {
   contentionForFact,
+  contentionForSubject,
   badgeLabel,
   type ContentionPage,
+  type ContentionView,
   type ContentionValueView,
 } from '@/lib/contentionModel'
 
 interface ContestedBadgeProps {
-  /** The `facts.id` whose dispute to surface. */
-  factId: string
+  /** The `facts.id` whose dispute to surface (precise lookup). Mutually
+   *  exclusive with `subject`; `factId` wins if both are given. */
+  factId?: string
+  /** The claim subject to surface a dispute for, when no fact id is in hand
+   *  (e.g. a finding statement). Lower-cased before the `?subject=` lookup. */
+  subject?: string
   /** Render the per-value support panel inline (default true). When false,
    *  only the compact badge shows (e.g. in a dense list). */
   showPanel?: boolean
@@ -87,32 +101,18 @@ function ValueRow({ v }: { v: ContentionValueView }) {
   )
 }
 
-export default function ContestedBadge({
-  factId,
-  showPanel = true,
+/** The contested-claim presentation, shared by both lookup paths. */
+function ContestedView({
+  view,
+  showPanel,
   className,
-}: ContestedBadgeProps) {
-  const { data, error } = useQuery<ContentionPage>({
-    queryKey: ['contention-for-fact', factId],
-    enabled: Boolean(factId),
-    queryFn: () =>
-      apiGet<ContentionPage>(`/contention?fact_id=${encodeURIComponent(factId)}`),
-  })
-
-  // A 404 / uncontested fact is the normal case — render nothing.
-  if (error) {
-    if (error instanceof ApiError && error.status === 404) return null
-    return null
-  }
-
-  const view = contentionForFact(data)
-  if (!view || !view.isLive) return null
-
+}: {
+  view: ContentionView
+  showPanel: boolean
+  className?: string
+}) {
   return (
-    <div
-      className={cn('flex flex-col gap-1', className)}
-      data-testid="contested-badge"
-    >
+    <div className={cn('flex flex-col gap-1', className)} data-testid="contested-badge">
       <span
         className={cn(
           'inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold',
@@ -122,8 +122,8 @@ export default function ContestedBadge({
         )}
         title={
           view.abstained
-            ? 'Sources disagree and the arbiter surfaced no winner — treat as unresolved.'
-            : `Sources disagree on ${view.subjectKey} ${view.predicateKey}; the arbiter surfaced a winner.`
+            ? `Competing values on ${view.subjectKey} ${view.predicateKey} disagree and the arbiter surfaced no winner — treat as unresolved.`
+            : `Competing values on ${view.subjectKey} ${view.predicateKey}; the arbiter surfaced a winner.`
         }
       >
         <AlertTriangle className="h-3 w-3" aria-hidden />
@@ -139,4 +139,58 @@ export default function ContestedBadge({
       )}
     </div>
   )
+}
+
+export default function ContestedBadge({
+  factId,
+  subject,
+  showPanel = true,
+  className,
+}: ContestedBadgeProps) {
+  // factId wins when both are supplied (the precise lookup).
+  const byFact = Boolean(factId)
+  const subjectKey = subject?.trim().toLowerCase() ?? ''
+  const enabled = byFact ? Boolean(factId) : Boolean(subjectKey)
+
+  const { data, error } = useQuery<ContentionPage>({
+    queryKey: byFact ? ['contention-for-fact', factId] : ['contention-for-subject', subjectKey],
+    enabled,
+    // No retry: a 404 (uncontested) is expected and a 5xx should surface
+    // promptly rather than spin — the default `retry: 1` would do neither well.
+    retry: false,
+    queryFn: () =>
+      byFact
+        ? apiGet<ContentionPage>(`/contention?fact_id=${encodeURIComponent(factId!)}`)
+        : apiGet<ContentionPage>(`/contention?subject=${encodeURIComponent(subjectKey)}`),
+  })
+
+  // Distinguish "uncontested" from "lookup failed":
+  //  - 404 ⇒ the fact/subject is not contested → render nothing (correct, the
+  //    common case);
+  //  - any other error (5xx / network) ⇒ DO NOT masquerade as uncontested —
+  //    show a subtle, non-intrusive affordance so a genuinely-contested claim
+  //    is never silently hidden by a transient failure.
+  if (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    return (
+      <span
+        className={cn(
+          'inline-flex w-fit items-center gap-1 text-[10px] text-slate-500',
+          className,
+        )}
+        title={`Contested-claim lookup failed${
+          error instanceof ApiError ? ` (HTTP ${error.status})` : ''
+        } — disputes can't be shown right now.`}
+        data-testid="contested-badge-error"
+      >
+        <AlertCircle className="h-3 w-3" aria-hidden />
+        contention unavailable
+      </span>
+    )
+  }
+
+  const view = byFact ? contentionForFact(data) : contentionForSubject(data)
+  if (!view || !view.isLive) return null
+
+  return <ContestedView view={view} showPanel={showPanel} className={className} />
 }
