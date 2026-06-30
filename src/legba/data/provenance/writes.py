@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -202,6 +203,31 @@ async def resolve_fact_source_credibility(
     if backed is not None:
         return backed
     return source_tier_credibility(source_type)
+
+
+# ---------------------------------------------------------------------------
+# Contested-claims coexistence (Holes-B Wave 4 — #101, decision #1)
+# ---------------------------------------------------------------------------
+#
+# The ONE behavioral change of the contested-claims feature, gated OFF by
+# default behind ``LEGBA_FACT_CONTENTION``. When ON, a SAME-TIER open prior
+# whose value is FUZZY-DISTINCT from the incoming value is NOT closed — both
+# rows COEXIST open so the detect-only ``fact_contention_arbiter`` opens a
+# contention group on its next cadence (decision #1: coexist + surface a
+# winner, never destroy the loser). Everything else closes exactly as before.
+_FACT_CONTENTION_ENV = "LEGBA_FACT_CONTENTION"
+
+
+def _fact_contention_enabled() -> bool:
+    """Honor ``LEGBA_FACT_CONTENTION`` (default OFF).
+
+    Only "1"/"true"/"yes"/"on" enable the write-path coexistence behavior;
+    unset/empty/anything-else keeps it off, so :func:`supersede_prior_facts`
+    runs the single blind UPDATE byte-for-byte as before (zero extra queries on
+    the hot path).
+    """
+    raw = os.environ.get(_FACT_CONTENTION_ENV, "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def noisy_or_confidence(existing: float, incoming: float, *, cap: float = 0.99) -> float:
@@ -1011,10 +1037,42 @@ async def supersede_prior_facts(
         insert on the same ``conn`` so the close + open are one logical step
         (the dapr write path acquires one connection per output).
 
+    **Contested-claims coexistence (Holes-B Wave 4, ``LEGBA_FACT_CONTENTION``).**
+    When the flag is ON one extra rule joins the close set: a SAME-TIER prior
+    open row whose value is FUZZY-DISTINCT from the incoming value is NOT closed
+    — both rows COEXIST open so the detect-only ``fact_contention_arbiter`` opens
+    a contention group next cadence (decision #1 — coexist + surface a winner,
+    never destroy the loser). "Same-tier" is equal ``_source_tier_rank``;
+    "fuzzy-distinct" is ``cluster_values([incoming, prior_value])`` yielding more
+    than one cluster (so e.g. same-tier "Russian" vs "Russia" is fuzzy-SAME and
+    still closes as today). Lower-tier priors (the incoming outranks) and
+    higher-tier priors (already A1-skipped) are unaffected. With the flag OFF
+    (the default) this function is byte-for-byte the single blind UPDATE below —
+    ZERO extra queries on the hot path.
+
     Returns the number of prior rows closed (0 when this is the first
-    assertion of the subject+predicate, a same-value re-assert, or every
-    differing-value prior row outranks the incoming fact on authority).
+    assertion of the subject+predicate, a same-value re-assert, every
+    differing-value prior row outranks the incoming fact on authority, or — with
+    the flag ON — every differing-value same-tier prior is a fuzzy-distinct
+    coexistence and nothing is left to close).
     """
+    if _fact_contention_enabled():
+        # Flag ON — the ONE behavioral change. Fetch the candidate open
+        # differing-value priors, decide per-row in Python (A1 tier guard PLUS
+        # the same-tier fuzzy-distinct coexistence carve-out), then close only
+        # the surviving set in a single UPDATE ... WHERE id = ANY($ids). Same
+        # connection, idempotent (only open rows are fetched / closed).
+        return await _supersede_prior_facts_coexist(
+            conn,
+            subject=subject,
+            predicate=predicate,
+            value=value,
+            new_fact_id=new_fact_id,
+            incoming_source_type=incoming_source_type,
+        )
+
+    # Flag OFF (default) — the single blind UPDATE, unchanged.
+    #
     # A1 — source-tier precedence. When the caller declares the incoming fact's
     # source_type we forbid closing any prior row whose authority rank is
     # STRICTLY higher (an ingestion/agent fact must not retire a seed/curated
@@ -1054,6 +1112,106 @@ async def supersede_prior_facts(
         value,
         new_fact_id,
         incoming_rank,
+    )
+    try:
+        return int(result.split()[-1]) if result else 0
+    except (ValueError, IndexError):                     # pragma: no cover
+        return 0
+
+
+async def _supersede_prior_facts_coexist(
+    conn: asyncpg.Connection,
+    *,
+    subject: str,
+    predicate: str,
+    value: str,
+    new_fact_id: UUID,
+    incoming_source_type: str | None,
+) -> int:
+    """Contention-aware variant of :func:`supersede_prior_facts` (flag ON).
+
+    Replaces the single blind UPDATE with a FETCH → decide-per-row → close-set
+    UPDATE so a same-tier fuzzy-distinct prior can COEXIST instead of being
+    closed (Holes-B Wave 4, decision #1). The close set is computed in Python:
+    a differing-value open prior closes iff it passes the A1 source-tier guard
+    AND is NOT (same-tier AND fuzzy-distinct from the incoming value). Lower-tier
+    priors still close (the incoming outranks them); higher-tier priors are
+    A1-skipped; same-tier fuzzy-SAME priors ("Russian" vs "Russia") still close
+    as today; only same-tier fuzzy-DISTINCT priors are spared to coexist.
+
+    Runs on the caller's connection (the close + the subsequent insert are one
+    logical step) and is idempotent: only rows still open are fetched, and a
+    replay re-fetches an already-closed prior as gone. Returns the number of
+    prior rows actually closed.
+    """
+    # Lazy import — the fuzzy clusterer is a sibling module (Wave 2); importing
+    # it only inside the ON branch keeps the OFF hot path and module import free
+    # of the dependency, and lets a test substitute it via monkeypatch.
+    from .value_clustering import cluster_values
+
+    incoming_rank = (
+        None if incoming_source_type is None
+        else _source_tier_rank(incoming_source_type)
+    )
+    # FETCH the candidate open differing-value priors (the SAME selection the
+    # OFF UPDATE's WHERE encodes, minus the tier guard — we apply A1 in Python so
+    # the fuzzy carve-out can sit alongside it). `id <> new_fact_id` keeps the
+    # just-inserting row out (mirrors the UPDATE's `id <> $4`).
+    rows = await conn.fetch(
+        """
+        SELECT id, value, source_type
+          FROM facts
+         WHERE lower(subject)   = lower($1)
+           AND lower(predicate) = lower($2)
+           AND lower(value)    <> lower($3)
+           AND valid_until IS NULL
+           AND superseded_by IS NULL
+           AND id <> $4
+        """,
+        subject,
+        predicate,
+        value,
+        new_fact_id,
+    )
+
+    to_close: list[UUID] = []
+    for row in rows:
+        prior_rank = _source_tier_rank(row["source_type"])
+        # A NULL incoming rank is the operator-correction caller — maximally
+        # authoritative, NO tier guard and NO coexistence carve-out: it closes
+        # every differing-value prior unconditionally, exactly as the OFF path's
+        # `$5::int IS NULL` short-circuit does. Only a producer that declared a
+        # source_type is subject to A1 + coexistence.
+        if incoming_rank is not None:
+            # A1 — never close a STRICTLY higher-authority prior (an
+            # ingestion/agent fact must not retire a seed/curated one).
+            if prior_rank > incoming_rank:
+                continue
+            # Coexistence carve-out — a SAME-TIER prior whose value is
+            # FUZZY-DISTINCT from the incoming one stays OPEN so the detect-only
+            # arbiter groups the two next cadence. Fuzzy-SAME ("Russian" vs
+            # "Russia" → ONE cluster) is NOT contention; it closes as today.
+            if prior_rank == incoming_rank:
+                fuzzy_distinct = len(cluster_values([value, row["value"]])) > 1
+                if fuzzy_distinct:
+                    continue  # COEXIST — leave the prior open.
+        to_close.append(row["id"])
+
+    if not to_close:
+        return 0
+
+    result = await conn.execute(
+        """
+        UPDATE facts
+           SET valid_until   = now(),
+               superseded_by = $1,
+               updated_at    = now()
+         WHERE id = ANY($2::uuid[])
+           AND valid_until IS NULL
+           AND superseded_by IS NULL
+        """,
+        new_fact_id,
+        to_close,
     )
     try:
         return int(result.split()[-1]) if result else 0
