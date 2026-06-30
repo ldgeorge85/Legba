@@ -49,7 +49,7 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 - **Maintenance / GC** (deterministic analysts on cadence, `data/analysts/deterministic_handlers/`): `fact_decay` / `nexus_decay` (temporal-confidence decay + expiry), `finding_supersession`, `entity_gc`, `signals_retention` (0036), `integrity_sweep`, `reminder_gc` (`runtime/reminder_gc.py`, GC of reminders for retired `actor_state` rows). These UPDATE/prune pre-existing rows.
 - **Per-source liveness watchdog** (`liveness_watchdog.check_source_cadence_once`, cadence): detects a silent source by comparing `now()` to `max(signals.fetched_at)` per source, then lateral-joins `source_poll_outcomes` (0046) for the *why* — `SourceActor.pull_once` writes a `source_poll_outcomes` row for every NON-productive poll (empty HTTP-200-with-0-signals, or error; productive polls are self-evidencing via their `signals` rows and are not logged), carrying the handler's own health diagnosis so the watchdog alert (and the UI) can distinguish a genuinely quiet feed from a broken one.
 - **Meta-analysts over the substrate** (altitude 2): `meta_findings_synthesizer` / `cross_analyst_correlator` / `competing_hypotheses` / `calibration_tracking` — they read accumulated outputs, not signals (Tier-2 cadence, but analysis-of-analysis rather than first-order).
-- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0046`, current head **0046**): schema evolution, applied PG-direct out of band. The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), and `source_poll_outcomes` (0046).
+- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0055`, current head **0055**): schema evolution, applied PG-direct out of band. The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), and the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9).
 
 ### 0.1 Substrate data inventory — what is kept where, written-by / read-by
 
@@ -349,9 +349,13 @@ The bringup set (`scripts/bringup_register_analysts.py`) now registers:
 `competing_hypotheses` (ach), `calibration_tracking`, `fact_decay`,
 `deep_consult`, `relationship_reifier`, `structural_balance`, `graph_mining`,
 `nexus_decay`, **`proposed_edge_governance`** (promote/reject the `proposed_edges`
-queue into `nexuses`, rejecting demonym/junk endpoints — P3-1), and
+queue into `nexuses`, rejecting demonym/junk endpoints — P3-1),
 **`thematic_proposal`** (propose thematic frames for uncovered hot situations,
-for operator promotion to thematic targets — Phase 5b). The situation-gated
+for operator promotion to thematic targets — Phase 5b), and
+**`fact_contention_arbiter`** (the detect-only contested-claims referee — a
+`deterministic`-kind META analyst that scans open facts hourly, groups disagreeing
+values, and surfaces the better-supported one in the contention sidecar **without
+ever mutating a fact** — #101, §5.9). The situation-gated
 `hypothesis_lifecycle` producer is **retired
 from bringup** — it emitted 0 rows (gated on `active` situations that go dormant)
 and `competing_hypotheses` superseded it as the real, fact/nexus-driven
@@ -533,7 +537,10 @@ pipeline reads bottom-up:
    the same `(subject, predicate)` whose **value differs** (`valid_until=now()`
    + `superseded_by`), so the single open row per triple *is* "what is true now"
    while history accrues. Analyst- and workflow-emitted facts share the same
-   write contract via `write_fact` (`OutputKind.FACT`).
+   write contract via `write_fact` (`OutputKind.FACT`). When two credible sources
+   genuinely *disagree* on a value (rather than one superseding the other), the
+   default-OFF contested-claims subsystem (§5.9) lets the rows **coexist open** and
+   records the dispute in a sidecar instead of silently dropping the loser.
 2. **Reified typed signed Nexus** (altitude 0, relations). The
    **`relationship_reifier`** META analyst (§5.3) lifts raw co-mention edges into
    *typed, directional, signed* relationships: `subject →[intermediary]→ object`
@@ -697,6 +704,141 @@ new store — it is (Tier 0) curating *current* data **in**, and (Tier 1)
 Grounding is purely additive over the substrate: it is a couple of cheap
 current-facts Postgres reads gated by a default-off descriptor field, injected as
 a prompt preamble — no new store, no new dependency, and never a hard failure.
+
+### 5.9 Contested claims — *the "alternate facts" referee (#101)*
+
+The temporal-fact model of §5.7 answers "what is true now" with a **single open
+row** per `(subject, predicate, value)` triple, and `supersede_prior_facts` keeps
+that property by closing a prior open row whose value differs. That is the right
+shape when sources *agree* — but when two credible sources genuinely **disagree**
+on a value (the "alternate facts" problem), last-writer-wins silently discards
+the loser, and the substrate forgets that the claim was ever contested. The
+contested-claims subsystem (#101, Holes-B) makes disagreement a **first-class,
+queryable, detect-only** fact about the substrate instead — it never destroys a
+fact and never adjudicates one away; it *annotates* the dispute and *surfaces*
+the better-supported value while leaving every competing fact row open.
+
+The whole subsystem is **flag-gated and ships OFF by default** (both
+`LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` default to OFF in
+code *and* in `docker-compose.yml` via `${VAR:-0}`); they are enabled (`=1`) only
+on this instance through the gitignored `.env`. Migration head is **0055**. The
+binding plan + decisions live in
+`planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md`.
+
+**Per-fact source credibility (Wave 0, migration 0054).** A `facts.source_credibility
+real` column carries the trust weight of the most credible source backing a fact
+(`0054_facts_source_credibility.sql`). NULL means *unknown* (it is never `0` — an
+unscored fact must not be treated as untrustworthy); both fact producers now stamp
+it, resolved as the **MAX** over the backing signals' `signals.source_credibility`
+else the tier nominal (seed/curated `0.9`, ingestion/agent `0.5`). Wave 0 also
+landed two latent holes-A fixes on the ingestion write path: the ingest fact-writer
+now passes `incoming_source_type` into `supersede_prior_facts` (so the A1 tier guard
+is no longer bypassed — an ingestion fact can no longer close a seed/curated row),
+and same-value merge now uses **noisy-OR** rather than `GREATEST` (matching the
+analyst path).
+
+**The contention sidecar (Wave 1, migration 0055).** Disagreement is recorded in a
+**sidecar**, never by mutating a fact's truth columns: `fact_contention` (one group
+per canonical `(subject_key, predicate_key)`, lifecycle
+`contested → surfaced → collapsed`) and `fact_contention_values` (one row per distinct
+non-junk value cluster). Three thin markers are added to `facts` —
+`contested boolean`, `contention_id uuid`, `surfaced_winner boolean` — which are the
+only `facts` columns the arbiter ever writes. The sidecar is fully **recomputable from
+the open facts**; additive DDL (`CREATE TABLE / ADD COLUMN IF NOT EXISTS`) leaves every
+existing row unmarked and uncontested.
+
+**The arbiter (Wave 2) — a detect-only deterministic META analyst.**
+`fact_contention_arbiter`
+(`data/analysts/deterministic_handlers/fact_contention_arbiter.py`) is a new
+**`deterministic`-kind** sub-handler — registered in `deterministic.py`
+(`SUB_HANDLERS` + `TRACE_ONLY`) with the descriptor
+`descriptors/analyst_fact_contention_arbiter.yaml` (hourly at `:37`, offset from the
+other short deterministic handlers). It is **TRACE_ONLY**: it produces no
+`analyst_outputs` row, only the sidecar + the three `facts` markers. Its load-bearing
+invariant is **DETECT-ONLY (decision B15): it NEVER mutates a fact's
+`value` / `valid_until` / `superseded_by` / `confidence`, and never calls
+`supersede_prior_facts`** — the open competing rows are left exactly as they were.
+Each pass:
+
+1. **Scan open facts** (`valid_until IS NULL AND superseded_by IS NULL`) and bucket
+   them by canonical `(subject, predicate)`, keeping only groups with ≥2 open rows.
+2. **Fuzzy-cluster** each group's values (`provenance/value_clustering.py`:
+   `canonicalize_entity` to fold demonyms/aliases, then normalized-Levenshtein under
+   a **tight `FUZZY_MERGE_MAX_DISTANCE = 0.12`** ceiling) — so a typo / spacing variant
+   merges (Russia/Russian, Kyiv/Kiev) while two genuinely different values stay split
+   (North Korea vs South Korea). This fuzzy grouping is the move that un-dormants both
+   holes-A's noisy-OR corroboration and holes-B's per-value aggregation, which were
+   inert under exact-string grouping (real sources phrase the same fact differently).
+3. **Junk-gate** each value cluster through the *existing* `fact_extractor` gates
+   (`is_junk_entity` / `_is_inverted_relation` / reflexive- and
+   containment-inversion checks). A rejected cluster is **operator-reportable** with its
+   gate name (`is_junk` / `junk_reason`), not silently dropped — and it is excluded from
+   the dispute (so the Poland→{Berlin, Russian} junk case is junk-dropped, *not* treated
+   as a genuine disagreement).
+4. **Score** each surviving value cluster `Q·C·R·F` (`_arbiter_score = q * c * r * f`,
+   multiplicative): **Q** = quorum (its share of distinct *source lineage*, so a chatty
+   single source can't manufacture quorum), **C** = its share of the group's
+   `source_credibility` mass (NULL credibility is unknown, summed as nothing — never 0),
+   **R** = exponential recency with a **30-day half-life** (one bounded factor, *not* the
+   sole decider — the core fix versus last-writer-by-recency), **F** = mean confidence.
+5. **Surface at most one winner** per `(subject, predicate)` group — it flips that
+   value's `surfaced_winner` marker — **or abstain**: a best cluster below
+   `MIN_SURFACE_SCORE = 0.15` is a "weak" abstain (honestly disputed, no resolution),
+   and two top clusters that both clear the floor but where the best doesn't beat the
+   runner-up by `DOMINANCE_RATIO = 1.25` is a "near-tie" abstain. The deterministic
+   winner selection is a total order (distinct-source → credibility → recency →
+   `value_key`), so two passes over unchanged data pick the same winner (idempotent).
+
+**The optional vLLM-only near-tie tie-break (Wave 2b).** A bounded LLM tie-break may
+run **only on a near-tie abstain** (never on a weak abstain, never to second-guess a
+deterministic winner). It is double-gated: `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` must be
+ON (default OFF) **and** the descriptor must declare a `method.llm.primary` — and the
+deps-builder **hard-refuses an Anthropic/Opus primary** for this path
+(`analyst_deps_builder._is_anthropic_component`), so the tie-break can route *only* to
+the **self-hosted `llm.primary.openai_compat` vLLM plane** (the billed Anthropic plane
+stays reserved for consult/deep). It is bounded — 256 tokens, a 30s call timeout, at
+most `MAX_LLM_TIEBREAKS = 10` calls per pass — and **degrades to abstain on any
+failure**. The receipt splits `llm_tiebreak_calls` (consultations) from `llm_tiebreaks`
+(successful picks). Even a tie-break "pick" surfaces through the *same* sidecar +
+marker path; it still **never** touches a fact's truth columns.
+
+**Write-path coexistence (Wave 4, flag `LEGBA_FACT_CONTENTION`).** For the arbiter to
+*see* a same-tier disagreement, both values have to stay open — so a small,
+flag-gated carve-out lives inside `supersede_prior_facts` (`provenance/writes.py`):
+when a same-tier incoming value is **fuzzy-DISTINCT** from an open prior
+(`cluster_values([incoming, prior])` yields more than one cluster), the prior is **not
+closed** — the rows coexist open and the detect-only arbiter groups them on its next
+cadence. (A fuzzy-*same* value — "Russian" vs "Russia" — still merges as before; a
+cross-tier upgrade still supersedes.) Both fact producers route through
+`supersede_prior_facts`, so the carve-out covers the ingestion and analyst/workflow
+paths alike. With the flag OFF, supersession is unchanged (pure holes-A
+last-writer-wins).
+
+**Surfacing (Wave 5) — read-only.** Once a fact is contested, four read paths *tell*
+that, none of them altering a fact:
+
+- **Grounding annotation.** The §5.8 grounding preamble adds a `CONTESTED` / `DISPUTED`
+  line (`runtime/grounding.py`) — respecting the existing provenance gate, so only
+  seed/curated facts reach it, and the annotation is the only addition. A surfaced
+  winner renders "(CONTESTED: N sources disagree; surfaced winner)"; a contested fact
+  that is *not* the surfaced winner is annotated as disputed.
+- **ACH evidence.** `competing_hypotheses` emits a `contested_fact_value` evidence item
+  per live contention group whose subject is in the topic's resolved-entity set, so the
+  Heuer matrix sees the disagreement as evidence.
+- **Read API.** `GET /api/v1/contention` (`registry/substrate_reads_api.py`) serves the
+  contention groups + their value clusters.
+- **UI.** A `ContestedBadge` component (`legba-ui-v3/src/v4/components/ContestedBadge.tsx`)
+  is mounted in the **Why** provenance trail (fact-keyed) and the target **Claims** panel
+  (subject-keyed).
+
+**Validation status (honest).** The detect-only arbiter, the Wave-4 coexistence, and
+the Wave-5 read API are **proven live** (a synthetic same-tier dispute drove
+coexistence, `Q·C·R·F` surfaced the better-supported value, the detect-only invariant
+held — `valid_until`/`superseded_by` stayed NULL on both rows — and the read API
+surfaced the group). The Wave-2b vLLM tie-break is **proven consulted live** (it was
+called on a near-tie and correctly *abstained* on symmetric evidence — provenance-first
+is correct), but a successful LLM **pick** (`llm_tiebreaks ≥ 1`) is **unobserved live
+so far** (it awaits an asymmetric near-tie in the soak).
 
 ## 6. The four planes
 
@@ -1210,12 +1352,15 @@ Two properties hold across every layer and are not bolt-ons:
 
 The full loop — **altitudes 0 through 3** — runs end-to-end from cold-start
 (empty volumes, the `0001_baseline.sql` baseline + the forward chain
-`0032`…`0046` under `src/legba/data/migrations/`, current head **0046** — the
+`0032`…`0055` under `src/legba/data/migrations/`, current head **0055** — the
 `facts`/`nexuses`/`seed_batches` schema plus the entity-profile composite key
 (`0035`), signals retention (`0036`), the AGE output label (`0037`), the ACH
 `resolved_outcome` column (`0038`), the consult-sessions tables (`0039`),
 **situations-as-first-class + repairs (`0040`–`0042`)**, the data-quality
-backfills (`0043`–`0045`), and `source_poll_outcomes` (`0046`)):
+backfills (`0043`–`0045`), `source_poll_outcomes` (`0046`), the journal table
+(`0048`), the receipt/derived-from repairs + data cleanups (`0049`–`0053`), and
+the contested-claims schema — `facts.source_credibility` (`0054`) + the
+`fact_contention` sidecar (`0055`, §5.9)):
 
 - Real RSS sources (BBC / Deutsche Welle / Al Jazeera) acquire enriched signals —
   geo, language, and entity-class promoted to indexed columns; the

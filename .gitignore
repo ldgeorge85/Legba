@@ -45,5 +45,8 @@ docs/feedback/
 # UI v4 self-hosted basemap (large; operator-provided)
 deploy/tiles/*.pmtiles
 
+# Generated screenshot OUTPUT from the dev render harness (the harness source is tracked)
+legba-ui-v3/tools/screenshot/shots/
+
 # Internal planning / tracking docs — NOT part of the release.
 planning/

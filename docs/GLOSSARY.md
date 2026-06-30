@@ -312,6 +312,79 @@ accrues. An open-only partial-unique index keeps exactly one current row per
 (subject, predicate, value). This is "temporal honesty": the store answers both
 *what is true now* and *what did we believe, when*.
 
+**contested claim / contention** — When two **open** facts assert *different*
+values for the same (subject, predicate) and neither has superseded the other —
+the "alternate facts" problem.
+The case **supersession** deliberately does not resolve: rival sources disagree
+(e.g. competing casualty figures, contested control of a city) and there is no
+basis to close either as wrong. Rather than silently pick one by recency, Legba
+lets the rivals **coexist open** (see **write-path coexistence**) and records the
+disagreement in a sidecar so it can be surfaced honestly as *disputed* instead of
+faked into a single answer.
+*Note: a guarded feature — gated behind `LEGBA_FACT_CONTENTION` (default **off** in
+code and compose, enabled only on this instance). Plan:
+[HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md](../planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md).*
+
+**contention sidecar** — The side tables that record a fact disagreement without
+touching the rival facts themselves.
+Two tables (`fact_contention` + `fact_contention_values`, migration 0055) hold one
+contention group per disputed (subject, predicate) and its competing value
+clusters, plus three thin markers on the `facts` rows themselves — `contested`,
+`contention_id`, `surfaced_winner`. The sidecar is **recomputable** from the open
+facts, so it is a derived index over the disagreement, never the source of truth.
+
+**fact_contention_arbiter** — The detect-only analyst that finds contested facts
+and records the disagreement — but never resolves a fact.
+A `deterministic`-kind global **META analyst** (hourly at :37, **TRACE_ONLY**) that
+scans open facts, fuzzy-clusters their values (`canonicalize_entity` +
+normalized-Levenshtein at distance ≤ 0.12, so *Russia/Russian* and *Kyiv/Kiev* merge
+while *North/South Korea* stays split), junk-gates via the existing fact-extractor
+gates, scores each cluster (see **Q·C·R·F score**), and writes only the **contention
+sidecar** + the three markers. Its hard invariant
+(**detect-only**): it **never** mutates a fact's value, `valid_until`,
+`superseded_by`, or confidence — disagreement is *annotated*, not adjudicated into
+the **facts** table.
+
+**surfaced winner vs abstain** — Either the arbiter marks one value cluster as the
+dominant reading, or it honestly declares the dispute unresolved.
+Per (subject, predicate) group the arbiter surfaces **at most one** winner — the
+top-scoring cluster, iff it clears `MIN_SURFACE_SCORE` (0.15) **and** beats the
+runner-up by `DOMINANCE_RATIO` (1.25×). Otherwise it **abstains**: the group stays
+`contested` with no `surfaced_winner` — an explicit "disputed, no resolution".
+A surfaced winner is a read-side label only; it does **not** close the losing facts
+(they stay open — see **detect-only** above).
+*Note: an optional bounded LLM tie-break (`LEGBA_FACT_CONTENTION_LLM_TIEBREAK`,
+default **off**) may run **only** on a near-tie abstain, on the self-hosted vLLM
+plane (256 tokens, 30s, ≤10 calls/pass), degrading back to abstain on any failure.
+Proven **consulted** live (it abstained on symmetric evidence — provenance-first);
+a successful LLM **pick** is unproven-live so far.*
+
+**write-path coexistence** — Letting a same-tier rival value stay open alongside a
+prior one, instead of superseding it, so the arbiter can group them.
+Inside `supersede_prior_facts`, when a same-tier incoming value is fuzzy-**distinct**
+from an open prior (not a typo/alias of it), the prior is **not** closed — the two
+coexist open as a candidate contention. This is the write-side that *creates* the
+disagreement **supersession** would otherwise hide; gated behind
+`LEGBA_FACT_CONTENTION` (default off).
+
+**source_credibility** — A per-fact trust weight, resolved from the backing signals
+or the fact's tier.
+A nullable `facts.source_credibility` (migration 0054) where **NULL means unknown**
+(never 0): nominally 0.9 for seed/curated and 0.5 for ingestion/agent facts, but
+resolved as the **MAX** over the backing signals' `source_credibility` when present,
+else the tier nominal. It feeds the credibility factor of the **Q·C·R·F score** so a
+disagreement is weighed by who said it, not just how many rows or how recent.
+
+**Q·C·R·F score** — The arbiter's multiplicative weight on a competing value
+cluster: quorum × credibility-share × recency × confidence.
+Each value cluster in a contention is scored `score = q · c · r · f` — **Q** quorum
+(distinct backing **lineage**, so one chatty source can't manufacture agreement),
+**C** the cluster's **share** of the group's total `source_credibility` mass, **R** a
+recency half-life decay, and **F** mean confidence. Multiplicative means any zero
+factor zeroes the cluster (no credible source / nothing recent / no confidence). The
+score only ranks clusters for the **surfaced winner vs abstain** decision; it never
+edits a fact.
+
 **OutputKind** — The fixed set of typed outputs an analyst can emit.
 The eleven typed kinds (finding, situation, hypothesis, prediction, alert,
 meta_finding, critique, fact, nexus, prompt-module candidate, **journal**). A

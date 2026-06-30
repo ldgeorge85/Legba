@@ -20,7 +20,9 @@ SOURCE → SIGNAL (enriched inline) → fan-out (routing, not data)
         → OUTPUTS (alert / webhook / STIX / A2A / MCP / NATS / substrate)
 ```
 
-**Durable stores:** `signals`, `signal_aliases`, `facts`, `entity_profiles`
+**Durable stores:** `signals`, `signal_aliases`, `facts` (+ the derived
+contested-claims sidecar `fact_contention` / `fact_contention_values`, 0055),
+`entity_profiles`
 (+`entity_profile_versions`), `nexuses`, `proposed_edges`, `graph_metrics`,
 `analyst_outputs`, `hypotheses`, `situations`, `analyst_traces`,
 `analyst_critiques`; the **off-chain** journal stores `journal_entries` +
@@ -43,7 +45,8 @@ chain — see "The journal — off-chain by design"); the consult audit trail
 | **Target descriptor** | `target_descriptors` | Registry | **append-only** (versioned, `is_head`) |
 | **Fan-out / subscription** | *(none — in-memory + NATS)* | subscription engine + per-target JetStream consumer | **ephemeral-routing** (no per-target row; signal never copied) |
 | **TargetActor runtime** | Dapr `actor_state` | TargetActor | **mutate-in-place** FSM; passive subscriber = NOOP on tick |
-| **Facts** | `facts` (0001/0032) | `fact_extractor` (ingestion) + `write_fact` (agent/seed) | **supersession-versioned** (open-only unique index; decay mutates open rows) |
+| **Facts** | `facts` (0001/0032; `source_credibility` 0054; contested-claims markers 0055) | `fact_extractor` (ingestion) + `write_fact` (agent/seed) | **supersession-versioned** (open-only unique index; decay mutates open rows). Under `LEGBA_FACT_CONTENTION` a fuzzy-distinct same-tier value coexists open instead of superseding (#101) |
+| **Contention sidecar** (derived) | `fact_contention` + `fact_contention_values` (0055) | `fact_contention_arbiter` (deterministic META, hourly :37, **detect-only** B15) | **derived / recomputable** from open `facts`; arbiter only sets the sidecar + the 3 `facts` markers, never mutates a fact |
 | **Entities** | `entity_profiles` (0001/0035) + `entity_profile_versions` | `entity_resolution` | **mutate-in-place** + append-only version history |
 | **Nexuses** | `nexuses` (0033) | `relationship_reifier` (`write_nexus`); `proposed_edge_governance` promotion | **supersession-versioned** (closes on polarity/label change; decay mutates open) |
 | **Proposed edges** | `proposed_edges` (0001) | `entity_resolution` (co-occurrence) | **mutate-in-place** (status + confidence accrual; no version chain) |
@@ -94,6 +97,99 @@ the deterministic maintenance sub-handlers) write **no `analyst_outputs` row** �
 their product is the side-write. **Every run** — output, side-write, TRACE_ONLY,
 or failure — leaves **exactly one** hash-chained `analyst_traces` row
 (`output_row_refs` empty when nothing was emitted).
+
+## The contested-claims fact model
+
+Task #101 Holes-B (migrations 0054 + 0055, head **0055**) turns "two credible
+sources disagree on one `(subject, predicate)` value" from an invisible race into
+a **first-class, derived, recomputable** state — without ever letting a machine
+overwrite the disputed facts. The substrate change is small and almost entirely
+*additive*; the behaviour is gated OFF by default.
+
+**Per-fact credibility — `facts.source_credibility real` (0054).** A 0..1 trust
+score of the most credible source backing this fact, propagated down from
+`signals.source_credibility` so the arbiter has a per-fact credibility term to
+weight competing values by. Resolved at write time as the **MAX over the backing
+signals'** `source_credibility`, else the **source-tier nominal** (seed/curated
+`0.9`, agent/ingestion `0.5`). `NULL` = *unknown* (a pre-0054 row, or a write with
+no resolvable credibility) — the arbiter treats `NULL` as unknown, **never as
+zero**. Two earlier Holes-A write-path fixes ship with this wave: the ingestion
+fact-writer now passes `incoming_source_type` (so the tier guard that protects a
+curated fact from a machine-extracted one is no longer bypassed), and a same-value
+merge aggregates confidence by **noisy-OR** (was `GREATEST`).
+
+**Three thin markers on `facts` (0055).** So a reader can tell a genuine update
+apart from a live dispute, with no JSON blob and no per-value columns:
+
+| Column | Type | Meaning |
+|---|---|---|
+| `contested` | `boolean NOT NULL DEFAULT false` | this open fact is one of ≥2 coexisting values in a live dispute |
+| `contention_id` | `uuid` | the `fact_contention` group this row belongs to (`NULL` = uncontested) |
+| `surfaced_winner` | `boolean NOT NULL DEFAULT false` | the arbiter currently surfaces *this* row as the group's winner |
+
+A partial index `idx_facts_contested ON facts (contention_id) WHERE contested`
+keeps the arbiter's marker-clearing sweep + downstream surfacing joins cheap
+regardless of total `facts` size.
+
+**Two sidecar tables (0055) — the derived group view.** Per-value support is
+multi-valued (N distinct values, each with its own source set / credibility sum /
+counts) and **recomputed on every arbiter pass**, so it lives in a sidecar rather
+than on the single-row `facts` table:
+
+- **`fact_contention`** — one group per `(subject_key, predicate_key)`,
+  `UNIQUE (subject_key, predicate_key)`. Lifecycle `status ∈ contested → surfaced
+  → collapsed` (collapses when a group falls back to one value). Carries the
+  arbiter's current winner (`surfaced_value` / `surfaced_fact_id`, both `NULL` on
+  abstain), the distinct non-junk `value_count`, the operator-reportable
+  `junk_count`, and `arbiter_version` / `resolved_at`.
+- **`fact_contention_values`** — one row per distinct **non-junk value cluster**
+  in a group (`UNIQUE (contention_id, value_key)`, FK `ON DELETE CASCADE`),
+  carrying the aggregated support and the deterministic **Q·C·R·F** `arbiter_score`
+  (quorum × credibility-share × recency-half-life × confidence). Key support
+  columns: `distinct_source_count` (DISTINCT lineage, **not** row count — defeats a
+  chatty source), `source_credibility_sum` (SUM of non-`NULL`
+  `facts.source_credibility`), `confidence_max` / `confidence_mean`,
+  `supporting_fact_ids`, `representative_fact_id`, `latest_asserted_at`, and
+  `surfaced_winner`. A junk cluster is **recorded** (`is_junk=true` + a
+  `junk_reason` naming which `fact_extractor` gate fired, never silently dropped)
+  and excluded from the dispute count.
+
+Both sidecar tables are **fully derived** — they can be dropped and rebuilt from
+the open `facts` rows at any time. That recomputability is the test that proves
+they are a *view over* the chain, not primary data.
+
+**DETECT-ONLY (invariant B15).** The hourly (:37) `deterministic`-kind
+`fact_contention_arbiter` META analyst that populates these tables **NEVER**
+mutates a `facts` value / `valid_until` / `superseded_by` / `confidence` — it only
+writes the sidecar rows + the three marker columns (and is itself TRACE_ONLY: one
+`analyst_traces` row, no `analyst_outputs`). It scans open facts, fuzzy-clusters
+values (canonicalize-entity + normalized-Levenshtein, distance threshold `0.12` —
+so *Russia / Russian* and *Kyiv / Kiev* merge but *North / South Korea* stay
+split), junk-gates through the existing `fact_extractor` gates, scores each cluster
+Q·C·R·F, and surfaces **at most one** winner per `(subject, predicate)` or
+**abstains** on a near-tie (`MIN_SURFACE_SCORE 0.15`, `DOMINANCE_RATIO 1.25`).
+
+**Two differing OPEN values for one `(subject, predicate)` is now an intended
+first-class state — under a flag.** The open-triple unique index keys on
+`lower(value)`, so distinct values have always been *able* to coexist; what
+changed is the write path. Under `LEGBA_FACT_CONTENTION` (default OFF), inside
+`provenance/writes.py` `supersede_prior_facts`, a same-tier incoming value that is
+fuzzy-*distinct* from an open prior **no longer closes** that prior — the two rows
+coexist open so the arbiter can group them (both fact producers route through
+`supersede_prior_facts`). With the flag OFF, the prior single-winner-by-recency
+behaviour is unchanged. An optional vLLM tie-break (`LEGBA_FACT_CONTENTION_LLM_
+TIEBREAK`, default OFF) runs **only** on a near-tie abstain, on the self-hosted
+plane; it is unrelated to the substrate shape and leaves these tables unchanged
+except for which cluster (if any) is marked the winner.
+
+> **Flag posture (honest).** Both `LEGBA_FACT_CONTENTION` and
+> `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` default **OFF** in code *and* in
+> `docker-compose` (`${VAR:-0}`); they are enabled (`=1`) only on this instance via
+> the gitignored `.env`. The detect-only arbiter, Wave-4 coexistence, and the
+> read-side surfacing are proven live; the vLLM tie-break is proven **consulted**
+> live (it abstained on symmetric evidence — correct, provenance-first), but a
+> successful LLM *pick* is **unobserved live** so far. Plan + decisions:
+> `planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md`.
 
 ## The journal — off-chain by design
 
@@ -177,10 +273,13 @@ descriptors + audit log; the universal `derived_from[]` lineage column.
     #101 Holes-A): a machine-extracted `ingestion`/`agent` fact does **not** close an
     open human-curated `seed`/`curated` fact (`seed == curated > ingestion == agent`);
     same-tier recency still wins. Agreement on a `(subject, predicate, value)`
-    aggregates confidence via a bounded noisy-OR (cap 0.99), not MAX. The model keeps
-    **no coexisting disputed values** and does **no** credibility-weighted
-    arbitration — that contested-claim arbiter is **designed, not built**
-    (`planning/CONTESTED_CLAIMS_PLAN.md`).
+    aggregates confidence via a bounded noisy-OR (cap 0.99), not MAX.
+  - **Contested values now coexist OPEN under a flag (task #101 Holes-B).** Under
+    `LEGBA_FACT_CONTENTION` (default OFF), a same-tier incoming value that is
+    fuzzy-*distinct* from an open prior does **not** close that prior — the two
+    open rows coexist as a first-class dispute, surfaced through the
+    `fact_contention` sidecar by the **detect-only** arbiter. See "The contested-
+    claims fact model" below.
 - **Mutate-in-place:** `signals` enrichment + later merge re-update (the one
   non-append substrate table), `entity_profiles`, `proposed_edges`,
   `hypotheses`/`situations` *status*, `journal_proposals` *status*
@@ -188,6 +287,11 @@ descriptors + audit log; the universal `derived_from[]` lineage column.
   `output_dead_letter` resolution.
 - **Ephemeral (no durable row):** subscription wiring, per-target JetStream
   consumers, the predicate match, NATS-stream output.
+- **Derived / recomputable (rebuildable from open `facts`):** the contested-claims
+  sidecar `fact_contention` / `fact_contention_values` — the detect-only arbiter
+  upserts them each pass and also sets the `contested` / `contention_id` /
+  `surfaced_winner` markers on `facts` in place, but never mutates a fact value
+  (invariant B15).
 
 ## Known thin / inert legs (honest)
 

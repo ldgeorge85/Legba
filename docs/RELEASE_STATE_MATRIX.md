@@ -54,6 +54,7 @@ these exceptions:
 | `POST /api/v1/journal_proposals/{proposal_id}/accept` · `…/reject` | **live** | Accept/reject a queued proposal. Accept runs an idempotent per-kind apply worker; reject requires a `decision_reason`. **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry. |
 | `GET /api/v1/v3/system/analyst-cadence` | **live** | Per-analyst cadence health (`v3_api.py`, `build_v3_router`, mounted at `/api/v1/v3`): last run, age, runs 1h/24h, last outcome, and a healthy/stale/silent status — read from `analyst_traces` (the actual run record), NOT `actor_state.last_run_at`, which is NULL. Powers the System Status panel's Analysis layer (§2). |
 | `GET /api/v1/v3/system/source-firing` | **live** | Per-source firing matrix (`v3_api.py`, mounted at `/api/v1/v3`): signals 24h/7d, last-seen age, last poll outcome, recent error count, and a firing/silent/error/paused status per source. Powers the System Status panel's Acquisition layer (§2). |
+| `GET /api/v1/contention` | **live** | Read-only contested-claim groups + their per-value support clusters (Holes-B Wave 5, #101 — `substrate_reads_api.py`, `build_substrate_reads_router`, mounted in registry `server.py` at `/api/v1`). Plain SELECTs over the deployed `fact_contention` / `fact_contention_values` sidecar (migration 0055) — it NEVER mutates a fact, a group, or a marker. Filters `status` (defaults to LIVE disputes `contested`+`surfaced`), `subject` (lower-cased `subject_key`), `fact_id` (single group via `facts.contention_id`), `include_junk`, `since`. Backs the `ContestedBadge` UI surface (§2) and the consult read surface. The sidecar is populated by the `fact_contention_arbiter` analyst (§1.1); whether disputes ACCUMULATE depends on the write-path coexistence flag `LEGBA_FACT_CONTENTION` (default **OFF** in code + docker-compose), so on a default build this route serves an empty/legacy set. Proven live (returns real groups on this instance). |
 
 Everything else in RUNBOOK §4.1 (findings / situations / signals / lineage /
 targets / analysts / budget / source-credibility / events WS) is **live**.
@@ -69,6 +70,7 @@ authoritative per-kind maturity tracking still lives in `planning/` +
 |---|---|---|
 | Analyst knowledge-grounding (Tier 1, structured) | **live, off-by-default** | The `grounding` descriptor block (`GroundingBlock`, `enabled: false` default) opts an analyst into a deps-builder step that, before the LLM call, reads CURRENT authoritative `facts`/`nexuses` (temporal-honesty gate, curated/seed-preferred) for the target geo + slice entities and PREPENDS a dated "AUTHORITATIVE CURRENT CONTEXT" preamble. Wired + opted IN on `analyst_world_assessor` + `analyst_country_assessor` (`grounding.enabled: true`); live-verified injecting the current US head of state into a US assessment. Token-capped (`max_facts`), degrade-not-drop (a read miss → no preamble, never fabricates). **Tier 2** (the `vector:world_context` collection) is a declared SEAM (#20, needs the L-114 embedder-through-port). |
 | `proposed_edge_governance` analyst | **live** | Promotes pending `proposed_edges` into neutral `CoOccursWith` nexuses (`descriptors/analyst_proposed_edge_governance.yaml`). |
+| `fact_contention_arbiter` analyst | **live (detect-only)** | The contested-claims referee (Holes-B Wave 2, #101 — `descriptors/analyst_fact_contention_arbiter.yaml`, `deterministic`-kind GLOBAL META analyst, hourly at `:37`, `TRACE_ONLY` in `deterministic.py`). DETECT-ONLY invariant (B15): it NEVER mutates a fact value / `valid_until` / `superseded_by` / `confidence` — it scans OPEN facts, fuzzy-clusters competing values (`provenance/value_clustering.py`: canonicalize-entity + normalized-Levenshtein, threshold 0.12 — Russia/Russian and Kyiv/Kiev merge, North/South Korea stay split), junk-gates via the existing fact-extractor gates, scores each value cluster `Q·C·R·F` (quorum, credibility-share, recency half-life, confidence), and surfaces at most ONE winner per `(subject, predicate)` or ABSTAINS on a near-tie (`MIN_SURFACE_SCORE` 0.15, `DOMINANCE_RATIO` 1.25). Its ONLY writes are the `fact_contention` / `fact_contention_values` sidecar + the three thin `facts` markers (`contested`, `contention_id`, `surfaced_winner`), all recomputable from open facts (migration 0055). **Optional Wave-2b LLM tie-break** runs ONLY on a near-tie abstain, on the SELF-HOSTED vLLM plane (the deps-builder hard-refuses an Anthropic/Opus primary), bounded (256 tokens, 30s, ≤10 calls/pass), degrades to abstain on any failure — flag `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` (default **OFF** in code + docker-compose). Detect-only arbiter proven live; the vLLM tie-break is proven CONSULTED live (it abstained on symmetric evidence — correct, provenance-first), but a successful LLM PICK is unobserved-live so far. Whether disputes COEXIST for it to group depends on the write-path flag `LEGBA_FACT_CONTENTION` (default **OFF**); both flags are enabled (`=1`) only on this instance via the gitignored `.env`. |
 | Phase-D graph-metrics legs | **live** | `structural_balance` / `graph_mining` / `nexus_decay` now WRITE rows via `_graph_metrics_sink.py` (previously inert). |
 | ACH outcome-resolution + calibration | **live (self-consistency-flagged)** | `competing_hypotheses` status-transitions resolve to `resolved_outcome`; `calibration_tracking` computes a Brier. **Caveat:** absent an exogenous outcome the Brier is a SELF-CONSISTENCY measure, tagged `brier_self_consistency_only` / `self_consistency_only=true` — NOT calibration against reality. The exogenous-outcome seam is preserved. |
 | `signals.source_credibility` at ingest | **live (legacy backlog)** | Now populated at ingest by a host-lookup in `source_actor.lookup_source_credibility` (the column was 100% NULL because the pipeline FILTER only ran when a descriptor bound the `source_credibility` kind, which the live descriptors don't). **Caveat:** this fixes NEW signals; pre-fix rows stay NULL until an optional backfill runs. |
@@ -116,6 +118,24 @@ authoritative per-kind maturity tracking still lives in `planning/` +
   with both new routes confirmed serving live data, but pending its first real
   in-browser render at the time of writing.)
 * v4 rooms: `v4.map`, `v4.flow`, `v4.why`
+* **`ContestedBadge`** (Holes-B Wave 5, #101 — `v4/components/ContestedBadge.tsx`):
+  not a standalone registered panel but a self-contained **component** mounted
+  into two existing live panels. It reads `GET /api/v1/contention` (§1) through
+  the pure, unit-tested `@/lib/contentionModel`, renders NOTHING when the claim
+  is not contested (the common case → zero visual noise), and is read-only (it
+  never mutates a fact, group, or marker; a 5xx lookup failure shows a subtle
+  affordance rather than masking as "uncontested"). Two mount points:
+  **(1) `v4.why` ProvenanceTrail** (`ProvenanceTrail.tsx`) — fact-keyed
+  (`<ContestedBadge factId={…} />`, precise `?fact_id=` lookup → 0/1 group) on a
+  lineage node whose `row_kind === 'fact'`; **(2) `target.claims`** (`Claims.tsx`)
+  — subject-keyed (`<ContestedBadge subject={claim.statement} />`, `?subject=`
+  → 0..N groups, surfaces the first LIVE one) since findings carry no real
+  `facts.id`. When contested it shows a "Contested" badge ("Contested — no
+  winner" on a near-tie abstain) plus a per-value support panel (distinct-source
+  count, credibility-share, arbiter score, surfaced-winner flag). **live** code,
+  but the underlying disputes only ACCUMULATE when the write-path flag
+  `LEGBA_FACT_CONTENTION` (default **OFF**) is set — so on a default build both
+  mount points render no badge.
 
 ### Preview — registered, honest pending / client-only state
 

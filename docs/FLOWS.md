@@ -64,8 +64,13 @@ SUPERSEDED by working code; every claim below cites the producing `file:line`):
 - `meta_findings_synthesizer` + `cross_analyst_correlator` (and the new
   `relationship_reifier` / `competing_hypotheses` / `calibration_tracking` /
   `deep_consult` / `structural_balance` / `graph_mining` / `nexus_decay` /
-  `fact_decay`) are now **REGISTERED** by descriptor in
+  `fact_decay` / `fact_contention_arbiter`) are now **REGISTERED** by descriptor in
   `scripts/bringup_register_analysts.py:58-75`, so they produce rows on cadence.
+  (`fact_contention_arbiter` is the detect-only contested-claims referee — a
+  `deterministic`-kind META analyst, TRACE_ONLY, hourly at `:37`, default OFF behind
+  `LEGBA_FACT_CONTENTION` — that surfaces a disputed fact's better-supported value in
+  the `fact_contention` sidecar **without ever mutating a fact**; #101,
+  ARCHITECTURE §5.9.)
 
 ---
 

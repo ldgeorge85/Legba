@@ -921,22 +921,27 @@ after a quiet window, contradiction override, corroboration boost, temporal
 expiration on `valid_until`, supersession of a same-subject/predicate fact). The
 relevant decay sub-handlers are `fact_decay` and `nexus_decay`.
 
-> **Fact write-path supersession model (updated 2026-06-26 — task #101 Holes-A;
-> see §7.8).** Supersession is **single-winner-by-recency within a source tier**,
-> NOT a contested-claim arbiter. Two refinements landed: (1) it is **source-tier-
-> aware** — a machine-extracted ingestion/agent fact no longer closes (supersedes)
-> an open human-curated `seed`/`curated` fact (`seed == curated > ingestion ==
-> agent`); same-tier recency still wins, so a legitimate leader change of the same
-> tier supersedes as before; (2) when N sources **agree** on the same
-> `(subject, predicate, value)`, confidence aggregates via a bounded **noisy-OR**
-> (cap 0.99) rather than MAX, so corroboration raises belief. The model is still
-> **single-winner**: it keys on `(subject, predicate)` latest-wins (the leader-change
-> semantics §7.9 relies on), does not keep coexisting disputed values, and has no
-> credibility-weighted arbitration. That full **contested-claim arbiter** (disputed
-> values kept alive at the fact layer + a credibility-weighted surfaced winner) is
-> **designed, not built** — `planning/CONTESTED_CLAIMS_PLAN.md`. Machine-extracted
-> ingestion fact confidence is floored conservatively (`_INGESTION_DEFAULT_CONFIDENCE`
-> ~0.5, below the 0.95 curated seed), not the old hardcoded 1.0.
+> **Fact write-path supersession model (updated 2026-06-29 — task #101 Holes-A
+> + Holes-B; see §7.8, §7.11).** The **default** write path is
+> **single-winner-by-recency within a source tier**. Three refinements landed in
+> Holes-A: (1) it is **source-tier-aware** — a machine-extracted ingestion/agent
+> fact no longer closes (supersedes) an open human-curated `seed`/`curated` fact
+> (`seed == curated > ingestion == agent`); same-tier recency still wins, so a
+> legitimate leader change of the same tier supersedes as before; (2) when N
+> sources **agree** on the same `(subject, predicate, value)`, confidence
+> aggregates via a bounded **noisy-OR** (cap 0.99) rather than MAX, so
+> corroboration raises belief; (3) every `facts` row now carries a
+> `source_credibility real` prior (§7.11). With those alone the model stays
+> **single-winner**: it keys on `(subject, predicate)` latest-wins (the
+> leader-change semantics §7.9 relies on), does not keep coexisting disputed
+> values, and does no credibility-weighted arbitration. **The full contested-claim
+> arbiter is now BUILT (Holes-B, §7.11)** — disputed values kept alive at the fact
+> layer + a credibility-weighted *surfaced* winner — but it is **detect-only and
+> flag-gated**: it never mutates a fact, the write-path coexistence that keeps two
+> disputed values open ships **OFF by default** (flag `LEGBA_FACT_CONTENTION`), and
+> it is enabled only on this instance. Machine-extracted ingestion fact confidence
+> is floored conservatively (`_INGESTION_DEFAULT_CONFIDENCE` ~0.5, below the 0.95
+> curated seed), not the old hardcoded 1.0.
 
 ### 7.3 The entity knowledge graph and structural balance
 
@@ -1122,9 +1127,10 @@ more-finished than the data.
   longer closes an open human-curated `seed`/`curated` fact (`seed == curated >
   ingestion == agent`; same-tier recency still wins); and N agreeing sources on a
   `(subject, predicate, value)` combine confidence via a bounded noisy-OR (cap 0.99),
-  not MAX. **Still single-winner-by-recency within a tier** — coexisting disputed
-  values and credibility-weighted arbitration are **designed, not built**
-  (`planning/CONTESTED_CLAIMS_PLAN.md`).
+  not MAX. The **default** write path is still single-winner-by-recency within a tier;
+  coexisting disputed values + a credibility-weighted surfaced winner are now the
+  **built** detect-only contested-claims arbiter (task #101 Holes-B, §7.11), gated
+  behind `LEGBA_FACT_CONTENTION` (default OFF) and enabled only on this instance.
 - ~~**Predicate vocabulary unreconciled**~~ — **FIXED (Phase B)**:
   `vocabulary.normalize_predicate` converges both write paths on the canonical
   lowercase-spaced form.
@@ -1305,6 +1311,147 @@ sufficient record (target n ≥ 30, ~3 weeks) **or** the task is sharpened to on
 where geography is not the dominant signal. Until then Legba **declines to call
 itself a forecaster** (README; `DIRECTION.md`) — the seam is documented as
 *designed and under test*, not *delivered*.
+
+### 7.11 Contested claims — the alternate-facts arbiter
+
+The supersession model of §7.2 is **single-winner-by-recency within a tier**: the
+newest same-tier `(subject, predicate)` assertion closes the prior. That is the
+right default for a genuine state change — a leader changes, the new officeholder
+fact supersedes the old (§7.9). But it is the *wrong* model for **disagreement**:
+when two sources of equal standing assert different *current* values for the same
+`(subject, predicate)` — the "alternate facts" problem — last-writer-wins silently
+destroys one side, and which side survives is an artifact of arrival order, not
+evidence. Legba's answer (task #101, "Holes-B") is a **detect-only contested-claim
+arbiter** built on one stance: *surface a winner from the SOURCE evidence, and
+never destroy the loser*. It is a methodology, not a verdict — it adjudicates which
+asserted value the substrate's own sources best support, it does **not** decide
+which is true in the world, and it **never** injects a model's own world-knowledge
+to settle a dispute.
+
+**Per-fact source credibility (the weighting input).** Every `facts` row carries a
+`source_credibility real` (Wave 0, migration `0054`). It is **resolved** as the MAX
+over the backing signals' per-host `signals.source_credibility` (the real scored
+track record, §7.8), falling back to a coarse **per-tier nominal** when no host
+score exists: `seed`/`curated` → 0.9, `ingestion`/`agent` → 0.5. A NULL is
+**UNKNOWN, never 0** — an unscored source is not treated as worthless, it simply
+abstains from the credibility mass. This is the *C* axis of the arbiter and the
+honest measure of "how much should this source's vote count".
+
+**Coexistence — never destroy the loser (Wave 4).** Before anything can be
+arbitrated, both disputed values have to *survive* the write path. Inside
+`supersede_prior_facts` (`provenance/writes.py`), when a same-tier incoming value is
+**fuzzy-distinct** from an open prior, the prior is **not** closed — the two
+coexist open so the arbiter can group them — instead of last-writer-wins. This is
+the one *behavioural* change in the whole feature, gated behind
+`LEGBA_FACT_CONTENTION` (**default OFF**, in code and in docker-compose
+`${VAR:-0}`); with the flag off the path is byte-for-byte the §7.2 single-winner
+model. Both fact producers (the analyst and ingestion paths) route through
+`supersede_prior_facts`, so the coexistence rule is uniform.
+
+**Fuzzy value clustering (Wave 2/3).** The arbiter only fires on *genuine*
+disagreement, so it must not split "Russia" from "Russian", or "Kyiv" from "Kiev",
+into a false dispute — nor merge "North Korea" with "South Korea" into a false
+agreement. `provenance/value_clustering.py` canonicalizes each raw value via the
+shared `canonicalize_entity` pass (the same demonym/alias/gazetteer normalization
+`entity_resolution` uses, §4.1) and then merges by **normalized Levenshtein**
+distance under a **tight** threshold `FUZZY_MERGE_MAX_DISTANCE = 0.12` — close
+enough to absorb a typo or spacing variant, far short of merging two genuinely
+different proper nouns (North/South Korea stays split). The same fuzzy helper also
+un-dormants the Holes-A noisy-OR corroboration leg, which previously grouped support
+by *exact* normalized string and therefore almost never fired on real,
+differently-phrased sources.
+
+**The deterministic Q·C·R·F score (Wave 2).** The arbiter is a `deterministic`
+META sub-handler (`fact_contention_arbiter`), TRACE_ONLY, firing **hourly at :37**.
+Each pass it scans **open** facts (`valid_until IS NULL AND superseded_by IS
+NULL`), buckets by `(subject, predicate)`, fuzzy-clusters the competing values, and
+**junk-gates** each cluster through the existing `fact_extractor` gates (so a
+number/date/unit or an inverted-relation triple is dropped, not adjudicated — the
+live Poland→Berlin case is junk, not a dispute). It scores each surviving value
+cluster multiplicatively, **Q·C·R·F**:
+
+- **Q (quorum)** — a log-damped count of **distinct backing sources** (keyed on
+  `derived_from` lineage, not rows, so one chatty source cannot manufacture
+  quorum), normalized within the group.
+- **C (credibility share)** — this value's share of the group's total
+  `source_credibility` mass (NULL-safe: unknown sources contribute nothing rather
+  than zero-ing the value).
+- **R (recency)** — an exponential **half-life** decay on the value's latest
+  assertion. Recency is *one bounded factor among four*, not the sole decider —
+  that is the structural fix versus last-writer-by-recency.
+- **F (confidence)** — the mean asserted confidence of the value's facts.
+
+The product is multiplicative on purpose: a zero on **any** axis kills the value (a
+single recent assertion from one unknown-credibility source does not win on recency
+alone).
+
+**The abstain gate (honest non-resolution).** The arbiter surfaces **at most one**
+winner per `(subject, predicate)` group, and only when it has earned it. It
+**abstains** — recording an honest "disputed, no resolution" rather than a forced
+pick — when the best cluster is **weak** (`best_score < MIN_SURFACE_SCORE = 0.15`)
+or the top two clusters are a **near-tie** (the best does not beat the runner-up by
+`DOMINANCE_RATIO = 1.25`). A surfaced winner is a *strong, dominant* value; a
+near-tie is left visibly unresolved.
+
+**Detect-only — the load-bearing invariant (B15).** The arbiter **never** mutates a
+fact. It touches zero of `valid_until` / `superseded_by` / `value` / `confidence`
+and never calls the supersession path. Its entire output is the **sidecar**
+(`fact_contention` + `fact_contention_values`, Wave 1, migration `0055`) plus three
+thin recomputable markers on `facts` — `contested`, `contention_id`,
+`surfaced_winner`. The whole contention state is derivable from the open facts, so
+the arbiter is a **read-over / annotate** layer, structurally incapable of
+destroying evidence — the same provenance-first discipline the journal (§3.10) and
+the lineage chain (§7.7) express.
+
+**The optional vLLM tie-break (Wave 2b) — and the provenance-first stance.** The
+one case the deterministic score genuinely cannot settle is a **near-tie** between
+two non-junk clusters that both clear the surface floor. *Only* there, and only when
+`LEGBA_FACT_CONTENTION_LLM_TIEBREAK` is set (**default OFF**), the arbiter may
+consult an LLM to break the tie — and it is bounded hard: the **self-hosted vLLM
+plane only** (the deps-builder *hard-refuses* an Anthropic/Opus primary so a
+mis-wired descriptor can never route the billed consult plane into a fact dispute),
+256 tokens, a 30s timeout, at most `MAX_LLM_TIEBREAKS = 10` calls per pass, and it
+**degrades to abstain on any failure**. Critically, **the tie-break is still
+detect-only**: an LLM-chosen winner is surfaced through the *same* sidecar + marker
+path; it never touches a fact value or `valid_until`. The receipt splits
+`llm_tiebreak_calls` (consultations attempted) from `llm_tiebreaks` (successful
+picks) so the spend and the effect are separately auditable. The stance the whole
+feature defends is here: the LLM is asked *"which of these two SOURCE-asserted
+values is better supported by this evidence?"*, **never** *"what is the true
+value?"* — it adjudicates the sources, it does not supply world-knowledge. This is
+exactly the right behaviour observed live: consulted on a dispute with **symmetric**
+evidence, the live vLLM **correctly abstained** rather than inventing a tiebreaker,
+which is the provenance-first answer.
+
+**Surfacing (Wave 5, read-only).** Contention is exposed without ever asserting a
+disputed value as settled truth:
+
+- **Grounding preamble (§7.9)** — a grounding-eligible fact (the existing
+  seed/curated provenance gate still applies; ingestion content is never injected)
+  is annotated: a surfaced winner reads `[CONTESTED: N sources disagree; surfaced
+  winner]`, while a contested-but-unresolved value reads `[DISPUTED: … no surfaced
+  winner — do not treat as settled]` so the analyst LLM never reads a disputed
+  value as fact.
+- **ACH (§7.5)** — a `contested_fact_value` evidence item is offered into
+  `competing_hypotheses`, so a live dispute is visible as evidence in the matrix.
+- **Read API** — `GET /api/v1/contention` (registry) serves the `fact_contention` /
+  `fact_contention_values` sidecar read-only.
+- **UI** — a `ContestedBadge` component mounts in the **Why** provenance trail
+  (fact-keyed) and the target **Claims** panel (subject-keyed).
+
+**Build / validation state (honest).** All waves (0, 1, 2, 2b, 4, 5) are **built,
+deployed, and enabled on this instance** (migration head **0055**; both
+`LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` ship **OFF by
+default** in code and compose, set to `1` only here via the gitignored `.env`).
+Proven **live**: the detect-only arbiter (Q·C·R·F surfaced the better-supported
+value, the detect-only invariant held — both facts' `valid_until`/`superseded_by`
+stayed NULL), Wave-4 coexistence (a same-tier fuzzy-distinct value coexisted,
+`supersede_closed = 0`), and the Wave-5 read API. The Wave-2b vLLM tie-break is
+proven **consulted live** (a genuine round-trip on a near-tie,
+`llm_tiebreak_calls = 1`, no errors) and correctly **abstained** on symmetric
+evidence — but a *successful* LLM **pick** (`llm_tiebreaks ≥ 1`) is **not yet
+observed live**; it awaits an asymmetric near-tie in the soak. Plan + decisions:
+`planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md`.
 
 ---
 
