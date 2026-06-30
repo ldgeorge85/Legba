@@ -48,12 +48,36 @@ Output ``data`` keys (the cadence receipt the operator reads):
     values_total      int — non-junk value clusters across open groups
     abstained         int — open groups where the arbiter surfaced NO winner
     junk_excluded     int — junk clusters recorded (is_junk=true), operator-reportable
+    llm_tiebreaks     int — near-tie abstains the LLM tie-break RESOLVED this pass
+                            (Wave 2b — 0 unless ``LEGBA_FACT_CONTENTION_LLM_TIEBREAK``
+                            is set AND a vLLM handler is wired)
+
+Wave 2b — LLM tie-break on ABSTAIN (decision #2). The deterministic ``Q·C·R·F``
+arbiter stays the default. There are TWO abstain causes at :func:`_select_winner`:
+(1) the best cluster is genuinely WEAK (``best_score < MIN_SURFACE_SCORE``) — the
+LLM is NEVER consulted, the abstain stands; (2) a NEAR-TIE between >= 2 non-junk
+clusters that BOTH clear ``MIN_SURFACE_SCORE`` but neither dominates the other by
+``DOMINANCE_RATIO`` — the ONLY case the LLM may break. When
+``LEGBA_FACT_CONTENTION_LLM_TIEBREAK`` is set (default OFF) AND deps carry a vLLM
+handler (the SELF-HOSTED ``llm.primary.openai_compat`` plane — NEVER Anthropic /
+Opus, that plane is consult/deep only), a BOUNDED, strictly-parsed call picks ONE
+``value_key`` OR ABSTAIN. Any failure / timeout / unparsable / llm-unavailable
+result DEGRADES to abstain (mirrors the ACH per-cell lexical fallback). Bounded:
+per-call token cap + timeout, and at most ``MAX_LLM_TIEBREAKS`` calls per pass.
+
+DETECT-ONLY (B15) holds for the tie-break too: an LLM-chosen winner is surfaced
+through the SAME sidecar + marker path (status surfaced, ``surfaced_winner``); it
+NEVER touches a fact ``value`` / ``valid_until`` / ``superseded_by`` /
+``confidence``.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import math
+import os
 from datetime import datetime, timezone
 from typing import Any, Mapping
 from uuid import UUID
@@ -79,6 +103,28 @@ ARBITER_VERSION = "fact_contention_arbiter/1.0.0"
 #: deadlock, refined by the LLM tie-break in the later Wave 2b).
 MIN_SURFACE_SCORE = 0.15
 DOMINANCE_RATIO = 1.25
+
+#: Wave 2b — LLM tie-break flag (decision #2). OFF by default: behavior is
+#: byte-for-byte the deterministic Wave-2 arbiter (no LLM, current abstain). ON
+#: only consults the LLM on a NEAR-TIE abstain (cause 2), never a weak abstain.
+LLM_TIEBREAK_ENV = "LEGBA_FACT_CONTENTION_LLM_TIEBREAK"
+
+#: Per-pass cap on LLM tie-break calls (bound: only abstaining near-tie groups
+#: trigger one, and never more than this many in a single hourly pass).
+MAX_LLM_TIEBREAKS = 10
+
+#: Per-call output token cap for the tie-break (the answer is one value_key or
+#: ABSTAIN — tiny). Bounded so a misconfigured handler can't run away.
+LLM_TIEBREAK_MAX_TOKENS = 256
+
+#: Per-call wall-clock timeout (seconds). On expiry the call is abandoned and the
+#: group ABSTAINS (degrade-not-break).
+LLM_TIEBREAK_TIMEOUT_SECONDS = 30.0
+
+#: The key under which the runtime stashes the resolved vLLM handler on
+#: ``StandardDeps.extras`` for the arbiter (wired in analyst_deps_builder iff the
+#: flag is ON and the descriptor declares method.llm.primary).
+LLM_DEPS_EXTRA_KEY = "fact_contention_llm"
 
 #: Recency half-life (B9): a value last asserted ``HALFLIFE_DAYS`` ago scores
 #: R=0.5; recency is ONE bounded factor in the multiplicative score, not the
@@ -367,6 +413,194 @@ def _select_winner(
     return best
 
 
+def _abstain_cause(aggs: list[_ValueAgg], scores: dict[str, float]) -> str | None:
+    """Classify WHY :func:`_select_winner` abstained (or ``None`` when it didn't).
+
+    Mirrors the two abstain gates of :func:`_select_winner` EXACTLY (the same
+    floor + dominance comparisons) so the cause is authoritative, not re-derived:
+
+      * ``None``       — there IS a deterministic winner (no abstain).
+      * ``"weak"``     — the best cluster is below ``MIN_SURFACE_SCORE`` (cause 1).
+                          The LLM is NEVER consulted here — the dispute is
+                          genuinely thin, surfacing anything would be noise.
+      * ``"near_tie"`` — both top clusters clear ``MIN_SURFACE_SCORE`` but the
+                          best fails to dominate the runner-up by
+                          ``DOMINANCE_RATIO`` (cause 2). The ONLY case Wave 2b's
+                          LLM tie-break may run.
+    """
+    if not aggs:
+        return None
+    ordered = sorted(
+        (scores.get(a.value_key, 0.0) for a in aggs), reverse=True,
+    )
+    best_score = ordered[0]
+    runner_up_score = ordered[1] if len(ordered) > 1 else 0.0
+    if best_score < MIN_SURFACE_SCORE:
+        return "weak"
+    if runner_up_score > 0 and best_score < DOMINANCE_RATIO * runner_up_score:
+        return "near_tie"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Wave 2b — bounded LLM tie-break on a NEAR-TIE abstain (decision #2)
+# ---------------------------------------------------------------------------
+
+
+def _llm_tiebreak_enabled() -> bool:
+    """``LEGBA_FACT_CONTENTION_LLM_TIEBREAK`` truthy? (default OFF).
+
+    OFF → the arbiter is byte-for-byte the deterministic Wave-2 handler: no LLM,
+    the near-tie abstain stands.
+    """
+    return os.getenv(LLM_TIEBREAK_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+_TIEBREAK_SYSTEM_PROMPT = (
+    "You are a deterministic intelligence-analysis referee resolving a NEAR-TIE "
+    "between competing claimed values for one (subject, predicate). The candidates "
+    "are statistically too close for the rule-based scorer to separate. Weigh "
+    "distinct-source corroboration, source credibility share, recency, source "
+    "types, and the representative phrasings. Pick the SINGLE best-supported "
+    "value_key, or ABSTAIN if they remain a genuine tie. Reply with ONE JSON "
+    "object and nothing else: {\"winner\": \"<value_key>\"} or {\"winner\": "
+    "\"ABSTAIN\"}. Never invent a value_key not listed."
+)
+
+
+def _build_tiebreak_prompt(
+    subject_key: str,
+    predicate_key: str,
+    aggs: list[_ValueAgg],
+    scores: dict[str, float],
+    now: datetime,
+) -> str:
+    """Render the competing clusters + their evidence as a strict tie-break prompt.
+
+    Gives the model exactly the deterministic factors (distinct_source_count,
+    credibility share, recency, source_types, representative value) so its call is
+    grounded in the SAME evidence the scorer used — not free-form speculation."""
+    group_cred_total = sum(a.cred_sum for a in aggs)
+    lines: list[str] = [
+        f"subject: {subject_key}",
+        f"predicate: {predicate_key}",
+        "",
+        "Candidate values (value_key — evidence):",
+    ]
+    for agg in aggs:
+        cred_share = _credibility_share(agg.cred_sum, group_cred_total)
+        recency = _recency(agg.latest_asserted_at, now)
+        types = ", ".join(sorted(agg.source_types)) or "unknown"
+        lines.append(
+            f"- {agg.value_key!r}: representative={agg.representative_value!r}; "
+            f"distinct_source_count={agg.distinct_source_count}; "
+            f"credibility_share={cred_share:.3f}; recency={recency:.3f}; "
+            f"confidence_mean={agg.confidence_mean:.3f}; source_types=[{types}]; "
+            f"score={scores.get(agg.value_key, 0.0):.4f}"
+        )
+    lines.append("")
+    lines.append(
+        'Reply with ONE JSON object: {"winner": "<value_key>"} '
+        'or {"winner": "ABSTAIN"}.'
+    )
+    return "\n".join(lines)
+
+
+def _parse_tiebreak_winner(
+    raw: str, valid_keys: set[str]
+) -> str | None:
+    """STRICTLY parse the tie-break reply to ONE listed value_key, else ``None``.
+
+    Returns ``None`` (→ ABSTAIN) on any deviation: no JSON object, missing
+    ``winner``, the literal ``ABSTAIN``, or a value_key not in ``valid_keys`` (no
+    hallucinated value can ever be surfaced)."""
+    if not raw:
+        return None
+    candidate = raw.strip()
+    if candidate.startswith("```"):
+        candidate = candidate.strip("`")
+        if candidate.lower().startswith("json"):
+            candidate = candidate[4:]
+        candidate = candidate.strip()
+    start = candidate.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    end = -1
+    for i in range(start, len(candidate)):
+        ch = candidate[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end < 0:
+        return None
+    try:
+        obj = json.loads(candidate[start:end])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    winner = obj.get("winner")
+    if not isinstance(winner, str):
+        return None
+    winner = winner.strip()
+    if not winner or winner.upper() == "ABSTAIN":
+        return None
+    return winner if winner in valid_keys else None
+
+
+async def _llm_tiebreak(
+    llm: Any,
+    subject_key: str,
+    predicate_key: str,
+    aggs: list[_ValueAgg],
+    scores: dict[str, float],
+    now: datetime,
+) -> _ValueAgg | None:
+    """Bounded, strictly-parsed LLM tie-break for ONE near-tie group.
+
+    Returns the chosen winner agg, or ``None`` to ABSTAIN. Degrade-not-break: any
+    timeout / exception / unparsable / unlisted result yields ``None`` (the
+    near-tie abstain stands), mirroring the ACH per-cell lexical fallback. The
+    call is single-turn, temperature 0, output-capped, and wrapped in a per-call
+    wall-clock timeout. DETECT-ONLY: this only SELECTS a winner — the caller still
+    surfaces it through the same sidecar + marker path."""
+    if llm is None or len(aggs) < 2:
+        return None
+    by_key = {a.value_key: a for a in aggs}
+    prompt = _build_tiebreak_prompt(subject_key, predicate_key, aggs, scores, now)
+    try:
+        response = await asyncio.wait_for(
+            llm.chat_complete(
+                [{"role": "user", "content": prompt}],
+                max_tokens=LLM_TIEBREAK_MAX_TOKENS,
+                temperature=0.0,
+                system=_TIEBREAK_SYSTEM_PROMPT,
+            ),
+            timeout=LLM_TIEBREAK_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "fact_contention_arbiter.tiebreak_timeout subject=%r predicate=%r",
+            subject_key, predicate_key,
+        )
+        return None
+    except Exception as exc:  # degrade-not-break: any handler failure → abstain
+        logger.warning("fact_contention_arbiter.tiebreak_failed err=%s", exc)
+        return None
+    content = getattr(response, "content", "") or ""
+    winner_key = _parse_tiebreak_winner(content, set(by_key))
+    if winner_key is None:
+        return None
+    return by_key.get(winner_key)
+
+
 # ---------------------------------------------------------------------------
 # Sidecar persistence (DETECT-ONLY: facts writes are markers only)
 # ---------------------------------------------------------------------------
@@ -554,16 +788,24 @@ async def _collapse_group(conn: Any, contention_id: UUID) -> None:
     )
 
 
-async def _run_arbiter(pool: Any) -> dict[str, int]:
-    """One full arbiter pass over the open facts. Idempotent."""
+async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
+    """One full arbiter pass over the open facts. Idempotent.
+
+    ``llm`` — the OPTIONAL self-hosted vLLM tie-break handler (Wave 2b). When it
+    is ``None`` (flag off / not wired) the pass is byte-for-byte the deterministic
+    Wave-2 arbiter. When present, a NEAR-TIE abstain (cause 2) may be resolved by
+    a bounded LLM call, capped at ``MAX_LLM_TIEBREAKS`` per pass. A WEAK abstain
+    (cause 1) NEVER calls the LLM."""
     counts = {
         "groups_open": 0,
         "groups_collapsed": 0,
         "values_total": 0,
         "abstained": 0,
         "junk_excluded": 0,
+        "llm_tiebreaks": 0,
     }
     now = _now()
+    llm_tiebreaks_left = MAX_LLM_TIEBREAKS if llm is not None else 0
     async with pool.acquire() as conn:
         rows = await _open_triples(conn)
         buckets = _bucket_rows(list(rows))
@@ -587,6 +829,22 @@ async def _run_arbiter(pool: Any) -> dict[str, int]:
             live_keys.add((subject_key, predicate_key))
             scores = _score_group(non_junk, now)
             winner = _select_winner(non_junk, scores)
+            # Wave 2b — LLM tie-break on a NEAR-TIE abstain ONLY (decision #2). A
+            # WEAK abstain (cause 1) is left alone; a genuine deterministic winner
+            # is never second-guessed. Bounded by MAX_LLM_TIEBREAKS per pass.
+            if (
+                winner is None
+                and llm is not None
+                and llm_tiebreaks_left > 0
+                and _abstain_cause(non_junk, scores) == "near_tie"
+            ):
+                llm_tiebreaks_left -= 1
+                llm_winner = await _llm_tiebreak(
+                    llm, subject_key, predicate_key, non_junk, scores, now,
+                )
+                if llm_winner is not None:
+                    winner = llm_winner
+                    counts["llm_tiebreaks"] += 1
             contention_id = await _upsert_group(conn, subject_key, predicate_key)
             await _replace_group_values(conn, contention_id, non_junk, junk, scores, winner)
             await conn.execute(
@@ -624,7 +882,8 @@ def _build_finding(counts: Mapping[str, int], target_id: str | None) -> FindingP
         f"groups_collapsed={counts['groups_collapsed']}\n"
         f"values_total={counts['values_total']}\n"
         f"abstained={counts['abstained']}\n"
-        f"junk_excluded={counts['junk_excluded']}"
+        f"junk_excluded={counts['junk_excluded']}\n"
+        f"llm_tiebreaks={counts.get('llm_tiebreaks', 0)}"
     )
     tags = ["deterministic", "fact_contention_arbiter", "detect_only"]
     if counts["groups_open"]:
@@ -639,6 +898,24 @@ def _build_finding(counts: Mapping[str, int], target_id: str | None) -> FindingP
     )
 
 
+def _resolve_tiebreak_llm(deps: Any | None) -> Any | None:
+    """Pull the self-hosted vLLM tie-break handler off ``deps.extras`` iff the
+    Wave-2b flag is ON.
+
+    Returns ``None`` (no tie-break) when the flag is OFF, ``deps`` is absent, or
+    no handler was wired — keeping the off-path behavior byte-for-byte
+    deterministic. The handler is injected by
+    :func:`legba.runtime.analyst_deps_builder._build_deterministic` ONLY when the
+    flag is set AND the descriptor declares ``method.llm.primary`` (the
+    ``llm.primary.openai_compat`` plane)."""
+    if deps is None or not _llm_tiebreak_enabled():
+        return None
+    extras = getattr(deps, "extras", None)
+    if not isinstance(extras, Mapping):
+        return None
+    return extras.get(LLM_DEPS_EXTRA_KEY)
+
+
 async def handle(
     inputs: list[dict[str, Any]],
     options: Mapping[str, Any],
@@ -651,11 +928,13 @@ async def handle(
         "values_total": 0,
         "abstained": 0,
         "junk_excluded": 0,
+        "llm_tiebreaks": 0,
     }
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is not None:
+        llm = _resolve_tiebreak_llm(deps)
         try:
-            counts = await _run_arbiter(pool)
+            counts = await _run_arbiter(pool, llm)
         except Exception as exc:  # pragma: no cover - defensive cadence guard
             logger.warning("fact_contention_arbiter.run_failed err=%s", exc)
 

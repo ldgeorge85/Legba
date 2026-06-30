@@ -252,7 +252,9 @@ async def build_analyst_run_method(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool, deps=deps,
         )
     elif kind == "deterministic":
-        trio = _build_deterministic(handler, deps)
+        trio = await _build_deterministic(
+            descriptor, handler, deps, _resolve_primary_llm,
+        )
     elif kind == "predictor":
         trio = await _build_predictor(descriptor, handler, _resolve_primary_llm)
     elif kind == "critic":
@@ -811,19 +813,78 @@ async def _build_competing_hypotheses(
     )
 
 
-def _build_deterministic(
+async def _build_deterministic(
+    descriptor: AnalystDescriptor,
     handler: KindHandler,
     deps: StandardDeps,
+    resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """deterministic — code-only sub-dispatched kind.
 
     The kind's module-level ``run_method`` takes the
     :class:`StandardDeps` bundle directly (sub-handlers reach into
-    ``deps.pg_pool`` etc.).  No LLM resolution.  Sub-handler selection
-    happens at run time via ``options["sub_handler"]`` — the descriptor
-    must populate that field (validated by the kind itself, not here).
+    ``deps.pg_pool`` etc.).  Sub-handler selection happens at run time via
+    ``options["sub_handler"]`` — the descriptor must populate that field
+    (validated by the kind itself, not here).
+
+    Wave 2b (#101): the ``fact_contention_arbiter`` sub-handler may break a
+    NEAR-TIE abstain with a BOUNDED call on the SELF-HOSTED vLLM plane. We
+    resolve that handler and inject it into ``deps.extras`` under
+    ``fact_contention.LLM_DEPS_EXTRA_KEY`` ONLY when BOTH hold:
+
+      * ``LEGBA_FACT_CONTENTION_LLM_TIEBREAK`` is set (default OFF); AND
+      * the descriptor declares ``method.llm.primary`` (the
+        ``llm.primary.openai_compat`` self-hosted component — NEVER Anthropic /
+        Opus, that plane is consult/deep only).
+
+    Off (or no LLM ref) → ``deps`` is threaded UNMODIFIED, so every other
+    deterministic sub-handler (and the arbiter's deterministic path) is
+    byte-for-byte unchanged. A resolution failure degrades to the no-LLM path
+    (the arbiter's own abstain stands) rather than blocking deps-build.
     """
+    if (
+        descriptor.identity.kind == "deterministic"
+        and _fact_contention_tiebreak_enabled()
+        and _primary_llm_component_id(descriptor) is not None
+    ):
+        try:
+            from ..data.analysts.deterministic_handlers.fact_contention_arbiter import (
+                LLM_DEPS_EXTRA_KEY,
+            )
+
+            llm = await resolve_llm()
+            from dataclasses import replace as _dc_replace
+
+            merged_extras = {**dict(deps.extras), LLM_DEPS_EXTRA_KEY: llm}
+            deps = _dc_replace(deps, extras=merged_extras)
+            logger.info(
+                "analyst_deps_builder.deterministic.fact_contention_tiebreak "
+                "analyst=%r llm=%r — Wave-2b LLM tie-break WIRED on the "
+                "self-hosted vLLM plane",
+                descriptor.identity.id,
+                _primary_llm_component_id(descriptor),
+            )
+        except Exception as exc:
+            logger.warning(
+                "analyst_deps_builder.deterministic.tiebreak_resolve_failed "
+                "analyst=%r err=%s — degrading to the deterministic (no-LLM) "
+                "arbiter path",
+                descriptor.identity.id, exc,
+            )
     return handler.run_method, deps, handler.output_kind
+
+
+def _fact_contention_tiebreak_enabled() -> bool:
+    """``LEGBA_FACT_CONTENTION_LLM_TIEBREAK`` truthy? (default OFF).
+
+    Read here too (not only in the handler) so the runtime resolves the vLLM
+    handler ONLY when the flag is set — off → no resolution, no extra registry
+    fetch, ``deps`` untouched."""
+    import os
+
+    return os.getenv("LEGBA_FACT_CONTENTION_LLM_TIEBREAK", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 async def _build_predictor(
