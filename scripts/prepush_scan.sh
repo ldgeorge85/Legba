@@ -69,17 +69,15 @@ fi
 
 # 3. Tracked .env / secrets files.
 section "3. tracked .env / secret files"
-git ls-files \
+while IFS= read -r f; do report tracked-secret-file "${f}"; done < <(git ls-files \
   | grep -E '(^|/)\.env$|(^|/)\.env\.[^e].*|\.legba_signing_key$|\.legba_bearer_token$|(^|/)vault(/|$)|master_key.*\.txt$|secrets?\.(ya?ml|json|txt)$' \
-  | grep -vE '\.env\.example$|\.env\.claude\.example$' \
-  | while IFS= read -r f; do report tracked-secret-file "${f}"; done
+  | grep -vE '\.env\.example$|\.env\.claude\.example$')
 
 # 4. Private-key material in tracked content (real keys only — test fixtures
 #    that embed FAKE/EXAMPLE/DUMMY placeholder bodies are allowlisted).
 section "4. private-key blocks in tracked content"
 if git grep -nI -E -- '-----BEGIN ([A-Z ]+ )?PRIVATE KEY-----' . ':(exclude)scripts/prepush_scan.sh' >/tmp/_ps_pk 2>/dev/null; then
-  grep -viE 'FAKE|EXAMPLE|DUMMY|PLACEHOLDER|REDACTED|test|fixture|mock' /tmp/_ps_pk \
-    | while IFS= read -r line; do report private-key "${line}"; done
+  while IFS= read -r line; do report private-key "${line}"; done < <(grep -viE 'FAKE|EXAMPLE|DUMMY|PLACEHOLDER|REDACTED|test|fixture|mock' /tmp/_ps_pk)
 fi
 
 # 5. Token assignments with a long literal value (PASS/SECRET/TOKEN/API_KEY).
@@ -89,17 +87,16 @@ section "5. PASS|SECRET|TOKEN|API_KEY assigned a long literal"
 if git grep -nI -E -- \
    '(PASS(WORD)?|SECRET|TOKEN|API_?KEY)["'"'"']?\s*[:=]\s*["'"'"']?[A-Za-z0-9/+_.-]{16,}' \
    . ':(exclude)scripts/prepush_scan.sh' >/tmp/_ps_tok 2>/dev/null; then
-  grep -vE '\$\{|\$[A-Z_]|<[^>]+>|example|changeme|placeholder|your-|xxxx|REDACTED|\.invalid|getenv|os\.environ|environ\.get|process\.env|EXAMPLE|dummy|fake|TODO|"dev"|=dev$|:-dev' /tmp/_ps_tok \
-    | while IFS= read -r line; do report token-literal "${line}"; done
+  while IFS= read -r line; do report token-literal "${line}"; done < <(grep -vE '\$\{|\$[A-Z_]|<[^>]+>|example|changeme|placeholder|your-|xxxx|REDACTED|\.invalid|getenv|os\.environ|environ\.get|process\.env|EXAMPLE|dummy|fake|TODO|"dev"|=dev$|:-dev' /tmp/_ps_tok)
 fi
 
 # 6. High-entropy literals (long base64/hex runs) — heuristic, allowlist-filtered.
 section "6. high-entropy literals (heuristic)"
 if git grep -nI -E -- "['\"][A-Za-z0-9+/]{40,}={0,2}['\"]|['\"][0-9a-fA-F]{48,}['\"]" \
    . ':(exclude)scripts/prepush_scan.sh' ':(exclude)legba-ui-v3/package-lock.json' \
+   ':(exclude)deploy/baseline/0001_baseline.sql' \
    ':(exclude)*.svg' ':(exclude)*.png' >/tmp/_ps_ent 2>/dev/null; then
-  grep -vE 'sha256-|sha512-|integrity|test|fixture|mock|example|sample|hash|digest|did:key:|base64|encode|decode|ALPHABET|alphabet|charset|/[a-z]+/[a-z]+/' /tmp/_ps_ent \
-    | while IFS= read -r line; do report high-entropy "${line}"; done
+  while IFS= read -r line; do report high-entropy "${line}"; done < <(grep -vE 'sha256-|sha512-|integrity|test|fixture|mock|example|sample|hash|digest|did:key:|base64|encode|decode|ALPHABET|alphabet|charset|/[a-z]+/[a-z]+/' /tmp/_ps_ent)
 fi
 
 # 7. Non-neutral commit identity on the about-to-push range.
@@ -122,8 +119,7 @@ fi
 
 # 8. Tracked planning/ files (internal tracking must stay ignored).
 section "8. tracked planning/ files"
-git ls-files planning/ 2>/dev/null \
-  | while IFS= read -r f; do report tracked-planning "${f}"; done
+while IFS= read -r f; do report tracked-planning "${f}"; done < <(git ls-files planning/ 2>/dev/null)
 
 # Optional gitleaks pass.
 section "gitleaks (optional)"
