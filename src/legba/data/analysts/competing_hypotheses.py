@@ -492,6 +492,66 @@ async def _read_evidence_for_topic(
                 "polarity": int(r["polarity"] or 0),
             })
 
+    # 4) Contested-fact-value diagnostics (Holes-B Wave 5, #101). An OPEN
+    #    contention group whose subject is one of the topic's resolved entities
+    #    is a FIRST-CLASS ACH diagnostic: the substrate itself is telling us
+    #    credible sources DISAGREE on a (subject, predicate) value. We surface
+    #    the dispute as one ``contested_fact_value`` item per group, listing the
+    #    competing non-junk values + the arbiter's surfaced winner (if any) —
+    #    so the matrix can reason FROM the disagreement (which value a
+    #    hypothesis implies) instead of silently picking one side. Read-only:
+    #    we never close, surface, or mutate a fact or a group here.
+    remaining = max(0, limit - len(evidence))
+    if remaining and entity_names:
+        contention_rows = await conn.fetch(
+            """
+            SELECT fc.id,
+                   fc.subject_key,
+                   fc.predicate_key,
+                   fc.status,
+                   fc.surfaced_value,
+                   fc.value_count,
+                   fc.updated_at,
+                   COALESCE(
+                       array_agg(fcv.value_key ORDER BY fcv.arbiter_score DESC NULLS LAST)
+                         FILTER (WHERE fcv.is_junk = false),
+                       '{}'
+                   ) AS competing_values
+              FROM fact_contention fc
+              LEFT JOIN fact_contention_values fcv ON fcv.contention_id = fc.id
+             WHERE fc.status IN ('contested', 'surfaced')
+               AND fc.subject_key = ANY($1::text[])
+             GROUP BY fc.id, fc.subject_key, fc.predicate_key, fc.status,
+                      fc.surfaced_value, fc.value_count, fc.updated_at
+             ORDER BY fc.value_count DESC, fc.updated_at DESC
+             LIMIT $2
+            """,
+            entity_names, remaining,
+        )
+        for r in contention_rows:
+            values = [str(v) for v in (r["competing_values"] or []) if v]
+            surfaced = r["surfaced_value"]
+            disagree = " vs ".join(values) if values else "(values unavailable)"
+            winner = (
+                f"surfaced winner='{surfaced}'" if surfaced
+                else "NO surfaced winner (arbiter abstained — unresolved)"
+            )
+            text = (
+                f"CONTESTED CLAIM: sources disagree on "
+                f"'{r['subject_key']}' {r['predicate_key']}: {disagree}; {winner}"
+            )
+            evidence.append({
+                "id": r["id"],
+                "kind": "contested_fact_value",
+                "text": text[:600],
+                # The dispute is maximally DIAGNOSTIC (it is the platform's own
+                # flag of an unresolved disagreement), but it does not assert a
+                # value — polarity is neutral so it doesn't pre-bias a side.
+                "confidence": 0.9,
+                "produced_at": r["updated_at"],
+                "polarity": 0,
+            })
+
     logger.debug(
         "competing_hypotheses.evidence topic=%s items=%d", sit_id, len(evidence),
     )

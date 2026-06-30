@@ -38,6 +38,7 @@ from legba.data.analysts.competing_hypotheses import (
     _coerce_hypotheses,
     _deterministic_hypotheses,
     _diagnosticity,
+    _read_evidence_for_topic,
     _resolve_hypotheses_against_subsequent_facts,
     _resolve_topic_entities,
     _score_consistency,
@@ -803,3 +804,110 @@ async def test_calibration_reads_exogenous_resolved_outcome_only(pg_pool):
     resolved_row = next(r for r in mine if r["claim_id"] == str(out_resolved.id))
     assert resolved_row["outcome"] == 0
     assert resolved_row["claimed_confidence"] > 0.5
+
+
+# ---------------------------------------------------------------------------
+# Contested-fact-value ACH evidence (Holes-B Wave 5, #101) — a stub-conn unit
+# test (no live DB): an OPEN fact_contention group whose subject is a resolved
+# topic entity becomes a ``contested_fact_value`` diagnostic-evidence item.
+# ---------------------------------------------------------------------------
+
+
+class _RoutingConn:
+    """Routes ``fetch`` by table keyword so one stub serves every read leg of
+    ``_read_evidence_for_topic`` (entity_profiles / analyst_outputs / facts /
+    nexuses / fact_contention). Records the SQL it ran."""
+
+    def __init__(self, rows: dict[str, list[dict[str, Any]]]):
+        self._rows = rows
+        self.log: list[str] = []
+
+    async def fetch(self, sql: str, *params: Any) -> list[dict[str, Any]]:
+        self.log.append(sql)
+        if "FROM entity_profiles" in sql:
+            return self._rows.get("entity_profiles", [])
+        if "FROM fact_contention" in sql:
+            return self._rows.get("fact_contention", [])
+        if "FROM analyst_outputs" in sql:
+            return self._rows.get("analyst_outputs", [])
+        if "FROM facts" in sql:
+            return self._rows.get("facts", [])
+        if "FROM nexuses" in sql:
+            return self._rows.get("nexuses", [])
+        return []
+
+
+@pytest.mark.asyncio
+async def test_read_evidence_surfaces_open_contention_as_diagnostic():
+    cid = uuid4()
+    conn = _RoutingConn({
+        "entity_profiles": [{"canonical_name": "Country X"}],
+        "fact_contention": [
+            {
+                "id": cid,
+                "subject_key": "country x",
+                "predicate_key": "capital",
+                "status": "surfaced",
+                "surfaced_value": "Alpha",
+                "value_count": 2,
+                "updated_at": None,
+                "competing_values": ["Alpha", "Beta"],
+            }
+        ],
+    })
+    evidence = await _read_evidence_for_topic(
+        conn, situation={"id": uuid4(), "name": "Country X", "derived_from": []},
+        limit=30,
+    )
+    contested = [e for e in evidence if e["kind"] == "contested_fact_value"]
+    assert len(contested) == 1
+    item = contested[0]
+    assert item["id"] == cid
+    assert item["polarity"] == 0  # neutral — does not pre-bias a hypothesis
+    assert "CONTESTED CLAIM" in item["text"]
+    assert "Alpha vs Beta" in item["text"]
+    assert "surfaced winner='Alpha'" in item["text"]
+    # The query scoped by subject_key against the resolved entity set + only
+    # live groups (contested/surfaced).
+    fc_sql = next(s for s in conn.log if "FROM fact_contention" in s)
+    assert "fc.subject_key = ANY($1::text[])" in fc_sql
+    assert "fc.status IN ('contested', 'surfaced')" in fc_sql
+
+
+@pytest.mark.asyncio
+async def test_read_evidence_abstained_contention_reads_unresolved():
+    conn = _RoutingConn({
+        "entity_profiles": [{"canonical_name": "Country X"}],
+        "fact_contention": [
+            {
+                "id": uuid4(),
+                "subject_key": "country x",
+                "predicate_key": "capital",
+                "status": "contested",
+                "surfaced_value": None,  # arbiter abstained
+                "value_count": 2,
+                "updated_at": None,
+                "competing_values": ["Alpha", "Beta"],
+            }
+        ],
+    })
+    evidence = await _read_evidence_for_topic(
+        conn, situation={"id": uuid4(), "name": "Country X", "derived_from": []},
+        limit=30,
+    )
+    item = next(e for e in evidence if e["kind"] == "contested_fact_value")
+    assert "NO surfaced winner" in item["text"]
+    assert "abstained" in item["text"]
+
+
+@pytest.mark.asyncio
+async def test_read_evidence_no_contention_when_no_entities():
+    """No resolved entity set → the contention leg never queries (no spurious
+    diagnostic) — mirrors the facts/nexuses entity-scoping guard."""
+    conn = _RoutingConn({"entity_profiles": []})
+    evidence = await _read_evidence_for_topic(
+        conn, situation={"id": uuid4(), "name": "", "derived_from": []},
+        limit=30,
+    )
+    assert [e for e in evidence if e["kind"] == "contested_fact_value"] == []
+    assert not any("FROM fact_contention" in s for s in conn.log)

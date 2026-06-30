@@ -135,6 +135,20 @@ def _is_bare_qid(value: Any) -> bool:
     return isinstance(value, str) and _BARE_QID_RE.match(value.strip()) is not None
 
 
+def _row_get(row: Any, key: str, default: Any = None) -> Any:
+    """Read ``key`` from an asyncpg Record OR a plain dict, tolerating absence.
+
+    asyncpg ``Record`` raises ``KeyError`` on a missing column and has no
+    ``.get``, while the in-process test stubs hand back plain dicts that may
+    omit the newer joined columns (the Wave-5 contention annotation). This
+    keeps both shapes working — a row lacking the column degrades to
+    ``default`` instead of raising, so an older row shape is uncontested."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
 # A name shorter than this is too generic to ground on (drops "US", bare
 # initials, junk NER 1-2 char tags). 3 keeps real country/person names.
 _MIN_CANDIDATE_LEN = 3
@@ -190,9 +204,43 @@ def _is_non_event_situation(name: Any) -> bool:
 
 
 class GroundingFact:
-    """A single current authoritative fact row, normalised for rendering."""
+    """A single current authoritative fact row, normalised for rendering.
 
-    __slots__ = ("subject", "predicate", "value", "valid_from", "source_type", "confidence")
+    CONTESTED annotation (Holes-B Wave 5 — #101). A grounding-eligible
+    (seed/curated) fact can still belong to a live contention group when the
+    operator vetted two coexisting values for the same ``(subject, predicate)``
+    or an ingestion-side dispute names a curated value as one of its clusters.
+    The thin ``facts`` markers (``contested`` / ``surfaced_winner``) joined
+    against ``fact_contention`` let the preamble TELL the reading LLM that a
+    value is disputed instead of asserting a disputed value as plain ground
+    truth. Three states the renderer distinguishes:
+
+      * ``contested=False`` — the common case; rendered exactly as before.
+      * ``contested=True`` AND ``surfaced_winner=True`` — the arbiter picked
+        THIS value as the (current, deterministic) winner over N-1 others.
+        Rendered with "(CONTESTED: N sources disagree; surfaced winner)".
+      * ``contested=True`` AND ``surfaced_winner=False`` — a contested
+        non-winner, or a group the arbiter ABSTAINED on (no surfaced winner).
+        Rendered "DISPUTED" so it is NEVER read as settled fact.
+
+    ``contention_value_count`` is the group's distinct NON-junk value-cluster
+    count (the "N sources disagree" N — really N competing values); NULL/absent
+    when uncontested. The annotation NEVER injects ingestion content: only the
+    already-eligible fact's own line is decorated; the sibling values live in
+    the sidecar (surfaced by the read API), not in the ground-truth preamble.
+    """
+
+    __slots__ = (
+        "subject",
+        "predicate",
+        "value",
+        "valid_from",
+        "source_type",
+        "confidence",
+        "contested",
+        "surfaced_winner",
+        "contention_value_count",
+    )
 
     def __init__(
         self,
@@ -203,6 +251,9 @@ class GroundingFact:
         valid_from: datetime | None,
         source_type: str | None,
         confidence: float | None,
+        contested: bool = False,
+        surfaced_winner: bool = False,
+        contention_value_count: int | None = None,
     ) -> None:
         self.subject = subject
         self.predicate = predicate
@@ -210,12 +261,30 @@ class GroundingFact:
         self.valid_from = valid_from
         self.source_type = source_type
         self.confidence = confidence
+        self.contested = bool(contested)
+        self.surfaced_winner = bool(surfaced_winner)
+        self.contention_value_count = contention_value_count
 
     def render(self) -> str:
         since = ""
         if isinstance(self.valid_from, datetime):
             since = f" (since {self.valid_from.date().isoformat()})"
-        return f"{self.subject} — {self.predicate}: {self.value}{since}"
+        return f"{self.subject} — {self.predicate}: {self.value}{since}{self._contested_suffix()}"
+
+    def _contested_suffix(self) -> str:
+        """The CONTESTED/DISPUTED annotation appended to a contested fact line.
+
+        Empty for the uncontested common case. A surfaced winner reads as the
+        current best answer but flags the disagreement + value count; a
+        contested non-winner / abstained group reads "DISPUTED" so the LLM
+        never treats the value as settled ground truth."""
+        if not self.contested:
+            return ""
+        n = self.contention_value_count
+        n_str = str(n) if isinstance(n, int) and n > 0 else "multiple"
+        if self.surfaced_winner:
+            return f"  [CONTESTED: {n_str} sources disagree; surfaced winner]"
+        return f"  [DISPUTED: {n_str} sources disagree; no surfaced winner — do not treat as settled]"
 
 
 class GroundingNexus:
@@ -961,18 +1030,34 @@ class SubstrateGroundingResolver:
         # label-lookup failure — exclude it in SQL so the ``LIMIT`` budget is
         # spent only on facts that can actually render. (The Python guard below
         # is the in-process backstop for the same rule.)
+        #
+        # CONTESTED annotation (Wave 5, #101): LEFT JOIN the already-populated
+        # contention SIDECAR so a grounding-eligible fact that is in a live
+        # dispute is ANNOTATED (CONTESTED/DISPUTED), never silently asserted as
+        # ground truth. Read-only — the join touches nothing, the provenance
+        # gate above is unchanged (only seed/curated rows are SELECTed; the
+        # sidecar merely tells the renderer one of them is disputed). A
+        # ``collapsed`` group (down to one value) reads as uncontested, so the
+        # COALESCE folds it back to the marker default — we trust the live
+        # sidecar status over a possibly-stale ``facts.contested`` marker.
         sql = """
-            SELECT subject, predicate, value, valid_from, source_type, confidence
-            FROM facts
-            WHERE lower(subject) = ANY($1::text[])
-              AND source_type = ANY($2::text[])
-              AND superseded_by IS NULL
-              AND (valid_until IS NULL OR valid_until > now())
-              AND value !~ '^Q[0-9]+$'
+            SELECT f.subject, f.predicate, f.value, f.valid_from,
+                   f.source_type, f.confidence,
+                   (f.contested AND fc.status IN ('contested','surfaced'))
+                       AS contested,
+                   COALESCE(f.surfaced_winner, false) AS surfaced_winner,
+                   fc.value_count AS contention_value_count
+            FROM facts f
+            LEFT JOIN fact_contention fc ON fc.id = f.contention_id
+            WHERE lower(f.subject) = ANY($1::text[])
+              AND f.source_type = ANY($2::text[])
+              AND f.superseded_by IS NULL
+              AND (f.valid_until IS NULL OR f.valid_until > now())
+              AND f.value !~ '^Q[0-9]+$'
             ORDER BY
-              (source_type IN ('seed','curated')) DESC,
-              confidence DESC NULLS LAST,
-              valid_from DESC NULLS LAST
+              (f.source_type IN ('seed','curated')) DESC,
+              f.confidence DESC NULLS LAST,
+              f.valid_from DESC NULLS LAST
             LIMIT $3
         """
         async with self._pool.acquire() as conn:
@@ -983,6 +1068,16 @@ class SubstrateGroundingResolver:
             # preamble (degrade to no-grounding for this fact, not a Qxxxx line).
             if _is_bare_qid(r["value"]):
                 continue
+            # asyncpg returns the joined columns; a fact with no contention_id
+            # has NULL ``contested`` / ``contention_value_count`` (no matched
+            # row), which the GroundingFact ctor coerces to the uncontested
+            # default. ``_row_get`` keeps a pre-Wave-5 row shape (one that never
+            # SELECTed the joined columns) backward-compatible — it degrades to
+            # the plain/uncontested default rather than raising.
+            contested_raw = _row_get(r, "contested")
+            contested = bool(contested_raw) if contested_raw is not None else False
+            vc_raw = _row_get(r, "contention_value_count")
+            value_count = int(vc_raw) if vc_raw is not None else None
             out.append(
                 GroundingFact(
                     subject=r["subject"],
@@ -993,6 +1088,9 @@ class SubstrateGroundingResolver:
                     confidence=(
                         float(r["confidence"]) if r["confidence"] is not None else None
                     ),
+                    contested=contested,
+                    surfaced_winner=bool(_row_get(r, "surfaced_winner") or False),
+                    contention_value_count=value_count,
                 )
             )
         return out

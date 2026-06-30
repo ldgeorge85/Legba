@@ -61,6 +61,11 @@ MAX_LIMIT = 500
 # query types so the OpenAPI doc enumerates them.
 Severity = Literal["low", "medium", "high", "critical"]
 SituationState = Literal["active", "resolved", "escalating"]
+# `public.fact_contention.status` lifecycle (migration 0055): a group is
+# opened `contested`, walks to `surfaced` when the arbiter picks a winner, and
+# `collapsed` once it drops below 2 non-junk clusters. The UI surfaces the LIVE
+# disputes (contested / surfaced); a `collapsed` group is no longer contested.
+ContentionStatus = Literal["contested", "surfaced", "collapsed"]
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +202,57 @@ class SignalRow(BaseModel):
     entity_classes: list[str] = Field(default_factory=list)
 
 
+class ContentionValueRow(BaseModel):
+    """One competing NON-junk OR junk value cluster of a contention group.
+
+    Mirrors `public.fact_contention_values` (Holes-B Wave 1, migration 0055)
+    column-for-column, minus pure-internal ids the UI doesn't render. Each row
+    is one distinct value the sources offered for the group's
+    `(subject, predicate)`, carrying its aggregated support (distinct lineage,
+    summed source-credibility, confidence stats), the deterministic arbiter
+    `Q·C·R·F` score, and whether the arbiter surfaced it as the winner. A
+    junk-gated cluster carries `is_junk=true` + the operator-reportable
+    `junk_reason` (never silently dropped) and is excluded from the dispute
+    count.
+    """
+    value_key: str
+    representative_fact_id: str | None
+    distinct_source_count: int
+    source_credibility_sum: float
+    confidence_max: float
+    confidence_mean: float
+    source_types: list[str] = Field(default_factory=list)
+    arbiter_score: float | None
+    surfaced_winner: bool
+    is_junk: bool
+    junk_reason: str | None
+    latest_asserted_at: datetime | None
+
+
+class ContentionRow(BaseModel):
+    """One contention group — `public.fact_contention` (migration 0055) plus
+    its per-value support clusters.
+
+    A group is opened when >= 2 credible sources disagree on a
+    `(subject_key, predicate_key)` value. `status` walks
+    contested -> surfaced -> collapsed; `surfaced_value` is the arbiter's
+    current deterministic winner (NULL when it ABSTAINED on a near-tie). The
+    UI's "Contested" badge + per-value support panel read directly off this
+    shape. READ-ONLY: this endpoint never mutates a fact, a group, or a marker.
+    """
+    id: str
+    subject_key: str
+    predicate_key: str
+    status: str
+    surfaced_value: str | None
+    value_count: int
+    junk_count: int
+    opened_at: datetime
+    resolved_at: datetime | None
+    updated_at: datetime
+    values: list[ContentionValueRow] = Field(default_factory=list)
+
+
 class FindingsPage(BaseModel):
     data: list[FindingRow]
     next_cursor: str | None
@@ -209,6 +265,11 @@ class SituationsPage(BaseModel):
 
 class SignalsPage(BaseModel):
     data: list[SignalRow]
+    next_cursor: str | None
+
+
+class ContentionPage(BaseModel):
+    data: list[ContentionRow]
     next_cursor: str | None
 
 
@@ -345,6 +406,49 @@ def _hydrate_signal(row: Any, *, target_id: str | None = None) -> SignalRow:
         geo=geo,
         tags=tags,
         entity_classes=list(row.get("entity_classes") or []),
+    )
+
+
+def _hydrate_contention_value(row: Any) -> ContentionValueRow:
+    """Map one `fact_contention_values` row to its UI-facing model."""
+    rep = row["representative_fact_id"]
+    return ContentionValueRow(
+        value_key=row["value_key"],
+        representative_fact_id=str(rep) if rep is not None else None,
+        distinct_source_count=int(row["distinct_source_count"]),
+        source_credibility_sum=float(row["source_credibility_sum"]),
+        confidence_max=float(row["confidence_max"]),
+        confidence_mean=float(row["confidence_mean"]),
+        source_types=list(row["source_types"] or []),
+        arbiter_score=(
+            float(row["arbiter_score"]) if row["arbiter_score"] is not None else None
+        ),
+        surfaced_winner=bool(row["surfaced_winner"]),
+        is_junk=bool(row["is_junk"]),
+        junk_reason=row["junk_reason"],
+        latest_asserted_at=row["latest_asserted_at"],
+    )
+
+
+def _hydrate_contention(group_row: Any, value_rows: list[Any]) -> ContentionRow:
+    """Map one `fact_contention` group + its value clusters to ContentionRow.
+
+    The per-value rows are surfaced in their stored arbiter order (winner /
+    highest score first; the SQL orders them), so the UI's support panel reads
+    top-down strongest-first without re-sorting.
+    """
+    return ContentionRow(
+        id=str(group_row["id"]),
+        subject_key=group_row["subject_key"],
+        predicate_key=group_row["predicate_key"],
+        status=group_row["status"],
+        surfaced_value=group_row["surfaced_value"],
+        value_count=int(group_row["value_count"]),
+        junk_count=int(group_row["junk_count"]),
+        opened_at=group_row["opened_at"],
+        resolved_at=group_row["resolved_at"],
+        updated_at=group_row["updated_at"],
+        values=[_hydrate_contention_value(v) for v in value_rows],
     )
 
 
@@ -577,5 +681,135 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             last = out[-1]
             next_cursor = _encode_cursor(last.produced_at, last.id)
         return SignalsPage(data=out, next_cursor=next_cursor)
+
+    # ---------------- contention (Holes-B Wave 5, #101) ----------------
+
+    @router.get("/contention", response_model=ContentionPage)
+    async def list_contention(
+        status_filter: ContentionStatus | None = Query(default=None, alias="status"),
+        subject: str | None = Query(default=None),
+        fact_id: str | None = Query(default=None),
+        include_junk: bool = Query(default=False),
+        since: datetime | None = Query(default=None),
+        limit: int = Query(default=DEFAULT_LIMIT),
+        cursor: str | None = Query(default=None),
+        principal: str = Depends(require_bearer),
+    ) -> ContentionPage:
+        """List contested-claim groups + their per-value support clusters.
+
+        Read-only SELECTs over the deployed `fact_contention` /
+        `fact_contention_values` sidecar (migration 0055). Backs the UI's
+        "Contested" badge + per-value support panel and the consult surface.
+
+        Filters (all optional):
+          * `status` — `contested` / `surfaced` / `collapsed`. UNSET defaults
+            to the LIVE disputes only (`contested` + `surfaced`); pass
+            `status=collapsed` to see resolved/folded groups.
+          * `subject` — case-insensitive exact match on `subject_key`
+            (the lower-cased subject). Lets the Why/fact view fetch the
+            dispute for the fact it's rendering.
+          * `fact_id` — return the single group a given `facts` row belongs to
+            (resolved via `facts.contention_id`). The fact/Why view's direct
+            lookup.
+          * `include_junk` — when false (default), junk-gated value clusters
+            (`is_junk=true`) are omitted from each group's `values`; the
+            group's `junk_count` still reports how many were excluded.
+        """
+        limit = _validate_limit(limit)
+
+        where: list[str] = []
+        args: list[Any] = []
+
+        if status_filter is not None:
+            args.append(status_filter)
+            where.append(f"fc.status = ${len(args)}")
+        else:
+            # Default to LIVE disputes only — a collapsed group is resolved.
+            where.append("fc.status IN ('contested', 'surfaced')")
+        if subject is not None:
+            args.append(subject.strip().lower())
+            where.append(f"fc.subject_key = ${len(args)}")
+        if since is not None:
+            args.append(since)
+            where.append(f"fc.updated_at >= ${len(args)}")
+        if cursor is not None:
+            cur_at, cur_id = _decode_cursor(cursor)
+            args.append(cur_at)
+            args.append(cur_id)
+            where.append(
+                f"(fc.updated_at, fc.id) < (${len(args) - 1}, ${len(args)})"
+            )
+
+        async with deps.descriptor_registry.pg.acquire() as conn:
+            # A `fact_id` filter resolves to the group that fact belongs to
+            # (facts.contention_id). Done as a pre-resolve so it composes with
+            # the other filters as a single extra group-id predicate.
+            if fact_id is not None:
+                try:
+                    fact_uuid = UUID(fact_id)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="fact_id must be a UUID",
+                    )
+                grp = await conn.fetchval(
+                    "SELECT contention_id FROM facts WHERE id = $1",
+                    fact_uuid,
+                )
+                if grp is None:
+                    return ContentionPage(data=[], next_cursor=None)
+                args.append(grp)
+                where.append(f"fc.id = ${len(args)}")
+
+            args.append(limit + 1)
+            where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+            group_sql = f"""
+                SELECT fc.id, fc.subject_key, fc.predicate_key, fc.status,
+                       fc.surfaced_value, fc.value_count, fc.junk_count,
+                       fc.opened_at, fc.resolved_at, fc.updated_at
+                  FROM fact_contention fc
+                 {where_clause}
+                 ORDER BY fc.updated_at DESC, fc.id DESC
+                 LIMIT ${len(args)}
+            """
+            group_rows = await conn.fetch(group_sql, *args)
+
+            # Per-group value clusters in arbiter order (winner / top score
+            # first). One batched query keyed on the page's group ids — no
+            # N+1. Junk clusters are filtered unless `include_junk`.
+            page_groups = group_rows[:limit]
+            values_by_group: dict[Any, list[Any]] = {}
+            if page_groups:
+                group_ids = [g["id"] for g in page_groups]
+                junk_clause = "" if include_junk else "AND fcv.is_junk = false"
+                value_rows = await conn.fetch(
+                    f"""
+                    SELECT fcv.contention_id, fcv.value_key,
+                           fcv.representative_fact_id, fcv.distinct_source_count,
+                           fcv.source_credibility_sum, fcv.confidence_max,
+                           fcv.confidence_mean, fcv.source_types,
+                           fcv.arbiter_score, fcv.surfaced_winner, fcv.is_junk,
+                           fcv.junk_reason, fcv.latest_asserted_at
+                      FROM fact_contention_values fcv
+                     WHERE fcv.contention_id = ANY($1::uuid[])
+                       {junk_clause}
+                     ORDER BY fcv.surfaced_winner DESC,
+                              fcv.arbiter_score DESC NULLS LAST,
+                              fcv.distinct_source_count DESC
+                    """,
+                    group_ids,
+                )
+                for vr in value_rows:
+                    values_by_group.setdefault(vr["contention_id"], []).append(vr)
+
+        out = [
+            _hydrate_contention(g, values_by_group.get(g["id"], []))
+            for g in page_groups
+        ]
+        next_cursor: str | None = None
+        if len(group_rows) > limit and out:
+            last_group = page_groups[-1]
+            next_cursor = _encode_cursor(last_group["updated_at"], last_group["id"])
+        return ContentionPage(data=out, next_cursor=next_cursor)
 
     return router

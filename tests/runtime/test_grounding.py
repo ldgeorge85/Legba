@@ -346,9 +346,11 @@ async def test_resolver_applies_current_facts_gate_in_sql():
     resolver = SubstrateGroundingResolver(pg_pool=pool)
     await resolver.resolve(["United States"], max_facts=30)
     facts_sql = next(sql for sql, _ in pool.log if "FROM facts" in sql)
-    # The temporal-honesty gate (matches substrate_query_port).
-    assert "superseded_by IS NULL" in facts_sql
-    assert "valid_until IS NULL OR valid_until > now()" in facts_sql
+    # The temporal-honesty gate (matches substrate_query_port). The fact query
+    # is aliased ``f`` since Wave 5 LEFT JOINs the contention sidecar (``fc``),
+    # so the gate columns now carry the ``f.`` qualifier.
+    assert "f.superseded_by IS NULL" in facts_sql
+    assert "f.valid_until IS NULL OR f.valid_until > now()" in facts_sql
     # Curated/seed provenance is preferred in the ORDER BY.
     assert "source_type IN ('seed','curated')" in facts_sql
 
@@ -736,6 +738,109 @@ async def test_resolver_maps_rows_to_grounding_facts():
     assert len(facts) == 1
     assert facts[0].value == "Donald Trump"
     assert "since 2025-01-20" in facts[0].render()
+    # A row without the Wave-5 contention columns degrades to uncontested.
+    assert facts[0].contested is False
+    assert facts[0].surfaced_winner is False
+    assert "CONTESTED" not in facts[0].render()
+    assert "DISPUTED" not in facts[0].render()
+
+
+# ---------------------------------------------------------------------------
+# CONTESTED annotation (Wave 5, #101) — the grounding preamble TELLS the LLM a
+# value is disputed instead of asserting it as plain ground truth. The sidecar
+# is joined read-only; the provenance gate is untouched (only seed/curated
+# facts are SELECTed — the join merely annotates one of them).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolver_facts_sql_left_joins_contention_sidecar():
+    """The fact query LEFT JOINs the contention sidecar so an eligible fact in a
+    live dispute can be annotated — read-only, no provenance-gate change."""
+    pool = _StubPool(fetch_rows={"facts": [], "nexuses": []})
+    resolver = SubstrateGroundingResolver(pg_pool=pool)
+    await resolver.resolve(["United States"], max_facts=30)
+    facts_sql = next(sql for sql, _ in pool.log if "FROM facts" in sql)
+    assert "LEFT JOIN fact_contention fc ON fc.id = f.contention_id" in facts_sql
+    # Only a LIVE group (contested/surfaced) annotates; a collapsed group reads
+    # as uncontested (we trust the sidecar status over a stale facts marker).
+    assert "fc.status IN ('contested','surfaced')" in facts_sql
+    # The provenance gate is unchanged — still seed/curated only.
+    assert "source_type = ANY($2::text[])" in facts_sql
+
+
+def test_grounding_fact_render_surfaced_winner_is_annotated():
+    f = GroundingFact(
+        subject="Country X", predicate="capital", value="Alpha",
+        valid_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        source_type="curated", confidence=0.9,
+        contested=True, surfaced_winner=True, contention_value_count=3,
+    )
+    line = f.render()
+    assert "Country X — capital: Alpha (since 2025-01-01)" in line
+    assert "CONTESTED: 3 sources disagree; surfaced winner" in line
+    # A surfaced winner is NOT marked DISPUTED.
+    assert "DISPUTED" not in line
+
+
+def test_grounding_fact_render_contested_non_winner_is_disputed():
+    f = GroundingFact(
+        subject="Country X", predicate="capital", value="Beta",
+        valid_from=None, source_type="curated", confidence=0.6,
+        contested=True, surfaced_winner=False, contention_value_count=2,
+    )
+    line = f.render()
+    # A contested non-winner / abstained group reads DISPUTED — never settled.
+    assert "DISPUTED: 2 sources disagree; no surfaced winner" in line
+    assert "surfaced winner]" not in line  # not the winner phrasing
+
+
+def test_grounding_fact_render_uncontested_is_unchanged():
+    f = GroundingFact(
+        subject="Country X", predicate="capital", value="Alpha",
+        valid_from=None, source_type="seed", confidence=0.9,
+    )
+    line = f.render()
+    assert line == "Country X — capital: Alpha"
+    assert "CONTESTED" not in line and "DISPUTED" not in line
+
+
+def test_grounding_fact_render_contested_unknown_count_falls_back():
+    f = GroundingFact(
+        subject="Country X", predicate="capital", value="Alpha",
+        valid_from=None, source_type="seed", confidence=0.9,
+        contested=True, surfaced_winner=True, contention_value_count=None,
+    )
+    assert "CONTESTED: multiple sources disagree; surfaced winner" in f.render()
+
+
+@pytest.mark.asyncio
+async def test_resolver_maps_contention_columns_from_row():
+    """A joined row carrying the contention columns maps onto the GroundingFact
+    + the preamble surfaces the CONTESTED annotation (the live surfacing path).
+    A ``collapsed`` group already folds to contested=False in SQL, so the row
+    the resolver sees here is the live (annotate) case."""
+    rows = {
+        "facts": [
+            {
+                "subject": "Country X", "predicate": "capital", "value": "Alpha",
+                "valid_from": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                "source_type": "curated", "confidence": 0.9,
+                "contested": True, "surfaced_winner": True,
+                "contention_value_count": 3,
+            }
+        ],
+        "nexuses": [],
+    }
+    resolver = SubstrateGroundingResolver(pg_pool=_StubPool(fetch_rows=rows))
+    facts, _ = await resolver.resolve(["Country X"], max_facts=30)
+    assert len(facts) == 1
+    assert facts[0].contested is True
+    assert facts[0].surfaced_winner is True
+    assert facts[0].contention_value_count == 3
+    preamble = build_grounding_preamble(facts, [])
+    assert preamble is not None
+    assert "CONTESTED: 3 sources disagree; surfaced winner" in preamble
 
 
 # ---------------------------------------------------------------------------

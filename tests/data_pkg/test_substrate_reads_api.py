@@ -798,3 +798,118 @@ async def test_signals_filter_language(
     assert r.status_code == 200
     ids = [row["id"] for row in r.json()["data"]]
     assert ids == [str(en_id)]
+
+
+# ---------------------------------------------------------------------------
+# Contention read API (Holes-B Wave 5, #101) — hydration shape unit tests.
+#
+# The end-to-end HTTP coverage needs the 0055 fact_contention sidecar in the
+# migrated test DB; these pure-unit tests pin the response SHAPE of the
+# `/contention` hydration (group + per-value clusters) without a live DB so the
+# UI / consult contract is locked regardless of the integration env.
+# ---------------------------------------------------------------------------
+
+
+def _contention_group_row(**over: Any) -> dict[str, Any]:
+    base = {
+        "id": uuid4(),
+        "subject_key": "country x",
+        "predicate_key": "capital",
+        "status": "surfaced",
+        "surfaced_value": "Alpha",
+        "value_count": 2,
+        "junk_count": 1,
+        "opened_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+        "resolved_at": datetime(2026, 6, 28, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 6, 28, tzinfo=timezone.utc),
+    }
+    base.update(over)
+    return base
+
+
+def _contention_value_row(**over: Any) -> dict[str, Any]:
+    base = {
+        "value_key": "alpha",
+        "representative_fact_id": uuid4(),
+        "distinct_source_count": 3,
+        "source_credibility_sum": 2.4,
+        "confidence_max": 0.92,
+        "confidence_mean": 0.81,
+        "source_types": ["ingestion", "curated"],
+        "arbiter_score": 0.77,
+        "surfaced_winner": True,
+        "is_junk": False,
+        "junk_reason": None,
+        "latest_asserted_at": datetime(2026, 6, 27, tzinfo=timezone.utc),
+    }
+    base.update(over)
+    return base
+
+
+def test_hydrate_contention_value_maps_support_columns():
+    from legba.data.registry.substrate_reads_api import _hydrate_contention_value
+
+    row = _contention_value_row()
+    out = _hydrate_contention_value(row)
+    assert out.value_key == "alpha"
+    assert out.representative_fact_id == str(row["representative_fact_id"])
+    assert out.distinct_source_count == 3
+    assert out.source_credibility_sum == pytest.approx(2.4)
+    assert out.source_types == ["ingestion", "curated"]
+    assert out.arbiter_score == pytest.approx(0.77)
+    assert out.surfaced_winner is True
+    assert out.is_junk is False
+    assert out.junk_reason is None
+
+
+def test_hydrate_contention_value_handles_junk_and_null_score():
+    from legba.data.registry.substrate_reads_api import _hydrate_contention_value
+
+    row = _contention_value_row(
+        value_key="berlin", surfaced_winner=False, is_junk=True,
+        junk_reason="inverted_relation", arbiter_score=None,
+        representative_fact_id=None, source_types=[],
+    )
+    out = _hydrate_contention_value(row)
+    assert out.is_junk is True
+    assert out.junk_reason == "inverted_relation"
+    assert out.arbiter_score is None
+    assert out.representative_fact_id is None
+    assert out.source_types == []
+
+
+def test_hydrate_contention_group_with_values():
+    from legba.data.registry.substrate_reads_api import _hydrate_contention
+
+    grow = _contention_group_row()
+    winner = _contention_value_row(value_key="alpha", surfaced_winner=True)
+    loser = _contention_value_row(
+        value_key="beta", surfaced_winner=False, arbiter_score=0.41,
+        distinct_source_count=1,
+    )
+    out = _hydrate_contention(grow, [winner, loser])
+    assert out.id == str(grow["id"])
+    assert out.subject_key == "country x"
+    assert out.predicate_key == "capital"
+    assert out.status == "surfaced"
+    assert out.surfaced_value == "Alpha"
+    assert out.value_count == 2
+    assert out.junk_count == 1
+    # The per-value support panel data is surfaced in the SQL-supplied order
+    # (winner first), with exactly one flagged winner.
+    assert [v.value_key for v in out.values] == ["alpha", "beta"]
+    assert [v.surfaced_winner for v in out.values] == [True, False]
+
+
+def test_hydrate_contention_abstained_group_has_null_winner():
+    from legba.data.registry.substrate_reads_api import _hydrate_contention
+
+    grow = _contention_group_row(status="contested", surfaced_value=None)
+    out = _hydrate_contention(grow, [
+        _contention_value_row(value_key="alpha", surfaced_winner=False),
+        _contention_value_row(value_key="beta", surfaced_winner=False),
+    ])
+    assert out.status == "contested"
+    assert out.surfaced_value is None
+    # No surfaced winner anywhere — an honest "disputed, unresolved".
+    assert not any(v.surfaced_winner for v in out.values)
