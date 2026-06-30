@@ -51,9 +51,19 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: fact_contention_arbiter
-  # No LLM block, no token budget — pure Python over the `facts` table + the
-  # fact_contention* sidecar. The deterministic Q·C·R·F arbiter has no model call;
-  # the LLM tie-break is a LATER Wave 2b, not wired here.
+  # Wave 2b (#101): the LLM tie-break that breaks a NEAR-TIE abstain runs on the
+  # SELF-HOSTED vLLM plane ONLY — the deps-builder hard-refuses an Anthropic/Opus
+  # primary here (consult/deep are the only sanctioned Anthropic users). It is
+  # gated additionally by LEGBA_FACT_CONTENTION_LLM_TIEBREAK (default OFF); with
+  # the flag off this block is inert. The deterministic Q·C·R·F arbiter stays the
+  # default — the LLM is consulted ONLY on a near-tie the scorer can't break, with
+  # a per-call token cap + a per-pass call cap inside the handler.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 256
 
 cadence:
   # Every hour at :37 — the arbiter is cheap (a bounded open-facts scan + the

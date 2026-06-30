@@ -842,35 +842,47 @@ async def _build_deterministic(
     byte-for-byte unchanged. A resolution failure degrades to the no-LLM path
     (the arbiter's own abstain stands) rather than blocking deps-build.
     """
+    tiebreak_component_id = _primary_llm_component_id(descriptor)
     if (
         descriptor.identity.kind == "deterministic"
         and _fact_contention_tiebreak_enabled()
-        and _primary_llm_component_id(descriptor) is not None
+        and tiebreak_component_id is not None
     ):
-        try:
-            from ..data.analysts.deterministic_handlers.fact_contention_arbiter import (
-                LLM_DEPS_EXTRA_KEY,
-            )
-
-            llm = await resolve_llm()
-            from dataclasses import replace as _dc_replace
-
-            merged_extras = {**dict(deps.extras), LLM_DEPS_EXTRA_KEY: llm}
-            deps = _dc_replace(deps, extras=merged_extras)
-            logger.info(
-                "analyst_deps_builder.deterministic.fact_contention_tiebreak "
-                "analyst=%r llm=%r — Wave-2b LLM tie-break WIRED on the "
-                "self-hosted vLLM plane",
-                descriptor.identity.id,
-                _primary_llm_component_id(descriptor),
-            )
-        except Exception as exc:
+        if _is_anthropic_component(tiebreak_component_id):
+            # Hard guard: the Wave-2b tie-break is vLLM-only. Refuse an
+            # Anthropic/Opus primary (the billed consult/deep plane) so a
+            # mis-wired arbiter descriptor can never route tie-break calls onto
+            # Opus; stay on the deterministic (no-LLM) abstain path.
             logger.warning(
-                "analyst_deps_builder.deterministic.tiebreak_resolve_failed "
-                "analyst=%r err=%s — degrading to the deterministic (no-LLM) "
-                "arbiter path",
-                descriptor.identity.id, exc,
+                "analyst_deps_builder.deterministic.tiebreak_refused_anthropic "
+                "analyst=%r llm=%r — Wave-2b tie-break is vLLM-only; refusing an "
+                "Anthropic/Opus primary; staying deterministic",
+                descriptor.identity.id, tiebreak_component_id,
             )
+        else:
+            try:
+                from ..data.analysts.deterministic_handlers.fact_contention_arbiter import (
+                    LLM_DEPS_EXTRA_KEY,
+                )
+
+                llm = await resolve_llm()
+                from dataclasses import replace as _dc_replace
+
+                merged_extras = {**dict(deps.extras), LLM_DEPS_EXTRA_KEY: llm}
+                deps = _dc_replace(deps, extras=merged_extras)
+                logger.info(
+                    "analyst_deps_builder.deterministic.fact_contention_tiebreak "
+                    "analyst=%r llm=%r — Wave-2b LLM tie-break WIRED on the "
+                    "self-hosted vLLM plane",
+                    descriptor.identity.id, tiebreak_component_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "analyst_deps_builder.deterministic.tiebreak_resolve_failed "
+                    "analyst=%r err=%s — degrading to the deterministic (no-LLM) "
+                    "arbiter path",
+                    descriptor.identity.id, exc,
+                )
     return handler.run_method, deps, handler.output_kind
 
 
@@ -885,6 +897,16 @@ def _fact_contention_tiebreak_enabled() -> bool:
     return os.getenv("LEGBA_FACT_CONTENTION_LLM_TIEBREAK", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def _is_anthropic_component(component_id: str | None) -> bool:
+    """True if a stack-component id names the Anthropic plane (``llm.anthropic.*``).
+
+    The Wave-2b tie-break is vLLM-only; the deterministic deps-builder refuses an
+    Anthropic/Opus primary so a mis-wired arbiter descriptor can never route
+    billed Opus calls onto the deterministic-analyst plane (consult / deep_consult
+    are the only sanctioned Anthropic users)."""
+    return bool(component_id) and "anthropic" in component_id.lower()
 
 
 async def _build_predictor(

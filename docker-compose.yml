@@ -385,6 +385,14 @@ services:
       # (compose --profile dapr-workflow up legba-dapr-workflow-worker) to
       # dispatch the compile to that off-box worker for REAL dspy.GEPA.
       LEGBA_EMBED_WORKFLOW_WORKER: "${LEGBA_EMBED_WORKFLOW_WORKER:-1}"
+      # Contested-claims (#101) — both ship OFF (public default); our instance
+      # enables them via .env. FACT_CONTENTION = Wave-4 write-path coexistence
+      # (a same-tier fuzzy-distinct value coexists open instead of last-writer-
+      # wins supersession, so the detect-only arbiter opens a contention group).
+      # LLM_TIEBREAK = Wave-2b near-tie tie-break on the self-hosted vLLM plane
+      # (also needs the arbiter descriptor's method.llm.primary, already wired).
+      LEGBA_FACT_CONTENTION: "${LEGBA_FACT_CONTENTION:-0}"
+      LEGBA_FACT_CONTENTION_LLM_TIEBREAK: "${LEGBA_FACT_CONTENTION_LLM_TIEBREAK:-0}"
       # Hosted media-extraction endpoint (process_media loop; SEAMS #1). Leave
       # `.env`'s LEGBA_MEDIA_API_URL UNSET to keep the declared seam (the
       # runtime refuses process_media loudly). To deploy + TEST the loop in the
