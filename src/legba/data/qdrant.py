@@ -41,10 +41,13 @@ class QdrantStore:
 
     Exposes only what the L-001 substrate factor needs:
       * ensure_signals_collection() — idempotent create with BGE-M3 dims
+      * ensure_world_context_collection() / ensure_tradecraft_collection() —
+        the Lane-4 RAG corpus collections (S5-T2), same dim/distance
       * retire_dormant_collections() — drop the three deprecated collections
       * ensure_target_collection(target_id) — collection-per-target pattern
         per L-091 §6 (kept here; the lifecycle hook is L-114)
-      * upsert / search passthroughs
+      * upsert_points / search / count_doc_points / delete_doc_points — the
+        Lane-4 corpus loader's point I/O (all qmodels handling lives here)
     """
 
     def __init__(self, cfg: QdrantConfig):
@@ -91,22 +94,51 @@ class QdrantStore:
         result = await self.client.get_collections()
         return [c.name for c in result.collections]
 
-    async def ensure_signals_collection(self) -> bool:
-        """Create the canonical `legba_signals` collection if it doesn't exist.
+    async def _ensure_collection(self, name: str) -> bool:
+        """Idempotently create a BGE-M3 1024-dim cosine collection.
 
-        Returns True if newly created, False if it already existed.
+        Returns True if newly created, False if it already existed. The single
+        create path used by every ensure_* helper so dim/distance never drift
+        between collections (they all share the one bge-m3 embedder).
         """
         existing = await self.list_collections()
-        if self._cfg.signals_collection in existing:
+        if name in existing:
             return False
         await self.client.create_collection(
-            collection_name=self._cfg.signals_collection,
+            collection_name=name,
             vectors_config=qmodels.VectorParams(
                 size=self._cfg.signals_dim,
                 distance=qmodels.Distance.COSINE,
             ),
         )
         return True
+
+    async def ensure_signals_collection(self) -> bool:
+        """Create the canonical `legba_signals` collection if it doesn't exist.
+
+        Returns True if newly created, False if it already existed.
+        """
+        return await self._ensure_collection(self._cfg.signals_collection)
+
+    async def ensure_world_context_collection(self) -> bool:
+        """Create the `world_context` RAG corpus collection (Lane-4, S5-T2).
+
+        The country/topic-priors corpus (unstructured briefs, doctrine
+        summaries keyed to places/actors). Same 1024-dim cosine / bge-m3 as
+        `legba_signals`. Name matches the `vector:world_context` grounding
+        source token. Returns True if newly created, False if it existed.
+        """
+        return await self._ensure_collection(self._cfg.world_context_collection)
+
+    async def ensure_tradecraft_collection(self) -> bool:
+        """Create the `tradecraft` RAG corpus collection (Lane-4, S5-T2).
+
+        The HOW-to-analyze corpus (analytic standards, SAT handbooks,
+        doctrine). Separate collection because its retrieval key is the
+        question/method, not the target. Same dim/distance as `legba_signals`.
+        Returns True if newly created, False if it existed.
+        """
+        return await self._ensure_collection(self._cfg.tradecraft_collection)
 
     async def retire_dormant_collections(self) -> list[str]:
         """Drop the three dormant Qdrant collections per L-091 §3.4.
@@ -151,3 +183,122 @@ class QdrantStore:
             "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
             "status": getattr(info, "status", None),
         }
+
+    # ------------------------------------------------------------------
+    # Point I/O passthroughs (used by the Lane-4 corpus loader, S5-T2)
+    #
+    # Kept on the store so PointStruct / query-version handling lives in
+    # ONE place — callers pass plain tuples/dicts and never touch qmodels.
+    # ------------------------------------------------------------------
+
+    async def upsert_points(
+        self,
+        collection_name: str,
+        points: Iterable[tuple[str, list[float], dict[str, Any]]],
+    ) -> int:
+        """Upsert ``(point_id, vector, payload)`` tuples; return the count.
+
+        Idempotent by design: a deterministic ``point_id`` (the Lane-4 loader
+        derives it from the chunk natural key) makes a re-upsert overwrite the
+        same point in place rather than duplicating it.
+        """
+        structs = [
+            qmodels.PointStruct(id=pid, vector=list(vec), payload=dict(payload))
+            for pid, vec, payload in points
+        ]
+        if not structs:
+            return 0
+        await self.client.upsert(collection_name=collection_name, points=structs)
+        return len(structs)
+
+    def _doc_filter(self, corpus: str, doc_id: str) -> "qmodels.Filter":
+        """Payload filter selecting every chunk of one ``(corpus, doc_id)``."""
+        return qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="corpus", match=qmodels.MatchValue(value=corpus)
+                ),
+                qmodels.FieldCondition(
+                    key="doc_id", match=qmodels.MatchValue(value=doc_id)
+                ),
+            ]
+        )
+
+    async def count_doc_points(
+        self, collection_name: str, *, corpus: str, doc_id: str
+    ) -> int:
+        """Count stored chunks for one document (best-effort; 0 on any error)."""
+        try:
+            res = await self.client.count(
+                collection_name=collection_name,
+                count_filter=self._doc_filter(corpus, doc_id),
+                exact=True,
+            )
+        except Exception:  # collection may not exist yet, etc.
+            return 0
+        return int(getattr(res, "count", 0) or 0)
+
+    async def delete_doc_points(
+        self, collection_name: str, *, corpus: str, doc_id: str
+    ) -> int:
+        """Delete every chunk of one ``(corpus, doc_id)``; return the prior count.
+
+        DELETE-EXCEPTION (Lane-4 ``--mode=force``): vector rows are DERIVED,
+        re-embeddable artifacts, so the platform's no-hard-delete rule is
+        RELAXED here only — a force reload deletes the doc's chunks and
+        re-embeds. Structured facts/nexuses (Lanes 1-3) keep their temporal
+        supersession; the vector plane can be rebuilt from source at any time.
+        """
+        prior = await self.count_doc_points(
+            collection_name, corpus=corpus, doc_id=doc_id
+        )
+        await self.client.delete(
+            collection_name=collection_name,
+            points_selector=qmodels.FilterSelector(
+                filter=self._doc_filter(corpus, doc_id)
+            ),
+        )
+        return prior
+
+    async def search(
+        self,
+        collection_name: str,
+        *,
+        query_embedding: list[float],
+        limit: int = 10,
+        query_filter: "qmodels.Filter | None" = None,
+    ) -> list[dict[str, Any]]:
+        """Cosine search a collection by raw vector; return scored rows.
+
+        Rows are ``{"id", "score", "payload"}``. Supports both the modern
+        ``query_points`` (qdrant-client >= 1.10) and the legacy ``search``
+        surface so the module isn't pinned to one client version (mirrors
+        ``substrate_query_port.vector_search_by_embedding``).
+        """
+        if hasattr(self.client, "query_points"):
+            resp = await self.client.query_points(
+                collection_name=collection_name,
+                query=list(query_embedding),
+                limit=int(limit),
+                query_filter=query_filter,
+                with_payload=True,
+            )
+            hits = getattr(resp, "points", None) or []
+        else:  # pragma: no cover — legacy client
+            hits = await self.client.search(
+                collection_name=collection_name,
+                query_vector=list(query_embedding),
+                limit=int(limit),
+                query_filter=query_filter,
+                with_payload=True,
+            )
+        rows: list[dict[str, Any]] = []
+        for hit in hits or []:
+            rows.append(
+                {
+                    "id": str(getattr(hit, "id", "")),
+                    "score": float(getattr(hit, "score", 0.0)),
+                    "payload": getattr(hit, "payload", None) or {},
+                }
+            )
+        return rows

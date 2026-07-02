@@ -133,6 +133,13 @@ class QdrantConfig:
     signals_collection: str = "legba_signals"
     signals_dim: int = 1024
     embedding_model: str = "BAAI/bge-m3"
+    # Manual-ingest RAG corpus collections (Lane-4, S5-T2). Same dim/distance
+    # as `legba_signals` so the one embedder (bge-m3) serves all collections.
+    # Named to match the descriptor grounding source token `vector:world_context`
+    # (schema `GroundingBlock.sources`) and the docs.jsonl `corpus` field, so a
+    # future resolver maps `vector:<corpus>` → collection by name with no table.
+    world_context_collection: str = "world_context"
+    tradecraft_collection: str = "tradecraft"
 
     @classmethod
     def from_env(cls) -> "QdrantConfig":
@@ -145,6 +152,12 @@ class QdrantConfig:
             signals_collection=os.getenv("LEGBA_DATA_QDRANT_SIGNALS", "legba_signals"),
             signals_dim=int(os.getenv("LEGBA_DATA_EMBED_DIM", "1024")),
             embedding_model=os.getenv("LEGBA_DATA_EMBED_MODEL", "BAAI/bge-m3"),
+            world_context_collection=os.getenv(
+                "LEGBA_DATA_QDRANT_WORLD_CONTEXT", "world_context"
+            ),
+            tradecraft_collection=os.getenv(
+                "LEGBA_DATA_QDRANT_TRADECRAFT", "tradecraft"
+            ),
         )
 
 

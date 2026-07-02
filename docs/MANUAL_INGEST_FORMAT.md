@@ -237,3 +237,47 @@ nexuses.jsonl:1 [nexuses] polarity: Input should be less than or equal to 1
 `strict=True` raises `BatchValidationError` (which carries the same per-line
 error list) instead of returning a result with errors. A malformed manifest is
 fail-loud and raises before any lane is walked.
+
+## Lane 4 — the vector-corpus loader (`docs.jsonl` → Qdrant)
+
+The structured lanes (facts/entities/nexuses/signals) write to Postgres. The
+`docs` lane is different: it is **chunked, embedded, and upserted into Qdrant**
+by `legba.data.rag.load_vector_batch` (CLI: `scripts/manual_ingest_vectors.py`),
+riding the same `seed_batches` ledger for idempotency.
+
+**Collections.** Only two RAG corpora are provisioned; a `docs` record's
+`corpus` must be one of them (an unknown corpus is refused, never silently
+created):
+
+| `corpus` | Qdrant collection | contents |
+|---|---|---|
+| `world_context` | `world_context` | country/topic priors — briefs, doctrine summaries keyed to places/actors |
+| `tradecraft`    | `tradecraft`    | how-to-analyze corpus — analytic standards, SAT handbooks |
+
+Both are 1024-dim cosine (bge-m3), same as `legba_signals`.
+
+**Chunking.** Each record's text (inline `text` or the file at `text_ref`) is
+run through a heading-aware chunker (`legba.data.rag.chunk_text`, ~400-800
+tokens, small overlap). A record that already fits the token band becomes one
+chunk (`chunk_part = 0`); a longer one splits into `chunk_part = 0..N`. The
+stored **natural key** is therefore `(corpus, doc_id, chunk_seq, chunk_part)` —
+the design's `(corpus, doc_id, chunk_seq)` plus the sub-index. Point ids are a
+deterministic `uuid5` of that key, so a re-upsert overwrites in place.
+
+**Modes.** `skip` (and `merge`) are no-ops on an identical re-run (deduped on
+the ledger's manifest `content_hash`, so no re-embed). `force` = **delete the
+doc's existing chunks and re-embed** (see below).
+
+### ⚠ DELETE-EXCEPTION — `--mode=force` on the vector lane
+
+The platform rule is *no hard deletes* — structured substrate (Lanes 1-3) is
+only ever superseded (`valid_until` / `superseded_by`), never `DELETE`d. **Lane 4
+is the one documented exception.** `force` deletes every stored chunk of each
+`(corpus, doc_id)` in the batch, then re-embeds from source. This is safe here,
+and only here, because **vector rows are DERIVED, re-embeddable artifacts** — a
+chunk can always be rebuilt from its source document, so deleting it loses no
+authored knowledge (unlike a fact/nexus, whose supersession history is the
+record). Use `force` to re-chunk a document after its source text, chunker
+params, or embedding model change. The delete is scoped by a payload filter on
+`corpus` + `doc_id`, so it never touches another document's or another corpus's
+chunks.
