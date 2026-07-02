@@ -129,7 +129,7 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1536
+    max_tokens: 4096
   budget_tokens_per_day: 300000
   # Budget retry policy: if the per-analyst daily cap is projected to be crossed,
   # pause THIS unit until the next UTC bucket rather than demoting to a paid

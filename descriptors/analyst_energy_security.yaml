@@ -149,7 +149,7 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 1536
+    max_tokens: 4096
   budget_tokens_per_day: 300000
   # Budget retry left at pause_until_next_window: on a projected over-cap day the
   # actor pauses THIS unit until the next UTC bucket rather than demoting to a
