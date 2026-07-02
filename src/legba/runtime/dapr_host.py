@@ -1151,8 +1151,15 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         substrate_query_port = PostgresQdrantSubstrateQueryPort(
             pg_pool=pg_store.pool,
             qdrant_client=qdrant_client,
+            # L-114 — thread the hosted embedder so free-text vector_search
+            # embeds-then-searches; None keeps the honest no_embedder_wired
+            # fallback (seam #11).
+            embedder=embedding_service,
         )
-        logger.info("dapr_host.substrate_query_port.built")
+        logger.info(
+            "dapr_host.substrate_query_port.built embedder=%s",
+            "wired" if embedding_service is not None else "absent",
+        )
     else:
         logger.warning(
             "dapr_host.substrate_query_port.unavailable "
@@ -1559,6 +1566,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 temporal_client=temporal_client,    # W-2
                 deep_consult_client=deep_consult_client,  # anchor §5 PIECE 4
                 substrate_query_port=substrate_query_port,  # W-3
+                embedding_service=embedding_service,  # L-114 — grounding Tier-2 embedder
                 tools_registry=tools_registry,      # L-175
                 consult_agency_binding=consult_agency_binding,
                 # S5: the GATHER binding is passed so the runner engages the

@@ -50,13 +50,13 @@ Implementation notes
   shape.
 
 * ``vector_search`` queries Qdrant's ``legba_signals`` collection.  The
-  caller passes a free-form ``query`` string (per the Protocol); since
-  this port doesn't own an embedder, we surface
+  caller passes a free-form ``query`` string (per the Protocol).  L-114
+  threads the hosted embedding client through this port at bring-up
+  (``embedder`` kwarg): when present, the method embeds the query then
+  runs the cosine search via ``vector_search_by_embedding``.  When no
+  embedder is wired (the embedding service wasn't provisioned) we surface
   ``{"unavailable": True, "reason": "no_embedder_wired"}`` rather than
-  fabricate a vector.  The companion embedder hook is the L-114 follow-
-  up; when that lands, this method swaps in a real embed-then-search.
-  This matches the Protocol's ``unavailable`` shape used by the test
-  stub.
+  fabricate a vector — the same ``unavailable`` shape the test stub uses.
 
 * ``query_facts`` is the attribute-half facts table (per migration 0003
   / DM-2); relationship-half traversals over AGE edges raise
@@ -90,6 +90,7 @@ returns, and pass it through to
     substrate_query_port = PostgresQdrantSubstrateQueryPort(
         pg_pool=pg_store.pool,
         qdrant_client=qdrant_client,
+        embedder=embedding_service,  # L-114 — free-text vector_search
     )
     ...
     await build_analyst_run_method(
@@ -183,10 +184,20 @@ class PostgresQdrantSubstrateQueryPort:
         *,
         pg_pool: "asyncpg.Pool",
         qdrant_client: Any,
+        embedder: Any | None = None,
         signals_collection: str = "legba_signals",
     ) -> None:
         self._pool = pg_pool
         self._qdrant = qdrant_client
+        # L-114 embedder-through-port: the hosted embedding client
+        # (:class:`legba.runtime.embedding_factory.HostedEmbeddingClient`,
+        # ``async def embed(text) -> list[float]``) the host threads in at
+        # bring-up. When present, ``vector_search`` embeds the free-text
+        # query then runs the Qdrant cosine search via
+        # ``vector_search_by_embedding``; when None (the embedding service
+        # wasn't provisioned) it honestly reports the ``no_embedder_wired``
+        # Protocol shape rather than fabricating a vector (seam #11).
+        self._embedder = embedder
         self._signals_collection = signals_collection
 
     # ------------------------------------------------------------------
@@ -576,11 +587,13 @@ class PostgresQdrantSubstrateQueryPort:
         """Semantic similarity search over ``legba_signals`` in Qdrant.
 
         The consult Protocol passes a free-form ``query`` string here.
-        This port does not own an embedder — wiring an embedding model
-        through to this layer is the L-114 follow-up.  When the
-        embedder isn't wired we report ``unavailable=True`` (matching the
+        L-114 threads the hosted embedding client through this port at
+        bring-up: when an ``embedder`` is present we embed the query then
+        run the Qdrant cosine search via :meth:`vector_search_by_embedding`.
+        When no embedder is wired (the embedding service wasn't
+        provisioned) we report ``unavailable=True`` (matching the
         Protocol's documented shape) rather than fabricating a vector or
-        falling back to a different backing.
+        falling back to a different backing (seam #11).
 
         The collection-level filter on ``target_id`` is left for the
         per-target collection-naming follow-up (per
@@ -589,24 +602,66 @@ class PostgresQdrantSubstrateQueryPort:
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
 
-        # No embedder is wired through the SubstrateQueryPort surface
-        # today.  Per the no-stubs rule we surface that honestly rather
-        # than synthesizing an embedding.  The test stub reports the
-        # same ``unavailable`` shape so the consult kind already handles
-        # this path.
-        return {
-            "rows": [],
-            "refs": [],
-            "query": query,
-            "limit": clamped_limit,
-            "collection": self._signals_collection,
-            "unavailable": True,
-            "reason": (
-                "no_embedder_wired — vector_search requires an embedding "
-                "model surfaced through this port; that wiring is the "
-                "L-114 follow-up"
-            ),
-        }
+        # No embedder threaded through the port — surface the honest
+        # ``unavailable`` shape rather than synthesizing an embedding. The
+        # test stub reports the same shape so the consult kind already
+        # handles this path (seam #11 fallback).
+        if self._embedder is None:
+            return {
+                "rows": [],
+                "refs": [],
+                "query": query,
+                "limit": clamped_limit,
+                "collection": self._signals_collection,
+                "unavailable": True,
+                "reason": (
+                    "no_embedder_wired — vector_search requires an embedding "
+                    "model surfaced through this port; wire an embedding "
+                    "service at bring-up (embed.primary.openai_compat)"
+                ),
+            }
+
+        # Empty query — mirror ``search_signals``: skip the embed round-trip
+        # and return an empty result rather than embedding whitespace.
+        q = (query or "").strip()
+        if not q:
+            return {
+                "rows": [],
+                "refs": [],
+                "query": query,
+                "limit": clamped_limit,
+                "collection": self._signals_collection,
+                "backing": "qdrant_cosine",
+                "note": "empty_query",
+            }
+
+        # Embed the free-text query, then delegate the Qdrant cosine search
+        # to the shared by-embedding helper. An embed failure degrades to
+        # the honest ``unavailable`` shape (never a fabricated vector).
+        try:
+            vec = await self._embedder.embed(q)
+        except Exception as exc:  # noqa: BLE001 — embed backend surface
+            logger.warning(
+                "substrate_query_port.vector_search.embed_failed err=%s", exc,
+            )
+            return {
+                "rows": [],
+                "refs": [],
+                "query": query,
+                "limit": clamped_limit,
+                "collection": self._signals_collection,
+                "unavailable": True,
+                "reason": f"embed_failed: {exc!s}",
+            }
+
+        result = await self.vector_search_by_embedding(
+            query_embedding=vec, limit=clamped_limit,
+        )
+        # Carry the caller's original free-text query through + tag the
+        # backing so the consult trace shows the semantic path ran.
+        result["query"] = query
+        result["backing"] = "qdrant_cosine"
+        return result
 
     # ------------------------------------------------------------------
     # query_nexuses (S4-T6)

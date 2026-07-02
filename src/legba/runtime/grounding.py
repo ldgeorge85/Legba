@@ -998,7 +998,13 @@ class SubstrateGroundingResolver:
     outranked.
     """
 
-    def __init__(self, *, pg_pool: Any, target_id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        pg_pool: Any,
+        target_id: str | None = None,
+        embedder: Any | None = None,
+    ) -> None:
         self._pool = pg_pool
         # The run's target id, when the deps-builder constructs one resolver per
         # run (per-country path). Optional + backward-compatible: a resolver
@@ -1007,6 +1013,17 @@ class SubstrateGroundingResolver:
         # ``country_*`` id, resolve_graph_structure self-scopes (D4) even if the
         # caller doesn't thread an explicit scope arg.
         self._target_id = target_id
+        # L-114 embedder-through-port. The hosted embedding client
+        # (:class:`legba.runtime.embedding_factory.HostedEmbeddingClient`) the
+        # deps-builder threads in when the host has one; None otherwise. Tier-1
+        # grounding (the current facts/nexuses/situations/graph-structure reads
+        # below) is deliberately vector-free, so it does NOT consume this today.
+        # It is threaded now so the Tier-2 ``vector:world_context`` follow-up
+        # (seam #20 — a curated unstructured-brief collection queried
+        # semantically) has the embedder in hand the moment that collection is
+        # provisioned; the resolver simply carries it until then rather than
+        # re-plumbing the deps chain later. Optional + backward-compatible.
+        self._embedder = embedder
 
     async def resolve(
         self, candidates: Sequence[str], *, max_facts: int,

@@ -108,6 +108,7 @@ async def build_analyst_run_method(
     temporal_client: Any | None = None,
     deep_consult_client: Any | None = None,
     substrate_query_port: Any | None = None,
+    embedding_service: Any | None = None,
     tools_registry: Mapping[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] | None = None,
     consult_agency_binding: Any | None = None,
     inline_target_agency_binding: Any | None = None,
@@ -159,6 +160,13 @@ async def build_analyst_run_method(
         callers leave ``None`` — the builder raises
         :class:`AnalystDepsBuildError` because no in-tree production
         port exists yet (see report).
+    embedding_service:
+        Optional hosted embedding client (L-114) the host builds once at
+        bring-up from the ``embed.primary.openai_compat`` stack component.
+        Threaded into the grounded-kind (``inline_target`` /
+        ``journal_assessor``) grounding hook so the resolver carries it for
+        the Tier-2 ``vector:world_context`` follow-up; ``None`` when the
+        embedding service wasn't provisioned (grounding stays vector-free).
 
     Returns
     -------
@@ -236,6 +244,7 @@ async def build_analyst_run_method(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool,
             agency_binding=inline_target_agency_binding,
             budget_precheck=inline_target_budget_precheck,
+            embedding_service=embedding_service,
         )
     elif kind == "cross_target_raw":
         trio = await _build_cross_target_raw(handler, _resolve_primary_llm)
@@ -288,6 +297,7 @@ async def build_analyst_run_method(
             agency_binding=inline_target_agency_binding,
             budget_precheck=inline_target_budget_precheck,
             resolve_llm_component=_resolve_llm_component,
+            embedding_service=embedding_service,
         )
     else:
         # Defensive — discover_analyst_kinds returned a kind we didn't
@@ -352,6 +362,7 @@ async def _build_inline_target(
     pg_pool: "asyncpg.Pool | None" = None,
     agency_binding: Any | None = None,
     budget_precheck: Callable[[], Awaitable[bool]] | None = None,
+    embedding_service: Any | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """inline_target — LLM-bearing finding kind (single-shot or agentic).
 
@@ -422,7 +433,9 @@ async def _build_inline_target(
     # geo + slice entities) — the fix for stale-cutoff models. Off (None) for
     # every analyst that doesn't declare an enabled block; degrade to None when
     # no pool is wired.
-    grounding_hook = _build_grounding_hook(descriptor, pg_pool=pg_pool)
+    grounding_hook = _build_grounding_hook(
+        descriptor, pg_pool=pg_pool, embedder=embedding_service,
+    )
     if agency_binding is not None:
         logger.info(
             "analyst_deps_builder.inline_target.gather_enabled analyst=%r "
@@ -455,6 +468,7 @@ async def _build_journal_assessor(
     resolve_llm_component: (
         Callable[[str], Awaitable[LLMProviderHandler]] | None
     ) = None,
+    embedding_service: Any | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """journal_assessor — Legba's first-person reflective voice (plan §4.8).
 
@@ -533,7 +547,9 @@ async def _build_journal_assessor(
     # The journal may still opt into Tier-1 grounding (it's a META analyst over
     # the global slice) — the GROUND preamble corrects stale-cutoff drift before
     # it narrates (§4.5 point 3). Off (None) unless the descriptor opts in.
-    grounding_hook = _build_grounding_hook(descriptor, pg_pool=pg_pool)
+    grounding_hook = _build_grounding_hook(
+        descriptor, pg_pool=pg_pool, embedder=embedding_service,
+    )
     if agency_binding is not None:
         logger.info(
             "analyst_deps_builder.journal_assessor.gather_enabled analyst=%r "
@@ -563,6 +579,7 @@ def _build_grounding_hook(
     descriptor: AnalystDescriptor,
     *,
     pg_pool: "asyncpg.Pool | None",
+    embedder: Any | None = None,
 ) -> Callable[..., Awaitable[Any]] | None:
     """Build the per-run grounding hook for an opted-in analyst, else None.
 
@@ -574,6 +591,11 @@ def _build_grounding_hook(
     facts/nexuses, and (c) renders the dated preamble. All-or-nothing
     degrade-not-drop is owned by the resolver/runner (a read failure → no
     preamble), so this builder never raises on the grounding path.
+
+    ``embedder`` (L-114) is the hosted embedding client the host built at
+    bring-up, threaded into the resolver so the Tier-2 ``vector:world_context``
+    follow-up has it in hand; ``None`` (no embedding service) keeps grounding
+    on the vector-free structured substrate path — unchanged.
     """
     grounding = getattr(descriptor, "grounding", None)
     if grounding is None or not getattr(grounding, "enabled", False):
@@ -595,7 +617,10 @@ def _build_grounding_hook(
         situation_scope_for_target,
     )
 
-    resolver = SubstrateGroundingResolver(pg_pool=pg_pool)
+    # L-114: thread the hosted embedding client (when the host built one) into
+    # the resolver so the Tier-2 ``vector:world_context`` follow-up has the
+    # embedder in hand; Tier-1 (structured facts/nexuses) stays vector-free.
+    resolver = SubstrateGroundingResolver(pg_pool=pg_pool, embedder=embedder)
     scope = list(getattr(grounding, "scope", None) or [])
     sources = list(getattr(grounding, "sources", None) or [])
     static_candidates = list(getattr(grounding, "static_candidates", None) or [])

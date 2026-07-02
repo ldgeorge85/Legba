@@ -1010,6 +1010,47 @@ def test_deps_builder_gate_installs_hook_only_when_enabled():
     assert _build_grounding_hook(_descriptor_with_grounding(True), pg_pool=None) is None
 
 
+# ---------------------------------------------------------------------------
+# L-114 — the embedder threads through the resolver (S5-T1)
+# ---------------------------------------------------------------------------
+
+
+def test_resolver_carries_optional_embedder():
+    """SubstrateGroundingResolver accepts + stores an embedder; defaults None."""
+    pool = _StubPool()
+    assert SubstrateGroundingResolver(pg_pool=pool)._embedder is None
+    sentinel = object()
+    assert (
+        SubstrateGroundingResolver(pg_pool=pool, embedder=sentinel)._embedder
+        is sentinel
+    )
+
+
+def test_deps_builder_threads_embedder_into_resolver():
+    """`_build_grounding_hook(embedder=…)` reaches the closed-over resolver.
+
+    The hook closes over the resolver; the embedder must arrive on it so the
+    Tier-2 vector:world_context follow-up has it in hand (L-114 threading)."""
+    from legba.runtime.analyst_deps_builder import _build_grounding_hook
+
+    pool = _StubPool()
+    sentinel = object()
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(True), pg_pool=pool, embedder=sentinel,
+    )
+    assert hook is not None
+    # Pull the resolver out of the hook's closure and assert it carries it.
+    freevars = dict(zip(hook.__code__.co_freevars, hook.__closure__ or ()))
+    resolver = freevars["resolver"].cell_contents
+    assert isinstance(resolver, SubstrateGroundingResolver)
+    assert resolver._embedder is sentinel
+
+    # Default (no embedder threaded) → the resolver carries None, unchanged.
+    hook_none = _build_grounding_hook(_descriptor_with_grounding(True), pg_pool=pool)
+    freevars_none = dict(zip(hook_none.__code__.co_freevars, hook_none.__closure__ or ()))
+    assert freevars_none["resolver"].cell_contents._embedder is None
+
+
 @pytest.mark.asyncio
 async def test_deps_builder_hook_runs_resolver_and_builds_preamble():
     """End-to-end (stub pool): the installed hook extracts candidates, runs the
