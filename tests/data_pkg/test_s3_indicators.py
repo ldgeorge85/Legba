@@ -69,9 +69,10 @@ class _AllSupportedJudge:
     subprovider = "stub"
 
     async def chat_complete(self, messages, *, max_tokens=None, temperature=None, system=None, **kw):
-        # _run_judge zips claims with verdicts, so an over-long list is truncated
-        # to the claim count — this covers any small prose body.
-        return _Resp('{"verdicts": ["supported","supported","supported","supported"]}')
+        # #116d: _run_judge now enforces len(verdicts) == len(claims) (no more
+        # zip-truncation). The only body this stub grades has a single prose
+        # claim (the '## Assessment' line), so return exactly one 'supported'.
+        return _Resp('{"verdicts": ["supported"]}')
 
 
 # ---------------------------------------------------------------------------
