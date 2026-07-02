@@ -1,12 +1,25 @@
-# world_assessor — the GLOBAL COMPOSITION (P3-T5).
+# world_assessor — the GLOBAL COMPOSITION (P3-T5; S2-T3 repointed to REGIONS).
 #
 # The crown of the tower: ONE world-picture second-order Finding per cadence
-# tick that COMPOSES the per-country reads (country_composition) — NOT a raw
-# 24h signal one-pager. Every factual clause is cited [[ref:<uuid>]] to a
-# CITED country-read finding_id; the composition then gets the MANDATORY
-# faithfulness verify (the generalized pass recognizes the [[ref:uuid]]->
-# sub-claim bridge) and the T7 hedge/double-count cap folds
-# effective_confidence = min(confidence, overall_score).
+# tick that COMPOSES the per-REGION reads (region_composition) — NOT the ~24
+# per-country reads directly, and NOT a raw 24h signal one-pager. S2-T3 inserted
+# the region floor between the country reads and the world read
+# (unit sub-claim → country read → REGION read → world read), so the world read
+# now fuses the FIVE region heads (5-6 inputs) — structurally removing the
+# MAX_WORLD_INPUT_FINDINGS cap pressure (the P4-C2 "Global without the United
+# States" failure class). Every factual clause is cited [[ref:N]] to a CITED
+# region-read finding_id; the composition then gets the MANDATORY faithfulness
+# verify (the generalized pass recognizes the [[ref:N]]->read bridge) and the T7
+# hedge/double-count cap folds effective_confidence = min(confidence, overall_score).
+#
+# ── DEGRADE-NOT-DROP + absence-honest (S2-T3) ───────────────────────────────
+# READ_SLICE's world branch (_assemble_world_region_slice) reads the region
+# roster and, per region: feeds a present region head (mode 'region'); DEGRADES a
+# region with no region head to that region's member country_composition heads
+# (mode 'country_fallback' — never silently dropped); NAMES a region with neither
+# as an unassessed GAP (mode 'gap') in the world prose via an appended REGION
+# COVERAGE block. The per-region MODE that ran is stamped in data.region_coverage
+# so the provenance is honest about which floor grounded each region.
 #
 # ── why kind = meta_findings_synthesizer (repointed from inline_target) ──────
 # P0-T7 already DEMOTED this analyst's old role as a raw-signal executive
@@ -51,15 +64,15 @@ identity:
 
 subscription:
   # No `targets` block → META analyst: ONE global run per cadence tick over the
-  # per-country reads (see _cadence_targets → None → single global run). The
-  # composition reads the OUTPUTS of country_composition, not raw signals —
+  # per-REGION reads (see _cadence_targets → None → single global run). The
+  # composition reads the OUTPUTS of region_composition, not raw signals —
   # resolved by the kind's READ_SLICE from other_analysts[].id. Because the run
-  # is a verify-declaring GLOBAL meta, READ_SLICE takes the global-composition
-  # branch: it INCLUDES meta-marked findings (country_composition outputs ARE
-  # meta=True) and applies the faithfulness verify-floor so only verify-passed
-  # country reads enter the world slice.
+  # is a verify-declaring GLOBAL meta, READ_SLICE takes the S2-T3 world branch:
+  # it reads the region_composition HEADS (meta=True, so include_meta) verify-
+  # floored, DEGRADES a region with no head to that region's country reads, and
+  # NAMES a region with no read at all as a gap.
   other_analysts:
-    - id: country_composition
+    - id: region_composition
       data_types: [finding]
       time_window: 24h
   substrate:
@@ -114,9 +127,11 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  # Run AFTER country_composition lands. country_composition composes at
-  # :30 past 11 / 23 UTC; the world composition runs at 00:00 / 12:00 UTC
-  # (~30m later) so the freshest full set of country reads is present.
+  # Run AFTER region_composition lands. The region compose fires at :45 past
+  # 11 / 23 UTC (itself staggered after country_composition's :30); the world
+  # composition runs at 00:00 / 12:00 UTC (~15m later) so the freshest full set
+  # of region reads is present (a headless region degrades to its country reads,
+  # which composed at :30, still well inside the 24h window).
   fallback_schedule: "0 0,12 * * *"
   # 11h — below the 12h interval, stamped at run-completion. A cooldown == the
   # 12h interval would land past the next fire and silently HALVE the cadence

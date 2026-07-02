@@ -559,14 +559,15 @@ async def test_composition_honest_empty_no_llm_no_citations():
 
 def _world_descriptor(*, declares_verify: bool = True) -> SimpleNamespace:
     """A world_assessor-shaped descriptor: NO targets block, other_analysts =
-    [country_composition], method.llm carrying (optionally) a verify block."""
+    [region_composition] (S2-T3 repointed the world read over the region floor),
+    method.llm carrying (optionally) a verify block."""
     llm: dict[str, Any] = {"primary": {"raw": "llm.primary.openai_compat"}}
     if declares_verify:
         llm["verify"] = {"raw": "llm.verify.slm_8b"}
     return SimpleNamespace(
         subscription=SimpleNamespace(
             other_analysts=[
-                SimpleNamespace(id="country_composition", time_window="24h", data_types=[])
+                SimpleNamespace(id="region_composition", time_window="24h", data_types=[])
             ],
             targets=None,
         ),
@@ -582,37 +583,42 @@ async def test_declares_verify_helper():
 
 @pytest.mark.asyncio
 async def test_world_composition_read_slice_includes_meta_and_verify_floor():
-    """target_filter=None + declares verify → NO target scope, but INCLUDE meta
-    (the meta-exclusion clause is DROPPED — country_composition findings are
-    meta=True; else the slice is silently zeroed) AND apply the verify JOIN."""
+    """target_filter=None + declares verify → the S2-T3 world branch. It first
+    reads the region ROSTER (``target_descriptors``); with no roster present it
+    falls back to a plain region-head read: NO target scope, INCLUDE meta (the
+    exclusion clause is DROPPED — region_composition findings are meta=True; else
+    the slice is silently zeroed), and the verify JOIN over ``region_composition``."""
     desc = _world_descriptor(declares_verify=True)
     conn = _CapturingConn(rows=[])
     await synth.READ_SLICE(conn, descriptor=desc, target_filter=None)
-    query, params = conn.calls[0]
-    # No target scope on a global run.
-    assert "f.target_id =" not in query
-    # include_meta=True → the meta-exclusion clause is ABSENT.
-    assert "'meta'" not in query
-    # verify-floor gate present.
-    assert "JOIN LATERAL" in query
+    # The world branch reads the region-frame roster (empty here → plain read).
+    assert any("target_descriptors" in q for q, _ in conn.calls)
+    # The region-head slice read (last call) — no target scope, meta-inclusive,
+    # verify-floored, over the region composition.
+    query, params = conn.calls[-1]
+    assert "target_descriptors" not in query
+    assert "f.target_id =" not in query          # no target scope on a global run
+    assert "'meta'" not in query                 # include_meta=True → exclusion dropped
+    assert "JOIN LATERAL" in query               # verify-floor gate present
     assert "Faithfulness verify%" in query
-    # analyst set = the country composition.
-    assert params[0] == ["country_composition"]
-    # floor param is the default (last positional).
-    assert params[-1] == synth.DEFAULT_VERIFY_FLOOR
+    assert params[0] == ["region_composition"]   # the region layer, not country
+    assert params[-1] == synth.DEFAULT_VERIFY_FLOOR  # floor (last positional)
 
 
 @pytest.mark.asyncio
 async def test_global_meta_without_verify_still_excludes_meta_and_no_join():
     """target_filter=None + NO verify block (the old analyst_meta_synthesizer) →
-    legacy path: meta-exclusion clause PRESENT, no verify JOIN, no include_meta."""
+    legacy path, BYTE-FOR-BYTE: meta-exclusion clause PRESENT, no verify JOIN, no
+    include_meta, and NO region roster read (the world branch is verify-gated)."""
     desc = _world_descriptor(declares_verify=False)
     conn = _CapturingConn(rows=[])
     await synth.READ_SLICE(conn, descriptor=desc, target_filter=None)
+    # The legacy path issues exactly ONE query — no region roster read.
+    assert not any("target_descriptors" in q for q, _ in conn.calls)
     query, params = conn.calls[0]
     assert "'meta'" in query  # exclusion clause kept
     assert "JOIN LATERAL" not in query
-    assert params == (["country_composition"], 24)
+    assert params == (["region_composition"], 24)
 
 
 # --- read_open_contention + render -----------------------------------------
@@ -743,8 +749,9 @@ async def test_world_composition_run_selects_world_prompt_cites_and_marks_contes
         _Deps(llm),
     )
 
-    # Prompt: the WORLD composition prompt (not per-country, not global legacy).
-    assert llm.calls[-1]["system"] == synth._WORLD_COMPOSITION_SYSTEM
+    # Prompt: the WORLD-over-REGIONS composition prompt (S2-T3) — not the region/
+    # per-country prompt, not the global legacy synth.
+    assert llm.calls[-1]["system"] == synth._WORLD_OVER_REGIONS_SYSTEM
     assert llm.calls[-1]["system"] != synth._COMPOSITION_SYSTEM
     assert llm.calls[-1]["system"] != synth._SYSTEM_PROMPT
     # The CONTESTED FACTS block was fed into the user prompt.

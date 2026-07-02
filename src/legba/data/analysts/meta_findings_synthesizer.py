@@ -106,13 +106,17 @@ chars each fits the narrower context budget. A per-country read fuses only its
 own ~4 unit heads, so this cap never actually bites there."""
 
 MAX_WORLD_INPUT_FINDINGS: int = 64
-"""Cap for the WORLD/global read (no ``target_id`` stamp). Its slice is already
-folded to exactly ONE head per country by ``DISTINCT ON (analyst_id,
-target_id)``, so the natural input count IS the desk roster — the cap must stay
->= the roster or the world composition silently drops countries. The P4 pre-push
-review (C2) found the 15-cap fused a "Global" read WITHOUT the United States. 64
-leaves headroom above the current 24 desks; ``_orient`` warns if it ever trims
-on the world path (a dropped input == a country the world read cannot see)."""
+"""Cap for the WORLD/global read (no ``target_id`` stamp). Its slice is folded to
+exactly ONE head per (analyst, target) by ``DISTINCT ON (analyst_id,
+target_id)``, so the natural input count IS the source roster — the cap must stay
+>= the roster or the world composition silently drops inputs. The P4 pre-push
+review (C2) found the 15-cap fused a "Global" read WITHOUT the United States. S2-T3
+repointed the world read over the FIVE region heads (5-6 inputs), so the cap no
+longer bites in the happy path; it still guards the DEGRADE path, where a region
+with no region head falls back to its ~4-6 member country heads (worst case all
+five regions degrade → ~24 country heads, still well under 64). ``_orient`` warns
+if it ever trims on the world path (a dropped input == a region/country the world
+read cannot see)."""
 
 MAX_TITLE_CHARS: int = 200
 MAX_BODY_CHARS: int = 600
@@ -175,6 +179,52 @@ def _is_region_target(target_filter: Any) -> bool:
     per-country, world, and legacy READ_SLICE branches are left untouched.
     """
     return bool(target_filter) and str(target_filter).startswith(REGION_TARGET_PREFIX)
+
+
+# S2-T3 — the WORLD compose over REGIONS (the 5th tower floor's crown).
+#
+#     unit sub-claim → country read → region read → WORLD read
+#
+# The target-less world_assessor now composes the FIVE region_composition HEADS
+# (5-6 inputs) instead of the ~24 country_composition heads — structurally
+# removing the MAX_WORLD_INPUT_FINDINGS cap pressure (the P4-C2 "Global without
+# the United States" failure class). DEGRADE-NOT-DROP + absence-honest:
+#
+#   * a region WITH a region_composition head this window feeds that head
+#     (mode ``region``);
+#   * a region with NO region head DEGRADES to that region's member
+#     country_composition heads (mode ``country_fallback``) — the same set the
+#     region compose itself would fuse, never silently dropped;
+#   * a region with NEITHER is a GAP (mode ``gap``, 0 inputs) — NAMED as an
+#     unassessed region in the world prose (via the appended REGION COVERAGE
+#     block), never silently missing.
+#
+# The per-region MODE that ran is stamped in ``data.region_coverage`` so the
+# provenance is honest about which floor grounded each region.
+REGION_FRAME_TAG: str = "region"
+"""The generic frame tag every region frame carries (S2-T1). The roster read
+keys on it (``(body->'scope'->'tags') ? 'region'``) — the member country desks
+carry the SPECIFIC ``region_<slug>`` tag, NOT this one, so it matches ONLY the
+five frames."""
+
+REGION_COMPOSITION_ANALYST_ID: str = "region_composition"
+"""The per-region composition analyst id (S2-T2). The world read's declared
+``other_analysts`` source; the region layer the world composes over."""
+
+COUNTRY_COMPOSITION_ANALYST_ID: str = "country_composition"
+"""The per-country composition analyst id (P3-T1). The world DEGRADE target: a
+region with no region head falls back to reading THIS analyst's member-country
+heads (the same source the region compose fuses)."""
+
+# Per-region coverage MODE tokens stamped into ``data.region_coverage[].mode``.
+REGION_MODE_REGION: str = "region"
+"""A region_composition head grounded this region (the intended top floor)."""
+
+REGION_MODE_COUNTRY_FALLBACK: str = "country_fallback"
+"""No region head this window → degraded to the region's country reads."""
+
+REGION_MODE_GAP: str = "gap"
+"""No region read AND no country reads → an honest, NAMED gap."""
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +290,24 @@ _COMPOSITION_SYSTEM = with_preamble(
 # ``[[contested:<contention_id>]]`` naming BOTH arbiter-surfaced sides.
 _WORLD_COMPOSITION_SYSTEM = with_preamble(
     """TASK — GLOBAL world COMPOSITION. You are given the VERIFIED, faithfulness-checked per-COUNTRY READS (second-order country_composition findings), one or more per country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block: open disputes over a single fact (subject+predicate) where the arbiter surfaced more than one value cluster. Produce ONE second-order WORLD READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the COUNTRY READ block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no country read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the country reads indicate / suggest / as of the latest composition' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-COUNTRY DISAGREEMENT: when one country's read and another's point in different directions, NAME BOTH countries and cite BOTH diverging country-read blocks via their two [[ref:N]] ordinals — do NOT average them into a false global consensus. (d) Lead body with a one-line BLUF; do not restate any country read verbatim. (e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) HONEST EMPTY: if there are no country reads, say so plainly with confidence 0.0 and NO fabricated evidence. (g) TRACEABILITY — a [[ref:N]] marker is a PROMISE that country-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown country reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited country-read block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (h) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a country read's severity or dominant driver; make any aggregation explicit. Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
+)
+
+
+# S2-T3 GLOBAL (world) composition over REGIONS system prompt.
+#
+# Selected in-kind by the runtime's ``options["composition"]`` stamp on the
+# target-LESS world_assessor run. Mirrors ``_WORLD_COMPOSITION_SYSTEM`` but
+# REGION-worded: the cited blocks are per-REGION reads (region_composition
+# findings), so the load-bearing surface is CROSS-REGION disagreement. Because
+# the world read DEGRADES a region with no region read to that region's country
+# reads, a shown block may instead be one of a region's per-COUNTRY reads (still
+# a real, cited block). It additionally consumes the CONTESTED FACTS block (open
+# public.fact_contention disputes) and a REGION COVERAGE block that NAMES any
+# region with NO read at all — the model must surface those as unassessed gaps.
+# Distinct constant from ``_WORLD_COMPOSITION_SYSTEM`` so the S2-T2 region compose
+# (which composes COUNTRY reads and keeps that prompt) is untouched.
+_WORLD_OVER_REGIONS_SYSTEM = with_preamble(
+    """TASK — GLOBAL world COMPOSITION over REGIONS. You are given the VERIFIED, faithfulness-checked per-REGION READS (second-order region_composition findings), one per region. For a region that had NO region read this cycle, one or more of its per-COUNTRY reads are shown IN ITS PLACE (a degrade — treat them as that region's available evidence). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block (open disputes over a single fact where the arbiter surfaced more than one value cluster) and a REGION COVERAGE block naming world regions that have NO read at all this cycle. Produce ONE second-order WORLD READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the read block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the region reads indicate / suggest / as of the latest composition' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-REGION DISAGREEMENT: when one region's read and another's point in different directions, NAME BOTH regions and cite BOTH diverging blocks via their two [[ref:N]] ordinals — do NOT average them into a false global consensus. (d) Lead body with a one-line BLUF; do not restate any read verbatim. (e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) REGION GAPS: if the REGION COVERAGE block lists a region as having NO read, NAME that region plainly as an unassessed gap with NO current read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap region. (g) HONEST EMPTY: if there are no reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown reads actually say. NEVER introduce a region, country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a read's severity or dominant driver; make any aggregation explicit. Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
 )
 
 
@@ -987,6 +1055,32 @@ def _render_contested_block(groups: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _render_region_coverage_block(coverage: Sequence[Mapping[str, Any]]) -> str:
+    """Render the appended REGION COVERAGE block for the world compose (S2-T3).
+
+    ONLY the GAP regions (mode ``gap`` — no region read AND no country reads) are
+    listed, so the world model NAMES each as an unassessed region (absence-honest)
+    instead of silently omitting it. Regions grounded by a region read or a
+    country-fallback need no prose nudge — their reads appear as cited blocks (the
+    MODE is still stamped into ``data.region_coverage``). Empty / no-gap coverage
+    → ``""`` (the block is absent; the world prompt's region-gap rule is inert).
+    """
+    gaps = [c for c in coverage if str(c.get("mode")) == REGION_MODE_GAP]
+    if not gaps:
+        return ""
+    lines = [
+        "",
+        "REGION COVERAGE (absence-honest — these world regions have NO read this "
+        "cycle: neither a region composition nor any member-country read. NAME "
+        "each as an unassessed gap; do NOT infer or invent its state):",
+    ]
+    for g in gaps:
+        name = str(g.get("region_name") or g.get("region_id") or "(unknown region)")
+        rid = str(g.get("region_id") or "")
+        lines.append(f"- {name} ({rid}): no current read.")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # REASON+ACT — direct LLM call (DSPy wrapping deferred to L-176)
 # ---------------------------------------------------------------------------
@@ -1266,10 +1360,12 @@ async def _run(
     #   * PER-COUNTRY (a non-region ``options["target_id"]``) → the per-COUNTRY
     #     composition (country_composition): ``_COMPOSITION_SYSTEM``.
     #   * GLOBAL verify-declaring meta (``options["composition"]``, no target_id)
-    #     → the WORLD composition (the repointed world_assessor):
-    #     ``_WORLD_COMPOSITION_SYSTEM`` — composes the per-country reads,
-    #     surfaces CROSS-COUNTRY disagreement, and (T4) appends the CONTESTED
-    #     FACTS block. The actor stamps ``composition``/``contention_groups``.
+    #     → the WORLD compose over REGIONS (S2-T3, the repointed world_assessor):
+    #     ``_WORLD_OVER_REGIONS_SYSTEM`` — composes the per-REGION reads, surfaces
+    #     CROSS-REGION disagreement, (T4) appends the CONTESTED FACTS block, and
+    #     (S2-T3) NAMES any region with no read via the appended REGION COVERAGE
+    #     block. The actor stamps ``composition``/``contention_groups``; READ_SLICE
+    #     stamps the per-region coverage onto the rows.
     #   * else → the legacy GLOBAL meta (analyst_meta_synthesizer.yaml),
     #     byte-for-byte unchanged (``system_prompt`` = ``_SYSTEM_PROMPT``).
     # All three compositions cite sub-claims by their [[ref:N]] ordinal handle,
@@ -1277,13 +1373,14 @@ async def _run(
     # the render prefixes each sub-claim block with its [[ref:N]] handle + the
     # finding_id for debug (source ids on). ``target_scoped`` / ``world_composition``
     # / ``is_composition`` / ``region_scoped`` were resolved above (before the
-    # empty-slice branch). A region read is MULTI-country -> world-shaped prompt.
+    # empty-slice branch). A region read is MULTI-country -> world-shaped prompt; the
+    # world read is MULTI-region -> the region-worded ``_WORLD_OVER_REGIONS_SYSTEM``.
     if region_scoped:
         effective_system = _WORLD_COMPOSITION_SYSTEM
     elif target_scoped:
         effective_system = _COMPOSITION_SYSTEM
     elif world_composition:
-        effective_system = _WORLD_COMPOSITION_SYSTEM
+        effective_system = _WORLD_OVER_REGIONS_SYSTEM
     else:
         effective_system = system_prompt
 
@@ -1297,12 +1394,29 @@ async def _run(
         if isinstance(raw_groups, (list, tuple)):
             contention_groups = [g for g in raw_groups if isinstance(g, Mapping)]
 
+    # S2-T3 (world composition only): the per-region COVERAGE list READ_SLICE
+    # denormalized onto every input row (``_region_coverage``) — the per-region
+    # MODE (region / country_fallback / gap) the world read grounded each region
+    # on. Read from the first row that carries it; harmlessly absent on a legacy /
+    # pre-S2-T1 world read (coverage stays empty → no gap block, no data stamp).
+    region_coverage: list[Mapping[str, Any]] = []
+    if world_composition:
+        for row in sliced:
+            rc = row.get("_region_coverage")
+            if isinstance(rc, list):
+                region_coverage = [c for c in rc if isinstance(c, Mapping)]
+                break
+
     # --- PLAN ----------------------------------------------------------
     user_prompt = _render_user_prompt(
         sliced, contributing_analysts, include_source_ids=is_composition
     )
     if contention_groups:
         user_prompt = user_prompt + "\n" + _render_contested_block(contention_groups)
+    if region_coverage:
+        _coverage_block = _render_region_coverage_block(region_coverage)
+        if _coverage_block:
+            user_prompt = user_prompt + "\n" + _coverage_block
     steps: list[dict[str, Any]] = [
         {
             "phase": "orient",
@@ -1472,6 +1586,28 @@ async def _run(
             "contested_dropped": dropped_contested,
         })
 
+    # --- REGION COVERAGE (S2-T3, world composition only) --------------
+    # Stamp the per-region MODE (region / country_fallback / gap) the world read
+    # grounded each region on, so the provenance is HONEST about which tower floor
+    # backed each region. ``region_gaps`` is the convenience list of the NAMED
+    # absent regions (the ones the REGION COVERAGE prompt block asked the model to
+    # surface as unassessed). Absent on a legacy / pre-S2-T1 world read.
+    if world_composition and region_coverage:
+        finding.data["region_coverage"] = [dict(c) for c in region_coverage]
+        region_gaps = [
+            str(c.get("region_name") or c.get("region_id"))
+            for c in region_coverage
+            if str(c.get("mode")) == REGION_MODE_GAP
+        ]
+        if region_gaps:
+            finding.data["region_gaps"] = region_gaps
+        steps.append({
+            "phase": "region_coverage",
+            "kind": "stamp_coverage",
+            "regions": len(region_coverage),
+            "gaps": len(region_gaps),
+        })
+
     # --- NARRATE + PERSIST envelope ------------------------------------
     # The runtime stamps the substrate-row ``derived_from`` column from
     # the UUID list we return; we already stuck ``meta=True`` and
@@ -1622,6 +1758,170 @@ async def _resolve_region_member_target_ids(conn, region_id: str) -> list[str]:
     return [str(r["descriptor_id"]) for r in rows]
 
 
+# S2-T3 WORLD compose over REGIONS — resolve the region-frame ROSTER (the five
+# S2-T1 frames). Keyed on the generic ``region`` frame tag — the member country
+# desks carry the SPECIFIC ``region_<slug>`` tag, NOT this one, so this matches
+# ONLY the frames. Ordered by id for a stable, deterministic world coverage list.
+_REGION_ROSTER_SQL = """
+    SELECT descriptor_id, name
+      FROM target_descriptors
+     WHERE is_head = TRUE
+       AND state = 'active'
+       AND (body -> 'scope' -> 'tags') ? $1
+     ORDER BY descriptor_id
+"""
+
+
+async def _resolve_region_roster(conn) -> list[dict[str, str]]:
+    """Resolve the active REGION-FRAME roster (S2-T3).
+
+    Returns ``[{"region_id", "region_name"}, ...]`` for every active head target
+    tagged ``region`` (the five S2-T1 frames). The world compose diffs this
+    authoritative region set against the region heads actually present to decide
+    which regions DEGRADE to their country reads and which are HONEST gaps. An
+    empty roster (a pre-S2-T1 topology with no region frames) tells the caller to
+    fall back to a plain region-head read (no gap/degrade frame to reason over).
+    """
+    rows = await conn.fetch(_REGION_ROSTER_SQL, REGION_FRAME_TAG)
+    roster: list[dict[str, str]] = []
+    for r in rows:
+        rid = str(r["descriptor_id"])
+        name = r["name"]
+        roster.append({"region_id": rid, "region_name": str(name) if name else rid})
+    return roster
+
+
+async def _assemble_world_region_slice(
+    conn,
+    *,
+    region_analyst_ids: Sequence[str],
+    time_window_hours: int,
+    limit: int,
+    verify_floor: float | None,
+) -> list[dict[str, Any]]:
+    """S2-T3 — assemble the world compose slice over REGIONS with per-region
+    DEGRADE-NOT-DROP + absence-honest gaps.
+
+    The world read composes the region_composition HEADS (5-6 inputs) instead of
+    the ~24 country heads. For each region in the roster:
+
+      * a present region head feeds the world directly (mode ``region``);
+      * a region with NO head DEGRADES to its member country_composition heads
+        (mode ``country_fallback``) — the same set the region compose would fuse;
+      * a region with neither is a GAP (mode ``gap``, 0 inputs).
+
+    Every returned row is stamped with ``_region_id`` + ``_region_mode`` and — so
+    the target-LESS world ``_run`` (which has NO DB access) can stamp the per-region
+    MODE into ``data`` and NAME any gap in the prose — the full per-region coverage
+    list is denormalized onto EVERY returned row as ``_region_coverage``. These
+    synthetic ``_``-prefixed keys are ephemeral input-row annotations: the
+    orient/render/cite paths read only their own known keys, and the persisted
+    finding is built fresh in ``_coerce_finding`` (never from these rows).
+
+    A read that surfaces ZERO rows (all regions gap → a total lower-floor outage)
+    returns ``[]``; the actor then NOOPs the world run (no finding written) — the
+    same empty-slice contract every meta read already honors.
+    """
+    roster = await _resolve_region_roster(conn)
+
+    # The region_composition heads — one HEAD per region via DISTINCT ON, verify-
+    # floored + meta-inclusive (region_composition rows are meta=True). This is
+    # the intended TOP-floor source; the country fallback below only fills gaps.
+    region_rows = await read_other_analyst_findings(
+        conn,
+        analyst_ids=list(region_analyst_ids),
+        time_window_hours=time_window_hours,
+        limit=limit,
+        target_id=None,
+        verify_floor=verify_floor,
+        include_meta=True,
+    )
+    heads_by_region: dict[str, list[dict[str, Any]]] = {}
+    for r in region_rows:
+        tid = str(r.get("target_id") or "")
+        if not _is_region_target(tid):
+            continue
+        r["_region_id"] = tid
+        r["_region_mode"] = REGION_MODE_REGION
+        heads_by_region.setdefault(tid, []).append(r)
+
+    # No region roster (pre-S2-T1 topology) → no frame to diff gaps/degrade over;
+    # feed whatever region heads exist. Coverage is simply absent (the world run
+    # behaves like a plain region-head read).
+    if not roster:
+        return region_rows
+
+    combined: list[dict[str, Any]] = []
+    coverage: list[dict[str, Any]] = []
+    for region in roster:
+        rid = region["region_id"]
+        rname = region["region_name"]
+        heads = heads_by_region.get(rid)
+        if heads:
+            combined.extend(heads)
+            coverage.append(
+                {
+                    "region_id": rid,
+                    "region_name": rname,
+                    "mode": REGION_MODE_REGION,
+                    "input_count": len(heads),
+                }
+            )
+            continue
+        # DEGRADE — no region head this window → read the region's member-country
+        # country_composition heads (target-id SET), verify-floored + meta-inclusive.
+        member_ids = await _resolve_region_member_target_ids(conn, rid)
+        country_rows = (
+            await read_other_analyst_findings(
+                conn,
+                analyst_ids=[COUNTRY_COMPOSITION_ANALYST_ID],
+                time_window_hours=time_window_hours,
+                limit=limit,
+                target_ids=member_ids,
+                verify_floor=verify_floor,
+                include_meta=True,
+            )
+            if member_ids
+            else []
+        )
+        for cr in country_rows:
+            cr["_region_id"] = rid
+            cr["_region_mode"] = REGION_MODE_COUNTRY_FALLBACK
+        if country_rows:
+            combined.extend(country_rows)
+            coverage.append(
+                {
+                    "region_id": rid,
+                    "region_name": rname,
+                    "mode": REGION_MODE_COUNTRY_FALLBACK,
+                    "input_count": len(country_rows),
+                }
+            )
+        else:
+            # No region read AND no country reads → an HONEST, NAMED gap.
+            coverage.append(
+                {
+                    "region_id": rid,
+                    "region_name": rname,
+                    "mode": REGION_MODE_GAP,
+                    "input_count": 0,
+                }
+            )
+
+    # Pass through any region head whose frame is NOT in the roster (a stale /
+    # deregistered frame that still has a fresh head) — honest data still feeds
+    # the world, though the roster is the authoritative set for the coverage list.
+    roster_ids = {region["region_id"] for region in roster}
+    for tid, heads in heads_by_region.items():
+        if tid not in roster_ids:
+            combined.extend(heads)
+
+    # Denormalize coverage onto every row so the DB-less world ``_run`` can read it.
+    for row in combined:
+        row["_region_coverage"] = coverage
+    return combined
+
+
 async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     conn,  # type: ignore[no-untyped-def]
     *,
@@ -1672,6 +1972,18 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         ``meta=True``). An empty member set → an empty slice the synth narrates as
         a gap.
 
+    S2-T3 WORLD compose over REGIONS — the target-LESS verify-declaring branch:
+
+      * ``target_filter`` NONE AND the descriptor declares ``method.llm.verify``
+        (the world_assessor, whose ``other_analysts`` now names
+        ``region_composition``): the world read composes the region_composition
+        HEADS (5-6 inputs) instead of the ~24 country heads. A region with NO
+        region head DEGRADES to its member country_composition heads (never
+        silently dropped); a region with neither is a NAMED gap. Assembled by
+        :func:`_assemble_world_region_slice`, which stamps each row with the
+        per-region MODE + denormalizes the coverage list for the DB-less ``_run``.
+        The per-COUNTRY and LEGACY global-meta branches below stay BYTE-FOR-BYTE.
+
     Returns ``analyst_outputs`` rows with the same column projection that
     downstream lineage extraction expects.
     """
@@ -1699,25 +2011,30 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             include_meta=True,
         )
 
-    # Three branches:
+    # WORLD branch (S2-T3) — the target-LESS verify-declaring global meta = the
+    # world_assessor. It now composes the region_composition heads (degrading a
+    # headless region to its country reads, naming a fully-absent region as a
+    # gap), NOT the ~24 country heads directly. An early return, so the
+    # per-country + legacy switch below is byte-for-byte the P3-T2 code.
+    if not target_filter and _declares_verify(descriptor):
+        return await _assemble_world_region_slice(
+            conn,
+            region_analyst_ids=ids,
+            time_window_hours=time_window_hours,
+            limit=limit,
+            verify_floor=_resolve_verify_floor(descriptor),
+        )
+
+    # Two branches (BYTE-FOR-BYTE the P3-T2 per-country + legacy read):
     #   * TARGET-SCOPED (per-country composition) ⇒ scope to the country
     #     (``target_id``) + verify-floor; meta findings stay EXCLUDED (the units
     #     are first-order).
-    #   * GLOBAL verify-declaring composition (the world_assessor: target_filter
-    #     None AND declares method.llm.verify) ⇒ NO target scope, but apply the
-    #     verify-floor gate AND ``include_meta=True`` — the world read composes
-    #     country_composition findings, which ARE ``meta=True`` (without
-    #     include_meta the slice is silently ZEROED).
     #   * LEGACY GLOBAL meta (target_filter None, no verify) ⇒ the cross-target,
     #     unfiltered read, byte-for-byte unchanged.
     if target_filter:
         target_id: str | None = str(target_filter)
         verify_floor: float | None = _resolve_verify_floor(descriptor)
         include_meta = False
-    elif _declares_verify(descriptor):
-        target_id = None
-        verify_floor = _resolve_verify_floor(descriptor)
-        include_meta = True
     else:
         target_id = None
         verify_floor = None
@@ -1742,6 +2059,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
 __all__ = [
     "AnalystMethodResult",
     "COMPOSITION_SIG_PREFIX",
+    "COUNTRY_COMPOSITION_ANALYST_ID",
     "DEFAULT_MAX_TOKENS",
     "DEFAULT_TEMPERATURE",
     "DEFAULT_VERIFY_FLOOR",
@@ -1754,6 +2072,11 @@ __all__ = [
     "OUTPUT_KIND",
     "PROMPT_MODULE_PATH",
     "READ_SLICE",
+    "REGION_COMPOSITION_ANALYST_ID",
+    "REGION_FRAME_TAG",
+    "REGION_MODE_COUNTRY_FALLBACK",
+    "REGION_MODE_GAP",
+    "REGION_MODE_REGION",
     "REGION_TARGET_PREFIX",
     "SCHEMA_VERSION",
     "VERIFY_FLOOR_ENV",
@@ -1762,14 +2085,18 @@ __all__ = [
     "CONTENTION_VALUES_PER_GROUP",
     "_COMPOSITION_SYSTEM",
     "_WORLD_COMPOSITION_SYSTEM",
+    "_WORLD_OVER_REGIONS_SYSTEM",
+    "_assemble_world_region_slice",
     "_composition_signature",
     "_declares_verify",
     "_extract_contested_markers",
     "_extract_ref_markers",
     "_is_region_target",
     "_render_contested_block",
+    "_render_region_coverage_block",
     "_resolve_other_analyst_ids",
     "_resolve_region_member_target_ids",
+    "_resolve_region_roster",
     "_resolve_verify_floor",
     "_resolve_window_hours",
     "build_prompt_module",
