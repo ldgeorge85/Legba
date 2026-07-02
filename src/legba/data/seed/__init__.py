@@ -31,6 +31,21 @@ from ._base import (
     SeedSource,
 )
 from ._driver import SeedRunResult, run_seed_source
+from .manual_schema import (
+    BatchManifest,
+    BatchMode,
+    BatchValidationError,
+    ManualDocRecord,
+    ManualEntityRecord,
+    ManualFactRecord,
+    ManualNexusRecord,
+    ManualSignalRecord,
+    ProvenanceTier,
+    RecordError,
+    ValidatedBatch,
+    load_manifest,
+    validate_batch,
+)
 from .adapters.acled_conflict import ACLEDConflictSeedSource
 from .adapters.sipri_arms_transfers import SIPRIArmsTransfersSeedSource
 from .adapters.wikidata_leaders import WikidataLeadersSeedSource
@@ -73,6 +88,20 @@ __all__ = [
     "SeedSource",
     "SeedRunResult",
     "run_seed_source",
+    # manual-ingest batch format (S4-T1)
+    "BatchManifest",
+    "BatchMode",
+    "BatchValidationError",
+    "ManualDocRecord",
+    "ManualEntityRecord",
+    "ManualFactRecord",
+    "ManualNexusRecord",
+    "ManualSignalRecord",
+    "ProvenanceTier",
+    "RecordError",
+    "ValidatedBatch",
+    "load_manifest",
+    "validate_batch",
     "ADAPTERS",
     "get_adapter",
     "list_adapters",

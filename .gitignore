@@ -18,6 +18,8 @@ build/
 backups/
 dumps/
 *.jsonl
+# …but committed JSONL TEST FIXTURES are versioned data, not runtime dumps.
+!tests/**/fixtures/**/*.jsonl
 *.tar.gz
 cycle_*.txt
 step*_prompt.txt

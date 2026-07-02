@@ -1,0 +1,2 @@
+{"corpus": "world_context", "doc_id": "tl-handbook", "chunk_seq": 0, "title": "Testlandia country brief", "section": "overview", "text": "Testlandia is a synthetic polity used for fixtures.", "countries": ["Testlandia"], "topics": ["background"], "lang": "en", "license": "CC0-1.0", "effective_date": "2026-01-01"}
+{"corpus": "world_context", "doc_id": "tl-handbook", "chunk_seq": 1, "title": "Testlandia country brief", "section": "economy", "text_ref": "docs/tl-handbook.md", "countries": ["Testlandia"], "topics": ["economy"], "lang": "en", "license": "CC0-1.0"}

@@ -1,0 +1,2 @@
+{"subject": "Testlandia", "object": "TESTPACT", "rel_type": "member of", "polarity": 1, "valid_from": "2025-01-01", "intent": "alliance", "confidence": 0.9}
+{"subject": "Testlandia", "object": "Adversaria", "rel_type": "in active conflict with", "polarity": -1, "valid_from": "2026-02-28", "intent": "conflict"}

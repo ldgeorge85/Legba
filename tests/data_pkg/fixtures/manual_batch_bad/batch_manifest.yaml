@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A manual-ingest batch fixture with DELIBERATELY bad records (S4-T1 per-line
+# error test). NOTE: default_confidence is intentionally OMITTED so a fact that
+# also omits confidence trips the REFUSE-absent policy (no silent 1.0).
+schema_version: "1"
+batch_id: "fixture-bad-2026-07-02"
+operator: "legba-dev"
+created_at: 2026-07-02T00:00:00Z
+description: "Intentionally malformed records for the rejection test."
+default_provenance: manual
+mode: skip
+files:
+  facts: facts.jsonl
+  nexuses: nexuses.jsonl

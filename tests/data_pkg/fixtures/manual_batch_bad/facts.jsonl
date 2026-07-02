@@ -1,0 +1,5 @@
+{"subject": "X", "predicate": "p1", "value": "v1", "valid_from": "2025-01-01", "confidence": 0.5}
+
+{"subject": "X", "predicate": "p2", "value": "v2"}
+{"subject": "X", "predicate": "p3", "value": "v3", "valid_from": "oops-not-json
+{"subject": "X", "predicate": "p4", "value": "v4", "valid_from": "2025-01-01"}

@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A minimal VALID manual-ingest batch fixture (S4-T1 round-trip test).
+schema_version: "1"
+batch_id: "fixture-valid-2026-07-02"
+operator: "legba-dev"
+created_at: 2026-07-02T00:00:00Z
+description: "Round-trip fixture covering all five lanes."
+default_provenance: curated
+mode: skip
+default_confidence: 0.9
+license: "CC0-1.0"
+source_url: "https://example.invalid/fixtures"
+provenance_notes: "synthetic test data — not real intelligence"
+files:
+  facts: facts.jsonl
+  entities: entities.jsonl
+  nexuses: nexuses.jsonl
+  signals: signals.jsonl
+  docs: docs.jsonl

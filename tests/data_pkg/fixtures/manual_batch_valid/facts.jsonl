@@ -1,0 +1,3 @@
+{"subject": "Testlandia", "predicate": "head of state", "value": "Ada Tester", "valid_from": "2025-01-01", "confidence": 0.95}
+{"subject": "Testlandia", "predicate": "capital", "value": "Testburg", "valid_from": "1900-01-01"}
+{"subject": "Testlandia", "predicate": "head of government", "value": "Grace Doe", "valid_from": "2024-07-28", "valid_until": "2026-01-01", "geo_lat": 51.5, "geo_lon": -0.12, "data": {"note": "term ended"}}

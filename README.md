@@ -159,6 +159,7 @@ Inference is hosted out-of-process; **none of these models run inside the Legba 
 | [docs/ANALYSIS.md](docs/ANALYSIS.md) | The analysis plane — units, composition, verify, coalescing triggers, action-pack agency |
 | [docs/SOURCES.md](docs/SOURCES.md) | The source catalog — the 3 / 46 / ~50 scope model and the per-source table of what Legba ingests |
 | [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) | Source handler kinds and the data sources reachable through them |
+| [docs/MANUAL_INGEST_FORMAT.md](docs/MANUAL_INGEST_FORMAT.md) | The manual-ingest batch format — manifest + per-kind JSONL schemas for hand-supplied data |
 | [docs/AI_MODELS.md](docs/AI_MODELS.md) | The hosted models, providers, and how the runtime reaches them |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operator runbook — bring-up, migrations, registration, troubleshooting |
 | [docs/CODE_MAP.md](docs/CODE_MAP.md) | Code map — modules, function flows, dependencies |
