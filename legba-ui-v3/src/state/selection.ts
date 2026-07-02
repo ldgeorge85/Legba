@@ -28,11 +28,27 @@ export type SelectionKind =
   | 'situation'
   | 'signal'
 
+/**
+ * Optimistic detail the caller ALREADY HAS at click time (e.g. a feed row's
+ * prose body + title). Lets the Inspector paint the report in <300ms while the
+ * full lineage / citations / provenance hydrate behind it. Never authoritative
+ * — it is replaced the moment the real `InspectorDetail` resolves.
+ */
+export interface SelectionPreview {
+  title?: string
+  body?: string
+  severity?: string | null
+  analystId?: string | null
+  targetId?: string | null
+}
+
 export interface Selection {
   kind: SelectionKind
   id: string
   /** Optional human label for chrome (breadcrumbs, chips, Inspector header). */
   label?: string
+  /** Optimistic, already-in-hand detail for a fast first paint (see above). */
+  preview?: SelectionPreview
   /**
    * Disambiguates same-descriptor instances (redesign P-A15) — e.g. two Flow
    * nodes projecting the same descriptorId. Additive; never required and never
@@ -173,7 +189,7 @@ export function selectRow(
   rowKind: string,
   rowId: string,
   label?: string,
-  opts?: { origin?: string; instanceKey?: string },
+  opts?: { origin?: string; instanceKey?: string; preview?: SelectionPreview },
 ): void {
   const kind = selectionKindOf(rowKind)
   // When the substrate kind was coerced (e.g. hypothesis→finding), stash the
@@ -186,5 +202,6 @@ export function selectRow(
     label,
     instanceKey,
     origin: opts?.origin,
+    preview: opts?.preview,
   })
 }

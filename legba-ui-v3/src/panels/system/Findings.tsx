@@ -44,6 +44,7 @@ import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
 import type { Severity } from '@/v4/world/types'
 import { apiGet } from '@/lib/api'
+import { feedPreview } from '@/lib/proseText'
 import { useLiveTail } from '@/lib/useLiveTail'
 import { useBatchedTail } from '@/lib/liveTail'
 import type { PanelProps } from '@/types'
@@ -373,8 +374,22 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
   }
 
   function openRow(row: UnifiedRow) {
+    // #4 optimistic inspector — hand the Inspector the prose we ALREADY have so
+    // it paints the report in <300ms instead of waiting ~9s on the lineage
+    // chain. The full detail (citations, provenance, refs) hydrates behind it.
+    const preview =
+      row.source === 'finding' && row.body
+        ? {
+            title: row.title ?? undefined,
+            body: row.body,
+            severity: row.severity,
+            analystId: row.analyst_id,
+            targetId: row.target_id,
+          }
+        : undefined
     selectRow(row.source === 'signal' ? 'signal' : 'finding', row.id, row.title ?? undefined, {
       origin: 'findings',
+      preview,
     })
   }
 
@@ -881,6 +896,11 @@ function FeedCard({
   superseded?: boolean
 }) {
   const isSignal = row.source === 'signal'
+  // #8 feed hygiene — the preview renders to PLAIN TEXT: unwrap a raw
+  // {"title","body"} JSON-envelope body, strip markdown (`**BLUF:**`/`##`), and
+  // drop citation-marker noise (`[3][4][31]`). The full cited card lives in the
+  // Inspector; this scan line stays flat.
+  const preview = feedPreview(row.body)
   // The tight numbered-row layout: a left severity colour rail + muted row index,
   // a bold title line that carries the at-a-glance scan, and ONE muted meta line
   // (target/analyst or source/geo) with a relative-time stamp on the right.
@@ -975,7 +995,7 @@ function FeedCard({
         )}
       </div>
 
-      {row.body && <div className="mt-0.5 text-ink-2 line-clamp-2">{row.body}</div>}
+      {preview && <div className="mt-0.5 text-ink-2 line-clamp-2">{preview}</div>}
     </button>
   )
 }

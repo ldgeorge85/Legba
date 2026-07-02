@@ -43,14 +43,43 @@ export async function readErrorBody(res: Response): Promise<unknown> {
   }
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { Accept: 'application/json', ...authHeaders() },
-  })
-  if (!res.ok) {
-    throw new ApiError(res.status, await readErrorBody(res))
+/**
+ * Timing instrumentation (#4): every `apiGet` records its wall time so the real
+ * cost of a chain (e.g. the Inspector's ~9s lineage→findings walk) is
+ * measurable. Each call logs `[api] <ms> GET <path>` at debug level, warns past
+ * `SLOW_MS`, and drops a `performance.measure` mark so the timings show up in
+ * the DevTools Performance panel without any extra console noise.
+ */
+const SLOW_MS = 2000
+
+function recordTiming(path: string, ms: number): void {
+  const rounded = Math.round(ms)
+  try {
+    performance.measure(`api GET ${path}`, { start: performance.now() - ms, duration: ms })
+  } catch {
+    // performance.measure with a detail object is unsupported on old engines —
+    // timing is best-effort; never let instrumentation break a request.
   }
-  return res.json() as Promise<T>
+  if (ms >= SLOW_MS) {
+    console.warn(`[api] SLOW ${rounded}ms GET ${path}`)
+  } else {
+    console.debug(`[api] ${rounded}ms GET ${path}`)
+  }
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  const started = performance.now()
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      headers: { Accept: 'application/json', ...authHeaders() },
+    })
+    if (!res.ok) {
+      throw new ApiError(res.status, await readErrorBody(res))
+    }
+    return (await res.json()) as T
+  } finally {
+    recordTiming(path, performance.now() - started)
+  }
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {

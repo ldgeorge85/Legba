@@ -17,10 +17,11 @@ import { PanelChrome } from '@/components/PanelChrome'
 import { DescriptorView } from '@/components/DescriptorView'
 import { RecordLink, refKindForField } from '@/components/inspector/RecordLink'
 import { useInspectorDetail, type InspectorDetail, type Ref } from './useInspectorDetail'
-import { useSelection, type Selection } from '@/state/selection'
+import { useSelection, type Selection, type SelectionPreview } from '@/state/selection'
 import ProvenanceTrail from '@/v4/why/ProvenanceTrail'
 import CitedAssessment from '@/components/inspector/CitedAssessment'
 import { extractCitations } from '@/lib/citationsModel'
+import { unwrapEnvelope } from '@/lib/proseText'
 import type { PanelProps } from '@/types'
 
 /** Keys floated to the top of the BODY DescriptorView. */
@@ -44,7 +45,7 @@ export default function InspectorPanel({ registration }: PanelProps) {
   const selection = useSelection((s) => s.selection)
   const history = useSelection((s) => s.history)
   const back = useSelection((s) => s.back)
-  const { detail, isLoading, refetch } = useInspectorDetail(selection)
+  const { detail, refetch } = useInspectorDetail(selection)
 
   // Empty state — a call-to-action (#90: the world assessment is a FINDING; it
   // shows here when selected, like any finding — no special-cased panel/teaser).
@@ -77,10 +78,15 @@ export default function InspectorPanel({ registration }: PanelProps) {
 
         <Header kind={selection.kind} id={selection.id} />
 
-        {isLoading || !detail ? (
-          <DetailSkeleton />
-        ) : (
+        {detail ? (
           <DetailView detail={detail} />
+        ) : selection.preview?.body ? (
+          // #4 — paint the prose we already have (the clicked feed row's body)
+          // immediately; the full detail (citations, refs, provenance) hydrates
+          // per-section behind this. No 9s blank skeleton for the report.
+          <OptimisticReport preview={selection.preview} />
+        ) : (
+          <DetailSkeleton />
         )}
 
         {/* Provenance trail — reused Why fetch (lineage walk). */}
@@ -266,6 +272,37 @@ function Section({ label, children }: { label: string; children: React.ReactNode
       </div>
       {children}
     </section>
+  )
+}
+
+/**
+ * The optimistic first paint (#4): render the prose the caller already had in
+ * hand (the clicked feed row's body) as the Report, so the operator reads it in
+ * <300ms instead of staring at a skeleton for the full ~9s lineage chain. The
+ * body may be a raw `{"title","body"}` JSON envelope, so unwrap it first;
+ * citations are empty here (they arrive with the full detail) so the prose
+ * renders plainly — an honest, un-fabricated stand-in that swaps to the fully
+ * cited card the moment `detail` resolves. Only the report is optimistic; the
+ * remaining sections show a slim "hydrating" skeleton.
+ */
+function OptimisticReport({ preview }: { preview: SelectionPreview }) {
+  const text = unwrapEnvelope(preview.body ?? '')
+  return (
+    <>
+      <Section label="Report">
+        <div data-testid="inspector-report-optimistic">
+          <CitedAssessment text={text} citations={[]} analystId={preview.analystId ?? null} />
+        </div>
+      </Section>
+      <div
+        className="flex items-center gap-2 text-label text-ink-3"
+        data-testid="inspector-hydrating"
+        aria-busy="true"
+      >
+        <span className="h-2 w-2 animate-pulse rounded-full bg-accent-info" aria-hidden />
+        hydrating citations, references &amp; provenance…
+      </div>
+    </>
   )
 }
 
