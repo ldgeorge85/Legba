@@ -1316,6 +1316,41 @@ def test_target_scope_names_lifts_slug_token():
     assert target_scope_names(None) == set()
 
 
+def test_pk_watch_desk_slug_maps_to_pakistan_name():
+    # S1-T2: the `pk` gazetteer entry is what lifts the pk desk out of the
+    # fail-open blind spot — its scope names must include the country NAME, not
+    # just the bare ISO slug, so the guard can tell Pakistan from India.
+    from legba.runtime.grounding import target_scope_names
+    names = target_scope_names("country_watch_pk")
+    assert "pk" in names and "pakistan" in names
+
+
+def test_finding_off_target_flags_india_only_pakistan_watch_run():
+    # The precision the pk mapping buys: a pk desk whose finding is entirely
+    # about India (an OTHER country) → OFF-target. Without the `pk`→'pakistan'
+    # entry the guard would fail OPEN here (own == {'pk'} ⊆ slug tokens) and
+    # publish an India report as a Pakistan product.
+    from legba.runtime.grounding import finding_is_off_target
+    assert finding_is_off_target(
+        target_id="country_watch_pk",
+        text="India test-fired a new missile amid rising tensions with China.",
+        key_entities=["India", "China"],
+        geo=["India"],
+    ) is True
+
+
+def test_finding_on_target_when_pakistan_watch_run_names_pakistan():
+    # Mentions its OWN country (Pakistan) → on-target even though it also names
+    # India, because naming the target geo anywhere clears the guard.
+    from legba.runtime.grounding import finding_is_off_target
+    assert finding_is_off_target(
+        target_id="country_watch_pk",
+        text="Pakistan's military responded to cross-border clashes with India.",
+        key_entities=["Pakistan", "India"],
+        geo=["Pakistan"],
+    ) is False
+
+
 # ---------------------------------------------------------------------------
 # D4 off-target guard — END-TO-END through inline_target.run_method:
 # a per-country run whose finding is all about OTHER countries → force_trace_only.

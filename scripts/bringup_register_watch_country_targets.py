@@ -10,8 +10,9 @@ COVERAGE tag — the four bounded units + country_composition subscribe on
 tagged g20/watch — so adding a country here is all it takes for the full spine
 (units -> composition -> scorecard -> world composition) to card it.
 
-Operator selection (2026-07-01): Israel, Iran, Ukraine, Taiwan, North Korea.
-Add more by extending ``WATCH_ISO2``.
+Operator selection (2026-07-01): Israel, Iran, Ukraine, Taiwan, North Korea,
+Pakistan (the #1 roster hole — a nuclear state on the India border, per the
+2026-07-01 analyst-portfolio review). Add more by extending ``WATCH_ISO2``.
 
 Idempotent; validated against the real TargetDescriptor schema before write.
 """
@@ -34,7 +35,7 @@ from _p17_registrar import (  # noqa: E402
 from legba.data.schemas.target import TargetDescriptor  # noqa: E402
 
 # High-consequence non-G20 countries (ISO-3166-1 alpha-2). Extend to add more.
-WATCH_ISO2 = ["IL", "IR", "UA", "TW", "KP"]
+WATCH_ISO2 = ["IL", "IR", "UA", "TW", "KP", "PK"]
 
 # Same geopolitical vocabulary the G20 targets reason over (validated against
 # vocabulary_entries).

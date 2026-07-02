@@ -693,7 +693,7 @@ def is_per_country_target(target_id: str | None) -> bool:
 # ("country_g20_id" → 'indonesia'). The off-target guard checks BOTH the raw
 # slug token (matches a finding's ISO-coded ``geo`` tag) and the expanded
 # name(s) (matches the country named in the finding text). Covers the G20 tier
-# (``country_g20_*``) AND the watch tier (``country_watch_*``: kp/tw/ua/il/ir).
+# (``country_g20_*``) AND the watch tier (``country_watch_*``: kp/tw/ua/il/ir/pk).
 # A slug MISSING here is now SAFE, not silent suppression: ``finding_is_off_target``
 # fails OPEN when a desk has no name anchor beyond its bare ISO slug (it cannot
 # tell the desk's own country from another's, so it publishes). An entry here
@@ -732,6 +732,11 @@ _TARGET_SLUG_TO_NAMES: dict[str, tuple[str, ...]] = {
     "kp": ("north korea", "dprk"),
     "tw": ("taiwan",),
     "ua": ("ukraine",),
+    # Pakistan (S1-T2): a nuclear state on the India border. Without this entry
+    # the guard runs BLIND for the pk desk — it fails OPEN (publishes) but cannot
+    # tell Pakistan from India, so an India-only finding would slip through as a
+    # PK product. The mapping buys the precision to catch that off-target shape.
+    "pk": ("pakistan",),
 }
 
 

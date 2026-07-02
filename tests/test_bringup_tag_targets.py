@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for S1-T1 desk retro-tagging (scripts/bringup_tag_targets.py).
 
-Covers the PURE logic — the merge, the 24-desk mapping table, the per-desk plan,
+Covers the PURE logic — the merge, the 25-desk mapping table, the per-desk plan,
 and the read→merge→PUT loop with a FAKE in-memory registry (no httpx, no DB).
 The load-bearing acceptance is idempotency + no-coverage-loss: a re-run PUTs
 nothing, and the existing g20/watch coverage tags are always preserved.
@@ -47,8 +47,8 @@ def test_merge_never_drops_an_existing_tag() -> None:
 # The mapping table — 24 desks, one region each, watch tags from the vocab.
 # --------------------------------------------------------------------------- #
 def test_exactly_24_desks() -> None:
-    assert len(tt.desks()) == 24
-    assert len({d for d, _ in tt.desks()}) == 24  # ids unique
+    assert len(tt.desks()) == 25
+    assert len({d for d, _ in tt.desks()}) == 25  # ids unique
 
 
 def test_desk_ids_follow_the_registrar_convention() -> None:
@@ -64,12 +64,12 @@ def test_every_desk_has_exactly_one_region_tag() -> None:
         assert len(regions) == 1, f"{iso2}: {regions}"
 
 
-def test_region_tags_partition_all_24_desks() -> None:
+def test_region_tags_partition_all_25_desks() -> None:
     counts: dict[str, int] = {}
     for _, iso2 in tt.desks():
         region = tt.REGION_BY_ISO2[iso2]
         counts[region] = counts.get(region, 0) + 1
-    assert sum(counts.values()) == 24
+    assert sum(counts.values()) == 25
     # Every region tag used is in the declared vocabulary.
     assert set(counts) <= set(tt.REGION_TAGS)
 
@@ -187,7 +187,7 @@ class _FakeRegistry:
 
 
 def _seed_untagged() -> dict[str, dict]:
-    """All 24 desks with only their original coverage tags."""
+    """All 25 desks with only their original coverage tags."""
     bodies: dict[str, dict] = {}
     for desc_id, iso2 in tt.desks():
         cov = "g20" if desc_id.startswith("country_g20_") else "watch"
@@ -195,13 +195,13 @@ def _seed_untagged() -> dict[str, dict]:
     return bodies
 
 
-def test_run_tags_all_24_then_reruns_as_noop() -> None:
+def test_run_tags_all_25_then_reruns_as_noop() -> None:
     fake = _FakeRegistry(_seed_untagged())
 
     first = tt.run(get_body=fake.get_body, put_body=fake.put_body)
-    assert len(first) == 24
+    assert len(first) == 25
     assert all(r.action == "updated" for r in first)
-    assert len(fake.puts) == 24  # every desk written once
+    assert len(fake.puts) == 25  # every desk written once
 
     # Idempotent re-run: bodies now carry the tags -> zero PUTs.
     fake.puts.clear()

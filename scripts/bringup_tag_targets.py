@@ -70,7 +70,7 @@ G20_ISO2 = [
     "AR", "AU", "BR", "CA", "CN", "DE", "FR", "GB", "ID", "IN",
     "IT", "JP", "KR", "MX", "RU", "SA", "TR", "US", "ZA",
 ]
-WATCH_ISO2 = ["IL", "IR", "UA", "TW", "KP"]
+WATCH_ISO2 = ["IL", "IR", "UA", "TW", "KP", "PK"]
 
 # Exactly one region tag per desk. Two assignments are judgment calls flagged to
 # the operator (see the task's operator_questions): RU spans Eurasia (filed
@@ -104,6 +104,7 @@ REGION_BY_ISO2: dict[str, str] = {
     "KR": "region_indo_pacific",
     "TW": "region_indo_pacific",
     "KP": "region_indo_pacific",
+    "PK": "region_indo_pacific",   # S1-T2: Pakistan watch desk
     # Africa
     "ZA": "region_africa",
 }
@@ -133,6 +134,7 @@ WATCH_TAGS_BY_ISO2: dict[str, list[str]] = {
     "IL": ["nuclear_watch", "conflict_active"],
     "IR": ["nuclear_watch", "conflict_active", "sanctions_regime"],
     "KP": ["nuclear_watch", "sanctions_regime"],
+    "PK": ["nuclear_watch"],   # S1-T2: declared nuclear state (IN-PK dyad)
 }
 
 # The full closed vocabulary this script may assign (region + watch). Used for a
