@@ -94,13 +94,31 @@ method:
       "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited findings, each ending with its [N] citation(s); then a '## Assessment' paragraph naming the dominant escalation vector and the most plausible near-term trajectory, explicitly distinguishing rhetoric from materiel/confirmed movement; then a '## Indicators to watch' bullet list of concrete near-term signals that would confirm escalation or de-escalation>",
       "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
       "evidence": [<the signal indices / source references you cited, as strings>],
-      "tags": ["escalation", "severity:<low|moderate|elevated|high|critical>"]
+      "tags": ["escalation", "severity:<low|moderate|elevated|high|critical>"],
+      "indicators": [
+        {
+          "id": "<short stable slug, e.g. reservist-mobilization>",
+          "statement": "<one concrete, resolvable near-term escalation signpost>",
+          "status": "not_observed",
+          "horizon_date": "<YYYY-MM-DD by which this should resolve>",
+          "first_seen": "<YYYY-MM-DD, today>",
+          "citations": []
+        }
+      ]
     }
 
     The "tags" array MUST contain the topic tag "escalation" PLUS EXACTLY ONE
     severity tag drawn from {severity:low, severity:moderate, severity:elevated,
     severity:high, severity:critical}, chosen to match the assessed escalation
-    risk. Output nothing but the single JSON object.
+    risk. The "indicators" array is the STRUCTURED, machine-checkable mirror of
+    your '## Indicators to watch' prose — a SMALL, bounded list (about 3-6) of
+    concrete, resolvable near-term signposts. Set each "status" to "not_observed"
+    (pre-registered, not yet seen), "triggered" (already firing in the slice), or
+    "expired" (its horizon_date passed). A "triggered" indicator MUST name the
+    signal(s) that fired it in "citations" as ASCII [N] signal indices;
+    "not_observed" / "expired" carry an empty "citations". Keep each id a short
+    stable slug so it can be tracked run-over-run. Output nothing but the single
+    JSON object.
   llm:
     primary:
       factory_kind: stack_ref

@@ -99,8 +99,27 @@ method:
         would raise or lower the risk.>",
       "confidence": 0.0,
       "evidence": ["<the signal reference id/url for each [N] you cited>"],
-      "tags": ["severity:low", "topic:leadership_transition"]
+      "tags": ["severity:low", "topic:leadership_transition"],
+      "indicators": [
+        {
+          "id": "<short stable slug, e.g. cabinet-mass-resignation>",
+          "statement": "<one concrete, resolvable near-term transition signpost>",
+          "status": "not_observed",
+          "horizon_date": "<YYYY-MM-DD by which this should resolve>",
+          "first_seen": "<YYYY-MM-DD, today>",
+          "citations": []
+        }
+      ]
     }
+    The "indicators" array is the STRUCTURED, machine-checkable mirror of your
+    `### Indicators to watch` prose — a SMALL, bounded list (about 3-6) of
+    concrete, resolvable near-term signposts. For each, set "status" to one of:
+    "not_observed" (pre-registered but not yet seen), "triggered" (already firing
+    in the signal slice), or "expired" (its horizon_date has passed). A
+    "triggered" indicator MUST name the signal(s) that fired it in "citations" as
+    ASCII [N] signal indices (e.g. [2] -> [2]); "not_observed" and "expired" carry
+    an empty "citations". Keep the array bounded and each id a short stable slug so
+    the indicator can be tracked run-over-run.
     The "confidence" is your calibrated 0.0-1.0 confidence in the assessed
     likelihood. "tags" MUST contain EXACTLY ONE severity tag from
     severity:low | severity:moderate | severity:elevated | severity:high |

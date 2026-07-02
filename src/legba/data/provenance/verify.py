@@ -388,6 +388,14 @@ _ABSENCE_MARKERS = (
 # reconciles against checkable instead of over-counting.
 _ADVISORY_REASONS = frozenset({"double_counted", "hedge_laundering"})
 
+# S3-T1 — a structured I&W indicator whose status is 'triggered' asserts an
+# OBSERVED development and so must name the signal(s) that fired it. An uncited
+# 'triggered' entry is a REAL unsupported span (NOT advisory — it counts against
+# the tally + demotes faithfulness), exactly like an uncited prose fact. The
+# forward-looking 'not_observed' / 'expired' statuses are exempt (nothing exists
+# to cite for a non-occurrence — mirroring the prose watch-section exemption).
+_INDICATOR_UNCITED_TRIGGERED = "indicator_uncited_triggered"
+
 # Env flag (code DEFAULT OFF) gating the optional LLM judge. When unset / falsey
 # the pass is the deterministic floor labelled 'judge-unavailable'.
 _VERIFY_LLM_JUDGE_ENV = "LEGBA_VERIFY_LLM_JUDGE"
@@ -409,12 +417,15 @@ class UnsupportedSpan:
     judge_contradicted} for BOTH conventions, plus the composition-only
     ``double_counted`` (two cited sub-claims share underlying lineage → they are
     one independent evidence unit) and ``hedge_laundering`` (a composed clause
-    asserts more confidence than the sub-claim it rests on).
+    asserts more confidence than the sub-claim it rests on), plus the S3-T1
+    ``indicator_uncited_triggered`` (a structured ``data.indicators[]`` entry with
+    status ``triggered`` that carries no citation).
     """
 
     text: str
     # 'no_citation' | 'unresolved_citation' | 'judge_unsupported'
     # | 'judge_contradicted' | 'double_counted' | 'hedge_laundering'
+    # | 'indicator_uncited_triggered'
     reason: str
     # The markers the claim DID carry. The unit ([N]) path fills INT signal
     # indices; the composition ([[ref:N]]) path fills INT sub-claim ORDINALS —
@@ -1010,6 +1021,80 @@ def _deterministic_floor_subclaim(
     )
 
 
+def _indicator_spans(indicators: Any) -> tuple[int, int, list[UnsupportedSpan]]:
+    """Faithfulness contribution of the structured ``data.indicators[]`` block (S3-T1).
+
+    Returns ``(checkable, supported, spans)``. Each ``triggered`` indicator is a
+    CHECKABLE claim — SUPPORTED iff it carries >=1 citation index, else an
+    ``indicator_uncited_triggered`` unsupported span. ``not_observed`` / ``expired``
+    are forward-looking and contribute NOTHING (exempt — the same honesty as the
+    prose watch-section drop). A malformed / absent block contributes
+    ``(0, 0, [])`` — never a fabricated defect.
+    """
+    checkable = 0
+    supported = 0
+    spans: list[UnsupportedSpan] = []
+    if not isinstance(indicators, (list, tuple)):
+        return checkable, supported, spans
+    for entry in indicators:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("status") != "triggered":
+            continue  # not_observed / expired are forward-looking → exempt
+        checkable += 1
+        cites = entry.get("citations")
+        # A citation is a real signal-marker INDEX (int); reject bool (a stray
+        # True is not a citation index) and non-list shapes.
+        has_citation = isinstance(cites, (list, tuple)) and any(
+            isinstance(c, int) and not isinstance(c, bool) for c in cites
+        )
+        if has_citation:
+            supported += 1
+        else:
+            stmt = entry.get("statement")
+            ident = entry.get("id")
+            label = (
+                stmt if isinstance(stmt, str) and stmt.strip() else str(ident or "indicator")
+            )
+            spans.append(
+                UnsupportedSpan(
+                    text=f"triggered indicator without citation: {label}"[:500],
+                    reason=_INDICATOR_UNCITED_TRIGGERED,
+                )
+            )
+    return checkable, supported, spans
+
+
+def _fold_indicators(
+    floor: FaithfulnessReport, indicators: Any
+) -> FaithfulnessReport:
+    """Fold the structured-indicator check (S3-T1) into a deterministic floor.
+
+    Applied to the floor BEFORE the optional LLM judge so the judge's
+    ``min(floor, judge)`` refinement PRESERVES any indicator demotion (the judge
+    only grades prose; it can only tighten, never inflate). When there are no
+    ``triggered`` indicators the floor is returned UNCHANGED — byte-identical for
+    every finding without a structured indicators block, and for a composition
+    (whose payload carries no ``indicators``). The evidence ceiling / judge labels
+    carry through untouched.
+    """
+    ind_checkable, ind_supported, ind_spans = _indicator_spans(indicators)
+    if ind_checkable == 0:
+        return floor
+    checkable = floor.checkable_claims + ind_checkable
+    supported = floor.supported_claims + ind_supported
+    score = 1.0 if checkable == 0 else supported / checkable
+    return FaithfulnessReport(
+        faithfulness_score=score,
+        checkable_claims=checkable,
+        supported_claims=supported,
+        unsupported_spans=floor.unsupported_spans + ind_spans,
+        judge_status=floor.judge_status,
+        judge_unavailable_reason=floor.judge_unavailable_reason,
+        confidence_ceiling=floor.confidence_ceiling,
+    )
+
+
 async def _maybe_llm_judge(
     floor: FaithfulnessReport,
     *,
@@ -1190,6 +1275,7 @@ async def verify_finding_faithfulness(
     citations: Any,
     judge_llm: Any | None = None,
     finding_confidence: float | None = None,
+    indicators: Any = None,
 ) -> FaithfulnessReport:
     """MANDATORY faithfulness verify over ONE finding's cited prose.
 
@@ -1217,8 +1303,18 @@ async def verify_finding_faithfulness(
         ``float(finding_payload.confidence)`` so the T7 hedge-laundering check can
         compare a composed clause's asserted confidence against its cited
         sub-claim's ceiling. Ignored on the unit ``[N]`` path.
+    indicators:
+        OPTIONAL — the finding's structured ``data['indicators']`` block (S3-T1).
+        Default ``None`` → no-op (byte-identical for every finding without it).
+        When present, each ``triggered`` indicator is a checkable claim that MUST
+        carry a citation; an uncited ``triggered`` DEMOTES faithfulness while
+        ``not_observed`` / ``expired`` stay forward-looking + exempt. The forward-
+        looking 'Indicators to watch' PROSE section is UNAFFECTED — it stays
+        dropped wholesale by ``_segment_claims``; this scores only the STRUCTURED
+        mirror.
     """
     floor = _deterministic_floor(body, citations, finding_confidence)
+    floor = _fold_indicators(floor, indicators)
     return await _maybe_llm_judge(
         floor, body=body, citations=citations, judge_llm=judge_llm
     )

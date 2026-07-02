@@ -18,6 +18,7 @@ the two forms compare equal byte-for-byte.
 from __future__ import annotations
 
 import threading
+from datetime import date
 from enum import Enum
 from typing import Annotated, Any, Literal
 
@@ -676,3 +677,85 @@ class AnalystDescriptor(BaseModel):
         ):
             raise ValueError("critic analyst method.kind must be an LLM kind")
         return self
+
+
+# ---------------------------------------------------------------------------
+# S3-T1 — structured I&W indicators (a finding-payload sub-shape)
+# ---------------------------------------------------------------------------
+#
+# A unit's forward-looking "Indicators to watch" PROSE stays EXEMPT from the
+# faithfulness pass (it is forward-looking by construction — verify.py drops the
+# whole section). S3-T1 adds a SEPARATE, machine-checkable structured MIRROR of
+# that prose — ``FindingPayload.data.indicators[]`` — so the future I&W board can
+# render resolvable indicators run-over-run AND the verify pass can hold a
+# ``triggered`` indicator to a citation (an uncited triggered indicator DEMOTES
+# faithfulness; ``not_observed`` / ``expired`` stay forward-looking + exempt).
+#
+# This lives in the schemas package (not provenance/models) because it is the
+# typed contract a descriptor-driven finding's output must satisfy; a change here
+# is a data/schemas/* change (rebuild BOTH registry + runtime).
+
+
+class IndicatorEntry(BaseModel):
+    """One structured indications-and-warning indicator (S3-T1).
+
+    Fields
+    ------
+    id:
+        A short, stable slug identifying the indicator across runs (so an
+        ``indicator_tracker`` (S3-T2) can diff its status run-over-run).
+    statement:
+        The concrete, resolvable signpost (e.g. "Reservists mobilized in the
+        eastern military district").
+    status:
+        * ``triggered``    — the signpost has fired; MUST carry >=1 ``citations``
+          entry (a ``[N]`` signal index). An uncited ``triggered`` indicator is an
+          unsupported span that DEMOTES the finding's faithfulness (verify.py).
+        * ``not_observed`` — pre-registered but not yet seen (forward-looking → no
+          citation required; exempt from faithfulness like the prose watch list).
+        * ``expired``      — the ``horizon_date`` passed without the signpost
+          firing (forward-looking → exempt).
+    horizon_date:
+        The date by which the indicator is expected to resolve (ISO ``YYYY-MM-DD``).
+    first_seen:
+        The date the indicator was first registered (ISO ``YYYY-MM-DD``).
+    citations:
+        The finding's own ASCII ``[N]`` signal-marker INDICES (the ints keying
+        ``data['citations']``) that a ``triggered`` indicator rests on.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=128)
+    statement: str = Field(min_length=1, max_length=2048)
+    status: Literal["triggered", "not_observed", "expired"]
+    horizon_date: date
+    first_seen: date
+    citations: list[int] = Field(default_factory=list, max_length=64)
+
+
+def validate_indicators(value: Any) -> list[dict[str, Any]]:
+    """Validate + normalize a finding payload's ``data['indicators']`` block.
+
+    Returns the normalized list — each entry model_dumped to JSON-safe primitives
+    (ISO date strings for ``horizon_date`` / ``first_seen``) so the shape stored in
+    the JSONB ``data`` column is canonical and round-trips. ``None`` / absent → an
+    empty list.
+
+    Raises ``ValueError`` when the block is present but not a list, or any entry is
+    not a well-formed :class:`IndicatorEntry` — the write path then routes the
+    payload to the DLQ, the same fail-loud contract the other typed payload fields
+    carry. Tolerant ingestion of a noisy LLM ``indicators`` array is the caller's
+    job (``inline_target._coerce_indicators`` drops malformed entries BEFORE the
+    payload is constructed, so this strict pass only fires on a genuine mis-write).
+    """
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("data.indicators must be a list of indicator entries")
+    out: list[dict[str, Any]] = []
+    for i, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            raise ValueError(f"data.indicators[{i}] must be an object")
+        out.append(IndicatorEntry(**entry).model_dump(mode="json"))
+    return out

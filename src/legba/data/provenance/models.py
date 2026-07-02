@@ -24,7 +24,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +83,22 @@ class FindingPayload(_AnalystOutputBase):
     """Generic analyst observation — first-order output of inline/cross-target."""
 
     kind_marker: Literal["finding"] = "finding"
+
+    @model_validator(mode="after")
+    def _validate_indicators(self) -> "FindingPayload":
+        # S3-T1: the OPTIONAL structured indications-and-warning block. If
+        # ``data.indicators`` is present it MUST be a list of well-formed
+        # IndicatorEntry objects; normalize it to the canonical JSON-safe shape
+        # (ISO date strings) IN PLACE so the JSONB round-trips + the future I&W
+        # board renders a stable contract. Absent → no-op (byte-identical for
+        # every existing finding). The import is LOCAL so this module carries no
+        # schemas dependency at load time (no import cycle).
+        data = self.data
+        if isinstance(data, dict) and data.get("indicators") is not None:
+            from ..schemas.analyst import validate_indicators
+
+            data["indicators"] = validate_indicators(data.get("indicators"))
+        return self
 
 
 class MetaFindingPayload(_AnalystOutputBase):

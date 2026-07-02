@@ -230,6 +230,10 @@ async def verify_inline_target_finding(
     body = str(getattr(finding_payload, "body", "") or "")
     data = getattr(finding_payload, "data", None)
     citations = data.get("citations") if isinstance(data, Mapping) else None
+    # S3-T1: the finding's structured I&W block, if any. A 'triggered' indicator
+    # without a citation demotes faithfulness (the verify pass folds it into the
+    # score); absent → None → no-op. Only unit inline_target findings carry it.
+    indicators = data.get("indicators") if isinstance(data, Mapping) else None
 
     # SCOPE GUARD — the unit inline_target kind (always) OR a COMPOSITION
     # meta_findings_synthesizer finding that actually emitted a citation bridge.
@@ -268,6 +272,7 @@ async def verify_inline_target_finding(
             citations=citations,
             judge_llm=deps.verify_judge,
             finding_confidence=finding_confidence,
+            indicators=indicators,
         )
     except Exception as exc:  # pragma: no cover — verify must never break a run
         logger.warning(

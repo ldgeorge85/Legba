@@ -127,6 +127,7 @@ from uuid import UUID
 
 from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload
+from ..schemas.analyst import IndicatorEntry
 # S5 GATHER reuses consult's JSON-extraction + tool-ref helpers rather than
 # re-implementing them — same shape, one source of truth.
 from .consult_on_demand import (
@@ -638,6 +639,28 @@ def _unwrap_envelope_body(body: str) -> str:
     return inner_body
 
 
+def _coerce_indicators(raw: Any) -> list[dict[str, Any]]:
+    """Lenient per-entry coercion of the LLM's ``indicators`` array (S3-T1).
+
+    Coerces each entry into the typed :class:`IndicatorEntry` shape and DROPS any
+    malformed entry (degrade-not-drop) so a single bad indicator never DLQs an
+    otherwise-good finding; the strict ``FindingPayload`` validator then re-checks
+    what survives. Returns ``[]`` when the block is absent / not a list.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            out.append(IndicatorEntry(**entry).model_dump(mode="json"))
+        except Exception as exc:  # noqa: BLE001 — degrade-not-drop; skip the bad one
+            logger.debug("inline_target.indicator.dropped err=%s entry=%s", exc, entry)
+            continue
+    return out
+
+
 def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
     """Parse the LLM's JSON response into a :class:`FindingPayload`.
 
@@ -719,13 +742,24 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
             title = inner_title
         if not title:
             title = _title_from_text(body, fallback_title=fallback_title)
+        # S3-T1: the OPTIONAL structured I&W block. The unit prompts emit it as a
+        # top-level `indicators` array alongside the prose; tolerate a model that
+        # nested it under `data`. Coerce leniently (drop malformed entries) so a
+        # bad indicator never DLQs an otherwise-good finding.
+        ind_raw = parsed.get("indicators")
+        if ind_raw is None and isinstance(parsed.get("data"), dict):
+            ind_raw = parsed["data"].get("indicators")
+        data: dict[str, Any] = {"raw_llm_response": raw[:8000]}
+        indicators = _coerce_indicators(ind_raw)
+        if indicators:
+            data["indicators"] = indicators
         return FindingPayload(
             title=title[:2048],
             body=body[:65536],
             confidence=float(parsed.get("confidence", 0.5)),
             evidence=[str(e) for e in (parsed.get("evidence") or [])][:50],
             tags=[str(t) for t in (parsed.get("tags") or [])][:50],
-            data={"raw_llm_response": raw[:8000]},
+            data=data,
         )
     except Exception as exc:                            # pragma: no cover
         logger.warning("inline_target.finding.coerce_failed err=%s", exc)

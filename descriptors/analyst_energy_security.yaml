@@ -106,11 +106,27 @@ method:
      "evidence": [<the signal markers/ids your claims rest on>],
      "tags": [<exactly ONE severity tag from
        severity:low | severity:moderate | severity:elevated | severity:high |
-       severity:critical>, "energy_security"]}
+       severity:critical>, "energy_security"],
+     "indicators": [
+       {"id": "<short stable slug, e.g. lng-terminal-outage>",
+        "statement": "<one concrete, resolvable near-term energy-security signpost>",
+        "status": "not_observed",
+        "horizon_date": "<YYYY-MM-DD by which this should resolve>",
+        "first_seen": "<YYYY-MM-DD, today>",
+        "citations": []}
+     ]}
 
     RULES:
       - tags MUST contain EXACTLY ONE severity:* tag AND the topic tag
         "energy_security" — no more, no fewer of these two.
+      - The "indicators" array is the STRUCTURED, machine-checkable mirror of your
+        `Indicators to watch` prose — a SMALL, bounded list (about 3-6) of
+        concrete, resolvable near-term signposts. Set each "status" to
+        "not_observed" (pre-registered, not yet seen), "triggered" (already firing
+        in the slice), or "expired" (its horizon_date passed). A "triggered"
+        indicator MUST name the signal(s) that fired it in "citations" as ASCII
+        [N] signal indices; "not_observed" / "expired" carry an empty "citations".
+        Keep each id a short stable slug so it can be tracked run-over-run.
       - If NO signal bears on energy security, return a finding that states so,
         tagged severity:low, with confidence <= 0.3.
       - Severity reflects CITED pressure, not speculation; confidence reflects
