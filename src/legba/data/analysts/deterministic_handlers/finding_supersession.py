@@ -174,6 +174,27 @@ def _topic(data: Mapping[str, Any], fallback: str | None) -> str:
 _SITUATION_SIGNATURE_ENTITY_K = 0
 
 
+def _explicit_signature(data: Mapping[str, Any]) -> str | None:
+    """Explicit ``situation_signature`` / ``situation_id``, or ``None``.
+
+    Reads BOTH the top-level dump AND its nested ``data`` payload sub-dict — the
+    persisted ``analyst_outputs.data`` column is the full payload model_dump
+    (``FindingPayload`` is ``extra='forbid'``), so an analyst that stamps an
+    explicit signature onto its FindingPayload ``data`` (the S8-T3
+    meta_findings_synthesizer composition heads set
+    ``data['situation_signature']``) lands it at
+    ``data->'data'->'situation_signature'``, NOT the top level. Mirrors the
+    dual-source read already used by :func:`_entity_tokens` / :func:`_topic`.
+    """
+    inner = data.get("data")
+    sources = (data, inner) if isinstance(inner, Mapping) else (data,)
+    for src in sources:
+        explicit = src.get("situation_signature") or src.get("situation_id")
+        if explicit:
+            return str(explicit).strip()
+    return None
+
+
 def derive_signature(
     data: Mapping[str, Any],
     *,
@@ -182,15 +203,16 @@ def derive_signature(
     """Deterministic situation signature for a finding, or ``None``.
 
     Priority:
-      1. Explicit ``situation_id`` / ``situation_signature`` on ``data``.
+      1. Explicit ``situation_id`` / ``situation_signature`` (top-level OR the
+         nested payload ``data`` sub-dict — see :func:`_explicit_signature`).
       2. Derived ``sig:<topic>[|<top-K entity tokens>]`` — only when there is at
          least one entity token (so a bare summary finding never clusters).
 
     ``None`` means "do not cluster this finding".
     """
-    explicit = data.get("situation_signature") or data.get("situation_id")
+    explicit = _explicit_signature(data)
     if explicit:
-        return f"sit:{str(explicit).strip()}"
+        return f"sit:{explicit}"
 
     tokens = _entity_tokens(data)
     if not tokens:

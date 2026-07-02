@@ -590,6 +590,50 @@ def _coerce_finding(
 
 
 # ---------------------------------------------------------------------------
+# Composition supersession signature (S8-T3)
+# ---------------------------------------------------------------------------
+
+
+COMPOSITION_SIG_PREFIX: str = "composition"
+"""Prefix for a composition head's supersession signature. Distinct from the
+content-derived ``sig:`` / explicit-situation ``sit:`` prefixes so a composition
+head can never collide with a unit finding's content signature."""
+
+WORLD_TARGET_TOKEN: str = "world"
+"""Target token for the WORLD composition head (its ``target_id`` is NULL)."""
+
+
+def _composition_signature(
+    analyst_id: str | None,
+    target_id: str | None,
+) -> str:
+    """Per-head supersession signature for a meta-composition FindingPayload.
+
+    meta_findings_synthesizer compositions carry no entity/topic content, so
+    :func:`finding_supersession.derive_signature` cannot derive a signature and
+    the heads never cluster — every cadence cycle leaves ANOTHER live head (the
+    live symptom the S8-T3 fix targets: ~8 concurrent US composition heads
+    reachable by the read/findings API, hidden from the FUSION read only by its
+    ``DISTINCT ON (analyst_id, target_id)`` belt). Stamping this signature onto
+    ``FindingPayload.data['situation_signature']`` gives the supersession
+    clusterer an explicit key (``derive_signature`` reads the nested payload
+    ``data`` sub-dict too, so the persisted ``analyst_outputs.data`` column
+    surfaces it).
+
+    The finding_supersession cluster key is ``(situation_signature, analyst_id)``
+    so the signature MUST encode ``target_id`` — a bare per-analyst signature
+    would collapse ALL of one analyst's per-country compositions into a SINGLE
+    head. The world composition (``target_id`` NULL) uses the ``'world'`` literal.
+    Keeping ``analyst_id`` in the string as well makes it self-descriptive and
+    lets a future sibling composition kind (S2-T2 region_composition) reuse this
+    helper without collision.
+    """
+    target = str(target_id) if target_id else WORLD_TARGET_TOKEN
+    aid = str(analyst_id) if analyst_id else "unknown"
+    return f"{COMPOSITION_SIG_PREFIX}:{aid}:{target}"
+
+
+# ---------------------------------------------------------------------------
 # Substrate-read helper — other-analyst findings slice
 # ---------------------------------------------------------------------------
 
@@ -1090,6 +1134,27 @@ async def _run(
     else:
         contributing_analysts = derived_analysts
 
+    # Composition detection — resolved BEFORE the empty-slice branch so an
+    # honest-empty per-country / world composition ALSO carries the S8-T3
+    # supersession signature (else a country with zero verified sub-claims
+    # would still accumulate one live diagnostic head per cycle). Two flavors +
+    # the legacy global meta:
+    #   * TARGET-SCOPED (``options["target_id"]``) → the per-COUNTRY composition.
+    #   * GLOBAL verify-declaring meta (``options["composition"]``, no target_id)
+    #     → the WORLD composition.
+    #   * else → the legacy GLOBAL meta (byte-for-byte unchanged, no signature).
+    target_scoped = bool(options.get("target_id"))
+    world_composition = (not target_scoped) and bool(options.get("composition"))
+    is_composition = target_scoped or world_composition
+    # S8-T3 per-head supersession signature (None for the legacy global meta so
+    # its behavior is byte-for-byte unchanged). Encodes target_id — see
+    # ``_composition_signature``.
+    composition_signature = (
+        _composition_signature(options.get("analyst_id"), options.get("target_id"))
+        if is_composition
+        else None
+    )
+
     if not sliced:
         # Defensive empty-input path. The runtime ordinarily short-circuits
         # before calling us (see ``AnalystActor.run`` NOOP/no_inputs branch),
@@ -1097,15 +1162,20 @@ async def _run(
         # with ``meta=True`` so a downstream "list meta-findings" filter
         # still finds it; confidence=0.0 so it doesn't pollute synthesis
         # confidence stats.
+        empty_data: dict[str, Any] = {
+            "meta": True,
+            "contributing_analysts": list(contributing_analysts),
+        }
+        if composition_signature is not None:
+            # Cluster even the honest-empty composition head (append-only
+            # supersession folds prior-cycle empties to the newest).
+            empty_data["situation_signature"] = composition_signature
         finding = FindingPayload(
             title="No source findings to synthesize",
             body="The other-analyst output slice for this run was empty.",
             confidence=0.0,
             tags=["empty_slice", "meta"],
-            data={
-                "meta": True,
-                "contributing_analysts": list(contributing_analysts),
-            },
+            data=empty_data,
         )
         return AnalystMethodResult(
             finding=finding,
@@ -1135,10 +1205,8 @@ async def _run(
     # Both compositions cite sub-claims by their [[ref:N]] ordinal handle,
     # resolved into ``data.citations`` (ref_id=<finding uuid>, ref_kind='finding');
     # the render prefixes each sub-claim block with its [[ref:N]] handle + the
-    # finding_id for debug (source ids on).
-    target_scoped = bool(options.get("target_id"))
-    world_composition = (not target_scoped) and bool(options.get("composition"))
-    is_composition = target_scoped or world_composition
+    # finding_id for debug (source ids on). ``target_scoped`` / ``world_composition``
+    # / ``is_composition`` were resolved above (before the empty-slice branch).
     if target_scoped:
         effective_system = _COMPOSITION_SYSTEM
     elif world_composition:
@@ -1220,6 +1288,16 @@ async def _run(
         "evidence_count": len(finding.evidence),
         "structured": "unstructured" not in finding.tags,
     })
+
+    # --- SUPERSEDE (S8-T3, composition only) --------------------------
+    # Stamp the per-head supersession signature so finding_supersession clusters
+    # these composition heads down to ONE canonical head per (analyst_id,
+    # target_id) — append-only (the supersession handler / the 0058 backfill
+    # link older heads to the newest via ``superseded_by``, NEVER delete a row).
+    # The legacy global meta gets no signature (composition_signature is None), so
+    # its clustering behavior is byte-for-byte unchanged.
+    if composition_signature is not None:
+        finding.data["situation_signature"] = composition_signature
 
     # --- CITE (composition only) --------------------------------------
     # Resolve the model's inline ``[[ref:N]]`` ORDINAL markers against the rendered
@@ -1528,6 +1606,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
 
 __all__ = [
     "AnalystMethodResult",
+    "COMPOSITION_SIG_PREFIX",
     "DEFAULT_MAX_TOKENS",
     "DEFAULT_TEMPERATURE",
     "DEFAULT_VERIFY_FLOOR",
@@ -1542,10 +1621,12 @@ __all__ = [
     "READ_SLICE",
     "SCHEMA_VERSION",
     "VERIFY_FLOOR_ENV",
+    "WORLD_TARGET_TOKEN",
     "CONTENTION_GROUP_LIMIT",
     "CONTENTION_VALUES_PER_GROUP",
     "_COMPOSITION_SYSTEM",
     "_WORLD_COMPOSITION_SYSTEM",
+    "_composition_signature",
     "_declares_verify",
     "_extract_contested_markers",
     "_extract_ref_markers",
