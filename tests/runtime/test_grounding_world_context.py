@@ -1,0 +1,521 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""S5-T3 opportunistic RAG — the ``vector:world_context`` grounding source.
+
+Infra-free unit tests (no live Postgres / Qdrant / embedding endpoint) for the
+inline ASSEMBLE-time RAG that adds a SEPARATE, non-citable "BACKGROUND PRIORS
+(context, not evidence — do not cite)" block BELOW the authoritative preamble:
+
+  * ``SubstrateGroundingResolver.resolve_world_context`` embeds the query and
+    cosine-searches the ``world_context`` collection, mapping hits → chunks;
+  * degrade-not-drop / honesty: no embedder, no qdrant, empty query, an EMPTY
+    collection, an embed failure, or a search failure all yield NO chunks (→ no
+    block, no fabricated header);
+  * ``build_world_context_block`` renders the EXACT non-citable header + is
+    token-capped, and returns ``None`` when empty;
+  * the deps-builder hook, wired with ``sources=[substrate, vector:world_context]``,
+    emits the BACKGROUND PRIORS block BELOW the AUTHORITATIVE preamble AND records
+    the retrieved chunk ids into the caller's trace sink;
+  * end-to-end through ``inline_target.run_method``: the ``inject_preamble`` trace
+    event carries ``world_context_chunk_ids`` for auditable retrieval.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Mapping
+from uuid import uuid4
+
+import pytest
+
+from legba.data.analysts.inline_target import (
+    GROUNDING_RAG_CHUNK_SINK_KEY,
+    InlineTargetDeps,
+    run_method,
+)
+from legba.runtime.analyst_deps_builder import _build_grounding_hook
+from legba.runtime.grounding import (
+    GroundingWorldContextChunk,
+    SubstrateGroundingResolver,
+    build_world_context_block,
+)
+
+
+# ---------------------------------------------------------------------------
+# In-process fakes
+# ---------------------------------------------------------------------------
+
+
+class _FakePoint:
+    """A single scored Qdrant hit (mirrors ``QueryResponse.points`` item)."""
+
+    def __init__(self, *, id: str, payload: dict[str, Any], score: float) -> None:
+        self.id = id
+        self.payload = payload
+        self.score = score
+
+
+class _FakeQueryResponse:
+    def __init__(self, points: list[_FakePoint]) -> None:
+        self.points = points
+
+
+class _FakeQdrant:
+    """Async Qdrant stand-in exposing ``query_points``; records the last call."""
+
+    def __init__(self, points: list[_FakePoint]) -> None:
+        self._points = points
+        self.last_call: dict[str, Any] | None = None
+
+    async def query_points(self, **kwargs: Any) -> _FakeQueryResponse:
+        self.last_call = kwargs
+        return _FakeQueryResponse(list(self._points))
+
+
+class _RaisingQdrant:
+    async def query_points(self, **kwargs: Any) -> Any:
+        raise RuntimeError("qdrant unreachable")
+
+
+class _StubEmbedder:
+    """Records the embedded text; returns a fixed vector."""
+
+    dim = 4
+
+    def __init__(self, vector: list[float] | None = None) -> None:
+        self._vector = vector or [0.1, 0.2, 0.3, 0.4]
+        self.embedded: list[str] = []
+
+    async def embed(self, text: str) -> list[float]:
+        self.embedded.append(text)
+        return list(self._vector)
+
+
+class _RaisingEmbedder:
+    dim = 4
+
+    async def embed(self, text: str) -> list[float]:  # noqa: ARG002
+        raise RuntimeError("embedding backend unreachable")
+
+
+def _chunk_point(
+    *, id: str = "chunk-1", text: str = "A prior on succession dynamics.",
+    title: str = "Succession primer", section: str = "Overview",
+    source_url: str = "https://example.invalid/doc", score: float = 0.87,
+) -> _FakePoint:
+    return _FakePoint(
+        id=id,
+        payload={
+            "corpus": "world_context",
+            "doc_id": "doc-1",
+            "title": title,
+            "section": section,
+            "source_url": source_url,
+            "text": text,
+        },
+        score=score,
+    )
+
+
+# --- Postgres stub (facts/nexuses/situations by SQL keyword) ----------------
+
+
+class _StubConn:
+    def __init__(self, fetch_rows: dict[str, list[dict[str, Any]]], log: list[tuple[str, tuple]]):
+        self._fetch_rows = fetch_rows
+        self._log = log
+
+    async def fetch(self, sql: str, *params: Any) -> list[dict[str, Any]]:
+        self._log.append((sql, params))
+        if "FROM facts" in sql:
+            return self._fetch_rows.get("facts", [])
+        if "FROM nexuses" in sql:
+            return self._fetch_rows.get("nexuses", [])
+        if "FROM situations" in sql:
+            return self._fetch_rows.get("situations", [])
+        if "FROM graph_metrics" in sql:
+            return self._fetch_rows.get("graph_metrics", [])
+        return []
+
+
+class _StubAcquire:
+    def __init__(self, conn: _StubConn):
+        self._conn = conn
+
+    async def __aenter__(self) -> _StubConn:
+        return self._conn
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+
+class _StubPool:
+    def __init__(self, fetch_rows: dict[str, list[dict[str, Any]]] | None = None):
+        self.log: list[tuple[str, tuple]] = []
+        self._conn = _StubConn(fetch_rows or {}, self.log)
+
+    def acquire(self) -> _StubAcquire:
+        return _StubAcquire(self._conn)
+
+
+# --- LLM double + signal (for the run_method end-to-end trace test) ---------
+
+
+@dataclass
+class _Usage:
+    prompt_tokens: int = 10
+    completion_tokens: int = 5
+    reasoning_tokens: int = 0
+
+
+@dataclass
+class _Response:
+    content: str = ""
+    usage: _Usage | None = None
+
+
+class _CapturingLLM:
+    subprovider = "openai"
+
+    def __init__(self) -> None:
+        self.last_user_prompt: str | None = None
+
+    async def chat_complete(self, messages, *, max_tokens=None, temperature=None,
+                            system=None, **kwargs) -> Any:
+        self.last_user_prompt = messages[-1]["content"] if messages else ""
+        finding = {"title": "t", "body": "b", "confidence": 0.5, "evidence": [], "tags": []}
+        return _Response(content=json.dumps(finding), usage=_Usage())
+
+
+def _signal(geo: list[str] | None = None, tags: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "id": uuid4(),
+        "title": "Some event",
+        "produced_at": "2026-06-18T00:00:00+00:00",
+        "source_url": "https://example.invalid/x",
+        "data": {"summary": "an observation"},
+        "geo": geo or [],
+        "tags": tags or [],
+    }
+
+
+def _descriptor_with_grounding(sources: list[str]):
+    """A minimal valid inline_target descriptor opting into grounding."""
+    from legba.data.schemas.analyst import AnalystDescriptor
+
+    body: dict[str, Any] = {
+        "identity": {
+            "id": "leadership_transition",
+            "name": "Leadership-Transition Risk Unit",
+            "schema_uri": "legba/analyst/1.0.0",
+            "version": "0" * 16,
+            "kind": "inline_target",
+            "type_signature": {
+                "input_type": "legba.runtime.SignalList",
+                "output_type": "legba.runtime.Finding",
+            },
+            "state": "active",
+            "owner": "t",
+        },
+        "subscription": {"substrate": {"direct_queries": False}},
+        "method": {
+            "kind": "llm_planner",
+            "prompt_module": "legba.runtime.analyst_method:_DEFAULT_SYSTEM",
+            "llm": {"primary": {"factory_kind": "stack_ref", "raw": "llm.x",
+                                "expected_family": "llm_provider"}},
+        },
+        "cadence": {"fallback_schedule": "0 */6 * * *"},
+        "grounding": {"enabled": True, "scope": ["target_geo", "slice_entities"],
+                      "sources": sources},
+    }
+    return AnalystDescriptor.model_validate(body, strict=False)
+
+
+_US_FACT_ROW = {
+    "subject": "United States", "predicate": "head of state", "value": "Donald Trump",
+    "valid_from": datetime(2025, 1, 20, tzinfo=timezone.utc),
+    "source_type": "seed", "confidence": 0.95,
+}
+
+
+# ---------------------------------------------------------------------------
+# resolve_world_context — the resolver method
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_maps_hit_to_chunk():
+    embedder = _StubEmbedder()
+    qdrant = _FakeQdrant([_chunk_point(id="c-42")])
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=embedder, qdrant=qdrant,
+        world_context_collection="world_context",
+    )
+    chunks = await resolver.resolve_world_context("succession in country X", limit=30)
+    assert len(chunks) == 1
+    assert chunks[0].chunk_id == "c-42"
+    assert chunks[0].title == "Succession primer"
+    assert "succession dynamics" in chunks[0].text
+    # The query was embedded and the search hit the world_context collection.
+    assert embedder.embedded == ["succession in country X"]
+    assert qdrant.last_call is not None
+    assert qdrant.last_call["collection_name"] == "world_context"
+    assert qdrant.last_call["query"] == [0.1, 0.2, 0.3, 0.4]
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_empty_collection_returns_no_chunks():
+    """Honesty: an EMPTY collection (no hits) yields no chunks → no block."""
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=_FakeQdrant([]),
+    )
+    chunks = await resolver.resolve_world_context("anything", limit=30)
+    assert chunks == []
+    assert build_world_context_block(chunks) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_no_embedder_or_qdrant_returns_empty():
+    pool = _StubPool()
+    # No embedder → no RAG.
+    r1 = SubstrateGroundingResolver(pg_pool=pool, qdrant=_FakeQdrant([_chunk_point()]))
+    assert await r1.resolve_world_context("q", limit=30) == []
+    # No qdrant → no RAG.
+    r2 = SubstrateGroundingResolver(pg_pool=pool, embedder=_StubEmbedder())
+    assert await r2.resolve_world_context("q", limit=30) == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_empty_query_short_circuits():
+    embedder = _StubEmbedder()
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=embedder, qdrant=_FakeQdrant([_chunk_point()]),
+    )
+    assert await resolver.resolve_world_context("   ", limit=30) == []
+    assert embedder.embedded == []  # no embed round-trip on an empty query
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_embed_failure_degrades():
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_RaisingEmbedder(), qdrant=_FakeQdrant([_chunk_point()]),
+    )
+    assert await resolver.resolve_world_context("q", limit=30) == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_search_failure_degrades():
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=_RaisingQdrant(),
+    )
+    assert await resolver.resolve_world_context("q", limit=30) == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_drops_empty_text_chunk():
+    """A hit with no readable text contributes no prior (dropped)."""
+    empty = _FakePoint(id="e", payload={"title": "t", "text": "  "}, score=0.5)
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=_FakeQdrant([empty]),
+    )
+    assert await resolver.resolve_world_context("q", limit=30) == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_world_context_clamps_to_chunk_ceiling():
+    points = [_chunk_point(id=f"c-{i}", text=f"prior {i}") for i in range(20)]
+    qdrant = _FakeQdrant(points)
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=qdrant,
+    )
+    await resolver.resolve_world_context("q", limit=30)
+    # The requested limit (30) is clamped to the RAG ceiling (6) at the search.
+    assert qdrant.last_call["limit"] == 6
+
+
+# ---------------------------------------------------------------------------
+# build_world_context_block — the BACKGROUND PRIORS renderer
+# ---------------------------------------------------------------------------
+
+
+def test_build_world_context_block_header_and_non_citable():
+    chunk = GroundingWorldContextChunk(
+        chunk_id="c-1", title="Succession primer", section="Overview",
+        source_url=None, text="Watch coalition arithmetic and elite defections.",
+        score=0.9,
+    )
+    block = build_world_context_block([chunk])
+    assert block is not None
+    # The EXACT operator-facing header string is present verbatim.
+    assert "BACKGROUND PRIORS (context, not evidence — do not cite)" in block
+    assert "NOT" in block and "citable" in block  # the non-citable warning
+    assert "Succession primer — Overview" in block
+    assert "coalition arithmetic" in block
+    # The ground-truth header must NOT leak into this block.
+    assert "AUTHORITATIVE CURRENT CONTEXT" not in block
+
+
+def test_build_world_context_block_none_when_empty():
+    assert build_world_context_block([]) is None
+
+
+def test_build_world_context_block_trims_long_chunk_body():
+    long_text = "x" * 5000
+    chunk = GroundingWorldContextChunk(
+        chunk_id="c-1", title="T", section=None, source_url=None,
+        text=long_text, score=0.5,
+    )
+    block = build_world_context_block([chunk])
+    assert block is not None
+    # The per-chunk char cap trims the body (ellipsis) so it can't blow context.
+    assert "x" * 5000 not in block
+    assert "…" in block
+
+
+def test_build_world_context_block_stops_at_block_cap_but_admits_one():
+    chunks = [
+        GroundingWorldContextChunk(
+            chunk_id=f"c-{i}", title=f"T{i}", section=None, source_url=None,
+            text="y" * 600, score=0.5,
+        )
+        for i in range(6)
+    ]
+    block = build_world_context_block(chunks, block_char_cap=50)
+    assert block is not None
+    # The first chunk is always admitted (never an empty header)...
+    assert "T0" in block
+    # ...but the tiny block cap stops the fold before the rest crowd the context.
+    assert "T1" not in block and "T5" not in block
+
+
+# ---------------------------------------------------------------------------
+# Deps-builder hook — block placement + chunk-id recording
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hook_background_priors_below_authoritative_and_records_ids():
+    pool = _StubPool(fetch_rows={"facts": [_US_FACT_ROW], "nexuses": []})
+    qdrant = _FakeQdrant([_chunk_point(id="chunk-xyz")])
+    embedder = _StubEmbedder()
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["substrate", "vector:world_context"]),
+        pg_pool=pool, embedder=embedder, qdrant=qdrant,
+    )
+    assert hook is not None
+    sink: list[str] = []
+    out = await hook(
+        [_signal(geo=["United States"])],
+        {"target_id": "country_g20_us", GROUNDING_RAG_CHUNK_SINK_KEY: sink},
+    )
+    assert out is not None
+    # Both blocks present; BACKGROUND PRIORS sits BELOW the authoritative preamble.
+    assert "AUTHORITATIVE CURRENT CONTEXT" in out
+    assert "BACKGROUND PRIORS (context, not evidence — do not cite)" in out
+    assert out.index("AUTHORITATIVE CURRENT CONTEXT") < out.index("BACKGROUND PRIORS")
+    # The retrieved chunk id was recorded into the caller's trace sink.
+    assert sink == ["chunk-xyz"]
+    # The RAG query led with the unit's bounded-question proxy (descriptor name)
+    # plus the target-geo candidates (the S5-T3 query recipe: question + target +
+    # slice entities). The query TEXT is what we embedded; the vector reached qdrant.
+    assert len(embedder.embedded) == 1
+    rag_query = embedder.embedded[0]
+    assert rag_query.startswith("Leadership-Transition Risk Unit")
+    assert "united states" in rag_query.lower()
+    assert qdrant.last_call is not None
+    assert qdrant.last_call["collection_name"] == "world_context"
+
+
+@pytest.mark.asyncio
+async def test_hook_empty_collection_yields_no_block_no_ids():
+    """Empty collection → no BACKGROUND PRIORS block; substrate block unaffected."""
+    pool = _StubPool(fetch_rows={"facts": [_US_FACT_ROW], "nexuses": []})
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["substrate", "vector:world_context"]),
+        pg_pool=pool, embedder=_StubEmbedder(), qdrant=_FakeQdrant([]),
+    )
+    assert hook is not None
+    sink: list[str] = []
+    out = await hook(
+        [_signal(geo=["United States"])],
+        {"target_id": "country_g20_us", GROUNDING_RAG_CHUNK_SINK_KEY: sink},
+    )
+    assert out is not None
+    assert "AUTHORITATIVE CURRENT CONTEXT" in out
+    assert "BACKGROUND PRIORS" not in out
+    assert sink == []
+
+
+@pytest.mark.asyncio
+async def test_hook_without_vector_source_never_queries_qdrant():
+    """A descriptor NOT opting into vector:world_context never touches qdrant."""
+    qdrant = _FakeQdrant([_chunk_point()])
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["substrate"]),
+        pg_pool=_StubPool(fetch_rows={"facts": [_US_FACT_ROW], "nexuses": []}),
+        embedder=_StubEmbedder(), qdrant=qdrant,
+    )
+    assert hook is not None
+    out = await hook([_signal(geo=["United States"])], {"target_id": "country_g20_us"})
+    assert out is not None
+    assert "BACKGROUND PRIORS" not in out
+    assert qdrant.last_call is None  # never searched
+
+
+@pytest.mark.asyncio
+async def test_hook_vector_only_no_qdrant_degrades_to_no_block():
+    """vector:world_context declared but no qdrant wired → no block (degrade)."""
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["vector:world_context"]),
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=None,
+    )
+    assert hook is not None
+    out = await hook([_signal(geo=["United States"])], {"target_id": "country_g20_us"})
+    assert out is None  # nothing resolved → no preamble at all
+
+
+# ---------------------------------------------------------------------------
+# End-to-end through inline_target.run_method — the trace event carries ids
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_method_inject_preamble_trace_carries_chunk_ids():
+    pool = _StubPool(fetch_rows={"facts": [_US_FACT_ROW], "nexuses": []})
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["substrate", "vector:world_context"]),
+        pg_pool=pool, embedder=_StubEmbedder(), qdrant=_FakeQdrant([_chunk_point(id="cid-9")]),
+    )
+    llm = _CapturingLLM()
+    deps = InlineTargetDeps(llm=llm, grounding_hook=hook)
+    result = await run_method(
+        [_signal(geo=["United States"])], {"target_id": "country_g20_us"}, deps,
+    )
+    assert result.finding is not None
+    # The prompt carries the non-citable priors block.
+    assert "BACKGROUND PRIORS" in (llm.last_user_prompt or "")
+    # The inject_preamble trace step records the retrieved chunk ids.
+    ground = [s for s in result.intermediate_steps if s.get("kind") == "inject_preamble"]
+    assert len(ground) == 1
+    assert ground[0]["world_context_chunk_ids"] == ["cid-9"]
+
+
+@pytest.mark.asyncio
+async def test_run_method_substrate_only_trace_has_no_chunk_ids():
+    """A substrate-only grounding leaves the inject_preamble event unchanged
+    (no world_context_chunk_ids key)."""
+    pool = _StubPool(fetch_rows={"facts": [_US_FACT_ROW], "nexuses": []})
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["substrate"]),
+        pg_pool=pool, embedder=_StubEmbedder(), qdrant=_FakeQdrant([_chunk_point()]),
+    )
+    llm = _CapturingLLM()
+    deps = InlineTargetDeps(llm=llm, grounding_hook=hook)
+    result = await run_method(
+        [_signal(geo=["United States"])], {"target_id": "country_g20_us"}, deps,
+    )
+    ground = [s for s in result.intermediate_steps if s.get("kind") == "inject_preamble"]
+    assert len(ground) == 1
+    assert "world_context_chunk_ids" not in ground[0]

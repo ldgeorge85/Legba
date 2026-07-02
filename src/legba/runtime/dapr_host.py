@@ -1587,7 +1587,8 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 temporal_client=temporal_client,    # W-2
                 deep_consult_client=deep_consult_client,  # anchor §5 PIECE 4
                 substrate_query_port=substrate_query_port,  # W-3
-                embedding_service=embedding_service,  # L-114 — grounding Tier-2 embedder
+                embedding_service=embedding_service,  # L-114 — grounding embedder
+                qdrant_client=qdrant_client,  # S5-T3 — vector:world_context RAG
                 tools_registry=tools_registry,      # L-175
                 consult_agency_binding=consult_agency_binding,
                 # S5: the GATHER binding is passed so the runner engages the

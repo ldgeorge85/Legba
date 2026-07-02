@@ -82,10 +82,12 @@ __all__ = [
     "GroundingInterestingItem",
     "GroundingNexus",
     "GroundingSituation",
+    "GroundingWorldContextChunk",
     "SubstrateGroundingResolver",
     "build_graph_structure_block",
     "build_grounding_preamble",
     "build_situations_block",
+    "build_world_context_block",
     "collect_grounding_candidates",
     "finding_is_off_target",
     "situation_grounding_min_intensity",
@@ -167,6 +169,19 @@ _MAX_SITUATIONS = 8
 # into the (separate, clearly-labelled) ASSESSED STRUCTURE block — the headline
 # interesting structures the knowledge graph surfaced, not the full enumeration.
 _MAX_GRAPH_STRUCTURE = 6
+# Opportunistic RAG (S5-T3) — how many retrieved ``world_context`` chunks we fold
+# into the (separate, clearly-labelled) BACKGROUND PRIORS block. Small: this is a
+# few framing priors, NOT an evidence dump; it rides alongside the token-heavy
+# ground-truth + situations + structure blocks, so the ceiling is tight.
+_MAX_WORLD_CONTEXT_CHUNKS = 6
+# Per-chunk character cap — a single retrieved chunk is trimmed to this before it
+# reaches the prompt (the Lane-4 chunker targets ~400-800 tokens, but a stray
+# long chunk must not blow the context). Token-cap via chars, degrade-not-drop.
+_WORLD_CONTEXT_CHUNK_CHAR_CAP = 700
+# Total BACKGROUND PRIORS block character cap — the render stops folding chunks
+# once the accumulated block would exceed this, so the priors can never crowd out
+# the authoritative context + the signal slice.
+_WORLD_CONTEXT_BLOCK_CHAR_CAP = 3000
 
 
 # Quality guard for the situations grounding block (review M2). Clustered
@@ -432,6 +447,58 @@ class GroundingGraphStructure:
 
     def is_empty(self) -> bool:
         return not (self.interesting or self.frustration or self.brokers or self.proxy_chains)
+
+
+class GroundingWorldContextChunk:
+    """One retrieved ``world_context`` RAG chunk, normalised for rendering.
+
+    Opportunistic RAG (S5-T3): a semantic hit from the curated ``world_context``
+    Qdrant collection (Lane-4 corpus — country/topic priors, doctrine summaries).
+    This is PRIOR, not EVIDENCE — it frames HOW the unit reasons (method, what to
+    look for), never WHAT is true. It is rendered in a SEPARATE, clearly-labelled
+    "BACKGROUND PRIORS (context, not evidence — do not cite)" block and is NEVER
+    citable via ``[N]`` (verify semantics are untouched by construction — the
+    block carries no signal ids for the citation index to bind).
+
+    ``chunk_id`` is the Qdrant point id (a deterministic uuid5 of the chunk
+    natural key — see :func:`legba.data.rag.lane4_loader._point_id`); it is
+    recorded into the analyst trace so every run's retrieved context is auditable
+    provenance. ``text`` is the chunk body (``payload['text']``); ``title`` /
+    ``section`` label it; ``source_url`` carries attribution when present.
+    """
+
+    __slots__ = ("chunk_id", "title", "section", "source_url", "text", "score")
+
+    def __init__(
+        self,
+        *,
+        chunk_id: str,
+        title: str | None,
+        section: str | None,
+        source_url: str | None,
+        text: str,
+        score: float | None,
+    ) -> None:
+        self.chunk_id = chunk_id
+        self.title = title
+        self.section = section
+        self.source_url = source_url
+        self.text = text
+        self.score = score
+
+    def render(self, *, char_cap: int = _WORLD_CONTEXT_CHUNK_CHAR_CAP) -> str:
+        """One compact block per chunk: a label line + the (trimmed) body.
+
+        The label prefers ``title — section`` and falls back to whatever is
+        present; the body is trimmed to ``char_cap`` (token control) with an
+        ellipsis so a stray long chunk can't blow the context.
+        """
+        label_bits = [b for b in (self.title, self.section) if b and b.strip()]
+        label = " — ".join(label_bits) if label_bits else "untitled prior"
+        body = (self.text or "").strip()
+        if char_cap > 0 and len(body) > char_cap:
+            body = body[:char_cap].rstrip() + "…"
+        return f"- {label}: {body}" if body else f"- {label}"
 
 
 def _json_or_dict(payload: Any) -> dict[str, Any]:
@@ -1009,6 +1076,8 @@ class SubstrateGroundingResolver:
         pg_pool: Any,
         target_id: str | None = None,
         embedder: Any | None = None,
+        qdrant: Any | None = None,
+        world_context_collection: str = "world_context",
     ) -> None:
         self._pool = pg_pool
         # The run's target id, when the deps-builder constructs one resolver per
@@ -1019,16 +1088,22 @@ class SubstrateGroundingResolver:
         # caller doesn't thread an explicit scope arg.
         self._target_id = target_id
         # L-114 embedder-through-port. The hosted embedding client
-        # (:class:`legba.runtime.embedding_factory.HostedEmbeddingClient`) the
-        # deps-builder threads in when the host has one; None otherwise. Tier-1
-        # grounding (the current facts/nexuses/situations/graph-structure reads
-        # below) is deliberately vector-free, so it does NOT consume this today.
-        # It is threaded now so the Tier-2 ``vector:world_context`` follow-up
-        # (seam #20 — a curated unstructured-brief collection queried
-        # semantically) has the embedder in hand the moment that collection is
-        # provisioned; the resolver simply carries it until then rather than
-        # re-plumbing the deps chain later. Optional + backward-compatible.
+        # (:class:`legba.runtime.embedding_factory.HostedEmbeddingClient`,
+        # ``async def embed(text) -> list[float]``) the deps-builder threads in
+        # when the host has one; None otherwise. The Tier-1 STRUCTURED reads
+        # (facts/nexuses/situations/graph-structure) stay vector-free; the
+        # embedder powers the S5-T3 opportunistic ``vector:world_context`` RAG
+        # (:meth:`resolve_world_context`) — the curated unstructured-brief
+        # collection queried semantically (seam #20). Optional + backward-
+        # compatible: no embedder → no RAG block (degrade-not-drop).
         self._embedder = embedder
+        # S5-T3 — the raw async Qdrant client (``AsyncQdrantClient``, or a
+        # ``query_points``/``search``-shaped stand-in) the host built at bring-up,
+        # and the collection the Lane-4 loader wrote the ``world_context`` corpus
+        # to. Both must be present (with an embedder) for the RAG block to build;
+        # any missing → :meth:`resolve_world_context` returns ``[]`` (no block).
+        self._qdrant = qdrant
+        self._world_context_collection = world_context_collection
 
     async def resolve(
         self, candidates: Sequence[str], *, max_facts: int,
@@ -1326,6 +1401,116 @@ class SubstrateGroundingResolver:
         )
         return None if structure.is_empty() else structure
 
+    async def resolve_world_context(
+        self, query: str, *, limit: int,
+    ) -> list[GroundingWorldContextChunk]:
+        """Opportunistic RAG (S5-T3) — semantic hits from the ``world_context``
+        Qdrant collection for the BACKGROUND PRIORS block.
+
+        ``query`` is the ASSEMBLE-time RAG query (the unit's bounded question +
+        target country + top slice entities). Returns up to
+        :data:`_MAX_WORLD_CONTEXT_CHUNKS` retrieved chunks, most-similar first.
+
+        HONESTY + degrade-not-drop, all yielding ``[]`` (→ no BACKGROUND PRIORS
+        block, so no fabricated header):
+
+          * no embedder OR no Qdrant client wired (the vector plane wasn't
+            provisioned) → ``[]``;
+          * an empty / whitespace query → ``[]`` (no embed round-trip);
+          * an EMPTY collection (the corpus hasn't been loaded) → the search
+            returns no hits → ``[]``;
+          * an embed-backend failure or a Qdrant error → logged + ``[]`` (RAG is
+            an enrichment, never fails the analyst run).
+
+        The retrieved text is PRIOR, not EVIDENCE: it is rendered non-citable and
+        carries no signal ids, so verify semantics are untouched by construction.
+        """
+        if self._embedder is None or self._qdrant is None:
+            return []
+        q = (query or "").strip()
+        if not q:
+            return []
+        limit = min(int(limit), _MAX_WORLD_CONTEXT_CHUNKS)
+        if limit <= 0:
+            return []
+        # Embed the RAG query. An embed-backend failure degrades to no block
+        # (never a fabricated vector) — the same contract vector_search honors.
+        try:
+            vec = await self._embedder.embed(q)
+        except Exception as exc:  # degrade-not-drop — RAG is enrichment
+            logger.warning("grounding.resolve_world_context.embed_failed err=%s", exc)
+            return []
+        try:
+            hits = await self._search_world_context(vec, limit=limit)
+        except Exception as exc:  # degrade-not-drop — RAG is enrichment
+            logger.warning("grounding.resolve_world_context.search_failed err=%s", exc)
+            return []
+        return self._map_world_context_hits(hits)
+
+    async def _search_world_context(
+        self, query_embedding: Sequence[float], *, limit: int,
+    ) -> list[Any]:
+        """Cosine-search the ``world_context`` collection by raw vector.
+
+        Supports both the modern ``query_points`` (qdrant-client >= 1.10, returns
+        a response with ``.points``) and the legacy ``search`` surface, mirroring
+        :meth:`legba.data.qdrant.QdrantStore.search` /
+        ``substrate_query_port.vector_search_by_embedding`` so this isn't pinned
+        to one client version.
+        """
+        vec = list(query_embedding)
+        if hasattr(self._qdrant, "query_points"):
+            resp = await self._qdrant.query_points(
+                collection_name=self._world_context_collection,
+                query=vec,
+                limit=int(limit),
+                with_payload=True,
+            )
+            return list(getattr(resp, "points", None) or [])
+        hits = await self._qdrant.search(  # pragma: no cover — legacy client
+            collection_name=self._world_context_collection,
+            query_vector=vec,
+            limit=int(limit),
+            with_payload=True,
+        )
+        return list(hits or [])
+
+    def _map_world_context_hits(self, hits: Sequence[Any]) -> list[GroundingWorldContextChunk]:
+        """Map raw Qdrant hits onto :class:`GroundingWorldContextChunk`.
+
+        Reads the Lane-4 payload shape (``text`` / ``title`` / ``section`` /
+        ``source_url`` — see :func:`legba.data.rag.lane4_loader._build_payload`).
+        A hit with no readable ``text`` is dropped (an empty chunk contributes no
+        prior); the Qdrant point id becomes the auditable ``chunk_id``.
+        """
+        out: list[GroundingWorldContextChunk] = []
+        for hit in hits or []:
+            hid = getattr(hit, "id", None)
+            if hid is None:
+                continue
+            payload = getattr(hit, "payload", None) or {}
+            if not isinstance(payload, Mapping):
+                continue
+            text = payload.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            score = getattr(hit, "score", None)
+            out.append(
+                GroundingWorldContextChunk(
+                    chunk_id=str(hid),
+                    title=payload.get("title") if isinstance(payload.get("title"), str) else None,
+                    section=payload.get("section") if isinstance(payload.get("section"), str) else None,
+                    source_url=(
+                        payload.get("source_url")
+                        if isinstance(payload.get("source_url"), str)
+                        else None
+                    ),
+                    text=text,
+                    score=float(score) if isinstance(score, (int, float)) else None,
+                )
+            )
+        return out
+
 
 # ---------------------------------------------------------------------------
 # Preamble assembly — the dated "AUTHORITATIVE CURRENT CONTEXT" block
@@ -1475,5 +1660,57 @@ def build_graph_structure_block(structure: "GroundingGraphStructure | None") -> 
         lines.append("- Notable indirect / proxy links (A acts on B through an intermediary):")
         for c in structure.proxy_chains:
             lines.append(f"  - {c}")
+    lines.append("")  # blank separator before the slice
+    return "\n".join(lines)
+
+
+# The BACKGROUND PRIORS block (S5-T3 opportunistic RAG) — curated unstructured
+# priors retrieved from the ``world_context`` vector corpus. Rendered BELOW the
+# AUTHORITATIVE CURRENT CONTEXT ground-truth block, in its OWN fenced block whose
+# header makes the trust boundary explicit: this text is PRIOR, not EVIDENCE. It
+# frames HOW the unit reasons (method / what to look for), never WHAT is true, and
+# is NOT citable via ``[N]`` — every claim still cites the numbered signals, so
+# verify semantics are untouched by construction (the honesty rule, RAG plan §B).
+# The EXACT operator-facing header string is preserved verbatim as the leading
+# clause so a trace / prompt audit can grep for it.
+_WORLD_CONTEXT_HEADER = (
+    "BACKGROUND PRIORS (context, not evidence — do not cite) — curated background "
+    "/ doctrine the platform retrieved for this question. Use it to FRAME your "
+    "reasoning (method, what to look for), NOT as a source of fact. It is NOT "
+    "citable: cite only the numbered signals for every claim, exactly as before:"
+)
+
+
+def build_world_context_block(
+    chunks: Sequence[GroundingWorldContextChunk],
+    *,
+    block_char_cap: int = _WORLD_CONTEXT_BLOCK_CHAR_CAP,
+    chunk_char_cap: int = _WORLD_CONTEXT_CHUNK_CHAR_CAP,
+) -> str | None:
+    """Render retrieved ``world_context`` chunks into the dedicated BACKGROUND
+    PRIORS block (non-citable prior, fenced off from ground truth AND evidence).
+
+    Returns ``None`` when there is nothing to inject (no chunks) so the caller
+    skips an empty header — an EMPTY collection yields NO block, never a
+    fabricated header. Token-capped: each chunk body is trimmed to
+    ``chunk_char_cap`` and the fold stops once the accumulated block would exceed
+    ``block_char_cap`` (so the priors can never crowd out the authoritative
+    context + the signal slice).
+    """
+    if not chunks:
+        return None
+    lines: list[str] = [_WORLD_CONTEXT_HEADER]
+    total = len(_WORLD_CONTEXT_HEADER)
+    rendered_any = False
+    for c in chunks:
+        line = c.render(char_cap=chunk_char_cap)
+        # Stop once folding this chunk would blow the block cap — but always
+        # admit at least one chunk so a single long prior still surfaces (trimmed
+        # by the per-chunk cap) rather than yielding an empty header.
+        if rendered_any and block_char_cap > 0 and total + len(line) + 1 > block_char_cap:
+            break
+        lines.append(line)
+        total += len(line) + 1
+        rendered_any = True
     lines.append("")  # blank separator before the slice
     return "\n".join(lines)

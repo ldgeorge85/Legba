@@ -621,9 +621,13 @@ class GroundingBlock(BaseModel):
             clustered from recent findings, rendered in a SEPARATE, clearly-
             labelled "ASSESSED SITUATIONS" block (analysis-derived, NOT ground
             truth — never laundered into the ground-truth block). Phase 5a.
-          * ``vector:world_context`` — the declared Tier-2 follow-up (a curated
-            unstructured-brief collection); accepted so descriptors can
-            pre-declare it, but the resolver does not act on it yet.
+          * ``vector:world_context`` — opportunistic RAG (S5-T3): a semantic
+            search over the curated ``world_context`` vector corpus (unstructured
+            country/topic priors, doctrine summaries), rendered in a SEPARATE,
+            non-citable "BACKGROUND PRIORS (context, not evidence — do not cite)"
+            block BELOW the authoritative preamble. PRIOR, not evidence: never
+            citable via ``[N]`` — verify semantics are untouched. Degrades to no
+            block when the vector plane is unwired or the collection is empty.
     max_facts:
         Hard cap on the number of current facts folded into the preamble
         (token budget). 1..200; default 30.

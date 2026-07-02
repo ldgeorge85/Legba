@@ -45,10 +45,18 @@ mapping:
 # unit integrates the multi-week substrate, not only the fresh signal slice.
 # target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
 # off from ground truth (the grounding-quality provenance gate applies).
+#
+# S5-T3 opportunistic RAG: `vector:world_context` adds a SEPARATE, non-citable
+# "BACKGROUND PRIORS (context, not evidence — do not cite)" block BELOW the
+# authoritative preamble, retrieved from the curated world_context vector corpus
+# (query = this unit's bounded question + target country + top slice entities).
+# Enabled on THIS unit only (it carries the eval labels for the before/after RAG
+# experiment). PRIOR, not evidence: never citable via [N] — verify semantics are
+# untouched. An empty/absent corpus yields NO block (degrade-not-drop).
 grounding:
   enabled: true
   scope: [target_geo, slice_entities]
-  sources: [substrate, situations, graph_structure]
+  sources: [substrate, situations, graph_structure, vector:world_context]
   max_facts: 30
 
 method:

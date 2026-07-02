@@ -109,6 +109,7 @@ async def build_analyst_run_method(
     deep_consult_client: Any | None = None,
     substrate_query_port: Any | None = None,
     embedding_service: Any | None = None,
+    qdrant_client: Any | None = None,
     tools_registry: Mapping[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] | None = None,
     consult_agency_binding: Any | None = None,
     inline_target_agency_binding: Any | None = None,
@@ -165,8 +166,15 @@ async def build_analyst_run_method(
         bring-up from the ``embed.primary.openai_compat`` stack component.
         Threaded into the grounded-kind (``inline_target`` /
         ``journal_assessor``) grounding hook so the resolver carries it for
-        the Tier-2 ``vector:world_context`` follow-up; ``None`` when the
-        embedding service wasn't provisioned (grounding stays vector-free).
+        the ``vector:world_context`` RAG (S5-T3); ``None`` when the embedding
+        service wasn't provisioned (grounding stays vector-free).
+    qdrant_client:
+        Optional raw async Qdrant client the host built once at bring-up
+        (``AsyncQdrantClient``). Threaded — alongside ``embedding_service`` —
+        into the grounded-kind grounding hook so the S5-T3 opportunistic
+        ``vector:world_context`` RAG can cosine-search the curated corpus at
+        GROUND time. ``None`` (no vector store) keeps grounding on the structured
+        substrate path (no BACKGROUND PRIORS block).
 
     Returns
     -------
@@ -245,6 +253,7 @@ async def build_analyst_run_method(
             agency_binding=inline_target_agency_binding,
             budget_precheck=inline_target_budget_precheck,
             embedding_service=embedding_service,
+            qdrant_client=qdrant_client,
         )
     elif kind == "cross_target_raw":
         trio = await _build_cross_target_raw(handler, _resolve_primary_llm)
@@ -298,6 +307,7 @@ async def build_analyst_run_method(
             budget_precheck=inline_target_budget_precheck,
             resolve_llm_component=_resolve_llm_component,
             embedding_service=embedding_service,
+            qdrant_client=qdrant_client,
         )
     else:
         # Defensive — discover_analyst_kinds returned a kind we didn't
@@ -363,6 +373,7 @@ async def _build_inline_target(
     agency_binding: Any | None = None,
     budget_precheck: Callable[[], Awaitable[bool]] | None = None,
     embedding_service: Any | None = None,
+    qdrant_client: Any | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """inline_target — LLM-bearing finding kind (single-shot or agentic).
 
@@ -435,6 +446,7 @@ async def _build_inline_target(
     # no pool is wired.
     grounding_hook = _build_grounding_hook(
         descriptor, pg_pool=pg_pool, embedder=embedding_service,
+        qdrant=qdrant_client,
     )
     if agency_binding is not None:
         logger.info(
@@ -469,6 +481,7 @@ async def _build_journal_assessor(
         Callable[[str], Awaitable[LLMProviderHandler]] | None
     ) = None,
     embedding_service: Any | None = None,
+    qdrant_client: Any | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """journal_assessor — Legba's first-person reflective voice (plan §4.8).
 
@@ -549,6 +562,7 @@ async def _build_journal_assessor(
     # it narrates (§4.5 point 3). Off (None) unless the descriptor opts in.
     grounding_hook = _build_grounding_hook(
         descriptor, pg_pool=pg_pool, embedder=embedding_service,
+        qdrant=qdrant_client,
     )
     if agency_binding is not None:
         logger.info(
@@ -580,6 +594,7 @@ def _build_grounding_hook(
     *,
     pg_pool: "asyncpg.Pool | None",
     embedder: Any | None = None,
+    qdrant: Any | None = None,
 ) -> Callable[..., Awaitable[Any]] | None:
     """Build the per-run grounding hook for an opted-in analyst, else None.
 
@@ -592,10 +607,13 @@ def _build_grounding_hook(
     degrade-not-drop is owned by the resolver/runner (a read failure → no
     preamble), so this builder never raises on the grounding path.
 
-    ``embedder`` (L-114) is the hosted embedding client the host built at
-    bring-up, threaded into the resolver so the Tier-2 ``vector:world_context``
-    follow-up has it in hand; ``None`` (no embedding service) keeps grounding
-    on the vector-free structured substrate path — unchanged.
+    ``embedder`` (L-114) + ``qdrant`` (S5-T3) are the hosted embedding client +
+    the raw async Qdrant client the host built at bring-up. Threaded into the
+    resolver so the opportunistic ``vector:world_context`` RAG can cosine-search
+    the curated corpus at GROUND time and render a SEPARATE "BACKGROUND PRIORS
+    (context, not evidence — do not cite)" block BELOW the authoritative
+    preamble. When either is ``None`` (the vector plane wasn't provisioned) the
+    RAG degrades to no block — grounding stays on the structured substrate path.
     """
     grounding = getattr(descriptor, "grounding", None)
     if grounding is None or not getattr(grounding, "enabled", False):
@@ -608,19 +626,31 @@ def _build_grounding_hook(
         )
         return None
 
+    from ..data.analysts.inline_target import GROUNDING_RAG_CHUNK_SINK_KEY
+    from ..data.config import QdrantConfig
     from .grounding import (
         SubstrateGroundingResolver,
         build_graph_structure_block,
         build_grounding_preamble,
         build_situations_block,
+        build_world_context_block,
         collect_grounding_candidates,
         situation_scope_for_target,
     )
 
-    # L-114: thread the hosted embedding client (when the host built one) into
-    # the resolver so the Tier-2 ``vector:world_context`` follow-up has the
-    # embedder in hand; Tier-1 (structured facts/nexuses) stays vector-free.
-    resolver = SubstrateGroundingResolver(pg_pool=pg_pool, embedder=embedder)
+    # L-114 / S5-T3: thread the hosted embedding client + the raw Qdrant client
+    # (when the host built them) into the resolver so the opportunistic
+    # ``vector:world_context`` RAG can run; the STRUCTURED reads (facts / nexuses
+    # / situations / graph-structure) stay vector-free. The collection the Lane-4
+    # loader wrote the corpus to is the config's ``world_context_collection`` (so
+    # an env override is honored, not just the "world_context" default).
+    world_context_collection = QdrantConfig.from_env().world_context_collection
+    resolver = SubstrateGroundingResolver(
+        pg_pool=pg_pool,
+        embedder=embedder,
+        qdrant=qdrant,
+        world_context_collection=world_context_collection,
+    )
     scope = list(getattr(grounding, "scope", None) or [])
     sources = list(getattr(grounding, "sources", None) or [])
     static_candidates = list(getattr(grounding, "static_candidates", None) or [])
@@ -632,19 +662,42 @@ def _build_grounding_hook(
     # from the structural_balance + graph_mining metrics, analysis-derived. This
     # is the consume-side of "use the graph in analysis to find interesting edges".
     want_graph_structure = "graph_structure" in sources
-    # Tier-2 (vector:world_context) is a declared follow-up; the resolver acts
-    # only on the structured substrate (facts/nexuses), the situation frames, and
-    # the knowledge-graph structure today. A descriptor that declares NONE of the
-    # wired sources resolves nothing — surface that rather than silently injecting
-    # an empty preamble.
-    if not want_substrate and not want_situations and not want_graph_structure:
+    # S5-T3 opportunistic RAG — the curated ``world_context`` vector corpus,
+    # queried semantically and rendered as the non-citable BACKGROUND PRIORS
+    # block. Needs BOTH an embedder AND a Qdrant client; log the gap once at build
+    # time so a descriptor that opts in without a provisioned vector plane is
+    # observable (the run then degrades to no block).
+    want_world_context = "vector:world_context" in sources
+    if want_world_context and (embedder is None or qdrant is None):
+        logger.info(
+            "analyst_deps_builder.grounding.world_context_unavailable analyst=%r "
+            "embedder=%s qdrant=%s — grounding declares vector:world_context but "
+            "the vector plane is not fully wired; the RAG block degrades to absent",
+            descriptor.identity.id,
+            "wired" if embedder is not None else "absent",
+            "wired" if qdrant is not None else "absent",
+        )
+    # A descriptor that declares NONE of the wired sources resolves nothing —
+    # surface that rather than silently injecting an empty preamble.
+    if not (want_substrate or want_situations or want_graph_structure or want_world_context):
         logger.info(
             "analyst_deps_builder.grounding.no_wired_source analyst=%r "
-            "sources=%r — only 'substrate' (facts/nexuses), 'situations', and "
-            "'graph_structure' are wired today (vector:world_context is a "
-            "follow-up); no preamble built",
+            "sources=%r — only 'substrate' (facts/nexuses), 'situations', "
+            "'graph_structure', and 'vector:world_context' are wired; no "
+            "preamble built",
             descriptor.identity.id, sources,
         )
+
+    # The RAG query's leading clause — the unit's bounded question, proxied by the
+    # descriptor's human name (falls back to its id). Prepended to the target +
+    # slice-entity candidates so the semantic search keys on the TOPIC, not just
+    # the entities (RAG plan §B: "query = unit's bounded question + target country
+    # + top slice entities").
+    question_hint = (
+        getattr(descriptor.identity, "name", None)
+        or getattr(descriptor.identity, "id", None)
+        or ""
+    )
 
     async def _hook(
         inputs: list[Mapping[str, Any]],
@@ -696,9 +749,49 @@ def _build_grounding_hook(
             block = build_graph_structure_block(structure)
             if block:
                 parts.append(block)
+        # BACKGROUND PRIORS block (S5-T3 opportunistic RAG) — appended LAST so it
+        # sits BELOW the authoritative preamble (and the other fenced blocks). The
+        # query is the bounded question + target country + top slice entities, all
+        # available here at GROUND time. Non-citable prior; an empty collection →
+        # no block (no fabricated header). The retrieved chunk ids are recorded
+        # into the caller's trace sink (when supplied) for auditable retrieval.
+        if want_world_context:
+            query = _world_context_query(question_hint, candidates())
+            chunks = await resolver.resolve_world_context(query, limit=max_facts)
+            block = build_world_context_block(chunks)
+            if block:
+                parts.append(block)
+                sink = options.get(GROUNDING_RAG_CHUNK_SINK_KEY)
+                if isinstance(sink, list):
+                    sink.extend(c.chunk_id for c in chunks)
         return "\n".join(parts) if parts else None
 
     return _hook
+
+
+def _world_context_query(question_hint: str, candidates: "list[str]") -> str:
+    """Assemble the ASSEMBLE-time ``vector:world_context`` RAG query string.
+
+    ``question_hint`` (the unit's bounded question, proxied by the descriptor
+    name) leads, followed by the target-geo + top slice-entity candidates — the
+    same deterministic candidate set the structured resolver grounds on. Capped
+    to the leading candidates so the semantic query stays tight, and stripped of
+    empties. Returns ``""`` when there is nothing to query on (→ no RAG block).
+    """
+    terms: list[str] = []
+    q = (question_hint or "").strip()
+    if q:
+        terms.append(q)
+    for c in candidates[:_WORLD_CONTEXT_QUERY_CANDIDATES]:
+        if isinstance(c, str) and c.strip():
+            terms.append(c.strip())
+    return " — ".join(terms) if terms else ""
+
+
+# How many leading candidate names (target geo + top slice entities) fold into
+# the ``vector:world_context`` RAG query alongside the bounded question. Bounded
+# so a tag-heavy slice can't bloat the semantic query into noise.
+_WORLD_CONTEXT_QUERY_CANDIDATES = 8
 
 
 async def _build_cross_target_raw(

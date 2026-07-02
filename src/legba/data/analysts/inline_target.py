@@ -1182,6 +1182,18 @@ GroundingHook = Callable[
 ]
 
 
+# S5-T3 opportunistic RAG — the per-run sink key. The runner passes a fresh
+# mutable ``list`` under this key in a SHALLOW COPY of ``options`` to the
+# grounding hook; the hook (analyst_deps_builder._build_grounding_hook) appends
+# the retrieved ``world_context`` chunk ids it injected as BACKGROUND PRIORS, and
+# the runner reads them back to extend the ``inject_preamble`` trace event
+# (auditable retrieval provenance). Per-call safe (a fresh list per run, never
+# shared state); a hook that ignores the key (every non-RAG / legacy hook) is
+# byte-for-byte unchanged. Owned HERE (the data layer) so runtime imports it
+# downward, never the reverse.
+GROUNDING_RAG_CHUNK_SINK_KEY = "_grounding_rag_chunk_sink"
+
+
 # PER-PHASE LLM SPLIT — the gpt-oss "Reasoning: high" directive. vLLM does NOT
 # honor a ``reasoning_effort`` wire arg (vllm.py:106,:129); gpt-oss takes this
 # directive injected into the system/message content. It is prepended to the
@@ -1832,18 +1844,31 @@ async def run_method(
     # the fix for stale-cutoff models backfilling e.g. "former president".
     # Degrade-not-drop: a resolver failure leaves the prompt untouched.
     if deps.grounding_hook is not None:
+        # S5-T3: hand the hook a per-run mutable sink (in a shallow copy of
+        # options so the caller's options stay untouched) for the opportunistic
+        # ``vector:world_context`` RAG chunk ids it injects — recorded into the
+        # trace for auditable retrieval. A hook that ignores the key leaves it
+        # empty; the trace event is then byte-for-byte unchanged.
+        rag_chunk_ids: list[str] = []
+        hook_options = {**options, GROUNDING_RAG_CHUNK_SINK_KEY: rag_chunk_ids}
         try:
-            preamble = await deps.grounding_hook(sliced, options)
+            preamble = await deps.grounding_hook(sliced, hook_options)
         except Exception as exc:  # pragma: no cover — enrichment must not fail the run
             logger.warning("inline_target.grounding.failed err=%s", exc)
             preamble = None
         if preamble:
             user_prompt = f"{preamble}\n{user_prompt}"
-            steps.append({
+            ground_step: dict[str, Any] = {
                 "phase": "ground",
                 "kind": "inject_preamble",
                 "preamble_chars": len(preamble),
-            })
+            }
+            # Auditable retrieval provenance: the retrieved world_context chunk
+            # ids that made it into the BACKGROUND PRIORS block (empty for a
+            # substrate-only grounding, so the event is otherwise unchanged).
+            if rag_chunk_ids:
+                ground_step["world_context_chunk_ids"] = list(rag_chunk_ids)
+            steps.append(ground_step)
         else:
             steps.append({"phase": "ground", "kind": "no_current_facts"})
 
