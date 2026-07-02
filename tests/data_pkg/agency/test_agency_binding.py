@@ -386,6 +386,82 @@ async def test_escalate_full_lifecycle_emits_and_audits(pool):
     assert ("allow", "ok") in {(r["decision"], r["cause"]) for r in ev}
 
 
+async def test_escalate_verify_demoted_finding_is_a_noop(pool):
+    """S8-T2 — a finding whose RAW confidence clears the gate but whose
+    faithfulness verdict floors it below the gate must NOT escalate.
+
+    Same lifecycle setup as ``test_escalate_full_lifecycle_emits_and_audits``
+    (0.97 confidence, allowed g20 target) — so WITHOUT the verdict it would fire
+    end-to-end — but a ``verification_block`` with ``faithfulness_score=0.2``
+    yields ``effective = min(0.97, 0.2) = 0.2`` (< 0.85 gate) → hard no-op."""
+    target_id = f"target.a3.{uuid4().hex[:8]}"
+    who = f"analyst::vdem_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc = _escalation(pool, emitted, account=who)
+    async with pool.acquire() as conn:
+        await _insert_target(
+            conn, target_id=target_id, tags=["g20", "news"],
+            allows=[{"pack_id": "escalate_finding"}],
+        )
+        payload = FindingPayload(
+            title="Major refinery outage cascading",
+            body="one weakly-cited claim",
+            confidence=0.97,
+        )
+        # faithfulness_score floors it (unit path — no ceiling).
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            output_row_id=uuid4(), target_id=target_id, actor_id="analyst::t::v",
+            verification_block={
+                "faithfulness_score": 0.2, "confidence_ceiling": None,
+            },
+        )
+        # confidence_ceiling floors it (composition path — perfect faithfulness
+        # but a weak strongest independent sub-claim).
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            output_row_id=uuid4(), target_id=target_id, actor_id="analyst::t::v",
+            verification_block={
+                "faithfulness_score": 1.0, "confidence_ceiling": 0.3,
+            },
+        )
+        inv = await _invocations(conn, requested_by=who)
+        ev = await _events(conn, requested_by=who)
+    assert emitted == [] and inv == [] and ev == []
+
+
+async def test_escalate_verify_confirmed_finding_still_escalates(pool):
+    """S8-T2 control — a faithful verdict (score 1.0, no ceiling) leaves the
+    effective confidence == raw, so a gate-clearing finding STILL escalates:
+    the fold only ever DEMOTES, never promotes."""
+    target_id = f"target.a3.{uuid4().hex[:8]}"
+    who = f"analyst::vok_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc = _escalation(pool, emitted, account=who)
+    async with pool.acquire() as conn:
+        await _insert_target(
+            conn, target_id=target_id, tags=["g20", "news"],
+            allows=[{"pack_id": "escalate_finding"}],
+        )
+        payload = FindingPayload(
+            title="Major refinery outage cascading",
+            body="multiple corroborating signals",
+            confidence=0.97,
+        )
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            output_row_id=uuid4(), target_id=target_id, actor_id="analyst::t::v",
+            verification_block={
+                "faithfulness_score": 1.0, "confidence_ceiling": None,
+            },
+        )
+        inv = await _invocations(conn, requested_by=who)
+    assert emitted, "a faithful, gate-clearing finding must still escalate"
+    assert [(r["tool_name"], r["outcome"]) for r in inv] == [
+        ("escalate", "completed"),
+    ]
+
+
 async def test_escalate_below_gate_is_a_noop(pool):
     who = f"analyst::low_{uuid4().hex[:8]}"
     emitted: list = []

@@ -2584,6 +2584,12 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             output_row_id=output_row.id,
                             target_id=target_id,
                             actor_id=actor_id,
+                            # S8-T2 — hand the computed faithfulness verdict to
+                            # the escalation gate so a verify-DEMOTED finding
+                            # gates on its effective confidence, not the raw
+                            # LLM-asserted number. NULL when nothing was verified
+                            # (TRACE_ONLY / non-verify kind) → gate unchanged.
+                            verification_block=verification_block,
                         )
                     except Exception as exc:  # pragma: no cover — best-effort
                         logger.warning(

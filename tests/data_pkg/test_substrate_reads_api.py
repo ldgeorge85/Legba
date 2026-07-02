@@ -211,6 +211,7 @@ async def _insert_critique(
     overall_score: float,
     produced_at: datetime | None = None,
     data_extra: dict | None = None,
+    title: str | None = None,
 ) -> UUID:
     """Insert an L-175 critique row (kind='critique') graded against a finding.
 
@@ -223,9 +224,16 @@ async def _insert_critique(
     (``data.data``) — mirrors how the faithfulness verify pass stores its
     ``verification`` block via ``CritiquePayload.data`` so the /findings lateral
     can surface ``data->'data'->'verification'``.
+
+    ``title`` defaults to the faithfulness-verify convention
+    (``"Faithfulness verify (score …)"``) because the /findings lateral pins on
+    ``title LIKE 'Faithfulness verify%'`` (S8-T2) — ONLY the faithfulness verdict
+    drives ``effective_confidence``. Pass a generic ``title`` (e.g. ``"critique"``
+    for a country_critic) to insert a row the lateral deliberately IGNORES.
     """
     row_id = uuid4()
     ts = produced_at or datetime.now(timezone.utc)
+    row_title = title if title is not None else f"Faithfulness verify (score {overall_score:.2f})"
     data = {
         "kind_marker": "critique",
         "analyzed_output_id": str(analyzed_output_id),
@@ -242,13 +250,13 @@ async def _insert_critique(
                 target_id, target_version, analyst_id, analyst_version,
                 produced_at, derived_from, schema_uri, run_id
             ) VALUES (
-                $1, 'critique', 'critique', '', $2, NULL, $3::jsonb,
+                $1, 'critique', $6, '', $2, NULL, $3::jsonb,
                 NULL, NULL, 'country_critic', NULL,
                 $4, $5, 'iglu:legba/critique/jsonschema/1-0-0', NULL
             )
             """,
             row_id, overall_score, json.dumps(data),
-            ts, [analyzed_output_id],
+            ts, [analyzed_output_id], row_title,
         )
     return row_id
 
@@ -612,6 +620,58 @@ async def test_findings_faithfulness_verification_block_surfaces(
     # The verification block explains WHY (names the unsupported span).
     assert row["verification"] is not None
     assert row["verification"]["faithfulness_score"] == pytest.approx(0.5, abs=1e-4)
+    assert row["verification"]["unsupported_spans"][0]["reason"] == "no_citation"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_generic_critique_cannot_overwrite_faithfulness_demotion(
+    substrate_app, client: AsyncClient,
+):
+    """S8-T2 — a later GENERIC critique (e.g. a country_critic, title='critique')
+    landing AFTER the faithfulness verdict must NOT win the lateral and un-demote
+    the finding. The lateral pins on ``title LIKE 'Faithfulness verify%'``, so
+    effective_confidence stays at the faithfulness score and the verification
+    block still surfaces. Regression guard for the anchor (b) defect."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("verify-pin")
+    fid = await _insert_finding(
+        pg_store, title="cited but partly fabricated", confidence=0.9, target_id=tid,
+    )
+    verification = {
+        "verification": {
+            "faithfulness_score": 0.3,
+            "checkable_claims": 3,
+            "supported_claims": 1,
+            "unsupported_spans": [
+                {"text": "A coup attempt overnight.", "reason": "no_citation", "markers": []},
+            ],
+            "judge_status": "deterministic",
+        }
+    }
+    # 1) The faithfulness verdict demotes to 0.3 (lands FIRST).
+    older = datetime.now(timezone.utc) - timedelta(hours=1)
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.3,
+        data_extra=verification, produced_at=older,
+    )
+    # 2) A LATER generic country_critic critique scores it high — the row that
+    #    (pre-fix) won the produced_at race and un-demoted the finding.
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.9, title="critique",
+    )
+
+    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert row["id"] == str(fid)
+    # The faithfulness demotion HOLDS — the generic critique did not overwrite it.
+    assert row["critic_score"] == pytest.approx(0.3, abs=1e-4)
+    assert row["effective_confidence"] == pytest.approx(0.3, abs=1e-4)
+    # And the faithfulness verification block still surfaces (its detail — the
+    # generic critique carries none).
+    assert row["verification"] is not None
+    assert row["verification"]["faithfulness_score"] == pytest.approx(0.3, abs=1e-4)
     assert row["verification"]["unsupported_spans"][0]["reason"] == "no_citation"
 
 

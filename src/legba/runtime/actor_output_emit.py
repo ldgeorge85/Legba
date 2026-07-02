@@ -202,12 +202,23 @@ async def _maybe_escalate_finding(
     output_row_id: Any,
     target_id: str | None,
     actor_id: str,
+    verification_block: dict[str, Any] | None = None,
 ) -> None:
     """A-3c — gate + fire the ``escalate_finding`` pack for one landed finding.
 
     Gate: an explicit severity (the payload attr for alert-kinds, else
     ``payload.data['severity']`` for LLM kinds that stamp one) at/above the
     pack's ``severity_gate``, OR confidence at/above ``confidence_gate``.
+
+    S8-T2 — the confidence leg gates on the verify-DEMOTED EFFECTIVE
+    confidence, not the raw LLM-asserted ``payload.confidence``. When the
+    faithfulness verify pass produced a verdict for this finding
+    (``verification_block``), fold it exactly as the read-path gate does:
+    ``effective = min(confidence, faithfulness_score[, confidence_ceiling])``.
+    A finding the verify pass floored therefore cannot escalate on its
+    pre-verify number. ``verification_block`` is NULL when nothing was verified
+    (TRACE_ONLY / a non-verify kind) → effective == raw (gate unchanged).
+    Severity is left as-is — the severity-still-in-TAGS column move is S3-T4.
 
     The target leg resolves PER RUN: the finding's target supplies its
     ``allowed_action_packs`` + scope for the applicability predicate. No
@@ -226,6 +237,15 @@ async def _maybe_escalate_finding(
     if severity is None and isinstance(data, dict):
         severity = data.get("severity")
     confidence = getattr(payload, "confidence", None)
+    # Fold the faithfulness verdict into the gated confidence. Mirrors the
+    # critique payload's ``overall_score = min(faithfulness_score,
+    # confidence_ceiling)`` and the read-path ``effective_confidence`` — both
+    # keys live on ``verification_block`` (FaithfulnessReport.as_dict).
+    if confidence is not None and verification_block is not None:
+        for _cap_key in ("faithfulness_score", "confidence_ceiling"):
+            _cap = verification_block.get(_cap_key)
+            if isinstance(_cap, (int, float)) and not isinstance(_cap, bool):
+                confidence = min(confidence, float(_cap))
     if not escalation_gate_decision(
         severity=severity,
         confidence=confidence,

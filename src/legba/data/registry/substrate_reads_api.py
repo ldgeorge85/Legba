@@ -551,12 +551,22 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             )
 
         args.append(limit + 1)
-        # The lateral picks the LATEST critique per finding and surfaces BOTH the
-        # gate input (overall_score) AND the P0-T3 faithfulness-verify detail
-        # block (cr.data->'data'->'verification' — written by the verify pass via
-        # CritiquePayload.data). The verification block is NULL for a finding with
-        # no faithfulness critique, so the API surfaces no fabricated block and
-        # effective_confidence stays == confidence (no regression).
+        # The lateral picks the LATEST faithfulness-verify critique per finding
+        # and surfaces BOTH the gate input (overall_score) AND the P0-T3
+        # faithfulness-verify detail block (cr.data->'data'->'verification' —
+        # written by the verify pass via CritiquePayload.data). The verification
+        # block is NULL for a finding with no faithfulness critique, so the API
+        # surfaces no fabricated block and effective_confidence stays ==
+        # confidence (no regression).
+        #
+        # S8-T2 — PIN to the faithfulness critique (``title LIKE
+        # 'Faithfulness verify%'``), not just any newest ``overall_score``
+        # critique. Without the pin a later GENERIC critique (e.g. a
+        # country_critic that also stamps ``overall_score``) would win the
+        # ``produced_at DESC`` race and OVERWRITE the faithfulness demotion,
+        # un-demoting a finding the verify pass floored. Mirrors the composition
+        # GATHER lateral (meta_findings_synthesizer) + gepa parent SQL, which
+        # already pin.
         sql = f"""
             SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
                    f.data, f.target_id, f.target_version, f.analyst_id,
@@ -572,6 +582,7 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                    WHERE cr.kind = 'critique'
                      AND cr.data->>'analyzed_output_id' = f.id::text
                      AND cr.data->>'overall_score' IS NOT NULL
+                     AND cr.title LIKE 'Faithfulness verify%'
                    ORDER BY cr.produced_at DESC, cr.id DESC
                    LIMIT 1
               ) c ON TRUE
