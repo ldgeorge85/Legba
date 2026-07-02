@@ -91,7 +91,7 @@ method:
     matching exactly this shape:
     {
       "title": "<concise headline naming the country + the dominant escalation vector>",
-      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited findings, each ending with its [N] citation(s); then a '## Assessment' paragraph naming the dominant escalation vector and the most plausible near-term trajectory, explicitly distinguishing rhetoric from materiel/confirmed movement>",
+      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited findings, each ending with its [N] citation(s); then a '## Assessment' paragraph naming the dominant escalation vector and the most plausible near-term trajectory, explicitly distinguishing rhetoric from materiel/confirmed movement; then a '## Indicators to watch' bullet list of concrete near-term signals that would confirm escalation or de-escalation>",
       "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
       "evidence": [<the signal indices / source references you cited, as strings>],
       "tags": ["escalation", "severity:<low|moderate|elevated|high|critical>"],
@@ -110,11 +110,9 @@ method:
     The "tags" array MUST contain the topic tag "escalation" PLUS EXACTLY ONE
     severity tag drawn from {severity:low, severity:moderate, severity:elevated,
     severity:high, severity:critical}, chosen to match the assessed escalation
-    risk. The "indicators" array is your indicators-to-watch list and is
-    REQUIRED — it is the ONLY place indicators appear (do NOT add a prose
-    '## Indicators to watch' section to the body). EVERY finding MUST include a
-    non-empty "indicators" array of 3-6 concrete, resolvable near-term signposts;
-    a finding that omits it is INVALID. Set each "status" to "not_observed"
+    risk. The "indicators" array is the STRUCTURED, machine-checkable mirror of
+    your '## Indicators to watch' prose — a SMALL, bounded list (about 3-6) of
+    concrete, resolvable near-term signposts. Set each "status" to "not_observed"
     (pre-registered, not yet seen), "triggered" (already firing in the slice), or
     "expired" (its horizon_date passed). A "triggered" indicator MUST name the
     signal(s) that fired it in "citations" as ASCII [N] signal indices;
