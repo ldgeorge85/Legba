@@ -492,25 +492,26 @@ def test_prune_v2_update_predicate_matches_0051() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S8-T5(a): the critique analyzed_output_id partial expression index (0058).
+# S8-T5(a): the critique analyzed_output_id partial expression index (0059).
 # Static (no-DB) shape checks — the live idempotency/apply is exercised by the
 # integration migration suite (tests/data_pkg/test_migrations.py, DB-gated).
 # ---------------------------------------------------------------------------
 
-_CRITIQUE_IDX = _MIGRATIONS_DIR / "0058_critique_analyzed_output_id_index.sql"
+_CRITIQUE_IDX = _MIGRATIONS_DIR / "0059_critique_analyzed_output_id_index.sql"
 
 
 def test_critique_index_migration_exists() -> None:
     assert _CRITIQUE_IDX.exists(), f"missing critique-index migration: {_CRITIQUE_IDX}"
-    # 0058 was the next free number when this landed (head 0057 then). Assert it
-    # exists and follows 0057 with no gap — NOT that it is the GLOBAL head.
+    # Renumbered to 0059 at integration (0058 was taken by the composition-
+    # supersession fold, landed in the same batch). Assert 0059 exists and 0058
+    # precedes it with no gap — NOT that it is the GLOBAL head.
     nums = sorted(
         int(p.name[:4])
         for p in _MIGRATIONS_DIR.glob("*.sql")
         if p.name[:4].isdigit()
     )
+    assert 59 in nums
     assert 58 in nums
-    assert 57 in nums
 
 
 def test_critique_index_migration_is_idempotent_partial_expression_index() -> None:
