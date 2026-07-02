@@ -21,6 +21,7 @@ import {
   type DockviewReadyEvent,
   type DockviewApi,
   type IDockviewPanelProps,
+  type IDockviewPanelHeaderProps,
 } from 'dockview-react'
 import { Sidebar } from '@/components/Sidebar'
 import { StatusBar } from '@/components/StatusBar'
@@ -41,6 +42,7 @@ import {
   saveCustomLayout,
 } from '@/lib/layoutPresets'
 import { applyInvestigateLayout, applyInvestigateAnalystLayout } from '@/lib/investigateLayout'
+import { toggleDebugMode } from '@/lib/debugMode'
 import { useSelection, type SelectionKind } from '@/state/selection'
 import type { PaletteRecord } from '@/components/usePaletteRecords'
 
@@ -136,6 +138,34 @@ interface LegbaPanelParams {
 
 const COMPONENTS = { default: LegbaPanelComponent }
 
+/**
+ * Anchor-panel tab (item 5): renders the title WITHOUT a close button, so the
+ * Live Feed and Inspector can't be closed out of the workspace — they are the
+ * two fixed surfaces the whole shell drives. Everything else keeps the default
+ * closable tab.
+ */
+function AnchorTab(props: IDockviewPanelHeaderProps) {
+  return (
+    <div
+      className="flex h-full select-none items-center px-3 text-[13px] whitespace-nowrap"
+      title="Anchor panel — always docked"
+      data-testid="anchor-tab"
+    >
+      <span className="truncate">{props.api.title}</span>
+    </div>
+  )
+}
+
+const TAB_COMPONENTS = { anchor: AnchorTab }
+
+/** Singletons pinned as non-closable anchors (item 5) — the two fixed surfaces
+ *  the shell drives; opened anywhere (boot seed / sidebar / palette) they use
+ *  the close-button-less {@link AnchorTab}. */
+const ANCHOR_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
+  'system.findings',
+  'system.inspector',
+])
+
 export function App() {
   const mode = currentMode()
   const { registrations, isLoading, isError, error } = useRegistry(mode)
@@ -149,12 +179,19 @@ export function App() {
     setDockApi(ev.api)
   }, [])
 
-  // Global Ctrl/Cmd-K toggles the command palette (v2 parity).
+  // Global Ctrl/Cmd-K toggles the command palette (v2 parity); Ctrl/Cmd+Shift-D
+  // toggles the developer "debug chrome" (item 5 — panel provenance stamp,
+  // status-bar counters, density control), which defaults OFF.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault()
         setPaletteOpen((o) => !o)
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault()
+        toggleDebugMode()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -379,6 +416,7 @@ export function App() {
         <main className="flex-1 min-w-0">
           <DockviewReact
             components={COMPONENTS}
+            tabComponents={TAB_COMPONENTS}
             onReady={onDockReady}
             className="dockview-theme-abyss h-full"
           />
@@ -425,6 +463,8 @@ function addSingleton(
     id: kind,
     component: 'default',
     title: def.defaultTitle,
+    // Anchor singletons (Live Feed / Inspector) get the close-button-less tab.
+    ...(ANCHOR_KINDS.has(kind) ? { tabComponent: 'anchor' } : {}),
     params: { registration: null, singletonKind: kind, mode } satisfies LegbaPanelParams,
     // When position is supplied, Dockview splits the workspace relative
     // to the reference panel; otherwise the new panel joins the active

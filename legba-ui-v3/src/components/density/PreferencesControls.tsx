@@ -8,6 +8,7 @@
 import { Moon, Sun } from 'lucide-react'
 import { usePreferences, type Density } from './PreferencesProvider'
 import { cn } from '@/lib/cn'
+import { useDebugMode } from '@/lib/debugMode'
 
 const DENSITY_OPTIONS: ReadonlyArray<{ value: Density; label: string; abbr: string }> = [
   { value: 'tight', label: 'Tight density', abbr: 'T' },
@@ -17,8 +18,12 @@ const DENSITY_OPTIONS: ReadonlyArray<{ value: Density; label: string; abbr: stri
 
 export function PreferencesControls() {
   const { density, setDensity, theme, toggleTheme } = usePreferences()
+  // The cryptic T/C/Cf density segmented control is developer chrome — keep only
+  // the theme toggle by default; reveal density under debug chrome (item 5).
+  const debug = useDebugMode()
   return (
     <div className="flex items-center gap-2">
+      {debug && (
       <div
         className="inline-flex overflow-hidden rounded border border-line"
         role="group"
@@ -42,6 +47,7 @@ export function PreferencesControls() {
           </button>
         ))}
       </div>
+      )}
       <button
         type="button"
         onClick={toggleTheme}

@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn'
 import { RotateCw } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { usePanelTier } from '@/components/PanelTierContext'
+import { useDebugMode } from '@/lib/debugMode'
 
 export interface PanelChromeProps {
   registration: PanelRegistration
@@ -53,6 +54,10 @@ export function PanelChrome({
   // explicit `tier=` prop overrides it (rare).
   const ctxTier = usePanelTier()
   const effectiveTier = tier ?? ctxTier
+  // The `from <descriptor>@<version>` provenance stamp is developer plumbing —
+  // a bare "(singleton)@00000000" for a singleton — so hide it unless debug
+  // chrome is on (item 5).
+  const debug = useDebugMode()
 
   return (
     <div className="flex flex-col h-full w-full bg-surf-2 text-ink-1">
@@ -64,10 +69,12 @@ export function PanelChrome({
           </h2>
           <div className="text-label text-ink-2 truncate flex items-center gap-2">
             {subtitle && <span>{subtitle}</span>}
-            <span className="text-ink-3">
-              from <code className="font-mono">{registration.descriptor_id}</code>
-              @<code className="font-mono">{registration.descriptor_version.slice(0, 8)}</code>
-            </span>
+            {debug && (
+              <span className="text-ink-3">
+                from <code className="font-mono">{registration.descriptor_id}</code>
+                @<code className="font-mono">{registration.descriptor_version.slice(0, 8)}</code>
+              </span>
+            )}
             {budget && <BudgetPill budget={budget} />}
           </div>
         </div>
