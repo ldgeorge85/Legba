@@ -50,3 +50,10 @@ legba-ui-v3/tools/screenshot/shots/
 
 # Internal planning / tracking docs — NOT part of the release.
 planning/
+
+# Operational research corpus (fork #1, execution-plan v2) — OPERATIONAL-ONLY.
+# Corpus DATA lives here on this host only: never tracked, never pushed, never
+# seeded with the project, never baked into images. The loader CODE ships
+# in-repo (src/legba/data/seed/... + scripts/); the DATA does not. Per-chunk
+# license/provenance metadata is still recorded (hygiene + future options).
+corpora/
