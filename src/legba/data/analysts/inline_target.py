@@ -701,14 +701,14 @@ def _coerce_indicators(raw: Any) -> list[dict[str, Any]]:
 
 # --- S3-T1 EMIT FALLBACK: derive structured indicators from prose ----------
 #
-# The core InnoGPT-1 plane will NOT populate the JSON ``indicators`` array (4
-# prompt approaches all failed), but it DOES reliably write the prose
-# "## Indicators to watch" markdown bullet list the assessor prompt asks for.
-# When the model omits the structured array we mine those prose bullets into
-# ``IndicatorEntry``-shaped dicts so the I&W block is non-empty — a stopgap for
-# the emit gap, NOT a replacement for a model that emits the array (that path is
-# preferred; see ``_coerce_finding``). A future signal-match enhancement can
-# promote a derived ``not_observed`` item to ``triggered``; prose alone can't.
+# The core plane USUALLY populates the JSON ``indicators`` array (reliably, once
+# max_tokens gives the reasoning model room), but on runs where it omits the
+# array it still writes the prose "## Indicators to watch" markdown bullet list
+# the assessor prompt asks for. As a FALLBACK we mine those prose bullets into
+# ``IndicatorEntry``-shaped dicts so the I&W block is non-empty — a safety net,
+# NOT a replacement for the model's own array (that path is preferred; see
+# ``_coerce_finding``). A future signal-match enhancement can promote a derived
+# ``not_observed`` item to ``triggered``; prose alone can't.
 
 # Watch-section heading phrases (case-insensitive, matched by ``startswith`` on
 # the de-scaffolded line). Mirrors the forward-looking headings verify.py drops
