@@ -94,6 +94,32 @@ export function fuzzyMatch(query: string, target: string): boolean {
   return qi === q.length
 }
 
+/**
+ * Tiered relevance score for `query` vs `target` (higher = better, 0 = no
+ * match). The tiers rank a match by HOW it matched, not just whether — so a
+ * query resolves to its best target instead of an arbitrary alphabetical pick:
+ *
+ *   exact  >  prefix  >  word-boundary  >  contiguous substring  >  subsequence
+ *
+ * e.g. for "us" a word-boundary hit on `country_g20_us` (…_us) outranks the
+ * loose subsequence hit inside "australia"/"russia". Length/position break ties
+ * within a tier (shorter / earlier is more relevant). Absolute values only
+ * matter for the relative ordering.
+ */
+export function scoreMatch(query: string, target: string): number {
+  if (!query) return 1
+  const q = query.toLowerCase()
+  const t = target.toLowerCase()
+  if (t === q) return 1000
+  if (t.startsWith(q)) return 800 - Math.min(t.length, 200)
+  for (const word of t.split(/[^a-z0-9]+/)) {
+    if (word && word.startsWith(q)) return 600 - Math.min(t.length, 200)
+  }
+  const idx = t.indexOf(q)
+  if (idx >= 0) return 400 - Math.min(idx, 200)
+  return fuzzyMatch(q, t) ? 100 : 0
+}
+
 /** Singleton panel entries (binding-scoped panels reach the index via records). */
 function panelEntries(mode: Mode, onOpen: CommandPaletteProps['onOpen']): PaletteEntry[] {
   const out: PaletteEntry[] = []
@@ -153,11 +179,13 @@ function recordEntries(
       hint: `${rec.recordKind}${stateHint}`,
       entryKind: 'record',
       search: `${rec.label} ${rec.id} ${rec.recordKind} ${primaryDef.defaultTitle}`,
-      // Enter → open the record's bound primary panel.
-      open: () => onOpenBound(primaryPanel, rec.recordKind, rec.id),
-      // ⌘/Ctrl-Enter → select the record into the Inspector instead.
-      alt: () => onSelectRecord(rec.recordKind, rec.id, rec.label),
-      altHint: 'inspect',
+      // Enter → SET THE DESK SELECTION (the keystone): the feed, map, and
+      // Inspector all follow the shared selection, so "pick a country → see its
+      // findings" works from the palette without opening a placeholder panel.
+      open: () => onSelectRecord(rec.recordKind, rec.id, rec.label),
+      // ⌘/Ctrl-Enter → open the record's bound primary panel (grid) instead.
+      alt: () => onOpenBound(primaryPanel, rec.recordKind, rec.id),
+      altHint: 'open panel',
     })
     // Targets + analysts additionally get an "Investigate" grid action.
     if (rec.recordKind === 'target') {
@@ -232,16 +260,10 @@ export function CommandPalette({
   // the rest — never an empty alphabetical wall. With a query, fuzzy-filter then
   // float favorites to the top of the matches.
   const filtered = useMemo(() => {
-    const matches = query
-      ? allEntries.filter(
-          (e) => fuzzyMatch(query, e.label) || fuzzyMatch(query, e.search),
-        )
-      : allEntries.slice()
-
     if (!query) {
       const recents = loadRecents()
       const recentRank = new Map(recents.map((id, i) => [id, i]))
-      return matches.slice().sort((a, b) => {
+      return allEntries.slice().sort((a, b) => {
         const ra = recentRank.has(a.key) ? recentRank.get(a.key)! : Infinity
         const rb = recentRank.has(b.key) ? recentRank.get(b.key)! : Infinity
         if (ra !== rb) return ra - rb
@@ -251,12 +273,20 @@ export function CommandPalette({
         return a.label.localeCompare(b.label)
       })
     }
-    return matches.sort((a, b) => {
-      const fa = favorites.has(a.key) ? 0 : 1
-      const fb = favorites.has(b.key) ? 0 : 1
+    // Scored match: rank by HOW each entry matched (exact > prefix > word-
+    // boundary > substring > subsequence), best of the label vs the search
+    // haystack. Ties break on favorites, then label.
+    const scored = allEntries
+      .map((e) => ({ e, score: Math.max(scoreMatch(query, e.label), scoreMatch(query, e.search)) }))
+      .filter((x) => x.score > 0)
+    scored.sort((a, b) => {
+      if (a.score !== b.score) return b.score - a.score
+      const fa = favorites.has(a.e.key) ? 0 : 1
+      const fb = favorites.has(b.e.key) ? 0 : 1
       if (fa !== fb) return fa - fb
-      return a.label.localeCompare(b.label)
+      return a.e.label.localeCompare(b.e.label)
     })
+    return scored.map((x) => x.e)
   }, [allEntries, query, favorites])
 
   // Reset transient state each time the palette opens, and focus the input.
@@ -399,7 +429,7 @@ export function CommandPalette({
           ))}
         </ul>
         <div className="flex items-center justify-between px-4 py-2 text-label text-ink-3 border-t border-line">
-          <span>↑↓ navigate · ↵ open · ⌘↵ inspect · ★ favorite · esc close</span>
+          <span>↑↓ navigate · ↵ open/select · ⌘↵ panel · ★ favorite · esc close</span>
           <span>
             {filtered.length} result{filtered.length === 1 ? '' : 's'}
           </span>
