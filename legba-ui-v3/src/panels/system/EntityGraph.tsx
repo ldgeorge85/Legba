@@ -113,6 +113,45 @@ const STYLESHEET: StylesheetStyle[] = [
 const PRESET_NOOP = { name: 'preset', fit: false, animate: false } as cytoscape.LayoutOptions
 const COSE_LAYOUT = { name: 'cose', animate: false, idealEdgeLength: 80 } as cytoscape.LayoutOptions
 
+// #6 — NER emits ARTIFACT nodes (a lone timestamp like "9:33AM AKDT" classed as
+// TIME, bare quantities/ordinals, one-off mentions) that are noise in a
+// knowledge graph. These filter AT THE FETCH — not a client-side hide — so every
+// downstream count (subtitle, chips, legend) reflects the honest de-junked set.
+// A node survives when its class is a MEANINGFUL entity class AND it clears a
+// small mention-count floor; a recognized country or the centered ego node is
+// always kept.
+const ENTITY_CLASS_ALLOW = new Set([
+  'person', 'org', 'organization', 'gpe', 'geo', 'geopolitical', 'country',
+  'nation', 'location', 'loc', 'norp', 'nationality', 'fac', 'facility',
+  'event', 'law', 'product', 'work_of_art', 'group', 'entity',
+])
+const JUNK_ENTITY_CLASS = new Set([
+  'date', 'time', 'percent', 'money', 'quantity', 'ordinal', 'cardinal', 'number',
+])
+const MIN_MENTIONS = 2
+
+/** Drop NER-artifact nodes + their dangling edges from a raw graph response. */
+function filterGraphJunk(g: GraphResp, center: string | null): GraphResp {
+  const keep = (n: GNode): boolean => {
+    if (center && n.canonical_name === center) return true
+    const cls = (n.entity_class ?? '').toLowerCase()
+    if (JUNK_ENTITY_CLASS.has(cls)) return false
+    if (isCountry(n.canonical_name)) return true // countries are meaningful at any count
+    if (!ENTITY_CLASS_ALLOW.has(cls)) return false
+    return (n.mentions ?? 0) >= MIN_MENTIONS
+  }
+  const nodes = g.nodes.filter(keep)
+  // Keep an edge only when BOTH endpoints survived (match on either key the
+  // backend might use — canonical_name or id — so we never over-drop).
+  const alive = new Set<string>()
+  for (const n of nodes) {
+    alive.add(n.canonical_name)
+    alive.add(n.id)
+  }
+  const edges = g.edges.filter((e) => alive.has(e.source) && alive.has(e.target))
+  return { nodes, edges }
+}
+
 export default function EntityGraphPanel({ registration }: PanelProps) {
   const [center, setCenter] = useState<string | null>(null)
   // Filter state: hidden entity classes + show-orphans toggle. `null` ⇒ no class
@@ -139,8 +178,13 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
 
   const graphQ = useQuery<GraphResp>({
     queryKey: ['entity-graph', center],
-    queryFn: () =>
-      apiGet<GraphResp>(`/entities/graph?limit=80${center ? `&center=${encodeURIComponent(center)}` : ''}`),
+    queryFn: async () => {
+      const g = await apiGet<GraphResp>(
+        `/entities/graph?limit=80${center ? `&center=${encodeURIComponent(center)}` : ''}`,
+      )
+      // #6 — de-junk at the fetch so the counts downstream stay honest.
+      return filterGraphJunk(g, center)
+    },
     refetchInterval: 120_000,
   })
 
