@@ -96,14 +96,9 @@ method:
       "evidence": [<the signal indices / source references you cited, as strings>],
       "tags": ["escalation", "severity:<low|moderate|elevated|high|critical>"],
       "indicators": [
-        {
-          "id": "<short stable slug, e.g. reservist-mobilization>",
-          "statement": "<one concrete, resolvable near-term escalation signpost>",
-          "status": "not_observed",
-          "horizon_date": "<YYYY-MM-DD by which this should resolve>",
-          "first_seen": "<YYYY-MM-DD, today>",
-          "citations": []
-        }
+        {"id": "reservist-mobilization", "statement": "Reservist call-up or mobilization orders issued by the target state", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []},
+        {"id": "border-force-buildup", "statement": "Press- or satellite-confirmed force concentration along the contested border", "status": "triggered", "horizon_date": "2026-07-20", "first_seen": "2026-07-02", "citations": [3]},
+        {"id": "airspace-closure", "statement": "NOTAM or civil-aviation closure over the theater of concern", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []}
       ]
     }
 
@@ -111,8 +106,11 @@ method:
     severity tag drawn from {severity:low, severity:moderate, severity:elevated,
     severity:high, severity:critical}, chosen to match the assessed escalation
     risk. The "indicators" array is the STRUCTURED, machine-checkable mirror of
-    your '## Indicators to watch' prose — a SMALL, bounded list (about 3-6) of
-    concrete, resolvable near-term signposts. Set each "status" to "not_observed"
+    your '## Indicators to watch' prose. It is REQUIRED and MUST be NON-EMPTY:
+    always output 3-6 entries in the EXACT SHAPE of the three example objects
+    shown in the schema above (real desk-specific signposts — do NOT copy the
+    example text, do NOT leave the array empty, do NOT omit the field). Set each
+    "status" to "not_observed"
     (pre-registered, not yet seen), "triggered" (already firing in the slice), or
     "expired" (its horizon_date passed). A "triggered" indicator MUST name the
     signal(s) that fired it in "citations" as ASCII [N] signal indices;
