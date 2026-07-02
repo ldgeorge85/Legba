@@ -102,11 +102,57 @@ function orderedDimensions(
   return [...known, ...extras]
 }
 
+// Target ids arrive as `country_<tier>_<iso2>` (e.g. country_g20_tr); map the
+// ISO-2 code (and a few aliases) to a readable country name. Anything else is
+// humanized generically (drop the plumbing prefix, split, title-case).
+const COUNTRY_CODE_NAMES: Record<string, string> = {
+  // G20 + watch-tier roster (ISO 3166-1 alpha-2).
+  ar: 'Argentina', au: 'Australia', br: 'Brazil', ca: 'Canada', cn: 'China',
+  de: 'Germany', fr: 'France', gb: 'United Kingdom', id: 'Indonesia',
+  in: 'India', it: 'Italy', jp: 'Japan', kr: 'South Korea', mx: 'Mexico',
+  ru: 'Russia', sa: 'Saudi Arabia', tr: 'Turkey', us: 'United States',
+  za: 'South Africa', il: 'Israel', ir: 'Iran', kp: 'North Korea', tw: 'Taiwan',
+  // Common aliases.
+  usa: 'United States', uk: 'United Kingdom', uae: 'United Arab Emirates',
+  prc: 'China', roc: 'Taiwan', nkorea: 'North Korea', skorea: 'South Korea',
+  drc: 'DR Congo',
+}
+
+/** Humanize a raw substrate id (target/analyst/unit) into a DISPLAY name: drop
+ *  the plumbing prefix, split on separators, title-case; a bare country code
+ *  resolves to its name. The raw id is still used for keys / RecordLink drills. */
+function displayName(id: string): string {
+  const stripped = id
+    .replace(/^country_(?:g20_|watch_|tier[0-9]*_)?/i, '')
+    .replace(/^analyst_/i, '')
+  const key = stripped.toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (COUNTRY_CODE_NAMES[key]) return COUNTRY_CODE_NAMES[key]
+  const words = stripped.replace(/[._-]+/g, ' ').trim()
+  return words ? words.replace(/\b\w/g, (c) => c.toUpperCase()) : id
+}
+
+// Tone severity ordering — for rolling per-dimension bands up to one headline.
+const TONE_SEVERITY: BandTone[] = ['insufficient', 'good', 'watch', 'elevated', 'high', 'critical']
+
+/** Roll the per-dimension bands up to a single country headline tone: the most
+ *  severe banded dimension, or `insufficient` when nothing is banded yet. */
+function countryHeadline(sc: CountryScorecard): BandTone {
+  let worst: BandTone = 'insufficient'
+  for (const dim of Object.values(sc.dimensions)) {
+    if (isInsufficient(dim)) continue
+    const t = bandTone(dim.band)
+    if (TONE_SEVERITY.indexOf(t) > TONE_SEVERITY.indexOf(worst)) worst = t
+  }
+  return worst
+}
+
 export default function EvalScorecardPanel({ registration }: PanelProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [endpointPending, setEndpointPending] = useState(false)
   // Which (target:unit) band is expanded to its basis sub-claims.
   const [openBand, setOpenBand] = useState<string | null>(null)
+  // Which country's collapsed "insufficient" group is expanded to its why-drill.
+  const [openInsufficient, setOpenInsufficient] = useState<string | null>(null)
 
   const { data, isLoading, error, refetch } = useQuery<ScorecardRow[]>({
     queryKey: ['eval-scorecard'],
@@ -258,10 +304,24 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
                 <RecordLink
                   kind="target"
                   id={sc.target_id}
-                  label={sc.target_id}
+                  label={displayName(sc.target_id)}
                   origin="scorecard"
                   className="truncate text-slate-200"
                 />
+                {/* One rolled-up headline verdict per country — the most severe
+                    banded dimension (insufficient when nothing is banded yet). */}
+                {(() => {
+                  const tone = countryHeadline(sc)
+                  return (
+                    <span
+                      className={`shrink-0 rounded px-1 text-[10px] font-mono ${TONE_PILL[tone]}`}
+                      data-testid={`scorecard-headline-${sc.target_id}`}
+                      title="rolled-up country verdict (most severe banded dimension)"
+                    >
+                      {tone === 'insufficient' ? 'insufficient' : tone}
+                    </span>
+                  )
+                })()}
                 <span className="text-slate-600 text-[10px] shrink-0">
                   {bandedN}/{dims.length} banded
                 </span>
@@ -273,29 +333,23 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
               </div>
 
               <div className="space-y-1">
-                {dims.map(([unit, dim]) => {
-                  const insufficient = isInsufficient(dim)
-                  const bandKey = `${sc.target_id}:${unit}`
-                  const open = openBand === bandKey
-                  const flagged = dim.eval?.faithfulness_flagged === true
-                  return (
-                    <div
-                      key={unit}
-                      className="text-[11px]"
-                      data-testid={`scorecard-dim-${sc.target_id}-${unit}`}
-                    >
-                      <div className="flex items-baseline gap-2">
-                        <span className="w-40 shrink-0 truncate text-slate-400">{unit}</span>
-                        {insufficient ? (
-                          // Honest not-enough-verified state — no colored pill, no
-                          // number, no drill target (basis is empty).
-                          <span
-                            className="rounded bg-slate-800 px-1 text-[10px] text-slate-400"
-                            data-testid={`scorecard-insufficient-${sc.target_id}-${unit}`}
-                          >
-                            insufficient — {insufficientLabel(dim.reason)}
+                {/* Banded dimensions — one row each, drill to verified sub-claims. */}
+                {dims
+                  .filter(([, dim]) => !isInsufficient(dim))
+                  .map(([unit, dim]) => {
+                    const bandKey = `${sc.target_id}:${unit}`
+                    const open = openBand === bandKey
+                    const flagged = dim.eval?.faithfulness_flagged === true
+                    return (
+                      <div
+                        key={unit}
+                        className="text-[11px]"
+                        data-testid={`scorecard-dim-${sc.target_id}-${unit}`}
+                      >
+                        <div className="flex items-baseline gap-2">
+                          <span className="w-40 shrink-0 truncate text-slate-400" title={unit}>
+                            {displayName(unit)}
                           </span>
-                        ) : (
                           <button
                             type="button"
                             className={`shrink-0 rounded px-1 text-[10px] font-mono ${TONE_PILL[bandTone(dim.band)]}`}
@@ -305,59 +359,102 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
                           >
                             {dim.band}
                           </button>
-                        )}
-                        {!insufficient && dim.effective_confidence !== null && (
-                          <span className="text-slate-500 font-mono text-[10px]">
-                            eff {dim.effective_confidence.toFixed(2)}
-                          </span>
-                        )}
-                        {flagged && (
-                          <span
-                            className="text-rose-400 text-[10px] shrink-0"
-                            title="aggregate faithfulness below floor"
-                          >
-                            ⚑ low faithfulness
-                          </span>
+                          {dim.effective_confidence !== null && (
+                            <span className="text-slate-500 font-mono text-[10px]">
+                              eff {dim.effective_confidence.toFixed(2)}
+                            </span>
+                          )}
+                          {flagged && (
+                            <span
+                              className="text-rose-400 text-[10px] shrink-0"
+                              title="aggregate faithfulness below floor"
+                            >
+                              ⚑ low faithfulness
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Expanded basis — the verified sub-claims this band rests
+                            on. Each basis id is a P1 evidence + signed-lineage drill.
+                            basis.length===0 never renders a drill target. */}
+                        {open && (
+                          <div className="mt-1 ml-40 pl-2 border-l border-slate-800 space-y-1">
+                            {dim.basis.length === 0 ? (
+                              <div className="text-slate-600 text-[10px]">no basis sub-claim</div>
+                            ) : (
+                              dim.basis.map((basisId) => (
+                                <div key={basisId} data-testid={`scorecard-basis-${basisId}`}>
+                                  <RecordLink
+                                    kind="finding"
+                                    id={basisId}
+                                    label="sub-claim"
+                                    origin="scorecard"
+                                    className="text-[10px]"
+                                  />
+                                </div>
+                              ))
+                            )}
+                            <div
+                              className={
+                                flagged ? 'text-rose-300 text-[10px]' : 'text-slate-500 text-[10px]'
+                              }
+                            >
+                              {evalBadge(dim.eval)}
+                            </div>
+                          </div>
                         )}
                       </div>
+                    )
+                  })}
 
-                      {/* Expanded basis — the verified sub-claims this band rests
-                          on. Each basis id is a P1 evidence + signed-lineage drill.
-                          basis.length===0 never renders a drill target. */}
-                      {open && !insufficient && (
-                        <div className="mt-1 ml-40 pl-2 border-l border-slate-800 space-y-1">
-                          {dim.basis.length === 0 ? (
-                            <div className="text-slate-600 text-[10px]">
-                              no basis sub-claim
-                            </div>
-                          ) : (
-                            dim.basis.map((basisId) => (
-                              <div
-                                key={basisId}
-                                data-testid={`scorecard-basis-${basisId}`}
+                {/* The identical "insufficient" rows collapse behind ONE why-drill
+                    (they all say the same thing) instead of a wall of red-ish
+                    rows — the honest state stays one click away. */}
+                {(() => {
+                  const insuff = dims.filter(([, dim]) => isInsufficient(dim))
+                  if (insuff.length === 0) return null
+                  const open = openInsufficient === sc.target_id
+                  return (
+                    <div
+                      className="text-[11px]"
+                      data-testid={`scorecard-insufficient-group-${sc.target_id}`}
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full items-baseline gap-2 text-left"
+                        onClick={() => setOpenInsufficient(open ? null : sc.target_id)}
+                        data-testid={`scorecard-insufficient-toggle-${sc.target_id}`}
+                        aria-expanded={open}
+                      >
+                        <span className="rounded bg-slate-800 px-1 text-[10px] text-slate-400">
+                          {insuff.length} dimension{insuff.length === 1 ? '' : 's'} insufficient
+                        </span>
+                        <span className="text-slate-500 text-[10px]">{open ? 'hide' : 'why?'}</span>
+                      </button>
+                      {open && (
+                        <div className="mt-1 ml-2 pl-2 border-l border-slate-800 space-y-0.5">
+                          {insuff.map(([unit, dim]) => (
+                            <div
+                              key={unit}
+                              className="flex items-baseline gap-2"
+                              data-testid={`scorecard-insufficient-${sc.target_id}-${unit}`}
+                            >
+                              <span
+                                className="w-40 shrink-0 truncate text-slate-400"
+                                title={unit}
                               >
-                                <RecordLink
-                                  kind="finding"
-                                  id={basisId}
-                                  label="sub-claim"
-                                  origin="scorecard"
-                                  className="text-[10px]"
-                                />
-                              </div>
-                            ))
-                          )}
-                          <div
-                            className={
-                              flagged ? 'text-rose-300 text-[10px]' : 'text-slate-500 text-[10px]'
-                            }
-                          >
-                            {evalBadge(dim.eval)}
-                          </div>
+                                {displayName(unit)}
+                              </span>
+                              <span className="text-slate-500 text-[10px]">
+                                {insufficientLabel(dim.reason)}
+                              </span>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
                   )
-                })}
+                })()}
               </div>
 
               {/* The P3 composition aggregate node. */}
@@ -425,7 +522,9 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
                     <span className={`shrink-0 rounded px-1 text-[10px] font-mono ${BAND_PILL[band]}`}>
                       {(c.latest_overall * 100).toFixed(0)}
                     </span>
-                    <span className="truncate text-slate-200">{c.analyst_id}</span>
+                    <span className="truncate text-slate-200" title={c.analyst_id}>
+                      {displayName(c.analyst_id)}
+                    </span>
                   </button>
                   <RecordLink
                     kind="analyst"
