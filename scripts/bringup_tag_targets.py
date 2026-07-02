@@ -119,14 +119,15 @@ REGION_BY_ISO2: dict[str, str] = {
 #   conflict_active = states in an active armed conflict as of mid-2026 (RU-UA
 #                     war; US-Iran war + Israel regional war per the operator's
 #                     grounding seed). TIME-SENSITIVE — re-review on world-state
-#                     change. US (off-territory belligerent) left untagged.
-#   sanctions_regime= states under a comprehensive multilateral sanctions
-#                     regime {RU, IR, KP}. CN (targeted export controls, not a
-#                     comprehensive regime) left untagged.
+#                     change. US tagged as an active belligerent (operator call
+#                     2026-07-02).
+#   sanctions_regime= states under a sanctions regime {RU, IR, KP} plus CN
+#                     (targeted export controls / tech sanctions — operator call
+#                     2026-07-02).
 WATCH_TAGS_BY_ISO2: dict[str, list[str]] = {
-    "CN": ["nuclear_watch"],
+    "CN": ["nuclear_watch", "sanctions_regime"],
     "IN": ["nuclear_watch"],
-    "US": ["nuclear_watch"],
+    "US": ["nuclear_watch", "conflict_active"],
     "RU": ["nuclear_watch", "conflict_active", "sanctions_regime"],
     "UA": ["conflict_active"],
     "IL": ["nuclear_watch", "conflict_active"],

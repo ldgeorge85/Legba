@@ -130,8 +130,11 @@ def test_build_plan_merges_and_preserves_other_scope_fields() -> None:
     assert plan.changed is True
     assert plan.merged_tags == [
         "geopolitical", "news", "g20", "region_americas", "nuclear_watch",
+        "conflict_active",
     ]
-    assert plan.newly_added == ["region_americas", "nuclear_watch"]
+    assert plan.newly_added == [
+        "region_americas", "nuclear_watch", "conflict_active",
+    ]
     # Coverage tag preserved.
     assert "g20" in plan.merged_tags
     # Non-tag scope fields carried through verbatim.
@@ -145,7 +148,8 @@ def test_build_plan_merges_and_preserves_other_scope_fields() -> None:
 def test_build_plan_idempotent_when_tags_present() -> None:
     body = _fake_body(
         "US",
-        ["geopolitical", "news", "g20", "region_americas", "nuclear_watch"],
+        ["geopolitical", "news", "g20", "region_americas", "nuclear_watch",
+         "conflict_active"],
         "country_g20_us",
     )
     plan = tt.build_plan("country_g20_us", "US", body)
