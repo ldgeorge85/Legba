@@ -116,6 +116,7 @@ Tests that actually compile the DSPy module use
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -698,6 +699,158 @@ def _coerce_indicators(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+# --- S3-T1 EMIT FALLBACK: derive structured indicators from prose ----------
+#
+# The core InnoGPT-1 plane will NOT populate the JSON ``indicators`` array (4
+# prompt approaches all failed), but it DOES reliably write the prose
+# "## Indicators to watch" markdown bullet list the assessor prompt asks for.
+# When the model omits the structured array we mine those prose bullets into
+# ``IndicatorEntry``-shaped dicts so the I&W block is non-empty — a stopgap for
+# the emit gap, NOT a replacement for a model that emits the array (that path is
+# preferred; see ``_coerce_finding``). A future signal-match enhancement can
+# promote a derived ``not_observed`` item to ``triggered``; prose alone can't.
+
+# Watch-section heading phrases (case-insensitive, matched by ``startswith`` on
+# the de-scaffolded line). Mirrors the forward-looking headings verify.py drops
+# wholesale (``verify._NON_FACTUAL_HEADINGS``) — kept as a focused local copy so
+# the emit side stays self-contained; the assessor prompt emits "Indicators to
+# watch" verbatim, the rest cover models that phrase the section differently.
+_WATCH_HEADINGS: tuple[str, ...] = (
+    "indicators to watch",
+    "indicators to monitor",
+    "indicators",
+    "what to watch",
+    "watch items",
+    "watch for",
+    "watchlist",
+    "watch list",
+    "signposts",
+    "leading indicators",
+    "key indicators",
+    "developments to watch",
+    "things to watch",
+    "triggers to watch",
+)
+
+# A markdown list bullet ('- ' / '* ' / '+ ', optionally indented); group 1 is
+# the bullet's prose (requires at least one non-space char).
+_PROSE_BULLET_RE = re.compile(r"^\s*[-*+]\s+(.*\S.*)$")
+
+# Prose watch-items are forward-looking, so the schema-REQUIRED ``horizon_date``
+# is not inferable from a bullet — default to a sane 30-day window.
+_DERIVED_INDICATOR_HORIZON_DAYS = 30
+# Cap on prose-derived indicators (the assessor's watch list is short).
+_MAX_DERIVED_INDICATORS = 6
+
+
+def _is_watch_heading(line: str) -> bool:
+    """True when ``line`` is an "Indicators to watch"-style section heading.
+
+    Tolerates markdown heading depth (``##`` / ``###``), blockquote/emphasis
+    scaffolding (``**Indicators to watch**``), and a trailing colon. A list
+    bullet is content, never a heading; a long prose sentence that merely opens
+    with the phrase is rejected on length so we don't sweep a whole paragraph.
+    """
+    s = line.strip()
+    if not s or _PROSE_BULLET_RE.match(line):
+        return False
+    core = s.lstrip("#>").strip().strip("*_` ").strip().rstrip(":").strip()
+    low = core.lower()
+    if not low or len(low) > 48:
+        return False
+    return any(low.startswith(h) for h in _WATCH_HEADINGS)
+
+
+def _clean_indicator_statement(text: str) -> str:
+    """Clean a prose watch bullet into an indicator statement.
+
+    Folds variant citation brackets to ASCII, strips the ``[N]`` signal markers
+    (the derived entry carries no citations), removes markdown emphasis wrappers,
+    tightens whitespace left behind by marker removal, and caps to the schema's
+    ``statement`` length.
+    """
+    s = _normalize_citation_markers(text)
+    s = _CITATION_MARKER_RE.sub("", s)
+    s = s.replace("**", "").replace("__", "")
+    s = s.strip().strip("*_` ").strip()
+    # Tighten a dangling space-before-punctuation ("exports ." → "exports.").
+    s = re.sub(r"\s+([.;,:])", r"\1", s)
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s[:2048]
+
+
+def _indicator_slug(statement: str) -> str:
+    """Short, stable slug from a statement (first up-to-6 alnum words)."""
+    words = re.findall(r"[a-z0-9]+", statement.lower())
+    return "-".join(words[:6])[:64]
+
+
+def _derive_indicators_from_prose(
+    body: str,
+    *,
+    today: datetime.date | None = None,
+) -> list[dict[str, Any]]:
+    """S3-T1 EMIT FALLBACK — mine an "Indicators to watch" prose section into
+    ``IndicatorEntry``-shaped dicts.
+
+    Finds the watch heading (case-insensitive, tolerating ``###`` / bold), takes
+    each ``- ``/``* `` bullet until the next markdown heading as one entry, and
+    builds ``{id, statement, status='not_observed', first_seen, horizon_date,
+    citations=[]}``. Derived items are ``not_observed`` because a forward-looking
+    prose bullet cannot be read as ``triggered`` (that inference is a future
+    signal-match enhancement). Never fabricates: no watch section (or no usable
+    bullets) → ``[]``. Capped at ``_MAX_DERIVED_INDICATORS``. The caller routes
+    the result through :func:`_coerce_indicators` so any malformed entry drops.
+    """
+    if not body:
+        return []
+    today = today or datetime.date.today()
+    horizon = (today + datetime.timedelta(days=_DERIVED_INDICATOR_HORIZON_DAYS)).isoformat()
+    first_seen = today.isoformat()
+
+    out: list[dict[str, Any]] = []
+    seen_slugs: set[str] = set()
+    in_section = False
+    for line in body.splitlines():
+        if _is_watch_heading(line):
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        # A new markdown heading closes the watch section.
+        if line.lstrip().startswith("#"):
+            break
+        match = _PROSE_BULLET_RE.match(line)
+        if not match:
+            continue
+        statement = _clean_indicator_statement(match.group(1))
+        if not statement:
+            continue
+        slug = _indicator_slug(statement)
+        if not slug:
+            continue
+        # Keep ids unique within the finding so an indicator_tracker (S3-T2)
+        # can diff them run-over-run without collisions.
+        base, n = slug, 2
+        while slug in seen_slugs:
+            slug = f"{base}-{n}"
+            n += 1
+        seen_slugs.add(slug)
+        out.append(
+            {
+                "id": slug,
+                "statement": statement,
+                "status": "not_observed",
+                "first_seen": first_seen,
+                "horizon_date": horizon,
+                "citations": [],
+            }
+        )
+        if len(out) >= _MAX_DERIVED_INDICATORS:
+            break
+    return out
+
+
 # #125: locate the ``"body": "..."`` field inside a broken/truncated envelope.
 _ENVELOPE_BODY_KEY_RE = re.compile(r'"body"\s*:\s*"', re.IGNORECASE)
 
@@ -859,6 +1012,14 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
             ind_raw = parsed["data"].get("indicators")
         data: dict[str, Any] = {"raw_llm_response": raw[:8000]}
         indicators = _coerce_indicators(ind_raw)
+        # S3-T1 EMIT FALLBACK: the core plane won't emit the structured array but
+        # DOES write a prose "## Indicators to watch" bullet list. When the model
+        # gave us no usable structured entries, derive them from that prose (route
+        # through the SAME lenient coercer so bad entries still drop). Absent a
+        # watch section this yields [] → data.indicators stays absent (never
+        # fabricate; degrade-not-drop). Keep the model's own array when it emits one.
+        if not indicators:
+            indicators = _coerce_indicators(_derive_indicators_from_prose(body))
         if indicators:
             data["indicators"] = indicators
         return FindingPayload(

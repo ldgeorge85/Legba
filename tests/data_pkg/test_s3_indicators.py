@@ -18,13 +18,18 @@ judge is OFF by default or a canned stub — no test depends on a live LLM):
 
 from __future__ import annotations
 
+import datetime
 import json
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
-from legba.data.analysts.inline_target import _coerce_finding, _coerce_indicators
+from legba.data.analysts.inline_target import (
+    _coerce_finding,
+    _coerce_indicators,
+    _derive_indicators_from_prose,
+)
 from legba.data.provenance.models import FindingPayload
 from legba.data.provenance.verify import (
     _fold_indicators,
@@ -185,6 +190,121 @@ def test_coerce_finding_reads_nested_data_indicators():
 def test_coerce_indicators_non_list_is_empty():
     assert _coerce_indicators(None) == []
     assert _coerce_indicators("x") == []
+
+
+# ---------------------------------------------------------------------------
+# 2b. EMIT FALLBACK — derive indicators from the prose watch section (S3-T1)
+# ---------------------------------------------------------------------------
+#
+# The core plane won't populate the JSON `indicators` array but DOES write the
+# prose "## Indicators to watch" bullet list. When the structured array is
+# absent, `_coerce_finding` mines those bullets into `not_observed` entries.
+
+
+_PROSE_BODY = (
+    "The border is calm for now.\n"
+    "## Assessment\n"
+    "The situation is stable under current policy [1].\n"
+    "## Indicators to watch\n"
+    "- Reservists mobilized in the eastern district [2].\n"
+    "- Any new sanctions on this country's crude exports.\n"
+    "- Closure of the main border crossing [3][4]\n"
+)
+
+
+def test_derive_indicators_from_prose_basic():
+    today = datetime.date(2026, 7, 2)
+    got = _derive_indicators_from_prose(_PROSE_BODY, today=today)
+    assert len(got) == 3
+    # All derived entries are forward-looking `not_observed` with no citations.
+    assert {e["status"] for e in got} == {"not_observed"}
+    assert all(e["citations"] == [] for e in got)
+    # `[N]` markers stripped; whitespace-before-punct tightened.
+    assert got[0]["statement"] == "Reservists mobilized in the eastern district."
+    assert got[2]["statement"] == "Closure of the main border crossing"
+    assert all("[" not in e["statement"] for e in got)
+    # Slug derived from the statement; dates carried per the schema.
+    assert got[0]["id"] == "reservists-mobilized-in-the-eastern-district"
+    assert got[0]["first_seen"] == "2026-07-02"
+    assert got[0]["horizon_date"] == "2026-08-01"  # today + 30d
+
+
+def test_derive_indicators_no_watch_section_is_empty():
+    body = "## Assessment\nThe grid is stable [1].\n- a stray bullet with no watch heading\n"
+    assert _derive_indicators_from_prose(body) == []
+    assert _derive_indicators_from_prose("") == []
+
+
+def test_derive_indicators_tolerates_bold_heading_and_stops_at_next_heading():
+    body = (
+        "**Indicators to watch**\n"
+        "- Grid frequency excursions beyond tolerance\n"
+        "## Sources\n"
+        "- This source bullet must NOT become an indicator\n"
+    )
+    got = _derive_indicators_from_prose(body)
+    assert len(got) == 1
+    assert got[0]["id"] == "grid-frequency-excursions-beyond-tolerance"
+
+
+def test_derive_indicators_caps_at_six_and_dedups_slugs():
+    bullets = "\n".join(
+        f"- Reservists mobilized in the eastern district near town {i}" for i in range(8)
+    )
+    body = "## Indicators to watch\n" + bullets + "\n"
+    got = _derive_indicators_from_prose(body)
+    assert len(got) == 6  # capped
+    ids = [e["id"] for e in got]
+    assert len(ids) == len(set(ids))  # slugs de-duplicated within the finding
+
+
+def test_coerce_finding_derives_indicators_when_json_absent():
+    """ACCEPTANCE: a finding whose body has a prose watch list but NO JSON
+    `indicators` array → data.indicators is populated (derived, not_observed)."""
+    raw = json.dumps(
+        {"title": "T", "body": _PROSE_BODY, "confidence": 0.5, "tags": ["escalation"]}
+    )
+    fp = _coerce_finding(raw, fallback_title="fb")
+    inds = fp.data.get("indicators")
+    assert isinstance(inds, list) and len(inds) == 3
+    assert {e["status"] for e in inds} == {"not_observed"}
+    assert all("[" not in e["statement"] for e in inds)
+    today = datetime.date.today()
+    assert inds[0]["first_seen"] == today.isoformat()
+
+
+def test_coerce_finding_keeps_model_indicators_over_prose_fallback():
+    """When the model DOES emit the structured array, keep it — never override
+    with the prose-derived fallback even if a watch section is also present."""
+    model = _entry(status="triggered", citations=[1], id_="model-a")
+    raw = json.dumps(
+        {
+            "title": "T",
+            "body": _PROSE_BODY,  # also carries a prose watch section
+            "confidence": 0.5,
+            "tags": ["escalation"],
+            "indicators": [model],
+        }
+    )
+    fp = _coerce_finding(raw, fallback_title="fb")
+    inds = fp.data["indicators"]
+    assert len(inds) == 1
+    assert inds[0]["id"] == "model-a"
+    assert inds[0]["status"] == "triggered"
+
+
+def test_coerce_finding_no_prose_no_json_omits_indicators():
+    """Neither a structured array nor a prose watch section → key absent."""
+    raw = json.dumps(
+        {
+            "title": "T",
+            "body": "## Assessment\nThe grid is stable under current policy [1].\n",
+            "confidence": 0.5,
+            "tags": ["escalation"],
+        }
+    )
+    fp = _coerce_finding(raw, fallback_title="fb")
+    assert "indicators" not in fp.data
 
 
 # ---------------------------------------------------------------------------
