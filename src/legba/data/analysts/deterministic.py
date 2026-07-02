@@ -77,6 +77,7 @@ from .deterministic_handlers import (
     finding_supersession,
     forecast_scoreboard,
     hypothesis_lifecycle,
+    indicator_tracker,
     situation_clustering,
     thematic_proposal,
     graph_mining,
@@ -135,6 +136,12 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # operator reads it + registers the suggested target), so it is a real
     # FINDING, NOT trace-only.
     "thematic_proposal": OutputKind.FINDING,
+    # S3-T2 indicator_tracker — diffs the structured I&W indicators run-over-run
+    # per unit-stream + emits a summary FINDING on status FLIPS (esp.
+    # not_observed→triggered). A user-facing analytical product (the fired
+    # warning signposts a duty officer reads); a no-flip sweep is suppressed via
+    # the run's force_trace_only (NOT this map — the map is the always-on kind).
+    "indicator_tracker": OutputKind.FINDING,
     # Hypothesis lifecycle (Piece 3, Task D) — side-writes HYPOTHESIS rows via
     # write_hypothesis + returns a FindingPayload summary. NOT in the
     # operator-confirmed trace-only list, so unchanged here (left FINDING).
@@ -234,6 +241,10 @@ SUB_HANDLERS: dict[str, Any] = {
     # Thematic proposal (5b) — proposes thematic frames for uncovered hot
     # situations (detect → propose → operator-promote).
     "thematic_proposal": thematic_proposal.handle,
+    # S3-T2 indicator_tracker — deterministic run-over-run diff of the structured
+    # I&W indicators per (target_id, source unit analyst_id); emits a summary
+    # finding on status flips, trace-only on a no-flip/unchanged sweep.
+    "indicator_tracker": indicator_tracker.handle,
     # Hypothesis lifecycle (Piece 3, Task D) — emits forward-claim hypotheses
     # over rising situations + tests standing ones vs later evidence. Side-writes
     # HYPOTHESIS rows via the live write_hypothesis path; returns a FINDING summary.

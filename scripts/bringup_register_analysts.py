@@ -93,6 +93,7 @@ ANALYST_FILES = [
     "analyst_nexus_decay.yaml",               # NEW — PIECE A (nexuses-table temporal-lifecycle maintenance)
     "analyst_proposed_edge_governance.yaml",  # NEW — Phase D (promote/reject the proposed_edges queue; P3-1)
     "analyst_thematic_proposal.yaml",        # NEW — Phase 5b (propose thematic frames for uncovered hot situations)
+    "analyst_indicator_tracker.yaml",        # NEW — S3-T2 (deterministic META: diffs the structured I&W data.indicators run-over-run per unit-stream; emits a summary finding on status FLIPS, esp. not_observed->triggered; trace-only on a no-flip/unchanged sweep)
     "analyst_journal_assessor.yaml",         # NEW — Journal Assessor Wave 0 (the 11th OutputKind producer; entry tier)
     "analyst_journal_consolidator.yaml",     # NEW — Journal Wave 2 (consolidation tier: SAME kind, distinct id, daily beat)
     "analyst_entity_gc.yaml",                # NEW — health remediation D2 (deterministic GC of orphan entities/proposed_edges; drains the integrity_sweep-flagged backlog)

@@ -1,0 +1,86 @@
+# S3-T2 — Indicator Tracker analyst descriptor.
+#
+# A `deterministic`-kind META analyst over the SHARED analyst-output pool. It
+# closes the S3-T1 structured-I&W loop: every bounded unit now mirrors its
+# forward-looking "Indicators to watch" prose into a machine-checkable
+# FindingPayload.data.indicators[] block (stable `id` slug + `status` of
+# triggered / not_observed / expired, stored at
+# analyst_outputs.data->'data'->'indicators'). This analyst DIFFS those
+# indicators run-over-run per (target_id, source unit analyst_id), joining
+# entries by their `id` slug, and emits an honest summary FINDING whenever an
+# indicator's status FLIPS — most importantly a not_observed -> triggered
+# activation (a pre-registered warning signpost firing).
+#
+# Target-agnostic + META: the diff is an observation-level property of the shared
+# finding pool, not a per-target interpretation. The subscription declares NO
+# `targets` selector, so the cadence heartbeat is a SINGLE global run (not a
+# per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets. The
+# handler pulls the two most-recent indicator-bearing findings per unit-stream
+# directly via deps.pg_pool (it ignores the materialized input slice).
+#
+# Honesty / idempotency (the findings-feed dedup lesson): the summary finding is
+# a per-run RECEIPT. The handler sets AnalystMethodResult.force_trace_only=True
+# when NO indicator flipped (or the flip set is byte-identical to the last
+# EMITTED summary — the same two source runs re-swept) so an idempotent re-run
+# does NOT repeat a feed row. Only a genuine status transition reaches the feed.
+#
+# Method:
+#   * kind = deterministic — pure code, NO LLM, token usage always zero.
+#   * impl = the deterministic kind dispatcher module:run_method. The
+#     deterministic kind routes by `options.sub_handler`; the runtime injects
+#     `sub_handler: indicator_tracker` at fire time (dapr_actors reads
+#     descriptor.method.sub_handler, falling back to identity.id). We set it
+#     explicitly AND keep id == sub-handler name so either path resolves it.
+#
+# Cadence:
+#   * fallback_schedule = "15-59/30 * * * *" — every 30 min, OFFSET 15 min so the
+#     unit findings it diffs are fresh (the units + their compositions land
+#     earlier in the tick). The diff is idempotent, so a re-sweep of an unchanged
+#     pair is a no-op receipt (trace-only).
+#   * cooldown_seconds = 600 — a 10-min floor between runs (the sweep is cheap
+#     and idempotent, and indicator status is slow-changing).
+#
+# Registered via scripts/bringup_register_analysts.py or the registry REST API —
+# NOT inline through a test fixture.
+
+identity:
+  id: indicator_tracker
+  name: Indicator Tracker
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: s3_indicator_tracker
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared finding pool. The handler pulls the two most-recent
+  # indicator-bearing findings per (target_id, analyst_id) directly via
+  # deps.pg_pool (it ignores the materialized input slice / time window).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: indicator_tracker
+  # Deterministic kinds carry no LLM block and no per-day token budget — the whole
+  # run is pure Python over the analyst_outputs pool.
+
+cadence:
+  fallback_schedule: "15-59/30 * * * *"
+  cooldown_seconds: 600
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND
+# (FindingPayload -> analyst_outputs) writes the per-run summary finding; a
+# no-flip sweep is suppressed via force_trace_only (never a feed row).
+outputs: []

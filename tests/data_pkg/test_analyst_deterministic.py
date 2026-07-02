@@ -118,12 +118,14 @@ async def test_run_method_rejects_wrong_return_type(monkeypatch):
 async def test_run_method_each_real_sub_handler_returns_method_result():
     """Sanity: each real sub-handler returns the right shape on empty input."""
     for name in SUB_HANDLERS:
-        if name == "integrity_sweep":
-            # integrity_sweep REFUSES LOUD without a live pg_pool by design — it
-            # must never emit a zeroed integrity finding without actually running
-            # its checks (DIRECTION §9), so unlike the other deterministic
-            # handlers it has no synthetic/no-pool path. The empty-input contract
-            # is exercised with a fake pool in test_analyst_integrity_sweep.py.
+        if name in ("integrity_sweep", "composition_lineage_sweep"):
+            # These REFUSE LOUD without a live pg_pool by design — they must never
+            # emit a zeroed clean finding without actually running their checks
+            # (integrity_sweep per DIRECTION §9; composition_lineage_sweep per
+            # P3-T6, "refuse rather than emit a zeroed clean lineage finding
+            # without walking the tower"), so unlike the other deterministic
+            # handlers they have no synthetic/no-pool path. Their empty-input
+            # contract is exercised with a fake pool in their own test modules.
             continue
         result = await run_method(
             [],
