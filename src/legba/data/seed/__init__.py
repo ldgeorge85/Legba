@@ -46,6 +46,16 @@ from .manual_schema import (
     load_manifest,
     validate_batch,
 )
+from .manual_batch import (
+    ManualBatchReport,
+    ManualBatchSeedSource,
+    PriorFact,
+    PriorNexus,
+    RecordAction,
+    classify_fact,
+    classify_nexus,
+    run_manual_batch,
+)
 from .adapters.acled_conflict import ACLEDConflictSeedSource
 from .adapters.sipri_arms_transfers import SIPRIArmsTransfersSeedSource
 from .adapters.wikidata_leaders import WikidataLeadersSeedSource
@@ -102,6 +112,15 @@ __all__ = [
     "ValidatedBatch",
     "load_manifest",
     "validate_batch",
+    # manual-ingest batch loader (S4-T2)
+    "ManualBatchReport",
+    "ManualBatchSeedSource",
+    "PriorFact",
+    "PriorNexus",
+    "RecordAction",
+    "classify_fact",
+    "classify_nexus",
+    "run_manual_batch",
     "ADAPTERS",
     "get_adapter",
     "list_adapters",
