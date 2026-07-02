@@ -177,7 +177,9 @@ def test_mixed_row_has_no_all_insufficient_tag():
     payload = sp.build_scorecard_payload("country_g20_us", verdict)
     assert "scorecard_all_insufficient" not in payload.tags
     assert "2 banded" not in payload.title  # exactly 1 banded here
-    assert "1 banded / 3 insufficient" in payload.title
+    # 6 fixed dimensions (S1-T4/T5 added internal_stability + military_posture):
+    # 1 banded (escalation) + 5 insufficient.
+    assert "1 banded / 5 insufficient" in payload.title
 
 
 # ---------------------------------------------------------------------------

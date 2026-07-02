@@ -107,14 +107,18 @@ from ....runtime.analyst_method import AnalystMethodResult
 
 logger = logging.getLogger(__name__)
 
-# The four bounded reasoning UNITS (kind=inline_target descriptors) Phase 2
-# measures individually. Overridable via options['units'] for tests / a future
-# unit set, but defaulted here so the descriptor stays a bare global sweep.
+# The bounded reasoning UNITS (kind=inline_target descriptors) Phase 2 measures
+# individually. Overridable via options['units'] for tests / a future unit set,
+# but defaulted here so the descriptor stays a bare global sweep. internal_stability
+# (S1-T4) + military_posture (S1-T5) join the original four; keep in sync with
+# scorecard_banding.DIMENSIONS.
 _DEFAULT_UNITS: tuple[str, ...] = (
     "leadership_transition",
     "energy_security",
     "escalation",
     "narrative_coordination",
+    "internal_stability",
+    "military_posture",
 )
 
 # Window for "recent" head findings + faithfulness critiques. The per-target read

@@ -80,6 +80,11 @@ method:
     from materiel and confirmed troop or naval movement, weighting materiel and
     verified movement far above words. Do NOT assess economic, governance, or
     social-stability questions; those belong to other units.
+    BOUNDARY vs military_posture: assess a mobilization, force surge, or alert
+    spike here ONLY when it is tied to a SPECIFIC near-term confrontation; the
+    STANDING base rate — routine exercises, basing changes, long-lead procurement,
+    and structural readiness/mobilization CAPACITY — is the military_posture
+    unit's question, so do NOT double-count the same wire signal in both.
 
     PRODUCE EXACTLY ONE FINDING that answers ONLY this bounded question. Every
     key claim MUST cite the signal it rests on with a bracketed marker [N] keyed

@@ -106,6 +106,11 @@ ANALYST_FILES = [
     "analyst_energy_security.yaml",          # NEW — P2-T2 unit (energy-security pressure)
     "analyst_escalation.yaml",               # NEW — P2-T2 unit (escalation risk)
     "analyst_narrative_coordination.yaml",   # NEW — P2-T2 unit (narrative / coordination signals)
+    # S1-T4/T5 — two MORE bounded units (same T1 unit-factory pattern). BROAD
+    # (blanket g20+watch predicate → every desk), so both are wired as FIXED
+    # scorecard dimensions + into country_composition.other_analysts.
+    "analyst_internal_stability.yaml",       # NEW — S1-T4 unit (internal-stability / coup-risk)
+    "analyst_military_posture.yaml",         # NEW — S1-T5 unit (military-posture shift)
     # P3-T1/T2 — per-country COMPOSITION over the 4 verified units. Same
     # meta_findings_synthesizer kind (no new kind), but a PER-TARGET descriptor
     # (subscription.targets has_tag g20) reading the units as other_analysts, with

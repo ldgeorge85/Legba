@@ -1,9 +1,10 @@
 # P3-T1 — per-COUNTRY composition over the P2 verified UNIT sub-claims.
 #
 # The COMPOSITION leg: a second-order finding per G20 country that
-# reads the FOUR bounded P2 units for THAT country — leadership_transition,
-# energy_security, escalation, narrative_coordination — and synthesizes ONE
-# per-country read. It reuses the EXISTING meta_findings_synthesizer kind
+# reads the SIX bounded P2 units for THAT country — leadership_transition,
+# energy_security, escalation, narrative_coordination, internal_stability,
+# military_posture — and synthesizes ONE per-country read. It reuses the EXISTING
+# meta_findings_synthesizer kind
 # (Approach A: CONFIGURE, no new Python kind); the per-country behavior is all
 # descriptor + the P3-T2 READ_SLICE change (target-scope + verify-floor).
 #
@@ -40,18 +41,18 @@ identity:
 
 subscription:
   # PRESENT `targets` block ⇒ per-COUNTRY analyst. `_cadence_targets` matches the
-  # G20 tag (same fan-out set as country_assessor + the four units) and fires ONE
+  # G20 tag (same fan-out set as country_assessor + the six units) and fires ONE
   # worker per country with `target_filter=<country target id>`. has_tag is valid
   # on the analyst.subscription surface.
   targets:
     predicate: 'has_tag("g20") or has_tag("watch")'
     data_types: [finding]
     time_window: 24h
-  # The synth reads the OUTPUTS of these four units, not raw signals. READ_SLICE
+  # The synth reads the OUTPUTS of these six units, not raw signals. READ_SLICE
   # resolves this set from other_analysts[].id and — because the run is
   # target-scoped — restricts to the RUNNING country's findings, verify-floored.
   # 24h window: each unit fires 2x/day, so a 24h look-back holds two fires of
-  # each of the four units for the country.
+  # each of the six units for the country.
   other_analysts:
     - id: leadership_transition
       data_types: [finding]
@@ -63,6 +64,12 @@ subscription:
       data_types: [finding]
       time_window: 24h
     - id: narrative_coordination
+      data_types: [finding]
+      time_window: 24h
+    - id: internal_stability
+      data_types: [finding]
+      time_window: 24h
+    - id: military_posture
       data_types: [finding]
       time_window: 24h
   substrate:
@@ -110,9 +117,10 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  # OFFSET after all four units land. Units fire at 01/13 (leadership), 04/16
-  # (energy), 07/19 (escalation), 10/22 (narrative). Compose at :30 past 11 and
-  # 23 UTC so the freshest full set of four is present before synthesis.
+  # OFFSET after all six units land. Units fire at 01/13 (leadership), 02/14
+  # (internal_stability), 04/16 (energy), 05/17 (military_posture), 07/19
+  # (escalation), 10/22 (narrative). Compose at :30 past 11 and 23 UTC so the
+  # freshest full set of six is present before synthesis.
   fallback_schedule: "30 11,23 * * *"
   # 11h — below the 12h interval, stamped per-(analyst,target) at completion. A
   # cooldown == the 12h interval would land past the next fire and silently halve

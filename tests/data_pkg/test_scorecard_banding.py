@@ -75,12 +75,15 @@ def test_constants_are_the_locked_rule_table():
         "high": "high",
         "critical": "critical",
     }
-    # Dimensions are the four unit analyst_ids, not topic tags.
+    # Dimensions are the unit analyst_ids, not topic tags. internal_stability
+    # (S1-T4) + military_posture (S1-T5) join the original four P2 units.
     assert sb.DIMENSIONS == (
         "leadership_transition",
         "energy_security",
         "escalation",
         "narrative_coordination",
+        "internal_stability",
+        "military_posture",
     )
     assert sb.COMPOSITION_ANALYST_ID == "country_composition"
 
