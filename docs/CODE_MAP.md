@@ -1,27 +1,27 @@
 # CODE_MAP
 
-A navigational map of the Legba codebase: where each concern lives, how to
-add things, and the key entry points. Legba is a **decompositional intelligence
-system** — it turns a firehose of sources into cited, faithfulness-verified,
-drillable reports over whatever domain you DECLARE (the shown exemplar is
-geopolitics / G20, not a lock-in). The shape is still source-first at the
-ingestion edge — declarative descriptors (sources / targets / analysts) over a
-shared substrate, turned into running Dapr virtual actors that read and write it
-— but the product is the **analysis spine**, composed bottom-up: four bounded
-reasoning UNITS → per-country composition → world composition → a banded
-scorecard, with every claim cited to source and checked by a MANDATORY
-faithfulness pass. What the pass measures is **groundedness** (does each claim
-follow from its cited evidence?), NOT truth; several legs are honestly weak today
-and say so (§2.7).
+A navigational map of the Legba codebase: where each concern lives, how to add
+things, and the key entry points. This file is purely "where is the code" — for
+the concepts and why the system is shaped this way read `ARCHITECTURE.md` (and
+`ANALYSIS.md` for the analysis spine); for the implementation decisions read
+`DESIGN.md`; for running it read `RUNBOOK.md`. New here? Start with the
+[README](../README.md) and the [Tour](TOUR.md).
 
-For *what* the system does and *why*, read `ARCHITECTURE.md` and `ANALYSIS.md`
-(the analysis spine). For running it, read `RUNBOOK.md`. This file is purely
-"where is the code".
-
-The authoritative declared-seam list is `docs/SEAMS.md`. Where a module is
+The declared-seam list is `docs/SEAMS.md`. Where a module is
 **built-but-unwired** (real code, no live caller / no live descriptor) or has a
 known **code↔schema drift**, this map says so inline — don't infer "done" from
 "present".
+
+**Contents:**
+[0 Package responsibility index](#0-package-responsibility-index) ·
+[0a Corrections / honesty notes](#0a-corrections--honesty-notes-read-before-trusting-older-docs) ·
+[1 Top-level layout](#1-top-level-layout) ·
+[2 `src/legba/data/`](#2-srclegbadata--declarative-model--substrate) ·
+[3 `src/legba/runtime/`](#3-srclegbaruntime--execution) ·
+[4 UI](#4-ui--legba-ui-v3) ·
+[5 Entry points, infra, scripts](#5-entry-points-infra-scripts) ·
+[6 Where to add a thing](#6-where-to-add-a-thing) ·
+[7 Future seams](#7-future-seams-present-in-the-tree-not-yet-live)
 
 ---
 
@@ -29,7 +29,7 @@ known **code↔schema drift**, this map says so inline — don't infer "done" fr
 
 The fastest way to find a thing. One row per major package: its single
 responsibility, the file you start from, and what lives there. **Built-but-
-unwired** and **absent** markers are load-bearing — they distinguish "the code
+unwired** and **absent** markers matter — they distinguish "the code
 exists" from "the live system uses it".
 
 ### `src/legba/data/` — declarative model + substrate
@@ -833,7 +833,7 @@ src/
     _DeferredStub.tsx      placeholder for not-yet-built panels (future-seam UIs)
 ```
 
-**Panel tiers (present-but-hidden is a load-bearing distinction).**
+**Panel tiers (present-but-hidden is a deliberate distinction).**
 `panel-registry/registry.ts` `def()` returns a machine-readable `tier: 'live'`
 by default; two sets then reclassify in one place:
 
@@ -926,14 +926,14 @@ scored first; ~539 historical prediction rows remain), and `hypothesis_lifecycle
 (superseded by `competing_hypotheses`). This script also fails LOUD at register
 time on a unit that declares an `eval.rubric`/`method.llm.verify` drift (the P2-T7
 unit drift guard). **`bringup_register_source_catalog.py`
-is the load-bearing source-registration path** — a 46-entry `CatalogEntry` tuple
+is the main source-registration path** — a 46-entry `CatalogEntry` tuple
 (43 `rss` + 3 `geojson`) registered *directly* into `source_descriptors` (owner
 `s1_catalog`): NWS (`source.nws.active_alerts`), NASA EONET, USGS quakes,
 WHO/CDC/HRW, ~43 RSS feeds, etc. So the live source set is the
 **`source_descriptors` DB rows**, NOT just the operator-pinned
 `descriptors/source_*.yaml` — `ls descriptors/` undercounts. The full
 catalog table (with the three-tier 3 / 46 / 49 scope model) lives in
-`docs/SOURCES.md`. (A `CatalogEntry`'s
+`docs/DATA_SOURCES.md`. (A `CatalogEntry`'s
 `enrich_text` flag selects the geojson enrichment chain: `[language_detect,
 ner_multilingual, geocode]` when true vs geocode-only when false.)
 `bringup_source_first_host.py`
@@ -964,10 +964,10 @@ purges (`purge_proposed_situations.py`).
 
 ---
 
-## 7. Future seams (present in the tree, not yet load-bearing)
+## 7. Future seams (present in the tree, not yet live)
 
 These exist as stubs / thin handlers or pending wirings; don't mistake them for
-live features. The authoritative declared-seam list is `docs/SEAMS.md`.
+live features. The full declared-seam list is `docs/SEAMS.md`.
 
 - **Media extraction models** — the `process_media` job plane is real
   end-to-end (lands the derived signal, re-publishes it into fan-out with

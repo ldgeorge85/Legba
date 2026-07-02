@@ -1,5 +1,12 @@
 # Acquisition — how data enters Legba and reaches analysis
 
+This document covers the source handler, the canonical signal, baseline
+enrichment, fan-out and subscription, cross-source dedup, and discovery. For
+what happens *after* a signal reaches a target — coalescing, analysts,
+findings — see `ANALYSIS.md`. For the substrate stores see `ARCHITECTURE.md`;
+for the hosted NLP/translation models see `AI_MODELS.md`. New here? Start with
+the [README](../README.md) and the [Tour](TOUR.md).
+
 The **acquisition plane** is the first of Legba's four planes. It owns
 everything from "a source produces an observation" to "that observation is
 matched against every interested target". Its governing principle is
@@ -8,12 +15,14 @@ and publishes it *once*; the fan-out plane then routes that single canonical
 observation to the *many* targets whose predicates select it. Signals are
 observations — target-agnostic facts — not per-target interpretations.
 
-This document covers the source handler, the canonical signal, baseline
-enrichment, fan-out and subscription, cross-source dedup, and discovery. For
-what happens *after* a signal reaches a target — coalescing, analysts,
-findings — see `ANALYSIS.md`. For the substrate stores see
-`ARCHITECTURE.md`; for the hosted NLP/translation models see
-`AI_MODELS.md`.
+**Contents:**
+[1 The SourceActor](#1-the-sourceactor) ·
+[2 The canonical Signal](#2-the-canonical-signal) ·
+[3 Baseline enrichment](#3-baseline-enrichment-once-at-the-source) ·
+[4 Fan-out and subscription](#4-fan-out-and-subscription) ·
+[5 Cross-source dedup](#5-cross-source-dedup) ·
+[6 Discovery](#6-discovery) ·
+[7 End-to-end, in one line](#7-end-to-end-in-one-line)
 
 ---
 
@@ -100,9 +109,9 @@ handler integrations). A representative running deployment has **49 distinct
 sources actively producing signals** (the 46 catalog integrations plus seed /
 world-baseline curated sources) and has ingested **54,197 signals** →
 **19,629 findings** · **3,019 facts** · **3,822 nexuses** · **25 situations**
-· **398 hypotheses**. See `SOURCES.md` for the legible full catalog (the
-three-tier 3 / 46 / 49 scope model + the per-source table), `DATA_SOURCES.md`
-§3.15 for the handler-kind detail, and `SETUP.md` for the from-zero
+· **398 hypotheses**. See `DATA_SOURCES.md` for the full catalog (the
+three-tier 3 / 46 / 49 scope model, the per-source table, and the
+handler-kind detail), and `SETUP.md` for the from-zero
 cold-start-to-current-scope deploy commands.
 
 ---

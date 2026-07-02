@@ -1,8 +1,8 @@
 # Legba Setup — from-zero bootstrap
 
 The new-operator path: stand a fresh Legba instance up from **empty volumes**
-through to current/full scope, end to end. Follow the ordered steps below in
-order — they are load-bearing.
+through to current/full scope, end to end. Follow the steps below in
+order — the ordering matters.
 
 This is the **bootstrap** guide. For day-to-day operations (restarts, failure
 modes, troubleshooting, credential rotation) use [RUNBOOK.md](RUNBOOK.md); for
@@ -118,7 +118,7 @@ and `legba-runtime-dapr` (RUNBOOK §0).
 
 ## 3. Bring up the substrate + registry only (NOT the runtime yet)
 
-**Order is load-bearing.** The runtime builds its NLP / embedding clients **once
+**Order matters here.** The runtime builds its NLP / embedding clients **once
 at boot** from the registered stack. Boot it against an empty registry and
 `nlp_client` stays `None` for the whole process lifetime → enrichment fails →
 signals land with no geo/entities. So seed first, boot the runtime last (§9).
@@ -332,6 +332,6 @@ The UI is served by Caddy on `:80`/`:443` at `https://$LEGBA_PUBLIC_DOMAIN/`
 - **Operations** (restarts, failure modes, credential rotation, cleaning stale
   reminders): [RUNBOOK.md](RUNBOOK.md), starting with **§0**.
 - **Architecture / data model**: [ARCHITECTURE.md](ARCHITECTURE.md),
-  [DATA_MODEL.md](DATA_MODEL.md), [DATA_FLOW.md](DATA_FLOW.md).
+  [DATA_MODEL.md](DATA_MODEL.md), [FLOWS.md](FLOWS.md).
 - **Sources catalog detail**: [DATA_SOURCES.md](DATA_SOURCES.md).
 - **Known seams** (declared-but-unbuilt boundaries): [SEAMS.md](SEAMS.md).

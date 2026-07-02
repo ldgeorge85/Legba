@@ -2,11 +2,38 @@
 
 Operator-facing reference for running Legba day-to-day. Lives next to
 the substrate compose file. Concise on purpose — links to the deeper
-specs under `docs/` for context.
+specs under `docs/` for context. New here? Start with the
+[README](../README.md) and [SETUP.md](SETUP.md).
 
-## 0. ⚠️ Critical operator notes (updated 2026-06-09)
+**Contents:**
+[0 Critical operator notes](#0-critical-operator-notes-read-these-first) ·
+[1 Stack at a glance](#1-stack-at-a-glance) ·
+[2 Bring-up](#2-bring-up-everything-canonical-container-mode) ·
+[3 Migrations](#3-apply-migrations) ·
+[4 Verify the registry](#4-verify-the-registry) ·
+[5 Verify the UI](#5-verify-the-ui) ·
+[6 Vault credentials](#6-load-credentials-into-the-vault) ·
+[7 Stack components + working set](#7-register-stack-components--the-working-set) ·
+[8 Per-image troubleshooting](#8-per-image-troubleshooting) ·
+[9 Verify ingestion](#9-verify-ingestion-is-working) ·
+[10 Bring it all down](#10-bring-it-all-down) ·
+[11 Common operator tasks](#11-common-operator-tasks) ·
+[12 Known issues](#12-known-issues-as-of-2026-05-23) ·
+[13 Host-mode systemd](#13-alternative-host-mode-systemd) ·
+[14 File layout](#14-file-layout-cheat-sheet) ·
+[15 Multi-image split](#15-notes-on-the-multi-image-split-2026-05-23) ·
+[16 Bring-up lessons](#16-lessons-from-the-2026-05-21-bring-up-host-mode-era) ·
+[17 Source-first runtime bring-up](#17-source-first-runtime-bring-up) ·
+[18 Release gate](#18-release-gate-ordered-fail-fast) ·
+[19 Codename scan](#19-codename--prior-host-scan-findings-2026-06) ·
+[20 Pre-push scan + squash](#20-pre-push-secretcodename-scan--neutral-identity-squash) ·
+[21 Release checklist](#21-release-checklist-pre-tag) ·
+[22 Multi-replica proof](#22-multi-replica-local-proof-scaling-multinode) ·
+[23 Backup & restore](#23-backup--restore-resilience-observability-w-1b-5)
 
-- **DO NOT `git push`. The remote (`github.com/ldgeorge85/legba`) is PUBLIC.** Commit locally only; never push unless explicitly intended. (Operational-incident history and credential-rotation records are kept in `planning/` — internal tracking — not in this public doc.) The Caddy `basic_auth` bcrypt hash is read from the `LEGBA_BASIC_AUTH_HASH` env var in gitignored `.env` (never committed). To rotate: `docker exec legba-legba-caddy-1 caddy hash-password --plaintext '<new>'` → set it in `.env` — **single-quote it or `$$`-escape the `$` characters**, else docker-compose `env_file` interpolation mangles the hash and every password is rejected — → `docker compose up -d --force-recreate --no-deps legba-caddy`.
+## 0. Critical operator notes (read these first)
+
+- **DO NOT `git push`. The remote (`github.com/ldgeorge85/legba`) is PUBLIC.** Commit locally only; never push unless explicitly intended. (Operational-incident history and credential-rotation records are kept in the operator's internal tracking, not in this public doc.) The Caddy `basic_auth` bcrypt hash is read from the `LEGBA_BASIC_AUTH_HASH` env var in gitignored `.env` (never committed). To rotate: `docker exec legba-legba-caddy-1 caddy hash-password --plaintext '<new>'` → set it in `.env` — **single-quote it or `$$`-escape the `$` characters**, else docker-compose `env_file` interpolation mangles the hash and every password is rejected — → `docker compose up -d --force-recreate --no-deps legba-caddy`.
 
 - **⚠️ Dapr runtime restarts: NEVER restart `legba-runtime-dapr` ALONE (2026-06-08).** The app and its daprd `dapr-sidecar` are separate containers; restarting only the app while the sidecar (and `dapr-placement`) keep running leaves the actor-host registration STALE → every reminder/invocation fails with `did not find address for actor` / `actor is closed` / `context canceled` (in the **SIDECAR** log, not the app log), so `run()` is killed before it pulls/assesses → the loop goes SILENT with no app-level error. This is what stalled ingestion 2026-06-05→08. **Always restart the control plane TOGETHER, dependency-ordered:** `docker compose --profile runtime up -d --force-recreate dapr-placement dapr-scheduler dapr-sidecar legba-runtime-dapr`.
 
@@ -85,8 +112,8 @@ alternative in section 13.
 > After building the images, it runs the entire phased, idempotent, boot-verified
 > sequence (schema via the single baseline → ordered registrars → optional seeds →
 > runtime → verify). The `up -d` form below brings the **already-provisioned** stack
-> up; on a FRESH/empty substrate use the script (or follow §3–§7 in order — ordering
-> is load-bearing, the runtime must boot LAST against a seeded registry).
+> up; on a FRESH/empty substrate use the script (or follow §3–§7 in order — the
+> ordering matters: the runtime must boot LAST against a seeded registry).
 > ```
 > docker compose --profile runtime build      # build images first (one-time)
 > deploy/deploy.sh                             # provision + boot + verify (project legba)
@@ -153,7 +180,7 @@ The live `legba` volumes are never destroyed by this tool.
 > and the data-isolation firewall are round-trip-proven (the baseline against a fresh
 > `apache/age` DB — see `deploy/baseline/README.md`; isolation by the config-render
 > gate). `deploy.sh` is the canonical, intended bring-up and wraps the same
-> load-bearing ordering this runbook describes, but a full clean-slate fresh deploy
+> required ordering this runbook describes, but a full clean-slate fresh deploy
 > end-to-end through registrars → app boot has **not** yet been validated start to
 > finish on a fresh empty stack. Treat it as the canonical path, not as a fully
 > battle-tested one-shot.
@@ -1180,7 +1207,8 @@ remains the working transport when an analyst whitelists the tool.
 
 ### MCP integration (Claude Code)
 
-Per `docs/mcp_setup.md`. The Claude Code MCP host config points at
+See `DIRECTION.md` §4 (MCP server) for the current state of the MCP
+surface and its setup. The Claude Code MCP host config points at
 the legba-mcp image launched per-conversation:
 
 ```jsonc
@@ -1529,7 +1557,8 @@ It exits non-zero on: the `<prior-host>` codename or `<operator-domain>` domain 
 content; a tracked `.env`/secret/private-key file; a `PASS|SECRET|TOKEN|
 API_KEY` assigned a long literal; a high-entropy literal (heuristic); a
 **non-neutral commit author/committer identity** on the push range; or a
-tracked `planning/` file. If `gitleaks` is on PATH it also runs (best-effort).
+tracked `planning/` file (that directory is gitignored internal tracking and
+must never be committed). If `gitleaks` is on PATH it also runs (best-effort).
 `mnemosyne` is deliberately NOT scanned (it is a real component — §19).
 
 **Current tree state:** the file-content checks (1–6, 8) are CLEAN. Check 7
@@ -1587,15 +1616,15 @@ No `Co-Authored-By` trailer on any commit (project rule).
       provider** — a doc note cannot enforce revocation. Rotate per §11
       "Rotate MODELS_API credentials", then confirm the OLD credential no
       longer authenticates at the provider. Record the decommission date in
-      the operator's internal tracking (`planning/`, not this public doc).
+      the operator's internal tracking (not in this public doc).
 - [ ] Persistent signing key + production bearer token set in `.env`
       (§7 "Set production-mode auth"); bootstrap log shows no ephemeral-key
       warning.
 - [ ] Migrations applied; ledger verified (§3).
 ## 22. Multi-replica local proof (scaling-multinode)
 
-> Locked decision **D3** (`planning/SCALING.md` §scaling-multinode): **prove the
-> multi-node design LOCALLY, no load test.** This section is the documented
+> Locked decision **D3**: **prove the multi-node design LOCALLY, no load
+> test.** This section is the documented
 > procedure that proves Dapr placement redistributes actors + reminder
 > scheduling + fan-out across two `legba-runtime-dapr` replicas, each with its
 > OWN co-located daprd sidecar, while the **singleton control-plane loops run on
@@ -1694,8 +1723,8 @@ injector — the production target.)
 
 ### 22.4 Record the outcome
 
-Update `planning/SCALING.md` §9 from "Replicas never exercised" to the observed
-result (even actor spread, single leader, clean failover). A load-test ceiling
+Record the observed result (even actor spread, single leader, clean failover)
+in the operator's internal tracking. A load-test ceiling
 number is explicitly OUT of scope per D3 — the harness was dropped.
 
 ## 23. Backup & restore (resilience-observability W-1b §5)

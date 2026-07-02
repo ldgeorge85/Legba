@@ -3,16 +3,15 @@
 
 # Glossary
 
-Legba uses a handful of coined terms (`source-first`, `substrate`, `descriptor`,
-`signal`, `nexus`, `situation`, `seam`, `agency`, plus the analysis-spine terms
-`bounded unit`, `composition`, `faithfulness verify`, `scorecard`…) and some
-method names from analysis tradecraft. This page defines each one in plain
-language first, then precisely. New here? Skim **Core concepts** top-to-bottom;
-everything else is a reference to dip into.
+Definitions for Legba's coined terms (`source-first`, `substrate`, `descriptor`,
+`signal`, `nexus`, `situation`, `seam`, `agency`, …) and the analysis-tradecraft
+method names the docs use. Entries are grouped by area and alphabetized within
+each group. New here? Start with the [README](../README.md) and the
+[Tour](TOUR.md).
 
-This file defines **concepts**, which are stable. For volatile specifics —
-how many sources are live, which features are proven vs experimental, the
-migration head — see [RELEASE_STATE_MATRIX.md](RELEASE_STATE_MATRIX.md) and
+This file defines **concepts**, which are stable. For volatile specifics — how
+many sources are live, which features are proven vs experimental, the migration
+head — see [RELEASE_STATE_MATRIX.md](RELEASE_STATE_MATRIX.md) and
 [SEAMS.md](SEAMS.md). Where a term is built but unproven, or deliberately not
 built, the entry says so.
 
@@ -22,948 +21,644 @@ built, the entry says so.
 
 ## Core concepts
 
-**source-first** — Data is fetched and cleaned **once** by a source, then shared
-with everything that needs it.
-The platform's organizing principle: acquisition belongs to *sources*, not to the
-things that consume data. A source ingests an observation once, enriches it once,
-and publishes one canonical, target-agnostic **signal**; the **fan-out** plane
-then routes that single signal to every **target** whose **predicate** matches.
-The slogan is *"ingest once, enrich once, match many"* — one BBC feed serves
-all twenty-four country desks (the 19 G20 plus a 5-country **watch** tier)
-without re-fetching.
-*Note: "source-first" describes acquisition architecture. It is unrelated to the
-AGPL "source-available" license — though Legba is also that.*
+**analyst** — A declared reasoning unit (deterministic code or LLM-backed) that
+reads a scoped slice of the **substrate**, runs a method, and writes typed
+outputs (**findings**, **situations**, hypotheses, critiques) with full
+provenance. It fires on a **coalescing trigger** and/or a **cadence**
+heartbeat.
 
-**source** — Where data comes in.
-A declared connector that acquires observations — either by **polling** a feed on
-a cadence or by receiving a **webhook push** — enriches each one, and publishes
-canonical signals. It is the most fundamental actor in a source-first platform.
-*Note: pull (cadence poll) is the battle-tested path; push (webhook) is supported
-but newer and less exercised.*
-
-**signal** — One raw observation from a source, before any interpretation.
-The atomic unit of ingested data: a single canonical observation (a document,
-feed item, record, or media reference) carrying content, metadata, and
-provenance. A signal carries **no `target_id`** — it is an observation, not an
-interpretation — which is exactly what lets one signal route to many targets.
-
-**target** — A declared subject of analysis (e.g. a country) that signals are
-routed to.
-A passive subscriber declaring *what to watch*. It selects a slice of the shared
-signal pool by predicate and is what analysts produce assessments about. A target
-does no acquisition of its own.
-*Note: a "target" is really a scoped **subject / desk** — a named scope-frame a set
-of analysts work — not a surveilled entity. Targets are not geo-only either: scope
-is polymorphic (geographic, organizational, or entity-based).*
-
-**analyst** — A declared unit that reasons over matched signals and writes typed
-outputs.
-A reasoning unit (deterministic code or LLM-backed) that reads a scoped slice of
-the **substrate**, runs a method, and writes typed outputs (**findings**,
-**situations**, hypotheses, predictions, critiques) with full provenance. It fires
-on a **coalescing trigger** and/or a **cadence** heartbeat.
-
-**descriptor** — A config record that *declares* a source, target, analyst, or
-pack — instead of you writing code for it.
-A strict, content-hashed, registry-managed declarative unit (validated by
-pydantic) that says *what to watch* and *how to reason*. The runtime reads each
-registered descriptor and stands up the corresponding actor — there is no code to
-write per feed, per target, or per analysis. The precedent is Kubernetes CRDs, dbt
-models, or Prometheus scrape configs.
-*Note: the live system is the registered descriptor **rows in the database**, not
-the YAML files on disk. Model changes go live via the registry `PUT` API; the
-bringup scripts are create-only.*
-
-**finding** — The default analyst output: a recorded conclusion about a target.
-The primary typed output — a written analytic conclusion carrying `derived_from`
-provenance and a **receipt-chain** entry. A finding is itself re-published as a
-derived signal, so downstream analysts can react to it.
-*Note: every cited finding is scored by the mandatory **faithfulness verify**
-pass, and its surfaced confidence is folded to **effective_confidence** at read
-time.*
-
-**situation** — A durable thematic cluster of related findings/signals — a
-non-geographic frame.
-A first-class temporal frame that groups related signals/findings into an ongoing
-state of affairs, keyed by a `situation_signature` and detected bottom-up. Situations
-are Legba's deliberate stand-in for an *events table* (there is no events table).
-*Note: distinct from a finding (about a target) and from a raw "event". The
-situation write-path has known maturity gaps flagged in the project's data-quality
-audits.*
-
-**bounded reasoning unit / unit** — A narrow, single-question LLM analyst — the
-base building block of the analysis spine.
-One of four `inline_target` analysts — **leadership_transition**,
-**energy_security**, **escalation**, **narrative_coordination** — each scoped to
-every country desk by a `has_tag("g20") or has_tag("watch")` fan-out — the 19 G20
-desks plus a 5-country **watch tier** (Israel, Iran, Ukraine, Taiwan, North Korea;
-descriptor ids `country_watch_il/ir/ua/tw/kp`), 24 desks in all — and each
-answering ONE narrow
-question (e.g. "how likely, and on what timing, is a change in this country's top
-leadership, and by what mechanism?"). A unit is a *descriptor*, not new code: it
-inherits cited synthesis plus the **faithfulness verify** gate for free. Each run
-assembles a cited 72h signal slice plus a **grounding preamble** of accumulated
-substrate facts, synthesizes exactly one strict-JSON finding whose prose carries
-`[N]` citation markers, then runs the mandatory verify. Skill is reported PER
-UNIT, never as a platform boast.
+**bounded reasoning unit / unit** — One of four narrow, single-question
+`inline_target` analysts — **leadership_transition**, **energy_security**,
+**escalation**, **narrative_coordination** — fanned out to all 24 country desks
+(19 G20 + the 5-desk **watch** tier) by a `has_tag("g20") or has_tag("watch")`
+predicate. Each run assembles a cited 72h signal slice plus a **grounding
+preamble**, synthesizes one strict-JSON finding whose prose carries `[N]`
+citation markers, then runs the mandatory **faithfulness verify**. Skill is
+reported per unit, never as a platform-wide claim.
 
 **composition** — A second-order finding that synthesizes already-**verified**
-sub-claims, never raw signals.
-Two analysts run on the `meta_findings_synthesizer` kind: **country_composition**
-reads the four verified units for one country desk (G20 or watch-tier) and writes a
-hedged, cited per-country read; **world_assessor** (repointed to the same kind) composes over
-the per-country reads into one cited, hedged world view. An unverified sub-claim
-never enters a composition — the read slice INNER-JOINs on the faithfulness
-critique and admits only verify-passed claims above the floor. A country whose
-units produced no verify-passed claim yields an empty slice and an honest
-confidence-0.0 "nothing to synthesize" finding rather than an invented read. Each
-cited clause drills country → unit → source.
+sub-claims, never raw signals. **country_composition** reads one desk's four
+verified units and writes a hedged, cited per-country read; **world_assessor**
+composes those into one cited world view, drillable country → unit → source.
+An unverified sub-claim never enters a composition; a desk with no
+verify-passed claims yields an honest confidence-0.0 "nothing to synthesize"
+finding.
 
-**scorecard / banded scorecard** — One deterministic, banded verdict row per
-active desk (any target tagged `g20`/`watch`), derived only from already-verified claims.
-Produced by **scorecard_producer** (a deterministic META analyst; the 12th
-**OutputKind**, `scorecard`). Each tick it bands every active g20/watch desk over the
-four unit dimensions across a rolling 14-day window, from a few high-precision rules on each finding's
-`severity:<level>` tag and its folded **effective_confidence** —
-demote-never-promote. Every band NAMES the verified-claim id it rests on; a
-dimension with no qualifying verified claim reads `insufficient-evidence` with an
-explicit machine reason (never a fabricated band); a per-claim faithfulness below
-a floor demotes to `low-faithfulness`. No LLM, $0.
-*Note: the live scorecard is honestly a MIX — some countries band, some read
-all-insufficient (e.g. the US, whose unit faithfulness is genuinely low). That is
-the design, not a bug.*
+**descriptor** — A strict, content-hashed, registry-managed declarative config
+record (validated by pydantic) that declares a source, target, analyst, or
+pack; the runtime stands up the corresponding actor, so there is no code to
+write per feed, target, or analysis. The live system is the registered
+descriptor **rows in the database**, not the YAML files on disk — model
+changes go live via the registry `PUT` API.
 
-**per-target assessment** — The analytic product about **one specific** target —
-now produced by **composition**, not a monolith.
-A reasoned, cited judgment about a single target (e.g. one country desk — G20 or
-watch-tier). Since
-2026-07 this is **country_composition**'s hedged synthesis over that desk's
-four verified reasoning **units** — NOT the retired **country_assessor**
-one-pager. Its global sibling is the world composition (see **world_assessor**).
+**exemplar use case (G20 country assessment)** — Geopolitical assessment of
+the G20 countries is the proven end-to-end demonstration of the pipeline — not
+the system's identity. There is no code per country: the G20 targets are
+materialized from one **discovery** template, and the 5-country **watch tier**
+was added by simply registering targets.
 
-**knowledge fusion / data fusion** — Linking many separate observations into one
-connected, deduplicated, time-aware picture.
-Here this means **situation-assessment over text and structured data** — turning
-raw signals into a linked body of entities, facts, relations (**nexuses**),
-situations, and assessments, rather than isolated records.
-*Note: this is situation-assessment, **not** sensor-fusion or track-correlation.
-Legba does not claim that defense/aerospace level of rigor.*
+**finding** — The primary typed analyst output: a written analytic conclusion
+carrying `derived_from` provenance and a **receipt-chain** entry, itself
+re-published as a derived signal so downstream analysts can react to it. Every
+cited finding is scored by the mandatory **faithfulness verify** pass, and its
+surfaced confidence is folded to **effective_confidence** at read time.
 
-**provenance / lineage** — The traceable record of where every output came from.
-*Provenance* is the recorded origin and derivation history of a row; *lineage* is
-the walkable chain (over `derived_from` links) from any output back to the raw
-signals and sources behind it — `GET /api/v1/lineage/finding/{id}` walks it hop by
-hop to the real source URL with zero dangling links (a lineage-integrity sweep
-prunes dangling `derived_from`). The project's stated differentiator is this
-**discipline** — every claim cited, checked by the mandatory **faithfulness verify**
-pass, and drillable to source — together with auditability and the self-hostable
-model; **not** data access or analytic maturity.
+**knowledge fusion / data fusion** — Here: situation-assessment over text and
+structured data — turning raw signals into a linked, deduplicated, time-aware
+body of entities, facts, **nexuses**, situations, and assessments rather than
+isolated records. It is *not* sensor-fusion or track-correlation; Legba does
+not claim that defense/aerospace level of rigor.
 
 **measured experiment** — An ambitious capability that returns ONLY as an
-honestly-measured pilot, never as an always-on producer.
-Legba's discipline for its harder legs: rather than ship an unmeasured optimizer or
-forecaster, each returns scoped to a single measured surface that PUBLISHES a
-no-skill / insufficient-sample result instead of hiding it. The **unit_optimizer**
-(GEPA over one bounded unit) carries a real before/after **faithfulness** delta and
-can never auto-promote on a degenerate or non-positive one; the acute-forecast
-**scoreboard** (**forecast_scoreboard**) reports a Brier/BSS that currently shows
-NO proven skill. The always-on monoliths stay cadence-frozen (`country_optimizer`)
-or retired (the forecast-as-claim predictors). See **unit_optimizer**,
-**forecast_scoreboard**, **degeneracy guard**.
+honestly-measured pilot, never as an always-on producer: the
+**unit_optimizer** carries a real before/after faithfulness delta and can
+never auto-promote on a degenerate one; the **forecast_scoreboard** reports a
+Brier/BSS that currently shows NO proven skill. The always-on monoliths stay
+cadence-frozen (`country_optimizer`) or retired (the forecast-as-claim
+predictors).
 
-**the exemplar use case (G20 country assessment)** — The flagship demo domain that
-*proves* the pipeline — not the system's identity.
-Geopolitical assessment of the G20 countries is the proven end-to-end demonstration
-of the source → enrich → fan-out → assess pipeline. The same pipeline applies to
-any domain you can point a source at.
-*Note: there is **no code per country** — the G20 targets are materialized from one
-**discovery** template, and the newer 5-country **watch tier** was added by simply
-registering a target (no code). Geopolitics is the exemplar, not the product's identity.*
+**per-target assessment** — The analytic product about one specific target.
+Since 2026-07 this is **country_composition**'s hedged synthesis over that
+desk's four verified reasoning **units** — NOT the retired
+**country_assessor** one-pager. Its global sibling is the world composition
+(see **world_assessor**).
+
+**provenance / lineage** — *Provenance* is the recorded origin and derivation
+history of a row; *lineage* is the walkable chain (over `derived_from` links)
+from any output back to the raw signals and sources behind it, resolved hop by
+hop to the real source URL via `GET /api/v1/lineage/finding/{id}`.
+
+**scorecard / banded scorecard** — One deterministic banded verdict row per
+active `g20`/`watch` desk, written by **scorecard_producer** (the 12th
+**OutputKind**) from high-precision rules over already-verified claims in a
+rolling 14-day window — demote-never-promote, no LLM. Every band names the
+verified-claim id it rests on; a dimension with no qualifying claim reads
+`insufficient-evidence` with an explicit reason, never a fabricated band. The
+live board is honestly a mix — some countries band, some read
+all-insufficient (e.g. the US, whose unit faithfulness is genuinely low).
+
+**signal** — The atomic unit of ingested data: one canonical observation (a
+document, feed item, record, or media reference) carrying content, metadata,
+and provenance, before any interpretation. A signal carries **no `target_id`**
+— it is an observation, not an interpretation — which is exactly what lets one
+signal route to many targets.
+
+**situation** — A first-class durable temporal frame grouping related
+signals/findings into an ongoing state of affairs, keyed by a
+`situation_signature` and detected bottom-up — Legba's deliberate stand-in for
+an events table (there is no events table). The situation write-path has known
+maturity gaps flagged in the data-quality audits.
+
+**source** — A declared connector that acquires observations — either by
+polling a feed on a cadence or by receiving a webhook push — enriches each
+one, and publishes canonical signals. Pull (cadence poll) is the battle-tested
+path; push (webhook) is supported but newer and less exercised.
+
+**source-first** — The organizing principle: acquisition belongs to *sources*,
+not to the things that consume data. A source ingests an observation once,
+enriches it once, and publishes one canonical, target-agnostic **signal**; the
+**fan-out** plane routes that signal to every **target** whose **predicate**
+matches — *"ingest once, enrich once, match many."* Unrelated to the AGPL
+"source-available" license.
+
+**target** — A passive subscriber declaring *what to watch*: it selects a
+slice of the shared signal pool by predicate and is what analysts produce
+assessments about; it does no acquisition of its own. A "target" is a scoped
+**subject / desk** a set of analysts work — not a surveilled entity — and its
+scope can be geographic, organizational, or entity-based.
 
 ---
 
 ## Runtime & architecture
 
-**substrate** — The shared storage layer everything reads from and writes to.
-The persistent state layer holding all signals, facts, entities, relations,
-situations, and outputs: **Postgres + Apache AGE** (relational + entity graph),
-**Qdrant** (vectors), **Redis** (hot cache), and **NATS JetStream** (event bus +
-durable streams). It is the hand-off point between otherwise-decoupled actors —
-not a bespoke "fusion engine".
-
-**the two tiers (Tier 1 / Tier 2)** — The two distinct *times* analysis happens,
-kept strictly apart as a cost firewall.
-**Tier 1** is inline, at-ingest, per-signal, and **deterministic (no LLM)** — the
-**baseline enrichment** pipeline that runs on every signal before fan-out.
-**Tier 2** is the **cadence/slice analysts** that batch accumulated signals and
-*reason* (LLM + deterministic), never per-signal. Keeping heavy reasoning off the
-ingest firehose is what decouples LLM cost from ingest volume.
-
-**baseline enrichment** — The deterministic, no-LLM step run on every signal at
-ingest.
-Inside the `SourceActor`, before fan-out: `language_detect → geocode →
-entity NER → classify → source_credibility → dedupe → fact_extract`. Local NLP
-(GLiREL + zero-shot DeBERTa + pycountry/geocoder), no analyst LLM. This is the
-*"enrich once"* in *"ingest once, enrich once, match many"*; its writes are
-altitude-0 substrate (enriched signal columns + ingestion facts + entity rows).
-
 **altitude / the altitude map** — How far above the raw signal a piece of data
-sits — the docs' organizing frame.
-Altitude 0 = enriched signals, facts, entities (produced at ingest). Altitudes
-1-3 = findings, then situations/hypotheses/nexuses, then meta-findings (produced
-by Tier-2 cadence reasoning). "Extraction is always-on at ingest; reasoning is
-cadence-batched above it."
-*Note: the **journal** is the one cross-cutting layer that sits **across** this
-map rather than at a fixed altitude — every other meta-analyst cuts one slice; the
-journal narrates a first-person perspective **over** the whole chain. It is
-explicitly **not** a node in the lineage (see **Journal assessor**).*
+sits. Altitude 0 = enriched signals, facts, entities (produced at ingest);
+altitudes 1–3 = findings, then situations/hypotheses/nexuses, then
+meta-findings (produced by Tier-2 cadence reasoning). The **journal** is the
+one layer that cuts *across* this map rather than sitting at a fixed altitude.
 
-**Dapr virtual actor** — A stateful, per-descriptor object the runtime activates
-on demand.
-Dapr is a distributed-application runtime; its *virtual actors* are addressable,
-single-invocation-at-a-time, reminder-driven, scale-from-zero stateful objects.
-Legba turns each active descriptor into one such actor, distributed across runtime
-replicas by Dapr's placement service.
-*Note: a Dapr long-activity round-trip bug (1.17.9) can stop the durable-workflow
-path resuming for the optimizer / deep-consult; mitigated by an in-process fallback.*
+**baseline enrichment** — The deterministic, no-LLM step run on every signal
+at ingest, inside the `SourceActor` before fan-out: `language_detect → geocode
+→ entity NER → classify → source_credibility → dedupe → fact_extract`. This is
+the *"enrich once"* in *"ingest once, enrich once, match many."*
+
+**cadence / cadence heartbeat** — A scheduled interval (a cron-derived Dapr
+reminder, e.g. every 6h/12h/1d) on which an analyst is re-evaluated — the
+coverage floor beneath the reactive trigger path.
+
+**CAS-claim** — A compare-and-swap operation that lets exactly one worker claim
+the right to fire an (analyst, target) batch, so the reactive path and the
+cadence tick never double-dispatch the same run.
+
+**coalescing trigger / coalescer** — The rule that accumulates matched signals
+for an (analyst, target) pair and runs the analyst **once** — not once per
+signal — when a gate trips (accumulation threshold plus severity gate),
+clamped by a **cooldown**, with the **cadence** heartbeat as a floor. LLM
+analysts are always floored to a coalesced batch.
+
+**control plane / runtime plane** — The control plane is `legba-registry`
+(descriptor registry, lifecycle state machine, API/WebSocket, vault,
+dead-letter queue); the runtime plane is `legba-runtime-dapr`, which turns
+active descriptors into running actors over the substrate.
+
+**cooldown** — A per-pair minimum interval throttling how often the same
+(analyst, target) can fire — the cost governor for expensive LLM analysis.
+
+**Dapr reminder** — A persistent, restart-surviving scheduled callback, used
+to drive a source's poll cadence and an analyst's cadence heartbeat.
+
+**Dapr virtual actor** — Dapr is a distributed-application runtime; its
+virtual actors are addressable, single-invocation-at-a-time, reminder-driven,
+scale-from-zero stateful objects. Legba turns each active descriptor into one
+such actor, distributed across runtime replicas by Dapr's placement service.
+
+**Dapr Workflow** — Dapr's durable multi-step orchestration: a deterministic
+orchestrator yields to activities and replays event history to resume after a
+crash. Used for the multi-hour GEPA optimizer and deep-consult; subject to a
+long-activity round-trip bug (1.17.9) and falls back to a non-durable
+in-process loop.
+
+**fan-out / the fan-out plane** — The *match-many* routing layer: one shared
+signal is delivered to every target whose predicate matches, instead of
+copying signals per target. Implemented as coarse **NATS-subject** filtering,
+narrowed by a SQL `WHERE` clause, then a fine-grained **Starlark residual
+predicate**.
+
+**the four planes** — Legba's top-level split: Acquisition (source ownership,
+baseline enrichment, fan-out/subscription), Analysis (target subscribers,
+analyst reasoning, triggers, **agency**), Async jobs (a NATS work-queue with
+competing-consumer workers), and Substrate (the storage layer).
+
+**job plane / competing-consumer workers** — A durable NATS work-queue plus a
+worker pool and an execution ledger, for heavier off-actor work.
+`process_media` is the one live job kind; jobs carry an idempotency key so
+duplicates collapse to one execution.
+
+**NATS JetStream / NATS subject** — NATS is a lightweight message bus;
+*JetStream* is its persistent streaming layer, carrying the
+signal-notification stream (`legba.signals.>`), lifecycle events, the
+dead-letter queue, and work queues. A *subject* is a dot-delimited routing key
+that lets consumers pre-filter cheaply before finer SQL/Starlark matching.
+
+**predicate** — A single-expression boolean matching rule attached to a
+target/source/analyst/trigger, deciding whether a signal matches. Predicates
+appear on four surfaces (target scope, source-ref filter, analyst→target
+bind, cadence trigger) and share one fixed helper catalog.
+
+**reconcile loop** — A Kubernetes-operator-style control loop that watches
+registry change events (via an *informer*) and activates/retires actors to
+converge observed state with desired state, backed by a periodic resync.
+Activation is idempotent, so a dropped reminder self-heals.
+
+**seam / declared seam** — A capability intentionally **not built**, registered
+in [SEAMS.md](SEAMS.md) with a guard rail that *raises* rather than stubbing
+or faking output — enforced by a stub-scanner test (the platform's no-stub
+rule). A declared seam does not work yet; don't mistake it for a finished
+capability, or for a bug.
 
 **SourceActor / TargetActor / AnalystActor** — The three concrete actor types:
-acquire, subscribe, reason.
-`SourceActor` owns one source's polling/push and baseline enrichment; `TargetActor`
-represents one passive subscriber; `AnalystActor` accumulates matched signals and
-fires reasoning. Each is a Dapr virtual actor stood up from a descriptor; testable
-cores let the logic run without a Dapr sidecar in tests.
+`SourceActor` owns one source's polling/push and baseline enrichment;
+`TargetActor` represents one passive subscriber; `AnalystActor` accumulates
+matched signals and fires reasoning. Each is a Dapr virtual actor stood up
+from a descriptor.
 
-**control plane / runtime plane** — The service that *holds* descriptors vs the
-service that *runs* the actors.
-The control plane is `legba-registry` (descriptor registry, lifecycle state
-machine, API/WebSocket, vault, dead-letter queue). The runtime plane is
-`legba-runtime-dapr`, which turns active descriptors into running actors over the
-substrate.
+**Starlark residual predicate** — A small sandboxed expression (Starlark is
+Google's tiny Python-like config language) evaluating the fine-grained
+"residual" match *after* the cheaper NATS-subject and SQL filters have
+narrowed the candidates. Each evaluation is capped at ~5ms and fails closed.
 
-**reconcile loop** — The loop that makes the running actors match the registered
-descriptors.
-A Kubernetes-operator-style control loop: it watches registry change events (via
-an *informer*) and activates/retires actors to converge observed state with
-desired state, backed by a periodic resync. Activation is idempotent, so a dropped
-reminder self-heals.
+**substrate** — The persistent state layer holding all signals, facts,
+entities, relations, situations, and outputs: **Postgres + Apache AGE**
+(relational + entity graph), **Qdrant** (vectors), **Redis** (hot cache), and
+**NATS JetStream** (event bus + durable streams). It is the hand-off point
+between otherwise-decoupled actors.
 
-**Dapr reminder** — A durable timer that wakes an actor on a schedule.
-A persistent, restart-surviving scheduled callback, used to drive a source's poll
-cadence and an analyst's cadence heartbeat.
+**the two tiers (Tier 1 / Tier 2)** — The two distinct *times* analysis
+happens, kept strictly apart as a cost firewall. Tier 1 is inline, at-ingest,
+per-signal, deterministic (**baseline enrichment**, no LLM); Tier 2 is the
+cadence/slice analysts that batch accumulated signals and *reason*, never
+per-signal — decoupling LLM cost from ingest volume.
 
-**fan-out / the fan-out plane** — The routing layer that delivers each signal to
-**every** matching target.
-The *match-many* step: one shared signal is routed to all targets whose predicate
-matches, instead of copying signals per target. Implemented as coarse
-**NATS-subject** filtering, narrowed by a SQL `WHERE` clause, then a fine-grained
-**Starlark residual predicate**.
-
-**predicate** — A boolean matching rule that decides whether a signal matches.
-A single-expression test attached to a target/source/analyst/trigger. Predicates
-appear on four "surfaces" (target scope, source-ref filter, analyst→target bind,
-cadence trigger) and share one fixed helper catalog.
-
-**Starlark residual predicate** — A small sandboxed expression that does the
-final, precise yes/no match.
-Starlark is Google's tiny Python-like config language (run via a sandboxed Rust
-binding). It expresses the fine-grained "residual" match evaluated *after* the
-cheaper NATS-subject and SQL filters have narrowed the candidates. Each evaluation
-is capped at ~5ms and fails closed.
-
-**NATS JetStream / NATS subject** — The durable message bus, and its hierarchical
-topic strings.
-NATS is a lightweight message bus; *JetStream* is its persistent streaming layer,
-carrying the signal-notification stream (`legba.signals.>`), lifecycle events, the
-dead-letter queue, and work queues. A *subject* is a dot-delimited routing key
-(e.g. `legba.signals.<tenant>.<source>.<modality>.<event_class>`) that lets
-consumers pre-filter cheaply before finer SQL/Starlark matching.
-
-**coalescing trigger / coalescer** — The rule that waits until enough related
-signals pile up, then runs the analyst **once** (not once per signal).
-It accumulates matched signals for an (analyst, target) pair and fires when a gate
-trips — an accumulation threshold plus a severity gate, clamped by a **cooldown**,
-with the **cadence** heartbeat as a floor. LLM analysts are always floored to a
-coalesced batch, never run per-signal.
-*Note: a read-modify-write "dirty accumulation" upsert can drop concurrent
-increments under last-writer-wins; absorbed in practice by the cadence floor.*
-
-**cadence / cadence heartbeat** — The guaranteed periodic firing, so an analyst
-still runs when signals are quiet.
-A scheduled interval (a cron-derived Dapr reminder, e.g. every 6h/12h/1d) on which
-an analyst is re-evaluated — the coverage floor beneath the reactive trigger path.
-
-**cooldown** — A minimum wait enforced between an analyst's firings.
-A per-pair minimum interval throttling how often the same (analyst, target) can
-fire — the cost governor for expensive LLM analysis.
-
-**CAS-claim** — A lock-free "only one wins" check, so a single worker runs a given
-batch even if two paths race.
-A compare-and-swap (CAS) operation that lets exactly one worker claim the right to
-fire an (analyst, target) batch, so the reactive path and the cadence tick never
-double-dispatch the same run.
-
-**worker actors / bounded fan-out** — Helper actors that run a wide analyst's
-per-target work concurrently, with a cap.
-A primary `AnalystActor` owns the cadence heartbeat and dispatches one run per
-matched target to lazily-activated worker actors, bounded by a semaphore — so a
-wide analyst over many countries runs in parallel without serializing or
-overloading.
-
-**the four planes** — Legba's top-level split: Acquisition, Analysis, Async jobs,
-Substrate.
-Acquisition (source ownership, baseline enrichment, fan-out/subscription);
-Analysis (target subscribers, analyst reasoning, triggers, **agency**); Async jobs
-(a NATS work-queue with competing-consumer workers); Substrate (the storage layer).
-
-**job plane / competing-consumer workers** — A background queue where
-interchangeable workers each pull one job.
-A durable NATS work-queue plus a worker pool and an execution ledger, for heavier
-off-actor work. `process_media` is the one live job kind; jobs carry an
-idempotency key so duplicates collapse to one execution.
-
-**Dapr Workflow** — Dapr's durable multi-step orchestration that survives restarts.
-A deterministic orchestrator yields to non-deterministic activities; the engine
-replays event history to resume after a crash. Used for the multi-hour GEPA
-optimizer and deep-consult.
-*Note: subject to the long-activity round-trip bug above; falls back to a
-non-durable in-process loop.*
-
-**seam / declared seam** — A deliberately **unbuilt** feature that is declared and
-**fails loudly**.
-Legba's honesty mechanism: a capability intentionally not built is registered in
-[SEAMS.md](SEAMS.md) with a guard rail that *raises* rather than stubbing or faking
-output — enforced by a stub-scanner test. This is the platform's no-stub rule.
-*Note: a declared seam does **not** work yet — don't mistake it for a finished
-capability, or for a bug.*
+**worker actors / bounded fan-out** — A primary `AnalystActor` owns the
+cadence heartbeat and dispatches one run per matched target to
+lazily-activated worker actors, bounded by a semaphore — a wide analyst over
+many countries runs in parallel without overload.
 
 ---
 
 ## Data model
 
-**entity** — A canonicalized real-world thing (person, org, place) extracted from
-signals.
-A resolved, disambiguated actor stored as one canonical profile (keyed by name +
-class, with version history). Different surface mentions ("US", "U.S.", "United
-States") are merged into one entity by *entity resolution*.
-*Note: entity-resolution fragmentation and NER junk are known open data-quality
-gaps in the audits.*
+**canonical signal / dedup** — Deduplication links duplicate signals to a
+single `canonical_signal_id` via a `signal_aliases` table ("link, never
+collapse" — raw rows are kept for audit). A four-tier scheme escalates from
+exact content-hash/URL match to semantic similarity via Qdrant; the semantic
+tiers refuse loudly if their embedding/vector ports are absent.
 
-**fact** — An asserted statement (subject, predicate, value) derived from signals
-or seeds.
-An atomic, temporally-versioned assertion in the `facts` table with `valid_from` /
-`valid_until` and a `superseded_by` pointer. Each carries a `source_type`
-(`ingestion` / `seed` / `curated` / `proposed`) and a confidence.
-*Note: raw ingested facts are stamped confidence 1.0 regardless of trust
-("poisoned"), so only **seed/curated** facts are used for grounding.*
-
-**nexus / nexuses** — A first-class, typed, **signed** relationship between two
-entities.
-A *reified* relationship row (subject →[intermediary]→ object) carrying a relation
-type, a **+1 / 0 / −1 polarity sign**, intent, channel, confidence, and validity
-time. "Reified" means the relationship is a stored, queryable object rather than an
-implicit graph edge. Nexuses feed signed-graph analysis.
-*Note: "nexus" is a coined Legba term — it just means a reified, typed, signed
-relationship record.*
-
-**proposed_edges** — Candidate relationships awaiting promotion into nexuses.
-Provisional untyped edges inferred from entity co-mention, queued for a governance
-handler to promote into typed nexuses (or reject as junk, e.g. demonyms).
-
-**temporal facts / supersession** — Facts carry validity time-ranges and can be
-replaced by newer facts.
-When a newer, differing value arrives, the prior "true now" row is *closed*
-(`valid_until` stamped, `superseded_by` set) rather than overwritten — so history
-accrues. An open-only partial-unique index keeps exactly one current row per
-(subject, predicate, value). This is "temporal honesty": the store answers both
-*what is true now* and *what did we believe, when*.
-
-**contested claim / contention** — When two **open** facts assert *different*
-values for the same (subject, predicate) and neither has superseded the other —
-the "alternate facts" problem.
-The case **supersession** deliberately does not resolve: rival sources disagree
-(e.g. competing casualty figures, contested control of a city) and there is no
-basis to close either as wrong. Rather than silently pick one by recency, Legba
-lets the rivals **coexist open** (see **write-path coexistence**) and records the
-disagreement in a sidecar so it can be surfaced honestly as *disputed* instead of
-faked into a single answer.
-*Note: a guarded feature — gated behind `LEGBA_FACT_CONTENTION` (default **off** in
-code and compose, enabled only on this instance). Plan:
-[HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md](../planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md).*
-
-**contention sidecar** — The side tables that record a fact disagreement without
-touching the rival facts themselves.
-Two tables (`fact_contention` + `fact_contention_values`, migration 0055) hold one
-contention group per disputed (subject, predicate) and its competing value
-clusters, plus three thin markers on the `facts` rows themselves — `contested`,
-`contention_id`, `surfaced_winner`. The sidecar is **recomputable** from the open
-facts, so it is a derived index over the disagreement, never the source of truth.
-
-**fact_contention_arbiter** — The detect-only analyst that finds contested facts
-and records the disagreement — but never resolves a fact.
-A `deterministic`-kind global **META analyst** (hourly at :37, **TRACE_ONLY**) that
-scans open facts, fuzzy-clusters their values (`canonicalize_entity` +
-normalized-Levenshtein at distance ≤ 0.12, so *Russia/Russian* and *Kyiv/Kiev* merge
-while *North/South Korea* stays split), junk-gates via the existing fact-extractor
-gates, scores each cluster (see **Q·C·R·F score**), and writes only the **contention
-sidecar** + the three markers. Its hard invariant
-(**detect-only**): it **never** mutates a fact's value, `valid_until`,
-`superseded_by`, or confidence — disagreement is *annotated*, not adjudicated into
-the **facts** table.
-
-**surfaced winner vs abstain** — Either the arbiter marks one value cluster as the
-dominant reading, or it honestly declares the dispute unresolved.
-Per (subject, predicate) group the arbiter surfaces **at most one** winner — the
-top-scoring cluster, iff it clears `MIN_SURFACE_SCORE` (0.15) **and** beats the
-runner-up by `DOMINANCE_RATIO` (1.25×). Otherwise it **abstains**: the group stays
-`contested` with no `surfaced_winner` — an explicit "disputed, no resolution".
-A surfaced winner is a read-side label only; it does **not** close the losing facts
-(they stay open — see **detect-only** above).
-*Note: an optional bounded LLM tie-break (`LEGBA_FACT_CONTENTION_LLM_TIEBREAK`,
-default **off**) may run **only** on a near-tie abstain, on the self-hosted vLLM
-plane (256 tokens, 30s, ≤10 calls/pass), degrading back to abstain on any failure.
-Proven **consulted** live (it abstained on symmetric evidence — provenance-first);
-a successful LLM **pick** is unproven-live so far.*
-
-**write-path coexistence** — Letting a same-tier rival value stay open alongside a
-prior one, instead of superseding it, so the arbiter can group them.
-Inside `supersede_prior_facts`, when a same-tier incoming value is fuzzy-**distinct**
-from an open prior (not a typo/alias of it), the prior is **not** closed — the two
-coexist open as a candidate contention. This is the write-side that *creates* the
-disagreement **supersession** would otherwise hide; gated behind
-`LEGBA_FACT_CONTENTION` (default off).
-
-**source_credibility** — A per-fact trust weight, resolved from the backing signals
-or the fact's tier.
-A nullable `facts.source_credibility` (migration 0054) where **NULL means unknown**
-(never 0): nominally 0.9 for seed/curated and 0.5 for ingestion/agent facts, but
-resolved as the **MAX** over the backing signals' `source_credibility` when present,
-else the tier nominal. It feeds the credibility factor of the **Q·C·R·F score** so a
-disagreement is weighed by who said it, not just how many rows or how recent.
-
-**Q·C·R·F score** — The arbiter's multiplicative weight on a competing value
-cluster: quorum × credibility-share × recency × confidence.
-Each value cluster in a contention is scored `score = q · c · r · f` — **Q** quorum
-(distinct backing **lineage**, so one chatty source can't manufacture agreement),
-**C** the cluster's **share** of the group's total `source_credibility` mass, **R** a
-recency half-life decay, and **F** mean confidence. Multiplicative means any zero
-factor zeroes the cluster (no credible source / nothing recent / no confidence). The
-score only ranks clusters for the **surfaced winner vs abstain** decision; it never
-edits a fact.
-
-**OutputKind** — The fixed set of typed outputs an analyst can emit.
-The twelve typed kinds (finding, situation, hypothesis, prediction, alert,
-meta_finding, critique, fact, nexus, prompt-module candidate, **journal**,
-**scorecard**). A registry maps each kind to its table, pydantic payload model,
-schema URI, and NATS subject. `analyst_outputs` is the generic table for kinds
-without a dedicated table.
-*Note: maintainer analysts write fact/nexus/entity straight into their substrate
-tables as a **side-write** (see TRACE_ONLY) rather than posting them to the
-findings feed. The 11th kind, **journal**, lands in its own `journal_entries`
-table **off** the fact/finding/nexus chain (see **Journal (OutputKind)**). The
-12th kind, **scorecard**, is the deterministic banded per-country verdict — one
-side-written `analyst_outputs` row per active g20/watch desk (see **scorecard**).*
-
-**TRACE_ONLY / side-write** — An analyst run that writes its real result straight
-into the knowledge tables and records only an audit trace.
-Some analysts (fact/nexus/entity maintainers) write results directly into substrate
-tables (a "side-write") and emit only a trace row, no feed entry.
-*Note: a no-change meta run is forced to trace-only so it doesn't spam the findings
-feed.*
-
-**receipt chain / hash-chained receipts** — A hash-chained audit log where each
-run's record hashes the previous one.
-Each analyst run appends an `analyst_traces` row whose `receipt_hash` chains
-(SHA-256) over the previous run's hash, so the run history is internally consistent
-and self-checking: a lineage node carries a `chain_consistent` boolean and the UI
-shows a **"chain-consistent (single-node)"** badge. This is hash-**chaining**, not a
-cryptographic **signature** on the output — analyst findings are **not** signed or
-tamper-proof, and this glossary does not claim they are. Separately, Ed25519-signed
-`audit_checkpoints` on the **descriptor audit-log** sign that log's head for
-independent verification — that signing applies to the audit checkpoints, not to
-analyst outputs.
-*Note: read the receipt chain as single-node integrity (SHA-256 chaining), not a
-signed / tamper-proof guarantee on findings; the Ed25519 signing lives only on the
-descriptor audit checkpoints.*
-
-**content-hashed identity** — A record's version *is* the hash of its content.
-Descriptors and signals are identified by a hash of their body, so any change is
+**content-hashed identity** — A record's version *is* the hash of its content:
+descriptors and signals are identified by a body hash, so any change is
 automatically a new immutable version — no manual version strings — which also
 enables integrity checks and dedup.
 
-**canonical signal / dedup** — The one authoritative row that duplicate signals
-are linked to.
-Deduplication links duplicates to a single `canonical_signal_id` via a
-`signal_aliases` table ("link, never collapse" — raw rows are kept for audit). A
-four-tier scheme escalates from exact content-hash/URL match to semantic cosine +
-temporal/title similarity via Qdrant.
-*Note: the semantic tiers refuse loudly if their embedding/vector ports are absent,
-rather than fabricating links.*
+**contention sidecar** — Two tables (`fact_contention` +
+`fact_contention_values`) holding one contention group per disputed
+(subject, predicate) and its competing value clusters, plus three thin markers
+on the `facts` rows themselves. The sidecar is recomputable from the open
+facts — a derived index over the disagreement, never the source of truth.
 
-**modality** — The medium of a signal: text, image, audio, video, structured, or
-binary.
-The coarse content type, treated as a first-class axis from ingest onward. A
-modality registry binds each one to an ingest extractor and a UI renderer, so
-adding a content type needs no schema change.
-*Note: some renderers and the media extractors (Whisper/VLM/OCR) are placeholders /
-declared seams — the registry slot exists ahead of the handler.*
+**contested claim / contention** — Two **open** facts asserting *different*
+values for the same (subject, predicate), with neither superseding the other —
+the "alternate facts" case **supersession** deliberately does not resolve.
+Rather than silently pick one by recency, Legba lets the rivals coexist open
+and records the disagreement in a sidecar so it surfaces honestly as
+*disputed*. Gated behind `LEGBA_FACT_CONTENTION` (default off); see
+[ANALYSIS.md](ANALYSIS.md) §7.11.
 
-**grounding / grounding preamble** — Injecting accumulated current facts into an
-analyst's prompt so the LLM isn't wrong about recent events.
-At run time, the GROUND phase prepends a dated "authoritative current context"
-preamble of currently-valid facts, nexuses, and assessed situations pulled from the
-substrate (e.g. "US head of government: Trump since 2025-01-20; US in active
-conflict with Iran since 2026-02-28; NATO member since 1949") — correcting the
-hosted LLM's stale training cutoff and explicitly **superseding** stale model
-priors. Restricted to still-valid facts (`superseded_by IS NULL`, in the validity
-window) of **seed/curated** provenance only. The four **bounded reasoning units**
-opt in, so each read integrates the multi-week substrate, not just the fresh 72h
-signal slice.
-*Note: the designed Tier-2 vector `world_context` is a seam; grounding currently
-uses structured seed/curated facts only.*
+**entity** — A resolved, disambiguated real-world actor (person, org, place)
+stored as one canonical profile (keyed by name + class, with version history);
+different surface mentions ("US", "U.S.", "United States") are merged by
+entity resolution. Entity-resolution fragmentation and NER junk are known open
+data-quality gaps in the audits.
 
-**seed / seeding** — Curated baseline data loaded into the substrate as
-authoritative ground truth.
-Importing curated reference data (current leaders, alliances, conflict data)
-straight into facts/nexuses marked `source_type='seed'`, tracked in a
-`seed_batches` ledger and idempotent on re-run. Adapters include `world_baseline`
-(curated) and `wikidata_leaders` (live SPARQL).
-*Note: some adapters (e.g. SIPRI) are registered but unseeded; ACLED is paused.*
+**fact** — An atomic, temporally-versioned assertion (subject, predicate,
+value) in the `facts` table with `valid_from` / `valid_until` and a
+`superseded_by` pointer, carrying a `source_type`
+(`ingestion` / `seed` / `curated` / `proposed`) and a confidence. Raw ingested
+facts are stamped confidence 1.0 regardless of trust, so only **seed/curated**
+facts are used for grounding.
+
+**fact_contention_arbiter** — A detect-only deterministic global META analyst
+(hourly, **TRACE_ONLY**) that scans open facts, fuzzy-clusters their values
+(so *Kyiv/Kiev* merge while *North/South Korea* stay split), scores each
+cluster (see **Q·C·R·F score**), and writes only the **contention sidecar** +
+markers. Its hard invariant: it **never** mutates a fact — disagreement is
+annotated, never adjudicated into the facts table.
+
+**grounding / grounding preamble** — At run time the GROUND phase prepends a
+dated "authoritative current context" preamble of currently-valid facts,
+nexuses, and situations from the substrate, correcting the LLM's stale
+training cutoff. Restricted to still-valid facts of **seed/curated**
+provenance only; the four **bounded reasoning units** opt in. The designed
+Tier-2 vector `world_context` is a seam.
+
+**modality** — The medium of a signal — text, image, audio, video, structured,
+or binary — treated as a first-class axis from ingest onward. A modality
+registry binds each one to an ingest extractor and a UI renderer, so adding a
+content type needs no schema change; some renderers and the media extractors
+(Whisper/VLM/OCR) are declared seams.
+
+**nexus / nexuses** — A coined Legba term: a *reified* (stored, queryable)
+relationship row between two entities, carrying a relation type, a
+**+1 / 0 / −1 polarity sign**, intent, channel, confidence, and validity time.
+Nexuses feed signed-graph analysis; the sign is a polarity label, not a
+cryptographic signature.
+
+**OutputKind** — The twelve typed kinds an analyst can emit (finding,
+situation, hypothesis, prediction, alert, meta_finding, critique, fact, nexus,
+prompt-module candidate, **journal**, **scorecard**); a registry maps each to
+its table, payload model, schema URI, and NATS subject. `analyst_outputs` is
+the generic table for kinds without a dedicated one; **journal** lands in its
+own `journal_entries` table off the fact/finding/nexus chain.
+
+**proposed_edges** — Provisional untyped candidate relationships inferred from
+entity co-mention, queued for a governance handler to promote into typed
+nexuses (or reject as junk, e.g. demonyms).
+
+**Q·C·R·F score** — The arbiter's multiplicative weight on a competing value
+cluster: **Q** quorum (distinct backing lineage) × **C** credibility share ×
+**R** recency decay × **F** mean confidence. Any zero factor zeroes the
+cluster; the score only ranks clusters for the **surfaced winner vs abstain**
+decision and never edits a fact.
+
+**receipt chain / hash-chained receipts** — Each analyst run appends an
+`analyst_traces` row whose `receipt_hash` chains (SHA-256) over the previous
+run's hash; a lineage node carries a `chain_consistent` boolean, surfaced as a
+**"chain-consistent (single-node)"** badge. This is hash-chaining —
+single-node integrity — **not** a cryptographic signature; analyst findings
+are not signed or tamper-proof (Ed25519 signing exists only on the descriptor
+audit-log's checkpoints).
+
+**seed / seeding** — Importing curated reference data (current leaders,
+alliances, conflict data) straight into facts/nexuses marked
+`source_type='seed'`, tracked in a `seed_batches` ledger and idempotent on
+re-run. Adapters include `world_baseline` (curated) and `wikidata_leaders`
+(live SPARQL); some adapters (e.g. SIPRI) are registered but unseeded.
+
+**source_credibility** — A nullable per-fact trust weight where **NULL means
+unknown** (never 0): nominally 0.9 for seed/curated and 0.5 for
+ingestion/agent facts, resolved as the MAX over the backing signals'
+credibility when present. It feeds the credibility factor of the **Q·C·R·F
+score**.
+
+**surfaced winner vs abstain** — Per contention group the arbiter surfaces at
+most one winner — the top-scoring cluster, iff it clears a minimum score and
+beats the runner-up by a dominance ratio — otherwise it **abstains**, leaving
+the group explicitly disputed. A surfaced winner is a read-side label only; it
+never closes the losing facts. An optional bounded LLM tie-break (default off)
+may run only on a near-tie, degrading back to abstain on any failure.
+
+**temporal facts / supersession** — When a newer, differing value arrives, the
+prior "true now" row is *closed* (`valid_until` stamped, `superseded_by` set)
+rather than overwritten, so history accrues. The store answers both *what is
+true now* and *what did we believe, when*.
+
+**TRACE_ONLY / side-write** — An analyst run that writes its real result
+straight into the knowledge tables (a "side-write") and records only an audit
+trace — no findings-feed entry. A no-change meta run is forced to trace-only
+so it doesn't spam the findings feed.
+
+**write-path coexistence** — Inside `supersede_prior_facts`, a same-tier
+incoming value that is fuzzy-**distinct** from an open prior (not a typo/alias
+of it) does not close it — the two coexist open as a candidate contention the
+arbiter can group. Gated behind `LEGBA_FACT_CONTENTION` (default off).
 
 ---
 
 ## Analysis & methods
 
-**analyst kind / `method.kind`** — The category of an analyst, and the execution
-strategy it dispatches on.
-An open taxonomy (~twelve built-in `build_*` branches plus operator-registered
-extensions) classifying what an analyst reads and writes (`inline_target`,
-`cross_target_raw`, `meta_findings_synthesizer`, `competing_hypotheses`,
-`predictor`, `critic`, `optimizer`, `consult_on_demand`, `deterministic`…).
-`method.kind` names *how* it reasons (`llm_planner`, `react_loop`,
-`stat_forecaster`, `deterministic`, `dspy_compile`…).
+**the 7-phase envelope / GROUND phase** — The fixed deterministic stages
+(WAKE/ORIENT/PLAN/GROUND/REASON/REFLECT/NARRATE) that wrap one analyst LLM
+call so a run is reproducible and replayable; the mandatory faithfulness
+**VERIFY** is a separate pass after NARRATE. ORIENT packs the scoped signal
+slice under the input-token budget (with a hard signal-count backstop); GROUND
+injects the grounding preamble between PLAN and REASON.
 
-**inline_target** — The per-target LLM analyst kind: reads one target's signal
-slice plus a grounding preamble and emits one cited finding.
-The base LLM-planner kind. It reads one target's recent signal slice, prepends the
-**grounding preamble**, and produces a first-order cited finding whose prose
-carries `[N]` markers, then runs the **faithfulness verify** pass. It is the kind
-behind the four **bounded reasoning units**, and the kind that opts into grounding
-and **agency** tools. (The retired **country_assessor** and the now-composition
-**world_assessor** were its former users.)
+**analyst kind / `method.kind`** — An open taxonomy (~twelve built-in kinds
+plus operator-registered extensions) classifying what an analyst reads and
+writes (`inline_target`, `meta_findings_synthesizer`, `predictor`, `critic`,
+`consult_on_demand`, `deterministic`, …). `method.kind` names *how* it reasons
+(`llm_planner`, `react_loop`, `stat_forecaster`, `deterministic`, …).
+
+**Brier score / Brier skill score (BSS)** — The *Brier score* is the mean
+squared error between predicted probability and the 0/1 outcome (lower is
+better); *BSS* expresses it relative to a baseline (per-country climatology),
+positive only when the forecast beats that baseline. **No forecast-skill claim
+is currently made** — the pilot's number lives in a segregated key and never
+pools into anything headline.
+
+**calibration / outcome-resolution** — Resolving each prediction/hypothesis
+against later outcomes to check whether stated confidence matches reality. The
+meaningful (*exogenous*) tier resolves against independent external facts; a
+weaker `self_consistency_only` tier grades against the hypothesis's own
+evidence and is flagged as such. Built but unproven — the live exogenous
+record is effectively n=0.
+
+**competing_hypotheses / ACH** — Analysis of Competing Hypotheses (Richards
+Heuer's tradecraft method): score each evidence item against
+mutually-exclusive thesis/counter-thesis pairs, weighted by *diagnosticity*,
+to surface the least-contradicted one. Built but unproven — it writes real
+rows but has no validated skill metric; cell scoring falls back to a lexical
+scorer when the token budget is exhausted.
+
+**consult / deep_consult** — On-demand analysts that answer operator questions
+over the substrate. `consult` runs a **ReAct** (reason-then-act) loop over
+governed read-only substrate tools, returning cited references and stated
+uncertainty; `deep_consult` schedules a longer plan → acquire → analyze →
+synthesize Dapr workflow and persists the result. Production consult is
+governed through the `substrate_read` pack — a tool not in that pack blocks as
+`unknown_tool`.
 
 **country_assessor** — RETIRED (2026-07): the former monolithic per-country
-one-pager.
-An `inline_target` analyst that fanned out one run per G20 country. It is now
-**retired and stopped** — live head `state='retired'`, removed from bringup —
-because nothing
-in the trusted spine reads it and, as a still-firing feeder, it was the single
-largest producer of *unverified* monolithic output (the verdict-from-nowhere
-pollution the units supersede). The four **bounded reasoning units** plus
-**country_composition** now produce the per-country read. (Descriptor kept for
-history; see [SEAMS.md](SEAMS.md).)
-*Note: this is not a clean slate — ~1.2k historical country_assessor findings
-**remain** in the DB, unread (nothing in the spine reads them); they were left in
-place rather than purged.*
+one-pager. Nothing in the trusted spine reads it, and it was the largest
+producer of *unverified* monolithic output; the four **bounded reasoning
+units** plus **country_composition** now produce the per-country read. ~1.2k
+historical findings remain in the DB, unread.
 
-**world_assessor** — The **global composition** (target-less): one cited, hedged
-world view per cadence tick.
-Repointed from `inline_target` to `meta_findings_synthesizer`: it no longer writes
-a raw-signal executive one-pager (that verdict-from-nowhere framing was retired).
-Declaring no `targets`, it runs **exactly once per tick**, composing over the
-per-country **country_composition** reads — every factual clause cited to a
-verified country read, drillable country → unit → source, with the mandatory
-**faithfulness verify** folded. It was NOT retired; it *graduated* into the world
-composition. (Still the canary for grounding + cadence health.)
+**critic** — A meta analyst using an LLM judge to score another analyst's
+output against an operator-authored rubric. The critic *actuates* —
+`effective_confidence = min(self-confidence, critic_score)` — so a poor grade
+can only reduce surfaced confidence, never inflate it. The live critic
+currently runs on the same core plane as the analysts it grades (a deliberate,
+reversible choice); the mandatory **faithfulness verify** is the always-on
+member of this family.
 
-**faithfulness verify** — The mandatory pass that scores whether each cited claim
-follows from its cited evidence (**groundedness, not truth**).
-Runs on every cited finding. A DETERMINISTIC citation-presence **floor** (always
-on) checks each fact-asserting claim in the prose against the resolved `citations`
-bridge: a claim with no `[N]` marker, or one resolving to no real signal, is an
-UNSUPPORTED span, and the score is the fraction of checkable claims that are
-supported. An OPTIONAL LLM judge — CURRENTLY the same core model
-(`llm.primary.openai_compat`, gpt-oss-120B) that produced the finding, NOT
-cross-family (a deliberate, temporary choice after the 8B judge
-`legba-slm`/`llm.verify.slm_8b` proved too weak; flag-gated, soft-fail; known
-limitation — same-model judging shares blind spots, dedicated reasoning judge
-planned) — refines the per-claim verdicts; when
-it is off or unreachable the result degrades to the floor and is LABELLED
-`judge-unavailable`, never a fabricated number. The verdict persists as a
-`critique` so the critic-actuation gate folds `effective_confidence =
-min(confidence, overall_score)`. It measures GROUNDEDNESS — does the claim follow
-from its cite — not whether the claim is true in the world; a planted fabrication
-is flagged unsupported.
+**degeneracy guard** — A check that withholds a forecast-skill claim when the
+calls are trivially near-0 / near-1 or geography-dominated — beating
+climatology on "which countries are seismic" is static geography, not
+anticipating the future.
 
-**effective_confidence** — The read-time floor `min(confidence, faithfulness_score)`
-that gates a low-confidence tier.
-An output's surfaced confidence is folded down to the minimum of its self-stated
-confidence and its faithfulness-verify score, so a poorly-grounded claim can only be
+**effective_confidence** — The read-time fold
+`min(confidence, faithfulness_score)`: a poorly-grounded claim can only be
 demoted, never inflated. It gates a visible low-confidence tier (never a hard
-delete) and drives the **scorecard**'s demote-never-promote banding. When verify
-never ran, effective_confidence is `None` — a first-class `verify-failed` state, not
-a value papered over.
+delete) and drives the **scorecard**'s demote-never-promote banding; when
+verify never ran it is `None` — a first-class `verify-failed` state, not a
+value papered over.
 
-**META analyst / meta-finding** — An analyst that reads other analysts'
-conclusions, not raw signals.
-An analyst with no single-target binding that runs once globally (on cadence) over
-other analysts' outputs or the whole graph, producing second-order findings
-(analysis-of-analysis), e.g. the **composition** analysts (`country_composition`,
-`world_assessor`), the deterministic `scorecard_producer`,
-`cross_analyst_correlator`, or the `relationship_reifier`. The **journal_assessor**
-is also a global META analyst, but
-the one that cuts **across** the whole flow rather than one slice — see **Journal
-assessor**.
-*Note: after any change to what an analyst reads, a no-target meta analyst must be
-live-forced to confirm it still runs — the e2e suite can miss meta-slice breakage.*
+**eval loop** — The analyst → critic → optimizer → calibration
+self-improvement cycle. The auto-improvement legs (optimizer, exogenous
+calibration) remain unproven research surfaces; the one grading leg that is
+live and always-on is the mandatory **faithfulness verify**, which folds
+**effective_confidence** on every cited finding.
 
-**Journal assessor** — Legba's first-person reflective voice: the one analyst
-pointed at the whole organism (its own self / state / flow).
-A global META analyst (`journal_assessor`, `target_filter=None`) that, unlike every
-other meta-analyst — each of which cuts **one** slice — narrates a coherent point of
-view **across** the entire flow. *"Poetry without evidence is noise. Evidence
-without perspective is just a log file."* It runs the in-actor agentic `llm_planner`
-GATHER envelope (a single staged PLAN → GATHER → NARRATE arc, persona re-loaded every
-phase), **not** the deep-consult Dapr workflow. The investigation loop runs on the
-local gpt-oss / vLLM plane (`llm.primary.openai_compat`, a "Reasoning: high"
-directive injected into the gather prompt only); the **voice** (the in-voice
-field-notes and NARRATE synthesis) runs on the Anthropic plane, Opus 4.8
-(`llm.anthropic.opus_4_7`) — so Anthropic spend is just the bounded final synthesis
-while the deep loop is local. Two tiers, **one kind**: `journal_assessor` (entry,
-every 12h) and `journal_consolidator` (consolidation, daily 02:00 UTC — same
-`identity.kind`, distinct id; it distills its prior consolidation + recent entries
-into one forward-carried narrative and supersedes the prior open consolidation). It
-is an **extension** analyst kind (registered via `register_analyst_kind` /
-`vocabulary_entries`), not a member of the closed built-in `AnalystKind` enum. Status:
-**LIVE** — deployed and live-validated (a real off-chain entry, in-voice, with
-honesty-flags forced from substrate metrics).
-*Note: the journal is granted **only** the `journal_read` (14 read tools, incl. 9
-self-instruments) and `journal_propose` packs — both non-write-fact, the grant-layer
-backstop for the never-write-a-fact invariant. Its only un-gated effect is its **own
-continuity** (reading its last entry + current consolidation into its next run);
-everything else goes through **propose-and-gate** (see that entry).*
+**faithfulness verify** — The mandatory pass scoring whether each cited claim
+follows from its cited evidence — **groundedness, not truth**. A deterministic
+citation-presence floor (always on) marks any claim with no `[N]` marker, or
+one resolving to no real signal, as UNSUPPORTED; an optional LLM judge —
+currently the same core model that produced the finding, **not** cross-family
+(a deliberate, temporary choice; same-model judging shares blind spots) —
+refines the verdicts, degrading to the floor labelled `judge-unavailable`
+when unreachable. The verdict persists as a `critique` and folds
+`effective_confidence = min(confidence, overall_score)`.
 
-**Journal (OutputKind)** — The 11th typed output: a journal entry / consolidation,
-landing in its own `journal_entries` table.
-`OutputKind.JOURNAL` (`schema_uri iglu:legba/journal/jsonschema/1-0-0`, payload
-`JournalPayload`) is the one kind that does **not** land in `analyst_outputs` — it
-goes to the dedicated `journal_entries` table (migration 0048). It is **off the
-fact/finding/nexus chain**: a journal row is a *perspective over* the provenance
-chain, never a *member of* it. It carries an **always-empty `derived_from`** and the
-table is deliberately absent from the lineage catalog, so a downstream lineage walk
-**can never surface a journal node**; it must never write a fact/finding/nexus (an
-invariant enforced by a gating test). When the lineage or a `derived_from` walk is
-enumerated, the journal is the explicit exception that is **not** a node in it.
-Citations live only in the row's `claims` / `cited_substrate_refs` (an up-only
-reference, not a lineage edge); `honesty_flags` are forced deterministically. The
-`entry_kind` column discriminates `entry` from `consolidation`; consolidations carry
-`valid_from` / `valid_until` / `superseded_by` and a partial-unique index enforces at
-most one open consolidation.
+**forecast_scoreboard** — The deterministic weekly driver of the
+acute-forecast pilot — the only honest home of a forecast number. It issues
+one binary forecast per G20 country per weekly window and exogenously resolves
+closed ones; the numbers surface ONLY on the calibration scoreboard route,
+never as a free-text claim or finding. Skill is withheld
+(`forecast_unproven=True`) until the BSS is positive on a non-degenerate,
+at-sample pilot.
 
-**substrate slice / read slice** — The bounded window of substrate an analyst
-reads each run.
-The scoped subset (default ~last 24h, scope-filtered, ~50 rows plus peer findings)
-an analyst reads per fire, rather than the whole pool. Each analyst kind has its
-own reader.
+**hypothesis** — A candidate explanation scored against evidence, stored in
+its own table: a thesis with a mandatory counter-thesis and a running signed
+evidence balance (±2 transitions auto-flip it confirmed/refuted), later
+resolvable against outcomes.
 
-**the 7-phase envelope / GROUND phase** — The fixed deterministic stages wrapping
-a single analyst LLM call.
-Named stages (WAKE/ORIENT/PLAN/GROUND/REASON/REFLECT/NARRATE) that wrap one
-LLM call so a run is reproducible and replayable (the mandatory faithfulness
-**VERIFY** is a separate pass that follows NARRATE). The **ORIENT** phase packs the
-scoped signal slice under the input-token budget (with a `_MAX_INPUT_SIGNALS = 200`
-hard backstop) — not a fixed newest-N trim. The **GROUND** phase injects the
-grounding preamble between PLAN and REASON.
+**inline_target** — The per-target LLM analyst kind: it reads one target's
+recent signal slice, prepends the **grounding preamble**, produces one
+first-order cited finding whose prose carries `[N]` markers, then runs the
+**faithfulness verify** pass. It is the kind behind the four **bounded
+reasoning units**, and the kind that opts into grounding and **agency** tools.
 
-**competing_hypotheses / ACH** — A structured method scoring rival hypotheses
-against the evidence.
-Analysis of Competing Hypotheses (Richards Heuer's tradecraft method): lay out
-mutually-exclusive thesis/counter-thesis pairs and score each evidence item against
-each on a consistency scale, weighted by *diagnosticity* (how well a piece of
-evidence discriminates between hypotheses), to surface the least-contradicted one.
-*Built but UNPROVEN — it writes real rows but has no validated skill metric; cell
-scoring falls back to a lexical scorer when the token budget is exhausted.*
+**JDL data-fusion model (L0–L5)** — The Joint Directors of Laboratories
+reference model (signals → entities → situations → impact → refinement).
+[ANALYSIS.md](ANALYSIS.md) uses it only as a *conceptual map* for where
+Legba's pipeline sits — it does not imply sensor-fusion rigor.
 
-**hypothesis** — A candidate explanation scored against evidence, stored in its own
-table.
-Created as a thesis with a mandatory counter-thesis and a running signed evidence
-balance (±2 transitions auto-flip it confirmed/refuted), later resolvable against
-outcomes.
+**Journal assessor** — A global META analyst (`journal_assessor`,
+`target_filter=None`) that narrates a first-person point of view *across* the
+entire flow — the one analyst pointed at the whole organism rather than one
+slice. Two tiers share one extension kind: a 12h entry tier and a daily
+`journal_consolidator` that distills prior entries into one forward-carried
+narrative. It is granted only the non-write-fact `journal_read` +
+`journal_propose` packs, so everything outward goes through
+**propose-and-gate**; its only un-gated effect is its own continuity. Live,
+deployed and live-validated.
 
-**predictor / forecast_acute** — A statistical forecasting analyst, and the
-acute-hazard forecast pilot.
-The `predictor` kind fits a time-series model (AutoARIMA, falling back to a
-naive-mean baseline) over recent signal counts. `forecast_acute` is the pilot
-estimating P(≥1 severe hazard) per G20 country at a 7-day horizon via a Poisson
-rate model.
-*The forecast-as-**claim** producers (`country_predictor`, `india_energy_predictor`)
-are RETIRED / frozen and STOPPED — a numeric forecast is a claim that must be scored
-before it ships. (Not a clean slate: ~539 historical prediction rows **remain** in
-the DB, unread.) Forecasting now returns ONLY as the **forecast_scoreboard** Brier/BSS
-scoreboard, never a free-text claim. **No forecast-skill claim is made**: a
-degenerate / geography-dominated
-vector ABSTAINS (zero rows) and the pilot currently reports NO proven skill.*
+**Journal (OutputKind)** — The 11th typed output: a journal
+entry/consolidation landing in the dedicated `journal_entries` table, not
+`analyst_outputs`. It is **off the fact/finding/nexus chain** — an
+always-empty `derived_from`, excluded from the lineage catalog — so a lineage
+walk can never surface a journal node, and the journal can never write a
+fact/finding/nexus (enforced by a gating test). Citations live only in the
+row's `claims` / `cited_substrate_refs`, an up-only reference, not a lineage
+edge.
 
-**forecast_scoreboard** — The deterministic weekly driver of the acute-forecast
-pilot — the only honest home of a forecast number.
-A `deterministic` META analyst that issues one binary forecast per G20 country for
-the next weekly window and exogenously resolves closed ones. The numbers surface
-ONLY on the calibration scoreboard route (`GET /api/v1/v3/eval/calibration`), NEVER
-as a free-text claim or finding; the per-run finding is a **TRACE_ONLY** receipt.
-Skill is segregated and WITHHELD (`brier_forecast_acute=None`,
-`forecast_unproven=True`) until the BSS is positive on a non-degenerate, at-sample
-pilot.
+**META analyst / meta-finding** — An analyst with no single-target binding
+that runs once globally (on cadence) over other analysts' outputs or the whole
+graph, producing second-order findings — e.g. the **composition** analysts,
+the deterministic `scorecard_producer`, `cross_analyst_correlator`, and the
+**Journal assessor**.
 
-**calibration / outcome-resolution** — Checking whether stated confidence matches
-real outcomes.
-Resolving each prediction/hypothesis against later outcomes to see if the system's
-probabilities match reality. The meaningful (*exogenous*) tier resolves against
-independent external facts; a weaker `self_consistency_only` tier grades against the
-hypothesis's own evidence and is flagged as such.
-*Built but UNPROVEN — exogenous resolvers are wired but the live record is
-effectively n=0; no validated skill.*
+**optimizer / GEPA / unit_optimizer** — GEPA is a reflective, Pareto-frontier
+prompt-evolution method (run via DSPy in an isolated worker) that mutates a
+prompt module from logged traces and critiques. It returns as a **measured
+experiment**: the **unit_optimizer** is scoped to ONE bounded unit, every
+candidate carries a real before/after faithfulness delta, and promotion stays
+human-gated — never auto-firing on a degenerate, absent, or non-positive
+delta. The unmeasured monolith (`country_optimizer`) is cadence-frozen;
+`litellm`/`dspy` are barred from the production inference path.
 
-**Brier score / Brier skill score (BSS)** — Standard accuracy yardsticks for
-probabilistic forecasts.
-**No forecast-skill claim is currently made** — these are the measures the
-experimental pilot would have to beat first. The *Brier score* is the mean squared
-error between predicted probability and the 0/1 outcome (lower is better); *BSS*
-expresses it relative to a baseline (per-country climatology), positive only when
-the forecast beats that baseline. The pilot's number lives in a segregated key and
-never pools into anything headline.
-
-**degeneracy guard** — A check that withholds a skill claim when forecasts are
-trivially near-0 / near-1.
-It refuses a forecast-skill claim when the calls are geography-dominated — beating
-climatology on "which countries are seismic" is static geography, not anticipating
-the future.
-
-**critic** — An analyst that grades other analysts' outputs against a rubric.
-A meta analyst using an LLM judge to score another analyst's output per-dimension
-against an operator-authored rubric — feeding the optimizer. A **heterogeneity
-guard** (`_assert_heterogeneous`) *can* require the judge to be a different model
-than the one it grades, but that is a configurable policy the analyzed analyst opts
-into via `eval.allow_self_correlated`. Today the live critic runs on the **same core
-plane** as the analysts it grades (the Anthropic plane is reserved for consult /
-deep-consult), so it is currently a same-model judge — a deliberate, reversible
-choice, not a fixed property.
-*Note: the critic **actuates** — `effective_confidence = min(self-confidence,
-critic_score)` — so a poor grade can only auditably reduce surfaced confidence,
-never inflate it. The mandatory **faithfulness verify** pass is the always-on
-member of this critic family, persisting its verdict as the `critique` this same
-gate folds.*
-
-**optimizer / GEPA / unit_optimizer** — A self-improvement loop that evolves an
-analyst's prompt from traces and critiques, returned as a **measured experiment**.
-GEPA is a reflective, Pareto-frontier prompt-evolution method (run via DSPy in an
-isolated worker) that mutates a prompt module from logged traces and critiques,
-producing a champion candidate. The always-on, unmeasured monolith
-(`country_optimizer` over the retired `country_assessor`) is **cadence-frozen** (its
-descriptor is still `state='active'`, but its cadence no longer fires); GEPA
-returns as **unit_optimizer**, scoped to ONE bounded unit
-(`leadership_transition`), where every candidate carries a REAL before/after
-**faithfulness** delta measured by the same faithfulness judge (currently the core
-model, not cross-family) that gates the live findings
-(live: parent 0.34 → candidate 0.29, delta −0.05).
-*Promotion stays **human-gated** and can NEVER auto-fire on a degenerate, absent,
-or non-positive delta — the deliverable is the measured delta, not an auto-promote.
-`litellm`/`dspy` are barred from the production inference path — dspy lives only in
-the opt-in optimizer worker.*
-
-**eval loop** — The analyst → critic → optimizer → calibration self-improvement
-cycle.
-The cycle by which the system grades its own analysts (critic), evolves better
-prompts (optimizer), and checks confidence against outcomes (calibration).
-*The auto-improvement legs (optimizer, exogenous calibration) remain unproven
-research surfaces. The one grading leg that is LIVE and load-bearing is the
-mandatory **faithfulness verify** — a critic-family gate that folds
-**effective_confidence** on every cited finding.*
-
-**consult / deep_consult** — On-demand analysts that answer operator questions over
-the substrate.
-`consult` answers a free-form question by running a **ReAct** (reason-then-act) loop
-over governed read-only substrate tools, returning cited references and stated
-uncertainty. `deep_consult` schedules a longer plan → acquire → analyze → synthesize
-Dapr workflow and persists the result.
-*Note: production consult is governed through the `substrate_read` pack — a tool not
-in that pack blocks as `unknown_tool` even though ungoverned unit tests pass. The
-Anthropic-plane consult is metered/billed; live tests are run sparingly.*
+**predictor / forecast_acute** — The `predictor` kind fits a time-series model
+(AutoARIMA, falling back to a naive-mean baseline) over recent signal counts;
+`forecast_acute` is the pilot estimating P(≥1 severe hazard) per G20 country
+at a 7-day horizon. The forecast-as-*claim* producers (`country_predictor`,
+`india_energy_predictor`) are retired and stopped (~539 historical prediction
+rows remain, unread); forecasting returns only as the **forecast_scoreboard**,
+and no forecast-skill claim is made.
 
 **structural balance / graph mining** — Signed-graph analyses over the
-entity/nexus graph.
-*Structural balance* classifies signed relationship triangles as balanced or
-"frustrated" ("the enemy of my enemy is my friend"); *graph mining* finds
-communities, centrality, brokers, and proxy-chain sign-products. Computed in-process
-with networkx over the relational `nexuses` table.
-*Built but UNPROVEN advanced-graph research surfaces.*
+entity/nexus graph: *structural balance* classifies signed relationship
+triangles as balanced or "frustrated"; *graph mining* finds communities,
+centrality, and brokers. Computed with networkx over the `nexuses` table;
+built but unproven research surfaces.
 
-**JDL data-fusion model (L0–L5)** — A standard reference model for layering data
-into higher-level understanding.
-The Joint Directors of Laboratories model (signals → entities → situations → impact
-→ refinement). [ANALYSIS.md](ANALYSIS.md) uses it only as a *conceptual map* for
-where Legba's pipeline sits.
-*Note: this does **not** imply sensor-fusion rigor — Legba does situation-assessment,
-not track correlation.*
+**substrate slice / read slice** — The bounded window of substrate an analyst
+reads each run (default ~last 24h, scope-filtered, ~50 rows plus peer
+findings) rather than the whole pool. Each analyst kind has its own reader.
+
+**world_assessor** — The global, target-less **composition**: it runs exactly
+once per tick, composing over the per-country **country_composition** reads —
+every factual clause cited to a verified country read, drillable
+country → unit → source. It no longer writes a raw-signal executive one-pager
+(that framing was retired); it graduated into the world composition and
+remains the canary for grounding + cadence health.
 
 ---
 
 ## Operations & governance
 
-**action-pack / pack** — A governed bundle of tools, prompts, rules, and budget
-caps an analyst may use.
-A registrable, versioned bundle granting an analyst specific tools, prompt
-fragments, escalation channels, and a **governor** — the sole surface by which an
-analyst is granted **agency**. Examples: `substrate_read`, `escalate_finding`,
-`web_access`, `propose_facts`.
-*Note: production consult tools MUST be in the pack — an entry missing from the live
-pack blocks as `unknown_tool`.*
+**action-pack / pack** — A registrable, versioned bundle granting an analyst
+specific tools, prompt fragments, escalation channels, and a **governor** —
+the sole surface by which an analyst is granted **agency**. Examples:
+`substrate_read`, `escalate_finding`, `web_access`, `propose_facts`.
+Production consult tools must be in the live pack — a missing entry blocks as
+`unknown_tool`.
 
-**agency** — An analyst's governed ability to take *actions* / use tools, not just
-read and write.
-The capability for an analyst to invoke tools mid-run (the GATHER phase) — fetch the
-web, propose facts, enqueue jobs, emit alerts — strictly allow-listed and budgeted
-rather than hard-coded.
-*Note: web text fetched via agency is flagged UNVERIFIED; agent-proposed writes are
-PROPOSE-grade (capped confidence, `source_type='proposed'`) and cannot mutate the
-control plane.*
+**agency** — An analyst's governed ability to invoke tools mid-run (the GATHER
+phase) — fetch the web, propose facts, enqueue jobs, emit alerts — strictly
+allow-listed and budgeted rather than hard-coded. Web text fetched via agency
+is flagged UNVERIFIED; agent-proposed writes are PROPOSE-grade (capped
+confidence, `source_type='proposed'`) and cannot mutate the control plane.
 
-**the three-way agency gate (grant ∩ allow ∩ applicability)** — A tool call runs
-only where all three permissions overlap.
-A pack is *effective* only where the analyst's **grant**, the target's **allow**-list,
-and the pack's **applicability** predicate all overlap — enforced by the governor and
-defaulting fail-closed.
+**bringup / registrar / catalog** — The deploy-time scripts that push
+descriptors into the registry, so the live source/analyst/target set is the
+database rows (the "catalog"), not the YAML files. Registrars are
+**create-only** — model changes go via the registry `PUT` API — and
+re-registering to a live runtime needs the correct DB and python entrypoint.
+
+**cold-start verification set** — The minimal 3-feed bootstrap (BBC World,
+Deutsche Welle, Al Jazeera) that verifies the whole source → enrich → fan-out
+→ assess loop from empty volumes, before scaling to the full source catalog
+(see [SETUP.md](SETUP.md) §7). If the registry is empty at boot, the NLP
+client stays null and enrichment silently does nothing — register first.
+
+**credential vault** — An encrypted store for source and model secrets: a
+`CredentialVault` using NaCl SecretBox (authenticated encryption via PyNaCl),
+decrypted with an environment-provided master key kept out of image layers.
+Descriptors hold only a secret *pointer*, never plaintext.
+
+**discovery / discovery template** — A pipeline that creates source/target
+*instances* from one template, rather than ingesting signals — e.g. the G20
+country targets are all produced from a single template, which is why there is
+no per-country code.
+
+**DLQ / dead-letter** — A holding store (`descriptor_dead_letter`,
+`output_dead_letter`) for malformed or failed descriptors/outputs, so a bad
+item fails cleanly and is available for operator resubmission rather than
+half-landing or corrupting a table.
+
+**emit / output binding** — Best-effort post-write handlers that serialize a
+stored output to an external format/sink — a STIX 2.1 bundle (optionally over
+TAXII 2.1), an alert, a webhook, a NATS stream, an A2A envelope, or MCP.
+*Degrade, don't drop*: a sink failure never blocks the durable write. Some
+emit surfaces (TAXII push, the A2A skill router) are off-by-default declared
+seams.
+
+**escalate_finding / alert sink** — A pack that fires when a finding crosses
+an escalation gate (severity ≥ high OR confidence ≥ 0.85), delivering to alert
+sinks (NATS, Pushover, XMPP/Matrix) up a severity ladder, with per-attempt
+delivery audit rows.
+
+**governor** — The `PackGovernorEnforcer`: per-pack invocation/rate/cost caps
+plus the global token envelope, applied before each tool call (precall-check →
+record → settle), logging every decision to ledgers and emitting an
+operator-visible event on a block. Known seam: a batch reserve can overshoot
+the pack cap by ≤4 (read-only, $0 impact).
+
+**lifecycle FSM** — The state machine every descriptor moves through:
+`draft → configured → active → paused → retired`, with per-state hooks
+separating *register* from *configure* from *activate*. The registrar advances
+a freshly-registered descriptor to declared-active on first register.
 
 **propose-and-gate / `journal_proposals`** — A human always sits between the
-**journal**'s voice and any change it wants to make.
-The journal writes only its own entries + consolidations directly; everything
-outward — a `correction`, a `change`, or a `self_revision` (including a
-`propose_self_revision` to its own instructions; protected sections auto-reject) —
-goes to the human-gated `journal_proposals` queue (a pending row, status `pending` →
-`accepted` / `rejected` / `archived`), **never** a live table. A human accepts or
-rejects; the accept path runs an idempotent per-kind apply worker. The journal's
-**only** un-gated effect is its own continuity — *"it can write its own next breath
-but cannot rewrite its own rules without the operator."* Surfaced over
-`GET /api/v1/journal_proposals` plus accept/reject endpoints; entries themselves are
-served at `GET /api/v1/journal` and rendered in the **Journal** UI panel
-(`system.journal`) with provenance chips that deep-link to the cited record.
-*Note: the `correction` and `self_revision` apply paths are tested end-to-end; the
-`change`-apply path is import-verified but not yet exercised against a live registry.
-The Journal panel was tsc-green and fully wired but pending its first real in-browser
-render at the time of writing. A critic + optimizer over the journal's own voice
-(Wave 5) is designed-not-built, gated on first building a critic actuator.*
+**journal**'s voice and any change it wants to make: everything outward — a
+`correction`, a `change`, or a `self_revision` (protected sections
+auto-reject) — goes to the human-gated `journal_proposals` queue, never a live
+table. A human accepts or rejects; the accept path runs an idempotent per-kind
+apply worker. The journal's only un-gated effect is its own continuity.
 
-**System Status panel** (`system.status`) — The per-component / per-layer health
-view that answers "are all sources firing? how is the queue? which cadence triggers
-are stalled?" in one operator page. Composes four layers: **Acquisition** (per-source
-firing matrix, `GET /api/v1/v3/system/source-firing`), **Analysis** (per-analyst
-cadence health, `GET /api/v1/v3/system/analyst-cadence`, read from `analyst_traces`
-rather than the NULL `actor_state.last_run_at`; per-analyst run timing — count,
-avg/max wall-clock seconds, last run, non-success count — at
-`GET /api/v1/v3/eval/analyst_runtime`), **Queues** (consumer backpressure,
-the orphan-filtered `GET /api/v1/v3/streams/consumer_lag`), and **Infra** (substrate
-reachability). *Note: tsc-green with both new routes serving live data, but pending
-its first real in-browser render at the time of writing.*
+**security perimeter (Caddy basic-auth)** — The single outer boundary: Caddy
+serves the operator UI over HTTPS behind HTTP basic auth and proxies `/api` to
+the registry; internal services bind to loopback, and registry endpoints
+additionally require a bearer token that fails closed if unset. This is the
+whole perimeter — there is no RBAC/SSO (designed, not built).
 
-**governor** — The enforcer that caps each pack's usage and spend.
-The `PackGovernorEnforcer` applies per-pack invocation/rate/cost caps and the global
-token envelope before each tool call (precall-check → record → settle), logging every
-decision to ledgers and emitting an operator-visible event on a block.
-*Note: a known seam — a batch reserve can overshoot the pack cap by ≤4 (read-only,
-$0 impact).*
+**self-hostable / AGPL** — Released under the GNU Affero GPL-3.0-or-later,
+whose §13 network clause requires offering source to users of a network
+service run on modified code. Commercial/dual-licensing is intended (a CLA is
+needed before outside contributions); AGPL "source-available" is a licensing
+fact, distinct from the "source-first" acquisition architecture.
 
-**token budget / global token envelope** — Per-analyst and system-wide caps on LLM
-token spend.
-`budget_tokens_per_day` caps one analyst's daily token use; a system-wide envelope
-blocks any pack call once exhausted. On exhaustion the strategy is *demote-and-continue*
-to a cheaper fallback model, or — if none is wired — pause loudly until the next budget
+**single-tenant / `owner_tenant`** — `owner_tenant` is stamped on
+sources/signals/outputs but is **not** an enforced isolation boundary today —
+Legba ships single-tenant, single-operator, single-node. RBAC / SSO /
+multi-tenant row-level security are designed but explicitly not built.
+
+**SSRF guard** — An `SsrfGuardedTransport` that refuses agency web fetches to
+loopback, RFC-1918 private ranges, link-local, and the cloud-metadata IP
+(169.254.169.254), raising a clean tool failure. The planner controls the
+*query*, never the *endpoint*.
+
+**stack / stack registry** — Registry-managed descriptors for shared substrate
+components (Postgres, NATS, Qdrant, LLM providers, embedder), with credentials
+held separately in the **vault**; descriptors bind via a `StackRef`. A
+shared-schema change requires rebuilding **both** `legba-runtime-dapr` and
+`legba-registry` — a stale registry silently stops analysts firing.
+
+**System Status panel (`system.status`)** — The per-component / per-layer
+health view answering "are all sources firing? how is the queue? which cadence
+triggers are stalled?" in one operator page. It composes four layers:
+Acquisition (per-source firing matrix), Analysis (per-analyst cadence health,
+read from `analyst_traces`), Queues (consumer lag), and Infra (substrate
+reachability).
+
+**the three-way agency gate (grant ∩ allow ∩ applicability)** — A pack is
+*effective* only where the analyst's **grant**, the target's **allow**-list,
+and the pack's **applicability** predicate all overlap — enforced by the
+governor and defaulting fail-closed. See
+[AGENCY_GATING_MODEL.md](AGENCY_GATING_MODEL.md).
+
+**token budget / global token envelope** — `budget_tokens_per_day` caps one
+analyst's daily token use; a system-wide envelope blocks any pack call once
+exhausted. On exhaustion the strategy is *demote-and-continue* to a cheaper
+fallback model, or — if none is wired — pause loudly until the next budget
 window (`BUDGET_THROTTLED`).
-
-**escalate_finding / alert sink** — Promoting a high-severity finding to an outbound
-alert.
-A pack that fires when a finding crosses an escalation gate (severity ≥ high OR
-confidence ≥ 0.85), delivering to alert sinks (NATS, Pushover, XMPP/Matrix) up a
-severity ladder, with per-attempt delivery audit rows.
-
-**emit / output binding** — Post-write dispatch that turns a stored output into an
-external artifact.
-Best-effort handlers that serialize a written output to an external format/sink — a
-STIX 2.1 bundle (optionally over TAXII 2.1), an alert, a webhook, a NATS stream, an
-A2A envelope, or MCP — *degrade, don't drop*, so a sink failure never blocks the
-durable write.
-*Note: some emit surfaces (TAXII push, the A2A skill router) are off-by-default
-declared seams.*
-
-**SSRF guard** — Protection that blocks outbound fetches to internal/private
-addresses.
-An `SsrfGuardedTransport` refuses agency web fetches to loopback, RFC-1918 private
-ranges, link-local, and the cloud-metadata IP (169.254.169.254), raising a clean tool
-failure. The planner controls the *query*, never the *endpoint*.
-
-**discovery / discovery template** — Materializing sources and targets from a
-template, rather than ingesting signals.
-A pipeline that creates source/target *instances* from one template — e.g. the G20
-country targets are all produced from a single template, which is why there is **no
-per-country code**.
-
-**lifecycle FSM** — The state machine every descriptor moves through.
-`draft → configured → active → paused → retired`, with per-state hooks, separating
-*register* from *configure* from *activate*. The registrar advances a freshly-registered
-descriptor to declared-active on first register.
-
-**stack / stack registry** — The registry of backing services (Postgres, NATS,
-models…) that descriptors reference.
-Registry-managed descriptors for shared substrate components (Postgres, NATS, Qdrant,
-vault, LLM providers, embedder), with credentials held separately in the **vault**.
-Descriptors bind via a `StackRef`.
-*Note: a shared-schema change requires rebuilding **both** `legba-runtime-dapr` and
-`legba-registry`; a stale registry silently stops analysts firing.*
-
-**credential vault** — An encrypted store for source and model secrets.
-A `CredentialVault` using NaCl SecretBox (authenticated encryption via PyNaCl),
-decrypted with an environment-provided master key kept out of image layers. Descriptors
-hold only a secret *pointer*, never plaintext.
-
-**DLQ / dead-letter** — A queue where failed/invalid items are parked instead of
-lost.
-A holding store (`descriptor_dead_letter`, `output_dead_letter`) for malformed or
-failed descriptors/outputs, so a bad item fails cleanly and is available for operator
-resubmission rather than half-landing or corrupting a table.
-
-**bringup / registrar / catalog** — The deploy-time scripts that register the live
-descriptor set.
-Scripts that push descriptors into the registry, so the live source/analyst/target set
-is the database rows (the "catalog"), not the YAML files.
-*Note: re-registering to a live runtime needs the correct DB and python entrypoint, and
-the registrars are **create-only** — model changes go via the registry `PUT` API.*
-
-**single-tenant / `owner_tenant`** — Legba runs for one operator; the tenant tag is
-forward-compat metadata.
-`owner_tenant` is stamped on sources/signals/outputs but is **not** an enforced
-isolation boundary today — Legba ships single-tenant, single-operator, single-node.
-*Note: RBAC / SSO / multi-tenant / row-level security are designed but explicitly NOT
-built.*
-
-**security perimeter (Caddy basic-auth)** — The single outer boundary: a reverse proxy
-with HTTP basic auth.
-Caddy serves the operator UI over automatic HTTPS behind HTTP basic authentication and
-proxies `/api` to the registry; internal services bind to loopback. Registry endpoints
-additionally require a bearer token and fail closed if it is unset.
-*Note: this is the whole perimeter — there is no RBAC/SSO; OIDC forward-auth is designed,
-not built.*
-
-**self-hostable / AGPL** — You run it on your own infrastructure, under the AGPL-3.0
-license.
-Released under the GNU Affero GPL-3.0-or-later; its §13 network clause requires offering
-source to users of a network service run on modified code, and copyleft keeps derivatives
-open. Self-hostability under AGPL is part of what sets Legba apart (you run and verify it
-yourself); commercial/dual-licensing is intended (a CLA is needed before outside contributions).
-*Note: AGPL "source-available" is a licensing fact — distinct from the "source-first"
-acquisition architecture.*
-
-**cold-start verification set** — The smallest feed set that proves the pipeline works
-from empty.
-A minimal 3-feed bootstrap (BBC World, Deutsche Welle, Al Jazeera) that verifies the whole
-source → enrich → fan-out → assess loop from empty data volumes, before scaling to the full
-source catalog. See [SETUP.md](SETUP.md) §7.
-*Note: if the registry is empty at boot, the NLP client stays null and enrichment silently
-does nothing — seed/register **before** relying on enrichment.*

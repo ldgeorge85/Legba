@@ -1,21 +1,34 @@
 # Legba — Architecture
 
-*The authoritative system architecture for Legba — a source-first, decompositional
-intelligence system that turns a firehose of sources into **cited, verified,
-drillable** reports over whatever domain you configure (geopolitics / G20 is the
-shown exemplar, not a lock-in): what Legba is, why it is shaped this way, how the
-pieces compose, and where each piece actually lives in the tree. This is the
-**spine + why** doc. For the implementation surface (APIs, files, deployment) see
-`DESIGN.md`; for "life of a…" walkthroughs see `FLOWS.md`; for the module-by-module
-map see `CODE_MAP.md`; for operations see `RUNBOOK.md`. The altitude frame this doc
-serves is `planning/ANALYSIS_LAYER_PLAN_2026-06-15.md`; the composed spine +
-verify + provenance direction it now reflects is
-`planning/PLATFORM_DIRECTION_PLAN_2026-06-30.md`.*
+This document explains Legba's concepts and why the system is shaped the way it
+is: the pieces, how they compose, and where each one lives in the tree. For the
+implementation decisions (APIs, files, deployment) see `DESIGN.md`; to navigate
+the code see `CODE_MAP.md`; for "life of a…" walkthroughs see `FLOWS.md`; for
+operations see `RUNBOOK.md`. New here? Start with the [README](../README.md)
+and the [Tour](TOUR.md).
 
 > **Honesty contract.** Every factual claim below is traceable to code
 > (`file:line` cited liberally). Where a capability is *built but not wired*, or
 > *declared but absent*, this doc says so in-line — it does not imply more than
-> ships. The authoritative not-built list is `docs/SEAMS.md`.
+> ships. The not-built list is `docs/SEAMS.md`.
+
+**Contents:**
+[0 Orientation](#0-orientation--what-processes--flows--triggers--schedules--scales) ·
+[1 The altitude map](#1-the-altitude-map--the-organizing-frame) ·
+[2 The problem](#2-the-problem-situational-awareness-at-scale) ·
+[3 The source-first answer](#3-the-source-first-answer-ingest-once-enrich-once-match-many) ·
+[4 The spine](#4-the-spine) ·
+[5 The core abstractions](#5-the-core-abstractions) ·
+[6 The four planes](#6-the-four-planes) ·
+[7 The runtime](#7-the-runtime--the-dapr-virtual-actor-model) ·
+[8 Outputs](#8-outputs--the-provenance--write-paths) ·
+[9 The actor → Workflow seam](#9-the-actor--dapr-workflow-seam-the-optimizer-precedent) ·
+[10 Self-improvement](#10-self-improvement--closing-the-loop) ·
+[11 How it scales](#11-how-it-scales) ·
+[12 Provenance + hot-pluggability](#12-provenance-and-hot-pluggability-end-to-end) ·
+[13 Live, proven state](#13-live-proven-state) ·
+[14 Built vs. declared seams](#14-built-vs-declared-seams) ·
+[15 Read next](#15-read-next)
 
 ---
 
@@ -43,7 +56,7 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 
 **Where Wikidata / grounding fit (out-of-band, decoupled by the substrate):** Wikidata is **not a live source** — it never touches the signal pipeline. It is a **seed** (`scripts/seed.py --source wikidata_leaders`, operator-run / cron-able) that writes *current* `head of state` facts INTO the substrate (superseding the stale officeholder). Separately, at *analysis time*, grounding-enabled analysts' **GROUND phase** READS those current facts back OUT of the substrate and injects a dated preamble into the LLM prompt (Flow 10). The two movements don't know about each other — the substrate is the hand-off. See §5.8.
 
-**What scales** — the **actors are the workers** (SourceActor/TargetActor/AnalystActor); Dapr **placement** redistributes them across `legba-runtime-dapr` replicas, so you scale out by adding replicas. **Cadence-batching is the key move:** analysts run on a schedule, not per-signal, so **LLM cost is decoupled from the ingest firehose**. The substrate scales independently (PG read-replicas/partitioning, NATS, Qdrant). **Singletons needing leader election:** the reconcile loop + the discovery informer (single-replica fail-loud guard otherwise; 2-replica placement + leader election proven locally). **The real ceiling is LLM throughput** (budget-gated) — which is exactly why the heavy graph work is deterministic Python and the analysis layer is cadence-batched. (Full treatment: `planning/SCALING.md`.)
+**What scales** — the **actors are the workers** (SourceActor/TargetActor/AnalystActor); Dapr **placement** redistributes them across `legba-runtime-dapr` replicas, so you scale out by adding replicas. **Cadence-batching is the key move:** analysts run on a schedule, not per-signal, so **LLM cost is decoupled from the ingest firehose**. The substrate scales independently (PG read-replicas/partitioning, NATS, Qdrant). **Singletons needing leader election:** the reconcile loop + the discovery informer (single-replica fail-loud guard otherwise; 2-replica placement + leader election proven locally). **The real ceiling is LLM throughput** (budget-gated) — which is exactly why the heavy graph work is deterministic Python and the analysis layer is cadence-batched. (More in §11.)
 
 **What runs OUTSIDE the source→output loop (out-of-band).** Not everything is the live `SOURCE ─▶ … ─▶ OUTPUT` pipeline. The decoupled processes — each handing off through the substrate, never on the signal hot path:
 - **Seeds** (`scripts/seed.py` → `data/seed/`): curated/authoritative roots imported INTO `facts`/`nexuses` with `source_type='seed'` + a `seed_batches` ledger row — adapters `world_baseline` / `wikidata_leaders` / `acled_conflict` / `sipri_arms_transfers` (operator-run / cron-able; §5.7, Flow 9). Wikidata is a *seed*, not a live source.
@@ -104,10 +117,9 @@ Legba surfaces at altitude 1+ is a decompositional chain, read bottom-up: FOUR
 narrow reasoning UNITS (each cited to source and put through a **mandatory
 faithfulness verify pass**, §5.10) → a per-country **composition** that admits
 only verified sub-claims → a **world composition** over the per-country reads → a
-deterministic **banded scorecard** + a per-unit **skill scoreboard**. The
-distinguishing property is the *discipline* — every claim is cited, checked for
-groundedness against its cited evidence, and auditable through a receipt chain to
-the original signal (§8, §12) — not any single verdict. Legba **measures
+deterministic **banded scorecard** + a per-unit **skill scoreboard**. Every
+claim is cited, checked for groundedness against its cited evidence, and
+auditable through a receipt chain to the original signal (§8, §12). Legba **measures
 groundedness (faithfulness — does each claim follow from its cited evidence?),
 NOT truth**; where a leg is honestly weak today (a degenerate forecast pilot, a
 tiny correctness gold set, a country whose units read all-insufficient) the
@@ -476,9 +488,9 @@ never plaintext.
 > a native graph engine if the live nexus edge count exceeds **~250k** *or*
 > multi-hop traversal latency in the recursive-CTE / networkx path exceeds **~2 s
 > p95** for a routine analyst slice — i.e. when DB-side variable-length traversal
-> would earn its operational cost. The detailed code-grounded investigation (which
-> additionally recommends *dropping* AGE outright as a follow-up cleanup, an
-> operator-gated change) is in `planning/AGE_REEVAL_2026-06-24.md`.
+> would earn its operational cost. The underlying investigation additionally
+> recommends *dropping* AGE outright as a follow-up cleanup (an operator-gated
+> change).
 
 | Store | Role | Status |
 |---|---|---|
@@ -686,7 +698,7 @@ the grounding store.** Temporal facts (`valid_from`/`valid_until`/`superseded_by
 + reified signed nexuses + seed roots are exactly a current-world-state model
 with a single queryable "what is true now" row per assertion. The fix is not a
 new store — it is (Tier 0) curating *current* data **in**, and (Tier 1)
-**injecting** it at analysis time. Plan: `planning/KNOWLEDGE_GROUNDING_PLAN.md`.
+**injecting** it at analysis time.
 
 - **Tier 0 — current data in (seed adapters with temporal supersession).** The
   `wikidata_leaders` seed adapter (`data/seed/adapters/wikidata_leaders.py`)
@@ -773,9 +785,7 @@ The whole subsystem is **flag-gated and ships OFF by default** (both
 `LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` default to OFF in
 code *and* in `docker-compose.yml` via `${VAR:-0}`); they are enabled (`=1`) only
 on this instance through the gitignored `.env`. The contested-claims schema landed
-at migrations 0054–0055; the current migration **head is 0057**. The
-binding plan + decisions live in
-`planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md`.
+at migrations 0054–0055; the current migration **head is 0057**.
 
 **Per-fact source credibility (Wave 0, migration 0054).** A `facts.source_credibility
 real` column carries the trust weight of the most credible source backing a fact
@@ -806,7 +816,7 @@ existing row unmarked and uncontested.
 (`SUB_HANDLERS` + `TRACE_ONLY`) with the descriptor
 `descriptors/analyst_fact_contention_arbiter.yaml` (hourly at `:37`, offset from the
 other short deterministic handlers). It is **TRACE_ONLY**: it produces no
-`analyst_outputs` row, only the sidecar + the three `facts` markers. Its load-bearing
+`analyst_outputs` row, only the sidecar + the three `facts` markers. Its core
 invariant is **DETECT-ONLY (decision B15): it NEVER mutates a fact's
 `value` / `valid_until` / `superseded_by` / `confidence`, and never calls
 `supersede_prior_facts`** — the open competing rows are left exactly as they were.
@@ -944,7 +954,7 @@ Two components:
 The verdict is persisted as a `critique`, and the fold
 `effective_confidence = min(confidence, faithfulness_score)` is applied **at read
 time**. Verification **never hard-deletes** a finding — a low score gates a visible
-low-confidence tier. This is the load-bearing honesty move: Legba **measures
+low-confidence tier. This is deliberate: Legba **measures
 groundedness, not truth**. A planted fabrication with no supporting citation is
 flagged unsupported.
 
@@ -1035,7 +1045,7 @@ operator-pinned `descriptors/source_*.yaml`, **plus** the 46-entry **catalog**
 (43 `rss` + 3 `geojson`) in `scripts/bringup_register_source_catalog.py`
 registered directly into `source_descriptors` — NWS, NASA EONET, WHO/CDC/HRW, RSS
 feeds — so the full live source set is the DB rows, not the YAML files; see
-`docs/SOURCES.md` for the catalog table and the 3 / 46 / 49 scope model.) **Enrichment mutates the signal in
+`docs/DATA_SOURCES.md` for the catalog table and the 3 / 46 / 49 scope model.) **Enrichment mutates the signal in
 place** — there is
 no separate enrichment table; the enriched signal is written canonically to the
 single `signals` table (`source_actor.py:520-525`), with the structured columns
@@ -1080,13 +1090,13 @@ Signal matching is **two-stage** (`subscription/filter.py:62-108`):
    acknowledged gap in the `starlark-pyo3` binding, mitigated by the
    expression-only gate + wall-clock budget (`compiler.py:36-42`).
 
-> **Cost rule (load-bearing):** immediate per-signal invocation is for *cheap*
+> **Cost rule:** immediate per-signal invocation is for *cheap*
 > reactions only (deterministic detectors, dedup, severity-gated alerts).
 > Expensive (LLM) analysis is always coalesced; the cooldown is the cost
 > governor. LLM analysts fire reactively on the accumulation / cadence gates,
 > never per-signal.
 
-> **Bounded per-run dedup (load-bearing for the actor-invoke budget).** The
+> **Bounded per-run dedup (matters for the actor-invoke budget).** The
 > `cross_source_dedup` deterministic analyst does **not** re-scan the whole
 > `signals` table every cadence. Its candidate query (a) skips content-hash
 > groups already fully canonicalised — in the DB, via
@@ -1322,7 +1332,7 @@ perspective is just a log file."* **LIVE** — deployed and live-validated (a re
 off-chain entry, `honesty_flags` forced deterministically from substrate metrics,
 receipt-chained, in-voice).
 
-**Off-chain, by design.** This is the load-bearing framing: the journal is a
+**Off-chain, by design.** The journal is a
 *perspective OVER* the provenance chain, **never a node in it**. A journal row
 carries an **always-empty `derived_from`** and `journal_entries` is deliberately
 **absent from the lineage catalog** (`lineage_api._SUBSTRATE_TABLES`), so a
@@ -1461,7 +1471,7 @@ follows:
 > `GET /api/v1/deep_consult/{task_id}` polls by reading the produced FINDING row
 > back from Postgres keyed by run_id (`registry/deep_consult_api.py`).
 >
-> **Gotcha (load-bearing):** a Dapr Workflow `instance_id` must **not** contain
+> **Gotcha:** a Dapr Workflow `instance_id` must **not** contain
 > `::` — activity result parsing splits on `::` and hangs forever otherwise
 > (`optimizer.py:508-519`). Worker actor ids use `::`; workflow ids must not.
 
@@ -1636,7 +1646,7 @@ The whole loop is now wired; the data-analysis rigor layer (§5.7) closed the
 
 The loop in §13 is live — including the full altitude-0..3 data-analysis rigor
 layer (§5.7), which was the open frontier in the pre-2026-06 drafts. What is
-*not* built is declared, never implied — the authoritative list is
+*not* built is declared, never implied — the full list is
 `docs/SEAMS.md`. The architecturally significant remaining seams:
 
 - **Eager media extraction** — job plane + `process_media` envelope live; the
@@ -1695,5 +1705,3 @@ claimed.
 - `DESIGN.md` — full implementation design (APIs, files, deployment).
 - `RUNBOOK.md` — runtime bootstrap, deps resolvers, operations.
 - `AI_MODELS.md` — the model-serving surface (LLM, embeddings, NLP).
-- `planning/ANALYSIS_LAYER_PLAN_2026-06-15.md` — the altitude frame + the
-  build pieces this architecture serves.

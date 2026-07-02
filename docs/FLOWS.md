@@ -1,23 +1,291 @@
-# Legba — Life-of-a… End-to-End Flows
+# Legba — End-to-End Flows
 
-> **Status anchor:** this document is grounded in the current build plan
-> [`planning/PLATFORM_DIRECTION_PLAN_2026-06-30.md`](../planning/PLATFORM_DIRECTION_PLAN_2026-06-30.md)
-> and the architecture docs it produced (`docs/ARCHITECTURE.md`, `docs/ANALYSIS.md`,
-> `docs/SEAMS.md`). Every factual claim below cites `file:line`. **The full analysis
-> spine (phases P0–P4) is now BUILT and LIVE** — the four bounded reasoning UNITS, the
-> mandatory faithfulness verify pass, the per-country + world COMPOSITIONS, and the
-> banded SCORECARD are walked here as Flows 12–15. The earlier framing where the
-> monolithic `country_assessor` one-pager was the product, and where `world_assessor`
-> was a raw-signal "verdict-from-nowhere" pass, is SUPERSEDED: `country_assessor` is
-> RETIRED (Flow 2 note; nothing in the spine reads it) and `world_assessor` graduated
-> into the world composition (Flow 13). What this system publishes is *groundedness*,
-> not truth — it MEASURES whether each claim follows from its cited evidence
-> (faithfulness), and it says so plainly, including where a leg is honestly weak today
-> (the forecasting pilot reports NO proven skill; the correctness gold set is tiny).
+This document walks how data moves through Legba: first the whole pipeline end
+to end in one pass, then fifteen "life of a …" walkthroughs, each a numbered
+step list with `file:line` citations into the code. It is for developers and
+operators who want to trace exactly what happens at each stage. New here?
+Start with the [README](../README.md) and the [Tour](TOUR.md).
 
-## How to read this
+**Contents:**
+[The whole pipeline, end to end](#the-whole-pipeline-end-to-end) ·
+[walkthrough index](#the-walkthroughs) ·
+[1 signal](#1-life-of-a-signal-live) ·
+[2 analyst cadence cycle](#2-an-analyst-cadence-cycle-live) ·
+[3 consult](#3-a-consult-live) ·
+[4 optimizer workflow](#4-the-optimizer-dapr-workflow-live--scoped-to-one-measured-unit) ·
+[5 deep consult](#5-a-deep-consult-live) ·
+[6 fact extraction](#6-fact-extraction--supersession-live) ·
+[7 nexus reification](#7-nexus-reification-live) ·
+[8 ACH hypotheses](#8-ach-competing-hypotheses-live) ·
+[9 seeding](#9-seeding-import-live) ·
+[10 grounded assessment](#10-a-grounded-assessment-live) ·
+[11 journal](#11-a-journal-entry-live--on-cadence-entry-12h--consolidator-daily) ·
+[12 unit + verify](#12-a-bounded-reasoning-unit--the-mandatory-verify-pass-live) ·
+[13 composition](#13-composition--per-country-then-world-live) ·
+[14 scorecard](#14-the-banded-scorecard-live) ·
+[15 scoreboard + forecast](#15-the-skill-scoreboard--measured-forecast-live--no-proven-skill-yet) ·
+[appendix: entry-point index](#appendix--primary-entry-point-index)
 
-Walkthroughs, each a numbered step list with `file:line` citations:
+---
+
+## The whole pipeline, end to end
+
+One pass over the whole pipeline before the detailed walkthroughs. Read the
+diagram left to right; every arrow is a substrate boundary (a table or a
+stream), not a function call. The left half is ingestion-to-output; the right
+half is the product spine — bottom-up composition over already-verified
+claims. Where this overview and a detailed flow disagree, the detailed flow
+(with its `file:line` citations) wins.
+
+```
+SOURCE ─► canonical Signal ─► predicate fan-out ─► the (analyst,target) fire ─► typed Output
+        (Tier-1 inline        (coarse NATS subject   (cadence reminder OR         (12 OutputKinds →
+         enrich, once)         + SQL WHERE +          reactive coalescer,          facts / nexuses /
+                               Starlark residual)     one cooldown CAS)            situations / …)
+
+                         … then the product spine, bottom-up, over VERIFIED claims:
+
+    4 bounded UNITS ─► per-country COMPOSITION ─► world COMPOSITION ─► banded SCORECARD
+    (inline_target,     (country_composition,       (world_assessor,      (scorecard_producer,
+     cite + verify       INNER JOIN on the           composes country      deterministic rules
+     each finding)       verify critique)            reads)                over verified claims)
+```
+
+For scale: the substrate is a continuously growing temporal knowledge graph —
+on the order of ~4.6k facts and ~4.9k nexuses at the time of writing, with
+`valid_from` / `valid_until` / decay — fed by ~50 poll sources (RSS / API /
+bulk) on cron. The three-feed set (BBC / Deutsche Welle / Al Jazeera) is the
+cold-start verification minimum, not the deployed scope; a fresh instance
+reaches current scope by running the full source catalog
+(`scripts/bringup_register_source_catalog.py`). The exemplar domain is
+geopolitics over 24 country desks — the 19 G20 countries plus a
+high-consequence watch tier; a "desk" is a scoped subject a set of analysts
+work, not a surveilled entity — but the domain is configured by YAML
+descriptors, not baked into code.
+
+### Stage by stage
+
+**SOURCE → canonical Signal.** A `SourceCore` actor pulls raw entries on a
+cadence and runs the per-source baseline **once** over each one, producing a
+single canonical, target-agnostic `Signal` (no `target_id` — an observation,
+not an interpretation). The baseline is the Tier-1 inline tier: deterministic,
+no analyst LLM, run synchronously per-signal *before* fan-out. Its enrichment
+chain (`language_detect → geocode → ner → classify → source_credibility →
+ingest_dedupe → fact_extractor`) writes the enriched signal columns, ingestion
+`facts`, and entity rows + `signal_entity_links` in place. (A webhook front
+and an S1 NATS inbound path also exist, but they are dormant plumbing until a
+live webhook source is wired; the poll path is what runs today.) Flow 1;
+`ACQUISITION.md` §1–§3.
+
+**Signal → predicate fan-out.** The written signal is published immediately to
+a coarse NATS subject (`legba.signals.>`). Each target has one aggregated
+durable pull consumer bound to the union of its subscription subjects;
+delivery is then narrowed exactly by a two-stage match — an indexed SQL
+`WHERE` over `geo` / `tags` / `entity_classes` / `languages` / `modalities`,
+then a Starlark residual predicate evaluated under a 5 ms wall-clock budget.
+The coarse subject narrows *delivery*; SQL + Starlark decide the *match*.
+Flow 1 steps 5–8; `ACQUISITION.md` §4.
+
+**Fan-out → the (analyst, target) fire.** A matched signal marks an
+`(analyst, target)` pair dirty, and the analyst fires on a gate, not
+per-signal — see "one fire, two doors" just below.
+
+**The fire → typed Output.** The analyst reads its substrate slice, runs its
+method, and writes one typed output validated against its kind's pydantic
+model. There are exactly twelve `OutputKind` values
+(`data/provenance/kinds.py`), routed by the universal write path to
+`situations` / `hypotheses` / the knowledge-layer `facts` / `nexuses` tables,
+the dedicated `journal_entries` table, or the generic `analyst_outputs` table;
+there is deliberately no `signal` kind. Flow 2 steps 10–13; `ARCHITECTURE.md`
+§8.1.
+
+### One fire, two doors
+
+The Dapr-reminder **cadence** cycle (Flow 2) and the reactive **trigger**
+plane (`ANALYSIS.md` §2) are not two systems — they are two ways the *same*
+`(analyst, target)` pair becomes eligible to fire:
+
+- **Cadence door.** On activation the primary actor registers a single Dapr
+  reminder (`run_cadence`); on each tick it resolves the matched targets and
+  fans them to worker actors. This is the floor — a quiet target still gets
+  re-evaluated on schedule. (A `subscription.targets` block makes a run
+  per-target; its absence makes a single global META run — the four units and
+  the per-country composition fan out; `world_assessor` and
+  `scorecard_producer` run globally.)
+- **Reactive door.** A matched signal (or a new upstream finding —
+  event-class `derived`, just another signal on the stream) marks the pair
+  dirty via the coalescer (`runtime/triggers/`), which fires on whichever gate
+  trips first — severity, accumulation, or cadence-with-pending — clamped by
+  a per-pair cooldown.
+
+The two doors converge on one lock: the coalescer CAS-claims the fire on the
+accumulator's last-fired anchor (`claim_fire`) so exactly one worker wins, and
+the worker run then re-checks a per-target cooldown (with a slack band that
+absorbs drift when `cooldown ≈ cadence`) before doing work. Net: a pair fires
+once per cooldown window no matter how many doors opened, and LLM-bearing
+analysts are floored to a minimum batch — never per-signal. Flow 2;
+`ANALYSIS.md` §2.
+
+### Two tiers — cheap once per observation, expensive once per slice
+
+- **Tier 1 — inline, deterministic, per-signal, pre-fan-out.** The
+  `data/filters/` baseline chain above (spaCy NER, geo resolution, relation
+  facts, dedup — no analyst LLM). It writes altitude-0 product that every
+  downstream target reads: "enrich once". Flow 1 is this tier; Flow 6 is the
+  `fact_extractor` stage inside it. `ARCHITECTURE.md` §0 / §6.1.
+- **Tier 2 — slice/cadence, reasoning, per-(analyst, target).** The
+  `data/analysts/` kinds read an accumulated substrate slice on a fire and
+  reason over it — never per-signal. This is where LLM cost lands, and the
+  coalescer is the device that decouples that cost from signal arrival rate.
+  The core analyst plane is a self-hosted gpt-oss-120B
+  (`llm.primary.openai_compat`, $0); Claude Opus 4.8 is reserved for the
+  billed `consult` / `deep_consult` surfaces. Flows 2–5 and 7–15 are all this
+  tier. `ANALYSIS.md` §3.
+
+### The product spine — units → composition → scorecard
+
+Bottom-up composition in which nothing rises to a higher altitude until it has
+been cited and verified at the lower one. Four layers, each reading only the
+verified output of the one below:
+
+1. **Four bounded reasoning units** (`kind: inline_target`):
+   `leadership_transition`, `energy_security`, `escalation`,
+   `narrative_coordination` — each scoped across the 24 desks by
+   `has_tag("g20") or has_tag("watch")` and answering one narrow question. Per
+   run it assembles a cited 72h signal slice plus a grounding preamble,
+   cite-synthesizes a strict-JSON finding whose prose carries `[N]` citation
+   markers mapped to signal ids, runs the mandatory faithfulness verify, and
+   folds `effective_confidence`. Skill is a per-unit number, not a platform
+   one; the units stagger across the clock to spread the shared token budget.
+   Flow 12.
+2. **Per-country composition** (`country_composition`): one hedged, cited
+   second-order finding per desk over that desk's four verified units
+   (`[[ref:N]]` markers to the sub-claim findings). Its read slice INNER JOINs
+   on the faithfulness critique above the floor, so an unverified sub-claim
+   never enters the composition; an empty slice yields an honest
+   `confidence=0.0` "no source findings to synthesize" finding, never an
+   invented read. Flow 13.
+3. **World composition** (`world_assessor`, repointed from its old raw-signal
+   role): one global run composing the per-country reads into a cited, hedged
+   world view, surfacing cross-country disagreement rather than averaging it,
+   drilling country → units → source. Flow 13.
+4. **Banded scorecard** (`scorecard_producer`, deterministic — pure SQL, no
+   LLM): one banded row per active desk per tick, from a few high-precision
+   demote-never-promote rules over already-verified claims in a 14-day window.
+   Every band names the verified-claim id it rests on; a dimension with no
+   qualifying verified claim reads `insufficient-evidence` with an explicit
+   machine reason, and per-claim faithfulness below the floor demotes to
+   `low-faithfulness`. Flow 14.
+
+The live scorecard is a mix, by design: some countries band, others read
+all-`insufficient-evidence` (e.g. the US, whose unit faithfulness is genuinely
+low, so the rules refuse to manufacture a band). That is intended behavior,
+not a gap.
+
+### The mandatory faithfulness verify
+
+Legba measures **groundedness**, not truth: the verify pass asks *does each
+claim follow from its cited evidence?* — not *is the claim true in the
+world?*. Every cited finding is scored in `[0,1]` by two layers
+(`data/provenance/verify.py`): a **deterministic citation-presence floor**
+(always on — a fact-asserting clause with no `[N]` marker, or whose marker
+resolves to no real signal id, is an unsupported span), and an **optional LLM
+judge** (flag-gated by `LEGBA_VERIFY_LLM_JUDGE`; currently the same core model
+that produced the finding, not cross-family — a deliberate, temporary choice
+that shares the producer's blind spots; when the flag is off or the judge is
+unreachable the result degrades to the floor and is labelled
+`judge-unavailable`, never a fabricated number). The verdict persists as a
+`critique`, and `effective_confidence = min(confidence, faithfulness_score)`
+is folded at read time — gating a visible low-confidence tier, never a hard
+delete. The composition INNER JOIN and the scorecard bands key on this fold.
+Flow 12 steps 4–5; `ANALYSIS.md` §6.2.
+
+### Grounding — the stale-cutoff corrector
+
+The core analyst LLM's training cutoff predates the present, so left alone it
+backfills current world facts (who holds office, which alliances hold) from a
+stale prior — observed live when an assessor called the sitting US president
+"former". Grounding reuses the substrate as its own knowledge store: temporal
+facts and polarity-signed nexuses seeded from the curated `world_baseline` and
+live `wikidata_leaders` adapters hold the temporally honest "who holds office
+now", and a **GROUND phase** between PLAN and REASON prepends a dated
+"AUTHORITATIVE CURRENT CONTEXT" preamble for `inline_target` analysts that
+declare `grounding.enabled: true` (all four units do). The preamble is
+restricted to `source_type IN ('seed','curated')`, so curated ground truth
+outranks a machine-extracted live fact; grounding is off — byte-for-byte
+unchanged — for any analyst that does not opt in. Flow 10; `ANALYSIS.md` §7.9.
+
+### Scoreboards, the optimizer, and the measured forecast
+
+The analysis leg grades itself, and a no-skill or insufficient-sample result
+is published, not hidden:
+
+- **Skill scoreboard (per unit).** Faithfulness plus correctness-vs-reference
+  (`unit_correctness_scorer`, deterministic against operator gold labels —
+  honest-null at 0 labels; the gold set is tiny today, n=1, reported
+  insufficient-sample), the segregated calibration Brier, and the
+  acute-forecast BSS — all surfaced on `GET /api/v1/v3/eval/calibration`, with
+  per-analyst run timing on `GET /api/v1/v3/eval/analyst_runtime`. Flow 15.
+- **GEPA self-optimizer (scoped, measured).** `unit_optimizer` over one
+  measured unit (`leadership_transition`); every candidate carries a real
+  before/after paired faithfulness delta, stays human-gated, and can never
+  auto-promote on a degenerate, absent, or non-positive delta. The monolithic
+  `country_optimizer` stays cadence-frozen. Flow 4.
+- **Forecasting (a scoreboard, never a claim).** Returns only as the
+  `acute_forecasts` Brier/BSS scoreboard (precise question + window +
+  probability + auto-resolve); a degenerate probability vector abstains. It
+  currently reports **no proven skill**, and that null is published. Flow 15.
+
+Retirements ride with this: the monolithic `country_assessor` one-pager and
+the forecast-as-claim predictors (`country_predictor`,
+`india_energy_predictor`) are retired and stopped — their historical rows
+remain in the DB, unread; nothing is deleted or de-registered. Details in the
+roster notes below and `SEAMS.md`.
+
+### Agency — the governed actuation surface
+
+When an analyst needs to *act* on the world (enqueue a media job, emit to a
+channel, discover a source, fetch a URL) rather than only write substrate, it
+does so through the action-pack agency plane — never directly. Every action
+passes a three-way gate (resolve ∩ allow ∩ applicability), a per-pack governor
+against a global budget envelope, and lands a reversible, stamped provenance
+row. Web egress is guarded, not trusted; writes are operator-gated by default.
+This is the only place untrusted text can drive an effect.
+`AGENCY_GATING_MODEL.md`; `ANALYSIS.md` §5.
+
+### Provenance — the through-line
+
+Every stage stamps lineage. A signal carries immutable acquisition provenance
+(source, fetch time, pipeline); every analyst output stamps `derived_from`
+with the substrate UUIDs it read, so `GET /api/v1/lineage/finding/{id}` walks
+a world composition → its country reads → their units → each unit's cited
+signals → each signal's acquisition record, with zero dangling links.
+Orthogonally, every analyst run extends a per-analyst SHA-256 hash-chained
+receipt chain in `analyst_traces`; each lineage node carries a `receipt_hash`
+and a `chain_consistent` boolean, and the UI badge reads "chain-consistent
+(single-node)" — an honest scope statement, not an external
+cryptographic-signing claim (Ed25519 signing exists only on the descriptor
+audit log, not on analyst outputs). Flow 2 step 12 and Flow 12 step 6;
+`ANALYSIS.md` §6.1 / §7.7.
+
+### The journal — the reflective layer over the pipeline
+
+The `journal_assessor` is the one analyst pointed at the whole organism — its
+own self, state, and flow — rather than one slice of it. It is deliberately
+**off-chain**: the 11th `OutputKind` (`journal`) lands in the dedicated
+`journal_entries` table with an always-empty `derived_from`, is absent from
+the lineage catalog (a lineage walk can never surface a journal node), and
+holds only read + propose packs, so it can never write a fact / finding /
+nexus. The entry tier runs every 12h and the consolidation tier daily;
+everything outward goes through the human-gated `journal_proposals` queue
+(routing its reflections back through that queue is a future item, not yet
+wired). Flow 11.
+
+---
+
+## The walkthroughs
+
+Each flow below is a numbered step list with `file:line` citations:
 
 | # | Flow | Tier / role | State |
 |---|---|---|---|
@@ -37,18 +305,9 @@ Walkthroughs, each a numbered step list with `file:line` citations:
 | 14 | **The banded scorecard** — deterministic rules over already-verified claims → one honest row per active desk (g20/watch) | honest top | **LIVE** |
 | 15 | **The skill scoreboard + measured forecast** — per-unit faithfulness/correctness, calibration Brier, acute-forecast BSS (honest-null / abstain) | measurement | **LIVE** (no proven skill yet) |
 
-> **Two analysis tiers (ARCHITECTURE §0).** Flow 1 is the **TIER-1 INLINE** tier —
-> the deterministic `data/filters/` baseline pipeline run *per-Signal at acquisition,
-> before fan-out, no LLM* (its writes: enriched signals + altitude-0 facts + entities).
-> Flow 6 (fact extraction) is the inline `fact_extractor` stage *inside* Tier 1. Every
-> other flow here (2-5, 7-15) is the **TIER-2 SLICE/CADENCE** tier — `data/analysts/`
-> reading accumulated slices/substrate on a Dapr reminder or reactive trigger and
-> *reasoning* (the analysis spine of Flows 12-15 is all Tier-2). The two never collapse:
-> Tier 1 is at-ingest and cheap, Tier 2 is cadence-batched so LLM cost is decoupled from
-> the ingest firehose.
-
-**The LIVE analysis-spine arc** (every claim below cites the producing `file:line`;
-the `OutputKind` enum now has **twelve** members —
+**Output kinds, the live roster, and retirements** (reference notes; every
+claim below cites the producing `file:line`; the `OutputKind` enum has
+**twelve** members —
 `src/legba/data/provenance/kinds.py:77-109`):
 - **`OutputKind.FACT` (`= "fact"`) and `OutputKind.NEXUS` (`= "nexus"`)** sit
   alongside the original findings/situations/hypotheses/predictions/alerts/
@@ -517,8 +776,8 @@ into the analyst's live system prompt.
 > retired `country_assessor` stays **cadence-frozen** (descriptor still `state: active`
 > and registered, but null cadence so it never fires; byte-unchanged; SEAMS #30).
 
-This is the durability substrate that replaced Temporal — one Dapr control plane (anchor
-§2.2). The optimizer kind calls through a stable `temporal_client` interface (the name is
+This is the durability substrate that replaced Temporal — one Dapr control plane.
+The optimizer kind calls through a stable `temporal_client` interface (the name is
 historical; it just means "workflow client",
 `src/legba/data/analysts/optimizer.py:303`). The workflow mechanics below are identical
 for either optimizer descriptor — only the `unit_optimizer` one is registered/live.
@@ -1100,8 +1359,7 @@ beat) — its only live effect today is its own next entry.
 > (`lineage_api._SUBSTRATE_TABLES`), so a `derived_from` walk FROM a
 > fact/situation/nexus can NEVER surface a journal node
 > (`0048_journal.sql:17-21`,`:58-60`). A gating test enforces that it never writes
-> a fact/finding/nexus. "Poetry without evidence is noise. Evidence without
-> perspective is just a log file."
+> a fact/finding/nexus.
 
 1. **Cadence run (one global META sweep).** No `subscription.targets` block →
    the `journal_assessor` kind is a META analyst, so its cadence tick reaches
@@ -1182,8 +1440,7 @@ beat) — its only live effect today is its own next entry.
    `propose_self_revision`; protected sections auto-reject) — goes to the
    HUMAN-GATED `journal_proposals` queue (`0048_journal.sql:92`), NEVER a live
    table. Its only un-gated effect is its OWN continuity (it reads its last entry +
-   current consolidation into its next run). "It can write its own next breath but
-   cannot rewrite its own rules without the operator."
+   current consolidation into its next run).
 
 6. **Accept → idempotent per-kind apply.** A human accepts/rejects via the review
    surface; on accept, an idempotent per-`proposal_kind` apply worker runs the
@@ -1229,8 +1486,8 @@ ASSEMBLING a cited 72h signal slice (+ the Flow 10 accumulated-facts grounding
 preamble), cite-SYNTHESIZING a strict-JSON `FindingPayload` whose prose carries `[N]`
 citation markers mapped to signal ids, then running the
 **mandatory faithfulness VERIFY pass** and folding
-`effective_confidence = min(confidence, faithfulness_score)` — the unit loop that IS
-the product. This is the loop the whole system composes bottom-up.
+`effective_confidence = min(confidence, faithfulness_score)` — the unit loop the
+rest of the spine composes bottom-up.
 
 > **A "desk" is a scoped subject-frame, not a surveilled entity.** A `target`
 > descriptor is really a named SCOPE-FRAME that a set of analysts work — a desk — not

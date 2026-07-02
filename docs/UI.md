@@ -1,18 +1,17 @@
 # Legba UI — Operator Console
 
-`legba-ui-v3` is the operator console for Legba — the decompositional analysis
-system that turns a firehose of sources into **cited, faithfulness-verified,
-drillable** reads over whatever domain the deployment configures (the shown
-exemplar is geopolitics / G20). It is a single-page **Vite + React +
+This document describes `legba-ui-v3`, the operator console for Legba: a
+**composable panel workstation**. It is a single-page **Vite + React +
 TypeScript** app whose workspace is a [Dockview](https://dockview.dev) tiling
-surface. The operator opens **panels** into a draggable grid; each panel is a
-self-contained read (or authoring) surface over one slice of the substrate, the
-registry, or the runtime.
+surface — the operator opens **panels** into a draggable grid, and each panel
+is a self-contained read (or authoring) surface over one slice of the
+substrate, the registry, or the runtime. New here? Start with the
+[README](../README.md) and the [Tour](TOUR.md).
 
 The read/drill product surfaces — the **cited read card** in the Inspector, the
 **banded per-country scorecard** and the **honest skill scoreboard** in Eval
 Scorecard, and the **provenance lineage DAG** in The Why — are described in §3.
-The system MEASURES groundedness (does each claim follow from its cited
+The system measures groundedness (does each claim follow from its cited
 evidence?), not truth; the UI is written to state that plainly and to show weak
 or unmeasured results honestly rather than hide them.
 
@@ -30,6 +29,14 @@ Adding a new panel *instance* — a new country target, a new analyst — is a
 descriptor-only change: the new binding shows up in the sidebar with no UI
 rebuild. See `ARCHITECTURE.md` for the descriptor registry and runtime, and
 `ACQUISITION.md` for the source / signal / fan-out model the panels read.
+
+**Contents:** [1. The shell](#1-the-shell) ·
+[2. Panel registration & loading](#2-panel-registration--loading) ·
+[3. The panel set](#3-the-panel-set) ·
+[4. Data access & the auth chain](#4-data-access--the-auth-chain) ·
+[5. Building & running](#5-building--running) ·
+[6. Panel tiers](#6-panel-tiers) ·
+[7. Future seams](#7-future-seams)
 
 ---
 

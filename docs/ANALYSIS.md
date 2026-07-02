@@ -11,6 +11,15 @@ This is one of the four planes of the platform. For the acquisition plane
 the substrate stores see `ARCHITECTURE.md`; for the AI models the analysts
 call see `AI_MODELS.md`; for operating the runtime see `RUNBOOK.md`.
 
+**Contents:** [1. Where analysis sits](#1-where-analysis-sits) ·
+[2. Coalescing triggers](#2-coalescing-triggers) ·
+[3. Analyst kinds — the taxonomy](#3-analyst-kinds--the-taxonomy) ·
+[4. The deterministic sub-handler library](#4-the-deterministic-sub-handler-library) ·
+[5. Action-pack agency](#5-action-pack-agency) ·
+[6. The eval loop](#6-the-eval-loop--analyst--critic--optimizer) ·
+[7. Analytical methodology](#7-analytical-methodology) ·
+[8. Proven end-to-end](#8-proven-end-to-end)
+
 ---
 
 ## 1. Where analysis sits
@@ -303,7 +312,7 @@ declares:
   llm_provider`) the builder resolves against the live stack; `method.llm`
   also carries `max_tokens` and the per-analyst `budget_tokens_per_day`. Each
   bounded unit caps `max_tokens: 1536` / `budget_tokens_per_day: 300000`, and —
-  the load-bearing addition — declares a `method.llm.verify` stack_ref
+  the key addition — declares a `method.llm.verify` stack_ref
   (`raw: llm.primary.openai_compat`) that names the faithfulness judge (§6.2) —
   **currently the SAME core model** as the producer, **not** cross-family. That is
   a deliberate, temporary choice after the earlier cross-family 8B judge
@@ -1171,7 +1180,7 @@ nowhere — a positive score means confidence is predictive), and drift across
 windows, feeding the L4 process-refinement level and the eval loop. **Live state
 (2026-06-18): the loop now produces a Brier** — but it is a *self-consistency*
 Brier, not yet calibration against exogenous reality (the distinction below is the
-load-bearing caveat).
+essential caveat).
 
 > **The outcome-resolution leg now fires, but at the self-consistency tier
 > (2026-06-18).** Phase D wired status-transition resolution: when a hypothesis
@@ -1606,7 +1615,7 @@ or the top two clusters are a **near-tie** (the best does not beat the runner-up
 `DOMINANCE_RATIO = 1.25`). A surfaced winner is a *strong, dominant* value; a
 near-tie is left visibly unresolved.
 
-**Detect-only — the load-bearing invariant (B15).** The arbiter **never** mutates a
+**Detect-only — the hard invariant (B15).** The arbiter **never** mutates a
 fact. It touches zero of `valid_until` / `superseded_by` / `value` / `confidence`
 and never calls the supersession path. Its entire output is the **sidecar**
 (`fact_contention` + `fact_contention_values`, Wave 1, migration `0055`) plus three
@@ -1664,8 +1673,7 @@ stayed NULL), Wave-4 coexistence (a same-tier fuzzy-distinct value coexisted,
 proven **consulted live** (a genuine round-trip on a near-tie,
 `llm_tiebreak_calls = 1`, no errors) and correctly **abstained** on symmetric
 evidence — but a *successful* LLM **pick** (`llm_tiebreaks ≥ 1`) is **not yet
-observed live**; it awaits an asymmetric near-tie in the soak. Plan + decisions:
-`planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md`.
+observed live**; it awaits an asymmetric near-tie in the soak.
 
 ---
 
