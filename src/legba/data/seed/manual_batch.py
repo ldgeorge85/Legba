@@ -30,18 +30,36 @@ Three reconciliation MODES (declared on the manifest, overridable on the CLI):
     open prior unconditionally, INCLUDING a higher-tier ``seed`` / ``curated``
     one. History is still preserved (the prior row is closed, not deleted).
 
-THE FORCE-MODE TIER TRAP (load-bearing). ``supersede_prior_facts`` guards a
-downgrade: an incoming fact whose ``source_type`` ranks BELOW the prior's
-(``_SOURCE_TIER_RANK`` — ``seed``/``curated`` = 2, everything else incl.
-``manual`` = 1) cannot close it. A manual batch stamped ``source_type='manual'``
-is tier 1, so through the normal write path it can NEVER supersede a seeded
-fact. For a ``force`` we therefore pre-close the differing-value priors by
+DECISIVE SUPERSESSION — the pre-close (load-bearing). A ``supersede`` decision
+(``merge`` or ``force``) pre-closes the differing-value open prior(s) itself, by
 calling ``supersede_prior_facts`` with ``incoming_source_type=None`` (the
-journal-correction precedent: a ``None`` incoming rank disables the guard) while
-STILL stamping the new row ``source_type='manual'`` — so the operator's force
-lands WITHOUT quietly widening the row's provenance tier to a grounding-eligible
-``curated``. Nexuses have no tier guard (``supersede_prior_nexuses`` closes any
-differing prior), so ``merge`` and ``force`` coincide for them.
+journal-correction precedent: a ``None`` incoming rank disables the guard) BEFORE
+the ``write_fact`` insert, while STILL stamping the new row ``source_type='manual'``
+— so the operator's reconciliation lands WITHOUT quietly widening the row's
+provenance tier to a grounding-eligible ``curated``. The guard-off pre-close is
+what makes the batch's own supersession DECISIVE against two write-path defaults
+that would otherwise leave the new value NOT the single open truth:
+
+  * THE TIER TRAP. ``supersede_prior_facts`` guards a downgrade: an incoming fact
+    whose ``source_type`` ranks BELOW the prior's (``_SOURCE_TIER_RANK`` —
+    ``seed``/``curated`` = 2, everything else incl. ``manual`` = 1) cannot close
+    it. A manual (tier-1) batch could NEVER supersede a seeded fact through the
+    normal write path. This only matters for ``force`` — a ``merge`` that meets a
+    higher-tier prior is caught earlier: ``classify_fact`` returns ``conflict``
+    (reported, no write), NOT a silent contention. So by the time a ``merge``
+    reaches the pre-close, no open prior outranks the incoming and guard-off is
+    safe (it closes exactly the same-or-lower-tier priors the classifier allowed).
+  * THE CONTENTION COEXISTENCE CARVE-OUT. With ``LEGBA_FACT_CONTENTION`` ON
+    (the live default), the write path's ``supersede_prior_facts`` SPARES a
+    same-tier FUZZY-DISTINCT prior (leaving e.g. "Ada" open beside "Bo" so the
+    detect-only arbiter can group them next cadence). That coexistence is for
+    AMBIENT machine disagreement — an operator ``merge`` / ``force`` is an
+    EXPLICIT reconciliation, so the pre-close (``incoming_source_type=None``
+    disables the carve-out too) makes the new value the single open truth rather
+    than minting a contention the operator did not ask for.
+
+Nexuses have no tier guard (``supersede_prior_nexuses`` closes any differing
+prior), so ``merge`` and ``force`` coincide for them.
 
 PROVENANCE (the honesty rail). The manifest's ``default_provenance`` maps
 straight onto the row ``source_type``: ``curated`` (grounding-eligible — the
@@ -513,10 +531,22 @@ async def _apply_fact(
     await _resolve_entity(conn, canonical_name=record.subject)
     await _resolve_entity(conn, canonical_name=record.value)
     row_id = uuid4()
-    if mode is BatchMode.FORCE and action is RecordAction.SUPERSEDE:
-        # Operator-authority supersession: bypass the source-tier guard
-        # (incoming_source_type=None) so a manual (tier-1) batch can retire a
-        # seed/curated (tier-2) prior — WITHOUT stamping the new row 'curated'.
+    if action is RecordAction.SUPERSEDE:
+        # A DECISIVE operator supersession — pre-close the differing-value open
+        # prior(s) with the guard OFF (incoming_source_type=None) so it lands
+        # regardless of BOTH the source-tier guard AND the contested-claims
+        # COEXISTENCE carve-out. The latter is the load-bearing reason to pre-
+        # close even in `merge`: when LEGBA_FACT_CONTENTION is ON, the write
+        # path's own supersede would SPARE a same-tier fuzzy-distinct prior
+        # (leaving "Ada" open beside "Bo" as a contention for the detect-only
+        # arbiter) — but an operator merge is an explicit reconciliation, not
+        # ambient machine disagreement, so the new value MUST become the single
+        # open truth. Guard-off is safe here for BOTH modes: `classify_fact`
+        # already refused a HIGHER-tier prior in `merge` (→ CONFLICT, returned
+        # above before any write), so by here no open prior outranks the
+        # incoming; `force` is operator authority over any tier. Either way the
+        # new row is still stamped `source_type='manual'` below (never widened
+        # to grounding-eligible `curated`).
         await supersede_prior_facts(
             conn,
             subject=record.subject,
