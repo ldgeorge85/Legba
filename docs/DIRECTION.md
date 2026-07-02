@@ -1,39 +1,31 @@
 # Legba — Direction
 
-*The forward engineering direction for the capabilities Legba deliberately does
-NOT ship yet. This is the public answer to "where is RBAC / STIX / MCP / …?" —
-one page per item, each grounded in the code as it exists today, with the
-integration points named so the design is checkable against the tree.*
+The forward engineering direction for capabilities Legba deliberately does NOT
+ship yet — the public answer to "where is RBAC / STIX / MCP / …?". One page per
+item, each grounded in the code as it exists today, with the integration points
+named so the design is checkable against the tree. New here? Start with the
+[README](../README.md) and the [Tour](TOUR.md).
 
-Legba is **a source-first, decompositional intelligence system**: it ingests
-open-source feeds and turns them into **cited, faithfulness-verified, drillable
-reports** over whatever domain you configure. The analysis spine runs bottom-up —
-signals → temporal `facts` / reified `nexuses` → **four bounded reasoning units**
-(each answering one narrow question over a cited signal slice) → a **per-country
-composition** over the verified units → a **world composition** over the country
-reads → a **banded scorecard** — and every claim is cited to its source, checked
-by a **mandatory faithfulness pass**, and auditable hop-by-hop back to the
-original signal via a SHA-256 receipt chain. What sets Legba apart is the
-discipline, not the data: **cited synthesis + a mandatory verify pass + a hash-
-chained provenance record, on a descriptor-driven, source-first, self-hostable
-(AGPL) engine** — not privileged data access or analytic maturity. The engine is
-domain-agnostic; **geopolitical country assessment across 24 scoped country desks
-— the 19 G20 economies plus a high-consequence watch tier (Israel, Iran, Ukraine,
-Taiwan, North Korea; descriptor ids `country_watch_il/ir/ua/tw/kp`) — is the shown
-exemplar, not the system's identity**. (A "target" here is a scoped subject/desk a
-roster of analysts works, not a surveilled entity; the units + `country_composition`
-subscribe on `has_tag("g20") or has_tag("watch")`, so adding a country is
-register-a-target, no code.) Swap the sources, desks, and units and the same
-pipeline reports over any domain.
+**Contents:**
+[0 Deployment perimeter](#0-deployment-perimeter--single-operator-single-tenant-locked) ·
+[1 RBAC / SSO](#1-rbac--sso) ·
+[2 Tenancy enforcement](#2-tenancy-enforcement) ·
+[3 STIX / TAXII + MISP](#3-stix-21--taxii-export--misp-sync) ·
+[4 MCP server](#4-mcp-server) ·
+[5 Multimodal](#5-multimodal-for-real) ·
+[6 Scale-out](#6-scale-out) ·
+[7 Fallback-model budget demotion](#7-fallback-model-budget-demotion-decision-f-2) ·
+[8 Deep-crawl discovery jobs](#8-deep-crawl-discovery-jobs-decision-f-1) ·
+[9 Data-integrity sweeps](#9-data-integrity-sweeps-re-homed-as-integrity_sweep--built) ·
+[10 Knowledge grounding](#10-knowledge-grounding--current-world-state-injection-built-tier-2-designed)
 
-**Honesty is the product — and honesty means measuring groundedness, not
-truth.** The mandatory verify pass scores whether each claim *follows from its
+One distinction applies everywhere below: the mandatory verify pass measures
+**groundedness, not truth**. It scores whether each claim *follows from its
 cited evidence* (a faithfulness score in `[0,1]`, from an LLM judge — currently
 the same core reasoning model that writes the analysis, not cross-family (a
 deliberate, temporary choice; see `AI_MODELS.md` §3) — plus a deterministic
-citation-presence floor); it does **not** adjudicate
-whether the claim is true about the world. That distinction is load-bearing
-everywhere below. Within the **built** system this document still separates the
+citation-presence floor); it does **not** adjudicate whether the claim is true
+about the world. Within the **built** system this document still separates the
 **measured core** — the four units, the per-country and world compositions, the
 banded scorecard, and the provenance / drill-down that carries them — from **the
 ambitious legs, which now return ONLY as measured, honestly-reported
@@ -344,9 +336,7 @@ Descriptor-declared tools remain the second catalog source, fetched from the
 registry over HTTP (catalog endpoint or the existing WebSocket event stream)
 instead of relying on in-process population — which fixes the standalone-empty
 problem at the same time. Transport: stdio first; HTTP/SSE transport later if
-a remote client materializes. Note `docs/mcp_setup.md` describes the
-pre-reshape 8-tool catalog and is stale; this page supersedes its
-future-state section.
+a remote client materializes.
 
 **Integration points.** `create_server` (`src/legba/ui/mcp_server.py`);
 `MCPToolRegistry.register_from_descriptor` / `.handle`
@@ -356,6 +346,53 @@ HTTP-client pattern to reuse.
 
 **Status:** descriptor-tool plumbing + stdio server **built**; the
 consult / substrate-reads / lineage MCP tool surface **designed, NOT built**.
+
+### Current setup
+
+How to run the stdio server that exists today (with the catalog caveat above:
+a separately-launched `legba-mcp` process lists an empty tool catalog until the
+runtime-population gap is closed — it fails loud, answering an unknown tool
+call with the available-tool list, never fabricated output).
+
+An analyst descriptor surfaces a tool by declaring an `outputs.mcp_tool`
+binding (`tool_name`, `description`, `input_schema`, and a `mode` —
+`latest_output` returns the analyst's most recent output for the bound scope;
+`consult_on_demand` triggers an on-demand analyst run with the call's args).
+On descriptor activation the runtime calls
+`MCPToolRegistry.register_from_descriptor`; on retire it unregisters. All
+registered tools are read-only or run-triggering — no registry mutations ride
+MCP.
+
+Build the image and point the MCP client (e.g. Claude Code) at it, launched
+per conversation:
+
+```
+docker compose --profile mcp build     # docker/Dockerfile.mcp → legba/legba-mcp:latest
+```
+
+```jsonc
+{
+  "mcpServers": {
+    "legba": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "--network=legba_default",
+               "--env-file=/usr/local/deployments/active/legba/.env",
+               "legba/legba-mcp:latest"]
+    }
+  }
+}
+```
+
+Host-mode alternative (module or entry point):
+
+```bash
+cd /usr/local/deployments/active/legba
+PYTHONPATH=src python -m legba.ui.mcp_server   # as a module
+legba-mcp                                      # entry point, after pip install -e .
+```
+
+Transport is stdio (JSON-RPC); logging goes to stderr so stdout stays clean
+for the protocol.
 
 ---
 
@@ -655,8 +692,8 @@ in-force alliances, the present state of an ongoing conflict — it backfills fr
 stale prior. The live failure that forced this: the assessor called the current US
 president a "former" president (its training data predates the 2024 election), and
 the signal slice (recent headlines) rarely restates a background fact like "X is the
-head of state", so the model had no in-context correction. Design:
-`planning/KNOWLEDGE_GROUNDING_PLAN.md`.
+head of state", so the model had no in-context correction. The shipped design
+is described in `ANALYSIS.md` §7.9.
 
 **Chosen approach — the substrate is the grounding store.** Legba already stores the
 temporally-honest answer (temporal `facts` with `valid_from`/`valid_until`/

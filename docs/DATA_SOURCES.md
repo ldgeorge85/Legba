@@ -1,22 +1,240 @@
 # Legba — Data Sources
 
-*The source-handler catalog. What each kind reaches, how it's configured, how to add your own.*
+This doc catalogs Legba's data sources: how many there are and at what scope
+(the three-tier model and the 46-source catalog), the fourteen source-handler
+kinds a descriptor can use, and how to register a source or add a new handler
+kind. It is written for operators deciding what to register and for developers
+adding a handler. For how a feed becomes a canonical signal (actor → baseline
+enrichment → publish) see `ACQUISITION.md`; for the exact registration
+commands see `SETUP.md` and `RUNBOOK.md`.
+
+**Contents**
+
+- [1. The three-tier scope model](#1-the-three-tier-scope-model)
+- [2. The full catalog (46 sources)](#2-the-full-catalog-46-sources)
+- [3. Credentialed sources: live status](#3-credentialed-sources-live-status)
+- [4. Registering sources (reaching full scope)](#4-registering-sources-reaching-full-scope)
+- [5. The Signal a handler produces](#5-the-signal-a-handler-produces)
+- [6. Acquisition modes: poll vs push](#6-acquisition-modes-poll-vs-push)
+- [7. Implemented source kinds](#7-implemented-source-kinds)
+- [8. Cost-tier summary](#8-cost-tier-summary)
+- [9. Source credibility scoring](#9-source-credibility-scoring)
+- [10. NER and relation-extraction backend](#10-ner-and-relation-extraction-backend)
+- [11. Adding a new source kind](#11-adding-a-new-source-kind)
+- [12. Future seams (not yet working)](#12-future-seams-not-yet-working)
+
+---
+
+## 1. The three-tier scope model
+
+"How many sources?" has three honest answers, because three different things
+are being counted. Anchor every scope claim to these:
+
+| Tier | Count | What it is | Where it comes from |
+|---|---|---|---|
+| **1 — Minimal cold-start** | **3** shared RSS | The smallest loop that proves the path from empty volumes: BBC World, Al Jazeera World, Deutsche Welle. This is *all a fresh deploy gets* if it stops at the documented working-set. | `scripts/bringup_register_sources.py` (standalone 3-source registrar) and the working-set script `scripts/bringup_register_p17_workingset.py` (RUNBOOK §7) |
+| **2 — Full repo catalog** | **46** sources | The full catalog of independently-verified, no-auth feeds: **43 `rss` + 3 `geojson`** hazard feeds. **NOT auto-run on deploy and NOT part of the working-set bring-up** — a separate manual step a fresh operator currently misses. Running it is how you reach current/full scope. | `scripts/bringup_register_source_catalog.py` (the `CATALOG` tuple — 46 `CatalogEntry`, owner `s1_catalog`) |
+| **3 — Live-productive** | **49** sources | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the 46-catalog sources **plus** seed / world-baseline curated adapters. | Live reconcile against the production `signals` table |
+
+Two adjacent counts round out the picture (neither is a different set of
+*feeds* — they are registry / fan-out bookkeeping):
+
+- **52 registered head source descriptors** — distinct non-autowired active
+  head `source_descriptors` rows in the registry (the catalog plus the
+  operator-pinned `descriptors/source_*.yaml` and seed sources; a few of these
+  are registered but quiet, which is why "registered" (52) ≥ "live-productive"
+  (49)).
+- **63 autowired per-target fan-out templates** (`src_autowire*` / `src_tmpl*`)
+  — these are **generated, not hand-authored** feeds. They are not new
+  upstreams; they are the discovery/auto-wire machinery's per-target binding
+  templates (one published BBC feed fans out to nineteen G20 targets without
+  re-fetching anything — see `ACQUISITION.md` §6). Do **not** count them as
+  ingest sources.
+
+> **Why three numbers.** A fresh deploy that stops at the documented
+> working-set gets **only 3 RSS feeds** — the minimal cold-start verification
+> set, not the catalog and not the live scope. The full 46-source catalog
+> lives in a separate, manually-run registration script that the working-set
+> bring-up does **not** invoke (§4). A review that sees "only 3 RSS feeds" is
+> reading the cold-start set.
+
+**The one-line answer.** *3 minimal · 46 catalog · 49 live-productive* — plus
+52 registered descriptors and 63 autowired fan-out templates. The fix for the
+"only 3 feeds" state is to register the 46-source catalog (§4).
+
+---
+
+## 2. The full catalog (46 sources)
+
+The catalog is **43 `rss` + 3 `geojson`** entries — every feed below was probed
+live (HTTP GET + `feedparser` / GeoJSON parse) before inclusion. Each `rss`
+entry runs the baseline enrichment chain `dedupe (tiers 1–2) → language_detect →
+ner_multilingual → geocode` (plus `fact_extractor` on the four feeds flagged
+below); `geojson` is **geocode-only** by default, except NWS, which opts into
+`language_detect + ner_multilingual` (its alerts carry rich English headline /
+description text). Registration mechanics are in §4.
+
+`fact_extract = True` on **4** feeds only: `source.cna.all`, `source.npr.world`,
+`source.france24.english`, `source.economist.international`.
+
+### 2.1 RSS / Atom feeds (43)
+
+| # | Source id | Feed URL | Notes |
+|---|---|---|---|
+| 1 | `source.gdacs.alerts` | `https://www.gdacs.org/xml/rss.xml` | crisis / hazard, gov |
+| 2 | `source.crisisgroup.latest` | `https://www.crisisgroup.org/rss` | thinktank |
+| 3 | `source.newhumanitarian.all` | `https://www.thenewhumanitarian.org/rss.xml` | |
+| 4 | `source.who.news` | `https://www.who.int/rss-feeds/news-english.xml` | gov / health |
+| 5 | `source.iaea.topnews` | `https://www.iaea.org/feeds/topnews` | gov / nuclear |
+| 6 | `source.cdc.travel_notices` | `https://wwwnc.cdc.gov/travel/rss/notices.xml` | gov |
+| 7 | `source.cdc.outbreaks_us` | `https://tools.cdc.gov/api/v2/resources/media/285676.rss` | gov, geo=US |
+| 8 | `source.hrw.news` | `https://www.hrw.org/rss/news` | human_rights |
+| 9 | `source.amnesty.latest` | `https://www.amnesty.org/en/latest/feed/` | human_rights |
+| 10 | `source.civicus.monitor` | `https://monitor.civicus.org/feed/` | human_rights |
+| 11 | `source.csis.analysis` | `https://www.csis.org/rss.xml` | thinktank |
+| 12 | `source.rand.press` | `https://www.rand.org/news/press.xml` | thinktank |
+| 13 | `source.atlanticcouncil.all` | `https://www.atlanticcouncil.org/feed/` | thinktank |
+| 14 | `source.warontherocks.all` | `https://warontherocks.com/feed/` | thinktank / defense |
+| 15 | `source.bellingcat.all` | `https://www.bellingcat.com/feed/` | osint |
+| 16 | `source.foreignpolicy.all` | `https://foreignpolicy.com/feed/` | |
+| 17 | `source.foreignaffairs.all` | `https://www.foreignaffairs.com/rss.xml` | |
+| 18 | `source.defenseone.all` | `https://www.defenseone.com/rss/all/` | defense |
+| 19 | `source.twz.all` | `https://www.twz.com/feed` | defense / osint |
+| 20 | `source.gcaptain.all` | `https://gcaptain.com/feed/` | maritime / defense |
+| 21 | `source.taskandpurpose.all` | `https://taskandpurpose.com/feed/` | defense, geo=US |
+| 22 | `source.yonhap.english` | `https://en.yna.co.kr/RSS/news.xml` | wire, geo=KR, state-affiliated |
+| 23 | `source.cna.all` | `https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml` | geo=SG, **fact_extract** |
+| 24 | `source.anadolu.english` | `https://www.aa.com.tr/en/rss/default?cat=guncel` | geo=TR, state-affiliated |
+| 25 | `source.tehrantimes.all` | `https://www.tehrantimes.com/rss` | geo=IR, state-affiliated |
+| 26 | `source.tass.english` | `https://tass.com/rss/v2.xml` | geo=RU, state-affiliated |
+| 27 | `source.allafrica.headlines` | `https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf` | aggregator / africa |
+| 28 | `source.africanews.all` | `https://www.africanews.com/feed/rss` | africa |
+| 29 | `source.timesofindia.world` | `https://timesofindia.indiatimes.com/rssfeeds/296589292.cms` | south_asia |
+| 30 | `source.hindustantimes.world` | `https://www.hindustantimes.com/feeds/rss/world-news/rssfeed.xml` | south_asia |
+| 31 | `source.mercopress.all` | `https://en.mercopress.com/rss` | americas |
+| 32 | `source.globalvoices.all` | `https://globalvoices.org/feed/` | aggregator |
+| 33 | `source.voa.africa` | `https://www.voanews.com/api/z-botl-vomx-tpertmq` | africa, state-affiliated |
+| 34 | `source.npr.world` | `https://feeds.npr.org/1004/rss.xml` | **fact_extract** |
+| 35 | `source.france24.english` | `https://www.france24.com/en/rss` | state-affiliated, **fact_extract** |
+| 36 | `source.economist.international` | `https://www.economist.com/international/rss.xml` | **fact_extract** |
+| 37 | `source.xinhua.world` | `http://www.xinhuanet.com/english/rss/worldrss.xml` | state-affiliated |
+| 38 | `source.globaltimes.all` | `https://www.globaltimes.cn/rss/outbrain.xml` | geo=CN, state-affiliated |
+| 39 | `source.aljazeera.arabic` | `https://www.aljazeera.net/aljazeerarss/…` | lang=ar, state-affiliated |
+| 40 | `source.federalreserve.press` | `https://www.federalreserve.gov/feeds/press_all.xml` | gov / finance, geo=US |
+| 41 | `source.eia.press` | `https://www.eia.gov/rss/press_rss.xml` | gov / energy, geo=US |
+| 42 | `source.stategov.travel_advisories` | `https://travel.state.gov/_res/rss/TAsTWs.xml` | gov / advisory |
+| 43 | `source.fcdo.travel_advice` | `https://www.gov.uk/foreign-travel-advice.atom` | gov / advisory (Atom) |
+
+### 2.2 GeoJSON hazard / structured feeds (3)
+
+These are the **model-free, non-text** modality: the `geojson` handler emits
+`structured` / `application/geo+json` signals (geometry inlined, coordinates
+promoted to the `geo` column) with **no extraction model in the loop**. They are
+the special hazard/structured feeds — and the exogenous resolution catalogs the
+experimental forecast pilot reads (see `README.md` and `ANALYSIS.md`).
+
+| # | Source id | Endpoint URL | Notes |
+|---|---|---|---|
+| 1 | `source.usgs.earthquakes_m45` | `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson` | seismic, gov; `max_features` 5000 |
+| 2 | `source.nws.active_alerts` | `https://api.weather.gov/alerts/active?severity=Severe,Extreme` | weather, geo=US; `enrich_text=True` → also gets `language_detect` + `ner_multilingual` + `geocode` |
+| 3 | `source.nasa.eonet_events` | `https://eonet.gsfc.nasa.gov/api/v3/events/geojson?days=3` | natural events, gov |
+
+> **Probe-drops — NOT in the 46, do not count them.** The catalog script's
+> docstring lists feeds that were probed and deliberately **kept out** (dead /
+> blocked / discontinued as of 2026-06-12): ReliefWeb, ProMED, Brookings, Nation
+> Africa, DFAT Smartraveller, CISA, Kyodo, SIPRI, EMSC. These are excluded from
+> the catalog count.
+
+---
+
+## 3. Credentialed sources: live status
+
+The 46-source catalog exercises two handler kinds (`rss`, `geojson`); the full
+set of fourteen kinds is documented in §7. The catalog is the **no-auth,
+verified-live** subset that needs no credentials to register; the credentialed /
+push kinds below need a per-deployment secret in the vault before they poll,
+and each is registered by a per-source bringup. They are in **neither** the
+working-set **nor** the no-auth catalog, so a fresh deploy lights up with zero
+secrets and **none of these active** unless an operator opts each one in
+(provision the secret in the vault, then register the descriptor). Status in
+the reference deployment:
+
+| Source (descriptor) | Auth | Status |
+|---|---|---|
+| `source.telegram.org_channels` | Telegram API (id/hash/session) | **Active** — thousands of signals, hourly. The live exemplar of a credentialed source. |
+| `source.gdelt.doc_api` | none (free `json_api`) | **Active** — registered; the handler works, but GDELT's free DOC API rate-limits (`429`) bursty polls; it produces on its spaced cron cadence. |
+| `source.acled.conflict` | **OAuth2 password grant** (account email + password) | **Handler migrated to OAuth2** (ACLED retired the legacy api-key method); creds **authenticate** (token issued). Activation is blocked one step upstream: the ACLED account must be **granted data-API access in the ACLED Access portal** (a read returns `403 Access denied` until then). Once granted, flip the descriptor to active. |
+| `source.gdelt.bigquery` | GCP service account | descriptor-defined, **dormant** — no creds. |
+| `source.mediacloud.world` | MediaCloud API key | descriptor-defined, **dormant** — no creds. |
+| `source.opensanctions.api` · `.bulk` | API key / bulk download | descriptor-defined, **dormant**. |
+| `source.intelmq.cisa_kev` | IntelMQ collector + Redis bridge | descriptor-defined, **dormant** — needs IntelMQ infrastructure, not just a key. |
+| `source.reliefweb.reports` | keyless, but `appname` must be **approved** by ReliefWeb | descriptor-defined, **dormant** — would `403` until the appname is approved. |
+
+The takeaway: of the credentialed tier only **Telegram** is fully productive;
+**GDELT-DOC** is wired+active (rate-limit-pending); **ACLED** is code-ready and
+auth-validated but blocked on ACLED-side account authorization; the rest ship as
+ready descriptors awaiting creds/infra.
+
+---
+
+## 4. Registering sources (reaching full scope)
+
+Registration is a deploy-time step, not a code change — the live source set is
+the `source_descriptors` **DB rows**, not the `descriptors/*.yaml` files.
+
+- **Minimal (Tier 1).** The working-set bring-up
+  (`scripts/bringup_register_p17_workingset.py`) registers the 3 shared RSS
+  sources alongside the G20 targets, analysts, and action packs. A fresh deploy
+  that stops here has exactly 3 feeds.
+- **Full catalog (Tier 2) — the step a fresh operator misses.** Run the catalog
+  bring-up:
+
+  ```
+  python scripts/bringup_register_source_catalog.py           # register all 46
+  python scripts/bringup_register_source_catalog.py --verify  # dry-run: probe feeds live, register nothing
+  ```
+
+  This registers the full **46-entry** `CATALOG` (43 `rss` + 3 `geojson`) and
+  seeds host-level `source_credibility` rows (`ON CONFLICT DO NOTHING`, so
+  operator overrides always win). The script is **idempotent** — re-runs report
+  `unchanged` for already-current heads. Additional keyed kinds (GDELT, ACLED,
+  MediaCloud, …) are then authored as individual `SourceDescriptor`s on top of
+  this base (§3, §7).
+
+The exact commands (image-mode vs. repo-mounted-container idioms, the
+`LEGBA_DATA_PG_DB=legba` env pin, and the required order — migrate → register
+stack → register working set → **register the catalog** → boot the runtime) are
+in **`SETUP.md`** (the from-zero bootstrap guide) and **`RUNBOOK.md`** (operator
+runbook). This doc does not duplicate them.
+
+**Validated live scope** (a representative running deployment):
+
+| Metric | Count |
+|---|---|
+| Distinct sources actively producing signals | **49** |
+| Signals ingested | **54,197** |
+| Findings produced | **19,629** |
+| Facts | **3,019** |
+| Nexuses | **3,822** |
+| Situations | **25** |
+| Hypotheses | **398** |
+
+The 49 live sources = the 46 catalog integrations plus the seed /
+world-baseline curated sources.
+
+---
+
+## 5. The Signal a handler produces
 
 In Legba's source-first model, a **source owns acquisition**. A `SourceActor`
 turns a `SourceDescriptor` into a running actor that either polls on a cadence
 or receives a push, produces **one canonical, target-agnostic `Signal`**,
 enriches it once (baseline language / geo / entity NER), and publishes it once
 to NATS JetStream. Signals carry no `target_id` — they are observations, and the
-fan-out plane routes each one to many subscribing targets by predicate. This doc
-catalogs the **source-handler kinds** that produce those signals.
-
-For the descriptor schema see `src/legba/data/schemas/source.py`; for the
-acquisition pipeline (actor → baseline → publish) see `ACQUISITION.md` and
-`DESIGN.md`; for the predicate fan-out / subscription side see `DESIGN.md`.
-
----
-
-## 1. The `Signal` a handler produces
+fan-out plane routes each one to many subscribing targets by predicate. For the
+descriptor schema see `src/legba/data/schemas/source.py`; for the acquisition
+pipeline (actor → baseline → publish) see `ACQUISITION.md` and `DESIGN.md`; for
+the predicate fan-out / subscription side see `DESIGN.md`.
 
 Every handler — regardless of kind — yields the same `Signal` shape
 (`src/legba/data/sources/_contract.py`). The handler fills only the
@@ -42,7 +260,7 @@ absorbs overlap windows.
 
 ---
 
-## 2. Acquisition modes: poll vs push
+## 6. Acquisition modes: poll vs push
 
 `SourceDescriptor.acquisition` is `"poll"` or `"push"`
 (`"stream"` is a documented future seam, not implemented). The two modes map to
@@ -68,7 +286,7 @@ descriptor-validation-time config parsing).
 
 ---
 
-## 3. Implemented source kinds
+## 7. Implemented source kinds
 
 The runtime discovers handlers by walking `legba.data.sources` and collecting
 `kind → handler class` pairs (`src/legba/data/sources/__init__.py`). **Fourteen**
@@ -77,7 +295,7 @@ first-party kinds are registered today. Credential references in config are
 runtime resolves them at call time and the handler never caches them past a
 single pull.
 
-### 3.1 `rss` — RSS 2.0 / Atom 1.0 feeds
+### 7.1 `rss` — RSS 2.0 / Atom 1.0 feeds
 
 *Poll · free · `RSSSourceHandler` (`rss.py`)*
 
@@ -91,9 +309,9 @@ sends `If-None-Match` / `If-Modified-Since`; HTTP 304 yields an empty pull.
 
 The broadest, most permissive surface: works against any feed, no auth. It is
 the kind used for the 3-feed minimal cold-start set (BBC / Deutsche Welle /
-Al Jazeera) and for 43 of the 46 catalog integrations (§3.15).
+Al Jazeera) and for 43 of the 46 catalog integrations (§2).
 
-### 3.2 `gdelt_query` — GDELT 2.0 via BigQuery
+### 7.2 `gdelt_query` — GDELT 2.0 via BigQuery
 
 *Poll · free tier (GCP-billed scan) · `GDELTBigQuerySourceHandler` (`gdelt.py`)*
 
@@ -114,7 +332,7 @@ hard ceiling 10 GiB). An optional `daily_cap_bytes` tracks cumulative bytes in
 `state_store` and refuses pulls that would blow the rolling-day budget;
 `max_rows_per_pull` caps the `LIMIT`. Over-cap raises `CostCapExceeded`.
 
-### 3.3 `acled` — ACLED conflict / protest events
+### 7.3 `acled` — ACLED conflict / protest events
 
 *Poll · free for non-commercial use · `ACLEDSourceHandler` (`acled.py`)*
 
@@ -131,7 +349,7 @@ downstream dedup on `external_id`.
 ACLED's license is non-commercial (journalists / NGOs / academia); a commercial
 license is required for business use.
 
-### 3.4 `mediacloud` — Media Cloud open-news corpus
+### 7.4 `mediacloud` — Media Cloud open-news corpus
 
 *Poll · free tier · `MediaCloudSourceHandler` (`mediacloud.py`)*
 
@@ -147,7 +365,7 @@ keep the actor's event loop non-blocking).
 omits it. 429s are retried with backoff (`rate_limit_*` knobs); exhaustion
 raises `MediaCloudRateLimited`.
 
-### 3.5 `opensanctions` — sanctions / PEPs / criminal lists
+### 7.5 `opensanctions` — sanctions / PEPs / criminal lists
 
 *Poll · free (bulk) or paid (API) · `OpenSanctionsSourceHandler` (`opensanctions.py`)*
 
@@ -170,7 +388,7 @@ Plus `dataset` (e.g. `all` / `sanctions` / `peps` / `us_ofac_sdn`),
 `topics` controlled vocabulary (`sanction`, `role.pep`, `crime`, …) is preserved
 on the signal payload for downstream filters.
 
-### 3.6 `scraper` — generic pluggable web scraper
+### 7.6 `scraper` — generic pluggable web scraper
 
 *Poll · free (proxy costs optional) · `ScraperSourceHandler` (`scraper.py`)*
 
@@ -187,7 +405,7 @@ fail-open per RFC 9309), `request_timeout_seconds`, `user_agent`; optional
 `proxy_pool` (a `StackRef` to a residential-proxy pool component) and
 `proxy_country`.
 
-### 3.7 `firecrawl` — AI-friendly URL extraction
+### 7.7 `firecrawl` — AI-friendly URL extraction
 
 *Poll · paid (credit-based) · `FirecrawlSourceHandler` (`firecrawl.py`)*
 
@@ -203,7 +421,7 @@ Wraps the Firecrawl REST API (`api.firecrawl.dev`) over `httpx` with
 `CreditUsageRecord` per pull for the budget ledger. 401/403 → `FirecrawlAuthError`
 (hard); 429 → `FirecrawlRateLimited` (retryable).
 
-### 3.8 `telegram_channel` — Telegram channels
+### 7.8 `telegram_channel` — Telegram channels
 
 *Poll · free (account-bound) · `TelegramChannelSourceHandler` (`telegram.py`)*
 
@@ -219,7 +437,7 @@ is generated out-of-band), `channels` (handles or numeric ids),
 `lookback_hours` (default 24), `include_media`, `per_channel_message_limit`
 (≤ 1000), retry / backoff / `flood_wait_cap_seconds`.
 
-### 3.9 `discord_webhook` — Discord (inbound)
+### 7.9 `discord_webhook` — Discord (inbound)
 
 *Push · free · `DiscordWebhookSourceHandler` (`discord.py`)*
 
@@ -235,7 +453,7 @@ signal for provenance), `public_key_secret` (vault ref → hex Ed25519 public
 key), optional `allowed_event_types` whitelist (verification still runs on
 filtered events; non-listed events simply aren't emitted).
 
-### 3.10 `common_crawl_news` — Common Crawl CC-NEWS
+### 7.10 `common_crawl_news` — Common Crawl CC-NEWS
 
 *Poll · free (anonymous S3 read) · `CommonCrawlNewsSourceHandler` (`common_crawl.py`)*
 
@@ -252,7 +470,7 @@ scoping), and hard caps `max_records_per_run` / `max_warc_files_per_run` /
 `max_body_bytes` (each WARC is ~1 GB; the runtime re-invokes `pull` to continue
 from the cursor).
 
-### 3.11 `intelmq_collector_bridge` — IntelMQ collector bots
+### 7.11 `intelmq_collector_bridge` — IntelMQ collector bots
 
 *Poll · free · `IntelMQCollectorBridge` (`intelmq.py`)*
 
@@ -275,7 +493,7 @@ Plus `bot_module`, opaque `bot_config` (validated by IntelMQ, not Legba), the
 dependency, imported lazily; enabling the kind without the extra raises
 `IntelMQNotInstalled`.
 
-### 3.12 `generic_webhook` — reference inbound webhook
+### 7.12 `generic_webhook` — reference inbound webhook
 
 *Push · free · `GenericWebhookSourceHandler` (`generic_webhook.py`)*
 
@@ -289,7 +507,7 @@ header.
 `url_field` (payload keys for external id + canonical URL), optional
 `media_ref_field` (a payload key whose value becomes the signal's `media_ref`).
 
-### 3.13 `json_api` — generic polled JSON/CSV HTTP API
+### 7.13 `json_api` — generic polled JSON/CSV HTTP API
 
 *Poll · free (API-dependent) · `JsonApiSourceHandler` (`json_api.py`)*
 
@@ -324,9 +542,7 @@ payload/provenance never contains it. Example descriptors:
 convention) and `descriptors/source_gdelt_doc_api.yaml` (keyless GDELT DOC
 2.0 — the no-billing GDELT alternative).
 
----
-
-### 3.14 `geojson` — GeoJSON / GIS documents (model-free, structured)
+### 7.14 `geojson` — GeoJSON / GIS documents (model-free, structured)
 
 Polls a configurable GeoJSON (RFC 7946) document URL and emits
 `modality="structured"` Signals (`mime_type="application/geo+json"`) with
@@ -337,69 +553,13 @@ The live geo view is the separate v4 Leaflet Dockview panel
 inline `application/geo+json` modality renderer remains a badged placeholder
 (SEAMS #13) and is not the path used today.
 
-A curated catalog of **46 real-world feeds** (43 `rss` + 3 `geojson`: USGS
-`significant_week`, NWS `severity=Severe,Extreme`, NASA EONET `days=3` GeoJSON,
-EMSC retired, plus assorted curated RSS — GDACS, ICG, WHO, IAEA, CDC, HRW,
-Amnesty, CIVICUS, …) is registered by the `CATALOG` tuple in
-`scripts/bringup_register_source_catalog.py` — the operator-facing reference for
-what concrete `geojson` / `rss` descriptors exist out of the box. This is the
-**full/current-scope** bring-up path (see §3.15).
-
-### 3.15 Deploying to current scope (cold-start vs full catalog)
-
-The 3-feed RSS set (BBC / Deutsche Welle / Al Jazeera) is the **minimal
-cold-start verification set** — the smallest end-to-end loop that proves the
-acquisition → fan-out → analysis path from empty volumes. It is *not* the
-deployed scope and not a proven-live limit.
-
-To stand a fresh instance up to **current/full scope**, run the catalog
-bring-up:
-
-```
-python scripts/bringup_register_source_catalog.py        # register all 46
-python scripts/bringup_register_source_catalog.py --verify  # dry-run probe feeds first
-```
-
-This registers the full **46-entry** `CATALOG` (43 `rss` + 3 `geojson`
-handler integrations), seeds the `source_credibility` table, and (with
-`--verify`) probes each feed for liveness before registering. The `geojson` /
-`json_api` / additional keyed kinds (GDELT, ACLED, MediaCloud, …) are then
-authored as individual `SourceDescriptor`s on top of this base.
-
-**Validated live scope** (a representative running deployment):
-
-| Metric | Count |
-|---|---|
-| Distinct sources actively producing signals | **49** |
-| Signals ingested | **54,197** |
-| Findings produced | **19,629** |
-| Facts | **3,019** |
-| Nexuses | **3,822** |
-| Situations | **25** |
-| Hypotheses | **398** |
-
-The 49 live sources = the 46 catalog handler integrations plus the seed /
-world-baseline curated sources. The relation/extract backend in the NER chain
-is **GLiREL** (`jackboyla/glirel-large-v0`) emitting real per-relation
-confidence scores — see §3.16 below and `AI_MODELS.md`.
-
-### 3.16 NER / relation extraction backend
-
-The baseline NER + relation enrichment (`ner_multilingual`,
-`fact_extractor`) calls the hosted NLP stack, whose relation-extraction model
-is **GLiREL** (`jackboyla/glirel-large-v0`). GLiREL emits **real per-relation
-confidence scores** (live facts span 0.75 / 0.80 / 0.92 / 0.95, with only a
-small tail at exactly 1.0), not a synthetic constant. See `AI_MODELS.md` for
-the full model inventory.
-
-> Note: some in-repo `src/*.py` code comments still name an older "REBEL"
-> backend; those comments are stale and a tracked code-cleanup follow-up
-> (reconciling the conf-1.0 sentinel against GLiREL's real scores). The
-> deployed backend is GLiREL.
+Three of the 46 catalog entries are `geojson` (USGS `significant_week`, NWS
+`severity=Severe,Extreme` alerts, NASA EONET `days=3`); the other 43 are `rss`
+— see §2 for the full catalog table and §4 for the bring-up script.
 
 ---
 
-## 4. Cost-tier summary
+## 8. Cost-tier summary
 
 | Kind | Mode | Cost tier | Auth | Reaches |
 |---|---|---|---|---|
@@ -420,7 +580,7 @@ the full model inventory.
 
 ---
 
-## 5. Source credibility scoring
+## 9. Source credibility scoring
 
 Source credibility is a **per-signal float in `[0.0, 1.0]`** annotated by the
 `source_credibility` filter (`src/legba/data/filters/source_credibility.py`),
@@ -455,7 +615,23 @@ signal can be admitted by a lenient target and filtered out by a strict one.
 
 ---
 
-## 6. Adding a new source kind
+## 10. NER and relation-extraction backend
+
+The baseline NER + relation enrichment (`ner_multilingual`,
+`fact_extractor`) calls the hosted NLP stack, whose relation-extraction model
+is **GLiREL** (`jackboyla/glirel-large-v0`). GLiREL emits **real per-relation
+confidence scores** (live facts span 0.75 / 0.80 / 0.92 / 0.95, with only a
+small tail at exactly 1.0), not a synthetic constant. See `AI_MODELS.md` for
+the full model inventory.
+
+> Note: some in-repo `src/*.py` code comments still name an older "REBEL"
+> backend; those comments are stale and a tracked code-cleanup follow-up
+> (reconciling the conf-1.0 sentinel against GLiREL's real scores). The
+> deployed backend is GLiREL.
+
+---
+
+## 11. Adding a new source kind
 
 A source kind is a drop-in. There is no central registration list to edit beyond
 one table entry; the runtime discovers handlers structurally.
@@ -506,7 +682,7 @@ plane routes them to subscribing targets — no other code changes.
 
 ---
 
-## 7. Future seams (not yet working)
+## 12. Future seams (not yet working)
 
 - **Eager media extraction** — `descriptor.pipeline.media = "eager"` wires a
   modality → `MediaExtractor` registry (`baseline.py`); production handlers

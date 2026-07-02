@@ -3,7 +3,7 @@
 Legba MCP Server — standalone entry point.
 
 Run this directly or via: python -m legba.ui.mcp_server
-For Claude Code, configure in .claude/settings.json (see docs/mcp_setup.md).
+For Claude Code, configure in .claude/settings.json (see docs/DIRECTION.md §4).
 
 The stdio server itself needs no environment variables: the tool catalog
 is descriptor-driven (``legba.data.outputs.mcp_tool.MCP_TOOL_REGISTRY``)

@@ -10,6 +10,19 @@ versions** (temporal), or is **ephemeral routing** with no durable row at all.
 Companion to `ARCHITECTURE.md` (component/flow) and `ANALYSIS.md` (analyst
 behaviour). Grounded in `data/migrations/` + the write paths in
 `data/provenance/writes.py`, `runtime/source_actor.py`, and the inline filters.
+New here? Start with the [README](../README.md) and the [Tour](TOUR.md).
+
+**Contents:**
+[The shape, in one breath](#the-shape-in-one-breath) ·
+[Per-tier table](#per-tier-table) ·
+[The three key questions](#the-three-key-questions) ·
+[The mandatory faithfulness verify](#the-mandatory-faithfulness-verify) ·
+[The scorecard](#the-scorecard--the-12th-outputkind) ·
+[The contested-claims fact model](#the-contested-claims-fact-model) ·
+[The journal](#the-journal--off-chain-by-design) ·
+[Old → new vocabulary](#old--new-vocabulary) ·
+[Mutate-vs-append cheat-sheet](#mutate-vs-append-cheat-sheet) ·
+[Known thin / inert legs](#known-thin--inert-legs-honest)
 
 ## The shape, in one breath
 
@@ -75,7 +88,7 @@ chain — see "The journal — off-chain by design"); the consult audit trail
 | **Outputs / emit** | `analyst_outputs` (+ `alert_sink_deliveries`); webhook/STIX/A2A/MCP/NATS sinks | `outputs/*.py` emit | substrate = **append-only**; emit = **ephemeral / side-table** |
 | **DLQ** | `output_dead_letter` (0007) | `route_to_output_dead_letter` | append + operator-resolution mutate |
 
-## The three load-bearing questions
+## The three key questions
 
 ### Does the inline pipeline change the signal, or add to it?
 **Both, stage-specific.** The `signals` *row* is written once (append-only). The
@@ -275,8 +288,7 @@ except for which cluster (if any) is marked the winner.
 > the gitignored `.env`. The detect-only arbiter, Wave-4 coexistence, and the
 > read-side surfacing are proven live; the vLLM tie-break is proven **consulted**
 > live (it abstained on symmetric evidence — correct, provenance-first), but a
-> successful LLM *pick* is **unobserved live** so far. Plan + decisions:
-> `planning/HOLES_B_CONTESTED_CLAIMS_SCOPED_PLAN.md`.
+> successful LLM *pick* is **unobserved live** so far.
 
 ## The journal — off-chain by design
 
@@ -453,5 +465,5 @@ narrower now:
   per-unit correctness leg scores a unit's live read against a labeled reference
   answer, but the labeled set is very small today (n≈1), so per-unit correctness
   reports **insufficient-sample** rather than a headline accuracy — faithfulness
-  (groundedness), not correctness-vs-reference, is the load-bearing per-unit
+  (groundedness), not correctness-vs-reference, is the meaningful per-unit
   number right now.

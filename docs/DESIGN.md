@@ -1,14 +1,27 @@
 # Legba — Implementation Design
 
-**Scope:** the authoritative in-repo implementation design for the source-first
-Legba platform. This is the cold-start orientation for engineers and operators
-walking up to the repo: what each subsystem is, how the pieces fit, and where to
-look in the code. It pairs with `docs/RUNBOOK.md` (operations), `docs/UI.md`
-(the operator console), and `docs/ARCHITECTURE.md` (the conceptual orientation
-and design rationale).
+This document covers Legba's implementation decisions: what each subsystem is,
+how the pieces fit, and how they are built. For the concepts and why the system
+is shaped this way see `docs/ARCHITECTURE.md`; to navigate the code see
+`docs/CODE_MAP.md`; for operations see `docs/RUNBOOK.md`. New here? Start with
+the [README](../README.md) and the [Tour](TOUR.md).
 
 Sections marked **(future seam)** describe declared shape that the code carries
 but does not yet exercise end-to-end; everything else is live.
+
+**Contents:**
+[1 Frame](#1-frame) ·
+[2 The four planes](#2-the-four-planes) ·
+[3 The actors](#3-the-actors) ·
+[4 The descriptor model](#4-the-descriptor-model) ·
+[5 The registries + REST surface](#5-the-registries--rest-surface) ·
+[6 The runtime](#6-the-runtime) ·
+[7 Data shape](#7-data-shape) ·
+[8 The predicate DSL](#8-the-predicate-dsl--starlark) ·
+[9 Security boundaries](#9-security-boundaries) ·
+[10 AI models](#10-ai-models) ·
+[11 Deployment](#11-deployment) ·
+[12 Sibling docs](#12-sibling-docs)
 
 ---
 
@@ -16,21 +29,19 @@ but does not yet exercise end-to-end; everything else is live.
 
 ### 1.1 What Legba is
 
-Legba is a **decompositional intelligence system**: it turns a firehose of
-sources into **cited, verified, drillable reports** over whatever domain you
-configure. Three kinds of declarative **descriptors** — sources, targets,
-analysts (plus action-packs) — are registered into a shared **substrate**, and a
-**Dapr virtual-actor runtime** turns each descriptor into a running actor that
-reads and writes that substrate. The geopolitical (G20 + high-consequence
-watch-tier) configuration is the shown exemplar, not a lock-in; the same machinery hosts attack-surface
+For what Legba is and why, see the [README](../README.md) and the
+[Tour](TOUR.md). In implementation terms: three kinds of declarative
+**descriptors** — sources, targets, analysts (plus action-packs) — are
+registered into a shared **substrate**, and a **Dapr virtual-actor runtime**
+turns each descriptor into a running actor that reads and writes that
+substrate. The geopolitical (G20 + high-consequence watch-tier) configuration
+is the shown exemplar, not a lock-in; the same machinery hosts attack-surface
 monitoring or a data-center watch as a different *set of descriptors*.
 
-What sets Legba apart is the **discipline**, not the data: every claim in the
-product is cited to a source, checked by a mandatory faithfulness pass, and
-auditable through a receipt chain back to the originating signal. It does **not**
-claim to measure *truth* — it measures **groundedness**: does each claim follow
-from the evidence it cites? That is a narrower, honest guarantee, and saying so
-is the point.
+Every claim in the product is cited to a source, checked by a mandatory
+faithfulness pass, and auditable through a receipt chain back to the
+originating signal. The system does **not** claim to measure *truth* — it
+measures **groundedness**: does each claim follow from the evidence it cites?
 
 **The acquisition mechanic — ingest once, enrich once, match many:**
 
@@ -89,7 +100,7 @@ reads:
   "low-faithfulness", a scorecard dimension with no qualifying claim reads
   "insufficient-evidence" (never a fabricated band), and the forecasting pilot
   publishes "no proven skill" rather than a number. `docs/SEAMS.md` is the
-  authoritative not-built / frozen list.
+  not-built / frozen list.
 
 Everything composable is a descriptor; the runtime executes whatever is
 registered. Adding a country, a feed, or an analysis pattern is a registration,
@@ -375,7 +386,7 @@ cutoff with substrate-sourced ground truth).
 
 ### 3.5 The mandatory faithfulness verify pass — measuring groundedness, not truth
 
-The load-bearing honesty contract: a cited finding is not trusted until a
+The honesty contract: a cited finding is not trusted until a
 **faithfulness verify pass** has scored it. This measures **groundedness** — does
 each cited claim follow from the evidence it cites — **not** truth; the system
 never asserts a claim is *correct about the world*, only whether it is
@@ -656,7 +667,7 @@ registry's auth + audit + content-hash-head logic.
 
 ### 5.5 Operator UI panels (`legba-ui-v3/`)
 
-The operator console (`docs/UI.md` is authoritative) is a dockview SPA whose
+The operator console (covered in depth in `docs/UI.md`) is a dockview SPA whose
 panels are lazy-registered in `legba-ui-v3/src/panel-registry/registry.ts`. Beyond
 the registry/target/analyst/system panels, four operator panels expose the
 source-first control surfaces that previously had no UI. **As of 2026-06 all four
@@ -1040,7 +1051,7 @@ a log file."*) It is **live** — deployed and live-validated (a real off-chain
 entry, `honesty_flags` forced deterministically from substrate metrics,
 receipt-chained, in-voice).
 
-**Off the chain (the load-bearing property).** The journal is the 11th
+**Off the chain (the defining property).** The journal is the 11th
 `OutputKind` (§7.2) but a *perspective over* the provenance chain, never a
 *member of* it: its rows land in a **dedicated `journal_entries` table**
 (migration `0048`), carry an **always-empty `derived_from`**, and the table is
@@ -1228,7 +1239,8 @@ documented in `docs/RUNBOOK.md`.
 
 ## 12. Sibling docs
 
-- `docs/ARCHITECTURE.md` — conceptual orientation and design rationale.
+- `docs/ARCHITECTURE.md` — concepts and why the system is shaped this way.
+- `docs/CODE_MAP.md` — where the code lives (navigation).
 - `docs/RUNBOOK.md` — bring-up, operations, troubleshooting.
 - `docs/UI.md` — the operator console (panels, auth chain).
 - `docs/ACQUISITION.md`, `docs/ANALYSIS.md` — the acquisition and analysis

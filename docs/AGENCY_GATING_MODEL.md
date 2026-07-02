@@ -1,12 +1,13 @@
 # Agency Gating Model — how an analyst is allowed to act
 
-*The trust model behind Legba's agentic tool surface (S6, 2026-06-19). It
-answers one question: when an assessor — driven by an LLM reasoning over
-**untrusted** source text — can fetch the web or propose a write back into the
-substrate, what stops a poisoned RSS item from turning into a side effect?
-Short answer: a three-way capability gate, a per-pack governor, mandatory
-provenance, and an operator-held allow leg on every write. This document
-narrates each layer and why the write tools are operator-gated by default.*
+This document describes the trust model behind Legba's agentic tool surface,
+for anyone reviewing its security posture. The question it answers: when an
+assessor — an LLM reasoning over **untrusted** source text — can fetch the web
+or propose a write back into the substrate, what stops a poisoned RSS item
+from turning into a side effect? Short answer: a three-way capability gate, a
+per-pack governor, mandatory provenance, and an operator-held allow leg on
+every write; the sections below cover each layer and why the write tools are
+operator-gated by default.
 
 ---
 

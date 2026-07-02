@@ -1,16 +1,25 @@
 # AI Models
 
-Legba is a decompositional intelligence system: it turns a firehose of sources
-into cited, verified, drillable reports over whatever domain you configure (the
-shown exemplar is geopolitics — 19 G20 country desks plus a high-consequence
-watch tier (Israel, Iran, Ukraine, Taiwan, North Korea), 24 desks total — not a
-lock-in; each desk is a scoped subject a set of analysts work, and adding one is
-register-a-target, no code). **Three roles of AI
-model** carry its acquisition, analysis, and verification work, and **none of
-them run inside the Legba containers** — every model is reached over HTTP against
-out-of-process model-serving hosts, with credentials and endpoints resolved
-through the stack registry and credential vault (see `ARCHITECTURE.md`,
-`ACQUISITION.md`).
+This document covers every AI model Legba uses: which models, where they are
+served, what each one is for, and how they are configured. New here? Start with
+the [README](../README.md) and the [Tour](TOUR.md).
+
+**Three roles of AI model** carry the acquisition, analysis, and verification
+work, and **none of them run inside the Legba containers** — every model is
+reached over HTTP against out-of-process model-serving hosts, with credentials
+and endpoints resolved through the stack registry and credential vault (see
+`ARCHITECTURE.md`, `ACQUISITION.md`).
+
+**Contents:**
+[1 The hosted `legba-models` NLP service](#1-the-hosted-legba-models-nlp-service) ·
+[2 LLM providers](#2-llm-providers) ·
+[3 The faithfulness verify judge](#3-the-faithfulness-verify-judge) ·
+[4 Embeddings](#4-embeddings) ·
+[5 The consult engine](#5-the-consult-engine) ·
+[6 Media extraction](#6-media-extraction-future-seam) ·
+[7 Knowledge grounding](#7-knowledge-grounding--mitigating-the-models-training-cutoff) ·
+[Configuration reference](#configuration-reference) ·
+[See also](#see-also)
 
 The three roles are:
 
@@ -58,8 +67,7 @@ analysis plane produced.
 > inert transitive dependency. The prompt-module files under `src/legba/prompts/`
 > import `dspy` at module top, but the analyst inference path guards with
 > `importlib.util.find_spec("dspy")` and **degrades to a direct `chat_complete`**
-> when dspy is absent (which it is, in production). See
-> `feedback/never-litellm-dspy-production` and `planning/OPTIMIZER_DSPY_GEPA_PLAN.md`.
+> when dspy is absent (which it is, in production).
 
 ---
 
@@ -279,7 +287,7 @@ the model.
 Every cited finding produced by a bounded reasoning unit (and every composition)
 goes through a **mandatory faithfulness verify pass**
 (`src/legba/data/provenance/verify.py`, `verify_finding_faithfulness(...)`). This
-is the load-bearing discipline of the system: it is what lets a report claim to
+pass is what lets a report claim to
 be *cited and checked* rather than merely generated.
 
 The pass has two layers:
