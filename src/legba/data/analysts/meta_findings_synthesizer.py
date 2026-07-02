@@ -152,6 +152,31 @@ per-country composition slice. Env-overridable via ``LEGBA_COMPOSITION_VERIFY_FL
 VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 
 
+# S2-T2 REGION composition — the region-frame target-id prefix.
+#
+# A region composition run (analyst_region_composition.yaml) fans out one worker
+# per REGION FRAME (a target tagged ``region``); the fan-out stamps the frame's
+# target id into ``target_filter`` / ``options["target_id"]``, and every region
+# frame id is ``region_<slug>`` (e.g. ``region_mena``). This prefix is the SOLE
+# discriminator that tells a region run apart from a per-COUNTRY one (both carry
+# a truthy ``target_id``): a region ``target_id`` is a FRAME with no
+# country_composition findings of its OWN, so it must NOT scope
+# ``f.target_id = 'region_mena'`` (matches nothing) — it resolves to its MEMBER
+# country desks and reads THEIR country_composition heads (a multi-country read,
+# world-shaped). Per-country / world / legacy paths never see this prefix.
+REGION_TARGET_PREFIX: str = "region_"
+
+
+def _is_region_target(target_filter: Any) -> bool:
+    """True iff ``target_filter`` names a REGION FRAME (``region_<slug>``).
+
+    The discriminator for the S2-T2 region mode. ``None`` / a country id
+    (``country_g20_in``) / any non-region string returns ``False`` — so the
+    per-country, world, and legacy READ_SLICE branches are left untouched.
+    """
+    return bool(target_filter) and str(target_filter).startswith(REGION_TARGET_PREFIX)
+
+
 # ---------------------------------------------------------------------------
 # Deps surface — LLM port only (no substrate side-deps; the runtime
 # materializes inputs before calling run_method, same as the other kinds).
@@ -645,6 +670,7 @@ async def read_other_analyst_findings(
     time_window_hours: int = 24,
     limit: int = 100,
     target_id: str | None = None,
+    target_ids: Sequence[str] | None = None,
     verify_floor: float | None = None,
     include_meta: bool = False,
 ) -> list[dict[str, Any]]:
@@ -679,6 +705,17 @@ async def read_other_analyst_findings(
         for THIS country target (``target_id = $N``). The runtime passes the
         run's ``target_filter`` here, so a per-country composition reads ONLY
         that country's unit findings, not the whole G20 cross-section.
+      * ``target_ids`` (S2-T2 REGION composition) — when set, restrict the slice
+        to a SET of member-country targets (``target_id = ANY($N::TEXT[])``). A
+        region reads the country_composition HEAD for EACH of its member desks,
+        so its scope is the member SET rather than the single-country equality.
+        Mutually exclusive with ``target_id`` (``target_id`` wins if both are
+        passed). An EMPTY set yields ``= ANY(ARRAY[]::TEXT[])`` → ZERO rows (the
+        honest region-gap: a region with no member desks reads nothing), NEVER an
+        unscoped whole-pool read. Like ``target_id`` it forces the composition
+        head-fold (``superseded_by IS NULL`` + one-head-per-``(analyst,target)``
+        ``DISTINCT ON``), so a region reads exactly ONE country_composition head
+        per member country.
       * ``verify_floor`` — when set, admit ONLY sub-claims that PASSED the
         faithfulness-verify pass above the floor. An INNER ``JOIN LATERAL`` to
         the paired ``kind='critique'`` faithfulness row (``title LIKE
@@ -734,13 +771,22 @@ async def read_other_analyst_findings(
     # DISTINCT ON below is the belt to this suspenders (covers the case where
     # supersession lagged and left >1 non-superseded row). The legacy
     # global-meta path (both filters off) is left BYTE-FOR-BYTE unchanged.
-    dedupe_composition = target_id is not None or include_meta
+    dedupe_composition = (
+        target_id is not None or target_ids is not None or include_meta
+    )
     if dedupe_composition:
         where.append("f.superseded_by IS NULL")
 
     if target_id is not None:
         params.append(str(target_id))
         where.append(f"f.target_id = ${len(params)}")
+    elif target_ids is not None:
+        # S2-T2 REGION composition: a SET of member-country targets. The empty
+        # set is kept (guarded on ``is not None``, not truthiness) so a region
+        # with no member desks reads ZERO rows — the honest gap — instead of
+        # silently dropping the filter and reading every country.
+        params.append([str(t) for t in target_ids])
+        where.append(f"f.target_id = ANY(${len(params)}::TEXT[])")
 
     join = ""
     select_extra = ""
@@ -1107,13 +1153,31 @@ async def _run(
     closure-shape (per-actor configured ``max_tokens`` etc.) and the simpler
     deps-passing entry point share a single body.
     """
+    # Composition MODE detection — drives the input cap, the system prompt, and
+    # the CITE block. Four flavors:
+    #   * PER-COUNTRY  (``options["target_id"]`` = a country id)     → single-country
+    #   * REGION       (``options["target_id"]`` = ``region_<slug>``) → multi-country
+    #   * WORLD        (``options["composition"]``, no target_id)     → multi-country
+    #   * legacy meta  (neither)                                     → global synth
+    _target_opt = options.get("target_id")
+    target_scoped = bool(_target_opt)
+    region_scoped = target_scoped and str(_target_opt).startswith(REGION_TARGET_PREFIX)
+    world_composition = (not target_scoped) and bool(options.get("composition"))
+    is_composition = target_scoped or world_composition
+
     # --- ORIENT --------------------------------------------------------
-    # The world/global read (no ``target_id`` stamp) fuses one head PER COUNTRY,
-    # so its input count is the desk roster and it must NOT be trimmed to the
-    # per-country default (the P4 review C2 found the 15-cap dropped the US from
-    # a "Global" read). A per-country composition reads only its own ~4 unit
-    # heads, so the default cap never bites there.
-    _cap = MAX_INPUT_FINDINGS if options.get("target_id") else MAX_WORLD_INPUT_FINDINGS
+    # A per-COUNTRY read fuses only its own ~4 unit heads, so the narrow default
+    # cap never bites there. The WORLD read AND a REGION read each fuse one head
+    # PER COUNTRY, so their input count is a desk roster (region = its member
+    # subset) and MUST NOT be trimmed to the per-country default (the P4 review
+    # C2 found the 15-cap dropped the US from a "Global" read; the same
+    # one-head-per-country invariant holds for a region — a dropped input is a
+    # member country the region read cannot see).
+    _cap = (
+        MAX_INPUT_FINDINGS
+        if (target_scoped and not region_scoped)
+        else MAX_WORLD_INPUT_FINDINGS
+    )
     sliced, derived_from, derived_analysts = _orient(inputs, cap=_cap)
 
     # The runtime can supply ``source_analyst_ids`` directly via options.
@@ -1192,9 +1256,15 @@ async def _run(
             ],
         )
 
-    # Composition selection — two flavors + the legacy global meta:
-    #   * TARGET-SCOPED (``options["target_id"]``) → the per-COUNTRY composition
-    #     (country_composition): ``_COMPOSITION_SYSTEM``.
+    # Composition selection — three flavors + the legacy global meta (the mode
+    # flags were resolved at the top of ``_run``):
+    #   * REGION (``options["target_id"]`` = ``region_<slug>``) → the WORLD-shaped
+    #     ``_WORLD_COMPOSITION_SYSTEM`` (a region read is MULTI-country, so it uses
+    #     the cross-country hedge + disagreement shape, NOT the single-country
+    #     ``_COMPOSITION_SYSTEM``). Checked FIRST so a region ``target_id`` never
+    #     falls into the per-country branch.
+    #   * PER-COUNTRY (a non-region ``options["target_id"]``) → the per-COUNTRY
+    #     composition (country_composition): ``_COMPOSITION_SYSTEM``.
     #   * GLOBAL verify-declaring meta (``options["composition"]``, no target_id)
     #     → the WORLD composition (the repointed world_assessor):
     #     ``_WORLD_COMPOSITION_SYSTEM`` — composes the per-country reads,
@@ -1202,12 +1272,15 @@ async def _run(
     #     FACTS block. The actor stamps ``composition``/``contention_groups``.
     #   * else → the legacy GLOBAL meta (analyst_meta_synthesizer.yaml),
     #     byte-for-byte unchanged (``system_prompt`` = ``_SYSTEM_PROMPT``).
-    # Both compositions cite sub-claims by their [[ref:N]] ordinal handle,
+    # All three compositions cite sub-claims by their [[ref:N]] ordinal handle,
     # resolved into ``data.citations`` (ref_id=<finding uuid>, ref_kind='finding');
     # the render prefixes each sub-claim block with its [[ref:N]] handle + the
     # finding_id for debug (source ids on). ``target_scoped`` / ``world_composition``
-    # / ``is_composition`` were resolved above (before the empty-slice branch).
-    if target_scoped:
+    # / ``is_composition`` / ``region_scoped`` were resolved above (before the
+    # empty-slice branch). A region read is MULTI-country -> world-shaped prompt.
+    if region_scoped:
+        effective_system = _WORLD_COMPOSITION_SYSTEM
+    elif target_scoped:
         effective_system = _COMPOSITION_SYSTEM
     elif world_composition:
         effective_system = _WORLD_COMPOSITION_SYSTEM
@@ -1517,6 +1590,38 @@ def _declares_verify(descriptor: Any) -> bool:
     return llm.get("verify") is not None
 
 
+# S2-T2 REGION composition — resolve a region frame → its member country desks.
+_REGION_MEMBERS_SQL = """
+    SELECT descriptor_id
+      FROM target_descriptors
+     WHERE is_head = TRUE
+       AND state = 'active'
+       AND descriptor_id <> $1
+       AND (body -> 'scope' -> 'tags') ? $1
+     ORDER BY descriptor_id
+"""
+
+
+async def _resolve_region_member_target_ids(conn, region_id: str) -> list[str]:
+    """Resolve a REGION FRAME's member COUNTRY desks (S2-T2).
+
+    The member desks are the active head targets whose ``scope.tags`` carry the
+    region's slug tag — which is the SAME ``region_<slug>`` string that IS the
+    region frame's own target id (``region_id``). So a region and its members
+    share one tag: the frame is ``region_mena`` and each MENA desk (Saudi Arabia,
+    Turkey, Israel, Iran, …) is tagged ``region_mena``. The frame itself is
+    EXCLUDED (``descriptor_id <> region_id``) — it has no country_composition
+    finding of its own; only its member desks do. Mirrors the tag-membership
+    idiom the scorecard producer uses for the g20/watch roster
+    (``(body -> 'scope' -> 'tags') ?| array[...]``); ``body`` is JSONB so the
+    ``?`` element-test needs no cast. An EMPTY result (a region with no tagged
+    member desks) is a HONEST gap — the caller's SET filter then reads zero
+    country reads and the synth narrates the region as unassessed.
+    """
+    rows = await conn.fetch(_REGION_MEMBERS_SQL, str(region_id))
+    return [str(r["descriptor_id"]) for r in rows]
+
+
 async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     conn,  # type: ignore[no-untyped-def]
     *,
@@ -1553,6 +1658,20 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         ``subscription.targets`` → one global run) → neither filter applies;
         the cross-target, unfiltered read is preserved unchanged.
 
+    S2-T2 REGION composition — a NEW 4th mode (keyed on the ``region_`` prefix):
+
+      * ``target_filter`` is a REGION FRAME id (``region_<slug>``): the region
+        composition descriptor's ``subscription.targets`` block matches the five
+        region frames, so the runtime fans this synth out one worker per FRAME
+        with ``target_filter='region_mena'`` etc. A frame has NO
+        country_composition finding of its own, so the per-country branch would
+        scope ``f.target_id='region_mena'`` and match nothing. Instead we resolve
+        the frame → its MEMBER country desks (:func:`_resolve_region_member_target_ids`)
+        and read THEIR country_composition heads as a SET (``target_ids``),
+        verify-floored + ``include_meta=True`` (country_composition rows are
+        ``meta=True``). An empty member set → an empty slice the synth narrates as
+        a gap.
+
     Returns ``analyst_outputs`` rows with the same column projection that
     downstream lineage extraction expects.
     """
@@ -1563,6 +1682,22 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
 
     if time_window_hours is None:
         time_window_hours = _resolve_window_hours(descriptor)
+
+    # REGION branch (S2-T2) — checked FIRST, an early return, so the per-country /
+    # world / legacy switch below stays byte-for-byte. A region ``target_filter``
+    # is a FRAME id; resolve it to the member country desks and read THEIR
+    # country_composition heads as a target-id SET (multi-country, world-shaped).
+    if _is_region_target(target_filter):
+        member_ids = await _resolve_region_member_target_ids(conn, str(target_filter))
+        return await read_other_analyst_findings(
+            conn,
+            analyst_ids=ids,
+            time_window_hours=time_window_hours,
+            limit=limit,
+            target_ids=member_ids,
+            verify_floor=_resolve_verify_floor(descriptor),
+            include_meta=True,
+        )
 
     # Three branches:
     #   * TARGET-SCOPED (per-country composition) ⇒ scope to the country
@@ -1619,6 +1754,7 @@ __all__ = [
     "OUTPUT_KIND",
     "PROMPT_MODULE_PATH",
     "READ_SLICE",
+    "REGION_TARGET_PREFIX",
     "SCHEMA_VERSION",
     "VERIFY_FLOOR_ENV",
     "WORLD_TARGET_TOKEN",
@@ -1630,8 +1766,10 @@ __all__ = [
     "_declares_verify",
     "_extract_contested_markers",
     "_extract_ref_markers",
+    "_is_region_target",
     "_render_contested_block",
     "_resolve_other_analyst_ids",
+    "_resolve_region_member_target_ids",
     "_resolve_verify_floor",
     "_resolve_window_hours",
     "build_prompt_module",

@@ -111,6 +111,13 @@ ANALYST_FILES = [
     # a verify-floor slice + hedged [[ref:<uuid>]] prompt. Registered AFTER the
     # units it reads (registration order is independent, but this reads clearly).
     "analyst_country_composition.yaml",      # NEW — P3-T1/T2 (per-country composition over verified sub-claims)
+    # S2-T2 — per-REGION composition BETWEEN the country reads and the world read.
+    # SAME meta_findings_synthesizer kind (no new kind), a PER-TARGET descriptor
+    # (subscription.targets has_tag region → one worker per region frame) reading
+    # country_composition as other_analysts. The kind's READ_SLICE region branch
+    # resolves each frame → its member country desks and reads their
+    # country_composition heads as a SET; the run uses the WORLD-shaped prompt.
+    "analyst_region_composition.yaml",       # NEW — S2-T2 (per-region composition over verified country reads)
     "analyst_composition_lineage_sweep.yaml", # NEW — P3-T6 (deterministic META sweep: multi-floor lineage-integrity over world+country composition outputs via validate_lineage; read-only audit)
     "analyst_scorecard_producer.yaml",  # NEW — P4-T2 (banded-scorecard producer; deterministic META, one scorecard row per active G20 country; data.bands = the T1 verdict, T5 eval folded)
     "analyst_forecast_scoreboard.yaml",  # NEW — P4-T7 (acute-forecast scoreboard producer; deterministic META, weekly-idempotent driver of the forecast_acute pilot: issue → exogenous-resolve → count. Side-writes acute_forecasts rows only; TRACE_ONLY counts receipt; forecasting surfaces ONLY in the T4 scoreboard, never as a claim)
