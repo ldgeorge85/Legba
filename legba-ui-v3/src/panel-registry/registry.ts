@@ -456,7 +456,8 @@ const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set([
   'system.targets.roster',    // collapsed → Target Registry (one Targets panel)
   'v4.case',                  // Casework Board shelved (no pin entry points wired)
   'system.tenant_view',       // multitenancy not product-baked (ingestion-only)
-  'v4.assessment',            // World Assessment is a FINDING → shown in Inspector
+  // 'v4.assessment' UNHIDDEN (S7-T1 item 2) — the verified composition one-pager
+  // is a first-class product surface (full one-pager, cited prose), not a teaser.
   'system.runtime',           // Runtime Actor Health = same endpoint as Actor Health (dup)
 ])
 for (const k of HIDDEN_KINDS) {

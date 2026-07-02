@@ -136,6 +136,23 @@ export type ProseToken =
 // so `\[\d+\]` matches nothing inside it, and `\[\[ref:` never matches `[5]`.
 const MARKER_RE = /\[\[ref:\d+\]\]|\[\d+\]/g
 
+// Full-width / variant brackets that a core-plane model (gpt-oss / Qwen)
+// non-deterministically wraps a citation ordinal in — 【N】 or ［N］ instead of
+// ASCII [N] (mirrors the backend `inline_target._normalize_citation_markers`).
+const VARIANT_MARKER_RE = /[【［]\s*(ref:\s*)?(\d+)\s*[】］]/g
+
+/**
+ * Normalize variant (full-width) citation brackets to ASCII so `MARKER_RE`
+ * (ASCII-only) can match them. Only a bracket pair that WRAPS an ordinal
+ * (optionally `ref:N`) is rewritten — prose that merely contains a stray
+ * full-width bracket is left untouched, and an unresolved ASCII marker still
+ * stays literal downstream (the honesty contract: never fabricate an anchor).
+ */
+export function normalizeCitationMarkers(text: string): string {
+  if (!text || typeof text !== 'string') return text
+  return text.replace(VARIANT_MARKER_RE, (_m, ref, n) => (ref ? `[ref:${n}]` : `[${n}]`))
+}
+
 /**
  * Split a prose string into text + marker tokens. Only markers that resolve in
  * `byMarker` become `marker` tokens (clickable chips); an unknown marker of

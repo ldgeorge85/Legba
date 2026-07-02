@@ -15,14 +15,15 @@
  */
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import ReactMarkdown, { type Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import type { Components } from 'react-markdown'
 import { formatDistanceToNow } from 'date-fns'
 import { Globe } from 'lucide-react'
 import { apiGet } from '@/lib/api'
 import { selectRow, useSelection } from '@/state/selection'
 import type { WorldAssessment as WorldAssessmentT } from '@/v4/why/types'
 import { CountryUnitsAssessment } from '@/v4/why/CountryUnitsAssessment'
+import CitedAssessment from '@/components/inspector/CitedAssessment'
+import { extractCitations, type Citation } from '@/lib/citationsModel'
 
 const ASSESSOR_ID = 'world_assessor'
 // P3 — the per-country VERIFIED composition (the product for a selected country).
@@ -79,8 +80,12 @@ function firstString(...vals: unknown[]): string {
   return ''
 }
 
+/** WorldAssessment + the composition's citation list (extracted from the
+ *  finding's `data.citations` envelope so the one-pager can render CITED prose). */
+type ProjectedAssessment = WorldAssessmentT & { citations: Citation[] }
+
 /** Project the newest world_assessor finding into the WorldAssessment shape. */
-function projectAssessment(row: FindingRow): WorldAssessmentT {
+function projectAssessment(row: FindingRow): ProjectedAssessment {
   const payload = asPayload(row)
   return {
     id: row.id,
@@ -94,6 +99,10 @@ function projectAssessment(row: FindingRow): WorldAssessmentT {
     ),
     severity: row.severity ?? undefined,
     producedAt: Date.parse(row.produced_at),
+    // P1-T3 — the composition cites sub-claim findings with `[[ref:N]]` ordinal
+    // markers; the list lives at `<envelope>.data.citations`. Empty for an
+    // uncited/legacy row (the card then renders prose plainly, no fabrication).
+    citations: extractCitations(payload),
   }
 }
 
@@ -238,7 +247,7 @@ export default function WorldAssessment() {
     queryFn: () => apiGet<FindingsResponse>(queryUrl),
   })
 
-  const assessment = useMemo<WorldAssessmentT | null>(() => {
+  const assessment = useMemo<ProjectedAssessment | null>(() => {
     const rows = data?.data ?? []
     let newest: FindingRow | null = null
     for (const row of rows) {
@@ -259,7 +268,13 @@ export default function WorldAssessment() {
     return (
       <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="country-read-column">
         <CountryUnitsAssessment targetId={targetId} />
-        <details className="mt-8 border-t border-slate-800 pt-4" data-testid="country-composition-synthesis">
+        {/* Expanded by default (item 2) — the verified composition is the product,
+            not a click-to-reveal teaser. */}
+        <details
+          open
+          className="mt-8 border-t border-slate-800 pt-4"
+          data-testid="country-composition-synthesis"
+        >
           <summary className="cursor-pointer text-label uppercase tracking-wider text-slate-500">
             Country composition (verified) · country_composition (the P3 synthesis over the units above)
           </summary>
@@ -279,9 +294,7 @@ export default function WorldAssessment() {
               </div>
               {assessment.summary.trim() !== '' ? (
                 <div className="text-sm text-slate-300">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-                    {assessment.summary}
-                  </ReactMarkdown>
+                  <CitedAssessment text={assessment.summary} citations={assessment.citations} />
                 </div>
               ) : (
                 <p className="text-sm text-slate-500">This synthesis was published without a written summary.</p>
@@ -361,9 +374,7 @@ export default function WorldAssessment() {
 
       {assessment.summary.trim() !== '' ? (
         <div className="text-sm text-slate-300" data-testid="world-assessment-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-            {assessment.summary}
-          </ReactMarkdown>
+          <CitedAssessment text={assessment.summary} citations={assessment.citations} />
         </div>
       ) : (
         <p className="text-sm text-slate-500" data-testid="world-assessment-nobody">

@@ -29,6 +29,7 @@ import {
   type Citation,
   citationsByMarker,
   evidenceAnchorId,
+  normalizeCitationMarkers,
   splitProse,
 } from '@/lib/citationsModel'
 
@@ -159,6 +160,10 @@ export interface CitedAssessmentProps {
  * machinery in the way.
  */
 export default function CitedAssessment({ text, citations, verification = null, analystId = null }: CitedAssessmentProps) {
+  // Normalize any full-width 【N】/［N］ ordinal brackets to ASCII [N] so the
+  // ASCII-only marker parser resolves them to chips instead of dropping them to
+  // literal text (core-plane models emit the variant brackets non-deterministically).
+  const prose = normalizeCitationMarkers(text)
   const cited = citations.length > 0
   const byMarker = cited ? citationsByMarker(citations) : new Map<string, Citation>()
   const components = cited ? citedComponents(byMarker) : MD_COMPONENTS
@@ -188,7 +193,7 @@ export default function CitedAssessment({ text, citations, verification = null, 
       {/* The report prose. Cited path links `[N]`; uncited path renders plainly. */}
       <div className="text-body text-ink-1" data-testid="cited-prose">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-          {text}
+          {prose}
         </ReactMarkdown>
       </div>
 
