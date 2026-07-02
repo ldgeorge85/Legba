@@ -450,6 +450,43 @@ def test_empty_streak_eval_groups_per_source() -> None:
     assert [d[0] for d in degraded] == ["source.a"]
 
 
+def _with_last_signal(rows, last_signal):
+    # Stamp the per-source newest-signal timestamp the SQL now returns on each
+    # row (a source's rows all carry the same value).
+    return [{**r, "last_signal": last_signal} for r in rows]
+
+
+def test_empty_streak_eval_resets_when_producing_again() -> None:
+    # OBS fix: an actively-producing source whose last recorded outcome rows are
+    # empty (a productive poll writes NO outcome row) must NOT be flagged. A
+    # signal produced AFTER the most-recent empty poll resets the run.
+    rows = _with_last_signal(
+        _empty_run("source.reuters.world", 8),  # newest empty at _NOW
+        last_signal=_NOW + timedelta(hours=1),  # produced AFTER the newest empty
+    )
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+
+
+def test_empty_streak_eval_still_flags_when_signal_older_than_run() -> None:
+    # A stale signal OLDER than the leading empty run does NOT reset it: the
+    # source went (and stayed) empty after it last produced → genuinely dead.
+    rows = _with_last_signal(
+        _empty_run("source.xinhua.world", 8),   # newest empty at _NOW
+        last_signal=_NOW - timedelta(hours=20),  # last production predates the run
+    )
+    degraded = _evaluate_empty_streaks(rows, threshold=5)
+    assert [d[0] for d in degraded] == ["source.xinhua.world"]
+    assert degraded[0][1] == 8
+
+
+def test_empty_streak_eval_no_last_signal_key_unchanged() -> None:
+    # Back-compat: rows without a last_signal key behave exactly as before
+    # (contiguous-empty run alone decides) — the xinhua/aljazeera dead case.
+    rows = _empty_run("source.dead.feed", 6)
+    degraded = _evaluate_empty_streaks(rows, threshold=5)
+    assert [d[0] for d in degraded] == ["source.dead.feed"]
+
+
 @pytest.mark.asyncio
 async def test_empty_streak_check_emits_degraded_alert() -> None:
     rows = _empty_run("source.aljazeera.arabic", 6)

@@ -1,0 +1,16 @@
+# prepush_scan.sh — codename term list (DATA, read by scripts/prepush_scan.sh §1).
+#
+# One term per line. Blank lines and lines beginning with '#' are ignored; the
+# scan builds a case-insensitive regex alternation from the remaining lines.
+# These are the prior-host CODENAMEs that must never reach the public remote —
+# distinctive, zero false-positive risk. Extracted from the previously-inline
+# scan list (S8-T5g) so the maintained list is data, not code.
+#
+# This file is itself EXCLUDED from the scan (it necessarily CONTAINS the terms)
+# — see the ':(exclude).prepush_terms' pathspec in scripts/prepush_scan.sh §1.
+#
+# NOTE: 'ai1' is intentionally NOT listed — too short, real false-positive risk
+# in identifiers/base64; it is already scrubbed and review catches a regression.
+skynet
+innogpt
+innoscale

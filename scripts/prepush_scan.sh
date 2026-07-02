@@ -7,7 +7,7 @@
 # The repo (github.com/ldgeorge85/legba) is PUBLIC. Before any push this
 # scan exits NON-ZERO on anything that must not reach the public remote:
 #
-#   1. Prior-host CODENAME in tracked file content (skynet / innogpt / innoscale).
+#   1. Prior-host CODENAME in tracked file content (terms in .prepush_terms).
 #   2. Operator DOMAIN in tracked file content (civislux).
 #   3. A tracked .env / secrets file (must stay gitignored).
 #   4. Private-key material (BEGIN ... PRIVATE KEY) in tracked content.
@@ -42,13 +42,22 @@ FOUND=0
 report() { echo "  HIT [$1] $2"; FOUND=1; }
 section() { echo ">> ${1}"; }
 
-# 1. Prior-host codename(s) in tracked content. The LLM-host codenames
-#    (innogpt / innoscale) are scanned alongside skynet — all distinctive,
-#    zero false-positive risk. (ai1 is intentionally NOT auto-scanned: too
-#    short, real false-positive risk in identifiers/base64; it is already
-#    scrubbed and review catches any regression.)
-section "1. codename (skynet/innogpt/innoscale) in tracked content"
-if git grep -nI -iE 'skynet|innogpt|innoscale' -- . ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' >/tmp/_ps_codename 2>/dev/null; then
+# 1. Prior-host codename(s) in tracked content. The term list lives in the
+#    .prepush_terms DATA file (one term per line; '#'/blank lines ignored) —
+#    extracted from the old inline list so the terms are maintained as data, not
+#    code. All terms are distinctive with zero false-positive risk. The regex
+#    alternation is built from that file; the file itself is EXCLUDED from the
+#    scan (it necessarily contains the terms). An empty/missing terms file is a
+#    hard FAIL — a silent empty regex would neuter the whole codename gate.
+TERMS_FILE="${REPO_ROOT}/.prepush_terms"
+CODENAME_RE="$(grep -vE '^[[:space:]]*(#|$)' "${TERMS_FILE}" 2>/dev/null \
+  | sed -E 's/[[:space:]]//g' | grep -v '^$' | paste -sd '|' -)"
+section "1. codename (from .prepush_terms) in tracked content"
+if [[ -z "${CODENAME_RE}" ]]; then
+  report prepush-terms "missing/empty ${TERMS_FILE} — codename scan cannot run"
+elif git grep -nI -iE "${CODENAME_RE}" -- . \
+     ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' \
+     ':(exclude).prepush_terms' >/tmp/_ps_codename 2>/dev/null; then
   while IFS= read -r line; do report codename "${line}"; done < /tmp/_ps_codename
 fi
 
@@ -56,7 +65,7 @@ fi
 section "2. operator domain (civislux) in tracked content"
 # Allowlist: legba@civislux.us is the operator's INTENTIONAL public contact
 # address (the README "Contact" section) — permitted. Every OTHER civislux
-# usage (e.g. skynet.civislux.us infra hostnames) is still reported, even on
+# usage (e.g. a <codename>.civislux.us infra hostname) is still reported, even on
 # the same line: the contact address is stripped first, then the residual is
 # re-checked for any remaining civislux occurrence.
 if git grep -nI -i 'civislux' -- . ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' >/tmp/_ps_domain 2>/dev/null; then

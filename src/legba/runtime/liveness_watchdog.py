@@ -574,13 +574,18 @@ class LivenessWatchdog:
         return alerted
 
     async def _fetch_source_empty_streak_rows(self) -> list[dict[str, Any]]:
-        """The recent poll-outcome run per ACTIVE source, newest-first.
+        """The recent poll-outcome run per ACTIVE source, newest-first, plus the
+        source's newest produced-signal timestamp.
 
         Pulls the last ``_EMPTY_STREAK_WINDOW`` ``source_poll_outcomes`` rows for
-        each active source (a productive poll writes no outcome row, so a
-        'success' breaks the empty run by ABSENCE — see _evaluate_empty_streaks
-        for why the signal feed is consulted, not just these rows). Each output
-        row is one outcome: ``{source_id, outcome, occurred_at}``.
+        each active source. A PRODUCTIVE poll writes NO outcome row, so it cannot
+        break the empty run from THIS table by itself — which is why every row
+        also carries ``last_signal`` (``max(signals.fetched_at)`` for the source):
+        ``_evaluate_empty_streaks`` uses it to RESET a streak whose most-recent
+        empty poll is OLDER than a produced signal (the source is alive again).
+        Without it, an actively-producing source whose last recorded outcome rows
+        happen to be empty stays pinned DEGRADED forever. Each output row is one
+        outcome: ``{source_id, outcome, occurred_at, health_state, last_signal}``.
         """
         # _EMPTY_STREAK_WINDOW is a trusted module-level int constant (not user
         # input); inlined into the LATERAL LIMIT.
@@ -591,7 +596,10 @@ class LivenessWatchdog:
                 SELECT po.source_id    AS source_id,
                        po.outcome      AS outcome,
                        po.occurred_at  AS occurred_at,
-                       po.health_state AS health_state
+                       po.health_state AS health_state,
+                       (SELECT max(s.fetched_at)
+                          FROM signals s
+                         WHERE s.source_id = d.descriptor_id) AS last_signal
                 FROM source_descriptors d
                 JOIN LATERAL (
                     SELECT source_id, outcome, occurred_at, health_state
@@ -657,20 +665,23 @@ def _evaluate_empty_streaks(
     """Pure empty-streak decision over poll-outcome rows — no DB, unit-testable.
 
     ``rows``: iterable of mappings with ``source_id``, ``outcome``
-    ('empty'|'error'), and ``occurred_at`` (tz-aware datetime), already grouped
-    per source and ordered NEWEST-FIRST (the SQL guarantees this). For each
-    source, count the leading run of consecutive 'empty' rows; the run breaks on
-    the first 'error' row. Returns ``(source_id, streak_len, newest_empty_at)``
-    for every source whose leading empty run is >= ``threshold``.
+    ('empty'|'error'), ``occurred_at`` (tz-aware datetime), and (optionally)
+    ``last_signal`` (tz-aware datetime — the source's newest produced signal),
+    already grouped per source and ordered NEWEST-FIRST (the SQL guarantees
+    this). For each source, count the leading run of consecutive 'empty' rows;
+    the run breaks on the first 'error' row. Returns
+    ``(source_id, streak_len, newest_empty_at)`` for every source whose leading
+    empty run is >= ``threshold`` AND that is NOT producing again.
 
-    Note on 'success' polls: a PRODUCTIVE poll writes NO outcome row (it is
-    self-evidencing via its signals), so a recent success does not appear here
-    to break the run. That is acceptable for this detector by design — its whole
-    point is the xinhua/aljazeera case where there has been NO productive poll
-    for a long time; if a source were producing, the per-source cadence/signal
-    liveness would see fresh signals and this path is moot. We deliberately key
-    only on the contiguous-empty run so the detector stays a pure read over this
-    one table.
+    Signal RESET (the fix for 41 actively-producing sources false-flagged
+    DEGRADED): a PRODUCTIVE poll writes NO outcome row (it is self-evidencing via
+    its signals), so a source that started producing again after its last empty
+    poll keeps stale leading 'empty' rows in this table forever. When
+    ``last_signal`` is present and NEWER than the streak's most-recent empty poll
+    (``newest_empty_at``), the source is alive again — the empty run is stale, so
+    it is RESET (not flagged). When ``last_signal`` is absent (older callers /
+    a source that has never produced), behavior is unchanged: the contiguous
+    'empty' run alone decides, which is exactly the xinhua/aljazeera dead case.
     """
     if threshold <= 0:
         return []
@@ -696,6 +707,16 @@ def _evaluate_empty_streaks(
             if newest_empty_at is None:
                 newest_empty_at = r.get("occurred_at")
             streak += 1
+        # RESET on a produced signal newer than the most-recent counted empty
+        # poll — the source is producing again, so the empty run is stale (all
+        # rows carry the same per-source last_signal; read it off the first).
+        last_signal = outcomes[0].get("last_signal") if outcomes else None
+        if (
+            last_signal is not None
+            and newest_empty_at is not None
+            and last_signal > newest_empty_at
+        ):
+            continue
         if streak >= threshold:
             degraded.append((sid, streak, newest_empty_at))
     return degraded

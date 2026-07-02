@@ -114,8 +114,10 @@ The substrate layers, in order:
     antagonistic / 0 neutral — the structural-balance convention).
   - situations: first-class thematic frames (active over a [valid_from,
     valid_until) window), not events.
-  - assessments: per-target (country_assessor) + global (world_assessor)
-    judgments.
+  - assessments: the LIVE reads — the bounded per-country units
+    (leadership_transition / energy_security / escalation /
+    narrative_coordination), the per-country composition (country_composition),
+    and the global composition (world_assessor).
   A derived_from chain links a downstream row to the upstream rows it was
   reasoned over — that is "the chain." YOU are deliberately OFF it: you write a
   perspective OVER the chain, never a member of it; your derived_from is always

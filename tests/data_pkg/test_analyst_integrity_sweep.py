@@ -489,3 +489,42 @@ def test_prune_v2_update_predicate_matches_0051() -> None:
         return " ".join(text[start:end].split())
 
     assert _statement(v2) == _statement(v1)
+
+
+# ---------------------------------------------------------------------------
+# S8-T5(a): the critique analyzed_output_id partial expression index (0058).
+# Static (no-DB) shape checks — the live idempotency/apply is exercised by the
+# integration migration suite (tests/data_pkg/test_migrations.py, DB-gated).
+# ---------------------------------------------------------------------------
+
+_CRITIQUE_IDX = _MIGRATIONS_DIR / "0058_critique_analyzed_output_id_index.sql"
+
+
+def test_critique_index_migration_exists() -> None:
+    assert _CRITIQUE_IDX.exists(), f"missing critique-index migration: {_CRITIQUE_IDX}"
+    # 0058 was the next free number when this landed (head 0057 then). Assert it
+    # exists and follows 0057 with no gap — NOT that it is the GLOBAL head.
+    nums = sorted(
+        int(p.name[:4])
+        for p in _MIGRATIONS_DIR.glob("*.sql")
+        if p.name[:4].isdigit()
+    )
+    assert 58 in nums
+    assert 57 in nums
+
+
+def test_critique_index_migration_is_idempotent_partial_expression_index() -> None:
+    body = _CRITIQUE_IDX.read_text(encoding="utf-8")
+    # Idempotent, additive, forward-only — CREATE INDEX IF NOT EXISTS only.
+    assert "CREATE INDEX IF NOT EXISTS" in body
+    assert "DROP INDEX" not in body
+    assert "DELETE" not in body and "UPDATE " not in body  # no data migration
+    # Targets the analyst_outputs table, the analyzed_output_id JSONB expression,
+    # and is PARTIAL to the critique subset (matches the join's kind filter).
+    assert "public.analyst_outputs" in body
+    assert "(data->>'analyzed_output_id')" in body
+    assert "WHERE kind = 'critique'" in body
+    # Not built CONCURRENTLY (the runner wraps each migration in a transaction).
+    assert "CREATE INDEX CONCURRENTLY" not in body
+    # SPDX header present, like the neighbouring migrations.
+    assert "SPDX-License-Identifier: AGPL-3.0-or-later" in body

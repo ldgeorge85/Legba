@@ -697,14 +697,35 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             body=row.get("body") or {},
         )
 
+    # Per-id family cache for the resolver below. A descriptor_id belongs to
+    # exactly ONE family for life, but the id alone doesn't carry it — so the
+    # first resolve probes the families in order and every MISS is a registry
+    # 404. The periodic resync re-resolves the SAME live set every interval, so
+    # without a memo each pass re-pays those cross-family 404s (~5k/6h observed:
+    # every source id costs a target+analyst 404, every analyst id a target
+    # 404). Remembering an id's resolved family makes the resync hit the right
+    # family FIRST — steady-state cross-family 404s drop to ~0.
+    _resolver_family_cache: dict[str, str] = {}
+
     async def desired_resolver(descriptor_id: str) -> DesiredState | None:
         # Descriptor family isn't carried in the actor_id alone; try each.
         # (All but one 404 and that's fine.) ``source`` joins target/analyst
         # per P-CUT so the reconcile loop can drive SourceActor lifecycle.
-        for family in ("target", "analyst", "source"):
+        # Probe the previously-resolved family FIRST (see cache note above) so a
+        # re-resolve of a known id costs one lookup, not a full cross-family walk.
+        _FAMILIES = ("target", "analyst", "source")
+        cached = _resolver_family_cache.get(descriptor_id)
+        probe_order = (
+            (cached, *(f for f in _FAMILIES if f != cached)) if cached else _FAMILIES
+        )
+        for family in probe_order:
             row = await registry_client.get_descriptor(descriptor_id, family=family)
             if row is not None:
+                _resolver_family_cache[descriptor_id] = family
                 return _to_desired(row)
+        # Not found under any family (retired/deleted head) — drop any stale
+        # memo so a re-created id re-probes cleanly rather than pinning a family.
+        _resolver_family_cache.pop(descriptor_id, None)
         return None
 
     async def desired_lister() -> list[DesiredState]:

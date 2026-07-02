@@ -126,6 +126,29 @@ __all__ = ["PostgresQdrantSubstrateQueryPort"]
 # wedge a postgres connection.
 _MAX_ROW_LIMIT = 200
 
+# The LIVE assessment producers the journal + consult reflect OVER when
+# ``get_assessments`` is called with no explicit ``analyst_id``. Replaces the
+# retired ``country_assessor``/``world_assessor`` MONOLITH default: the old
+# first-order ``country_assessor`` one-pager no longer produces, so keying the
+# journal's reflection surface on it read a DEAD surface. The live conclusion
+# chain is the four bounded P2 reasoning UNITS + the P3 per-country COMPOSITION
+# (``country_composition``) + the P3-T5 world COMPOSITION (``world_assessor``,
+# repointed from the retired monolith to ``meta_findings_synthesizer`` — its
+# live head rows ARE compositions). Kept in sync with the unit set in
+# scorecard_banding.DIMENSIONS / unit_correctness_scorer._DEFAULT_UNITS and the
+# composition set in composition_lineage_sweep._COMPOSITION_ANALYSTS. Region
+# compositions join this set when that leg lands.
+_ASSESSMENT_PRODUCER_ANALYSTS: tuple[str, ...] = (
+    # Compositions (second-order reads — the platform's headline conclusions).
+    "country_composition",
+    "world_assessor",
+    # Bounded P2 units (first-order per-country reads the compositions fuse).
+    "leadership_transition",
+    "energy_security",
+    "escalation",
+    "narrative_coordination",
+)
+
 # Default number of recent signal mentions ``inspect_entity`` joins in.
 _INSPECT_RECENT_SIGNAL_MENTIONS = 10
 # Default number of entity_profile_versions rows surfaced by inspect_entity.
@@ -1878,15 +1901,19 @@ class PostgresQdrantSubstrateQueryPort:
         limit: int = 20,
     ) -> dict[str, Any]:
         """Recent per-target / global ASSESSMENTS — the platform's own findings
-        from ``country_assessor`` + ``world_assessor`` (plan §5).
+        from the LIVE producers: the bounded P2 units + the per-country and world
+        COMPOSITIONS (plan §5).
 
         Distinct from ``list_findings`` only by intent: the journal narrates OVER
-        the assessors' conclusions, so this read defaults to the two assessor
-        analysts and folds the critic's ``overall_score`` in the same way
+        the assessment conclusions, so this read defaults to the live producer set
+        (``_ASSESSMENT_PRODUCER_ANALYSTS``) and folds the critic's
+        ``overall_score`` in the same way
         (``effective_confidence = min(confidence, critic_score)``). With no
-        ``analyst_id`` it returns BOTH country_assessor + world_assessor rows so
-        the journal sees the whole assessment surface in one call. Open rows only
-        (``superseded_by IS NULL``).
+        ``analyst_id`` it returns rows from every live assessment producer — the
+        four bounded units plus ``country_composition`` + ``world_assessor`` — so
+        the journal sees the whole live assessment surface in one call (NOT the
+        retired ``country_assessor`` monolith it defaulted to before). Open rows
+        only (``superseded_by IS NULL``).
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         clauses: list[str] = ["f.kind = 'finding'", "f.superseded_by IS NULL"]
@@ -1895,11 +1922,12 @@ class PostgresQdrantSubstrateQueryPort:
             params.append(analyst_id)
             clauses.append(f"f.analyst_id = ${len(params)}")
         else:
-            # Default to the two assessor analysts (the journal's reflection
-            # surface) rather than every finding-producer.
-            clauses.append(
-                "f.analyst_id = ANY(ARRAY['country_assessor','world_assessor'])"
-            )
+            # Default to the LIVE assessment producers (the journal's reflection
+            # surface) rather than every finding-producer OR the retired
+            # country_assessor/world_assessor monolith. Parameterized (trusted
+            # module constant, but keeps the ANY() out of the SQL literal).
+            params.append(list(_ASSESSMENT_PRODUCER_ANALYSTS))
+            clauses.append(f"f.analyst_id = ANY(${len(params)}::text[])")
         if target_id is not None:
             params.append(target_id)
             clauses.append(f"f.target_id = ${len(params)}")
