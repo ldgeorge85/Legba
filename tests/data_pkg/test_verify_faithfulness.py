@@ -239,6 +239,139 @@ async def test_flag_on_but_no_judge_component_labelled(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# #116(b/c/d) — verify polish: labeled-scaffold floor exemption, tally
+# reconciliation, fence/prose-tolerant + length-honest judge parsing.
+# ---------------------------------------------------------------------------
+
+
+def test_floor_does_not_penalize_labeled_scaffold_lines():
+    """#116(b): a bolded label:value line (**Severity:** High) is scaffolding, not
+    a citable fact — the FLOOR must not score it no_citation. The judge still
+    grades it (floor-only exemption)."""
+    from legba.data.provenance.verify import _is_judgeable_claim
+
+    body = (
+        "The lira fell three percent against the dollar today [1].\n"
+        "**Severity:** High\n"
+        "**Confidence:** Moderate\n"
+    )
+    citations = [{"marker": "[1]", "signal_id": str(uuid4())}]
+    rep = _deterministic_floor(body, citations)
+    # Only the one cited factual claim is checkable; the labeled lines are exempt.
+    assert rep.checkable_claims == 1
+    assert rep.supported_claims == 1
+    assert rep.faithfulness_score == 1.0
+    assert not any("Severity" in s.text for s in rep.unsupported_spans)
+    assert not any("Confidence" in s.text for s in rep.unsupported_spans)
+    # FLOOR-only: the judge still SEES the label lines (H1 must not re-widen).
+    assert _is_fact_asserting("**Severity:** High") is False
+    assert _is_judgeable_claim("**Severity:** High") is True
+    # A plain (unbolded) "Foo: bar" sentence stays a checkable claim.
+    assert _is_fact_asserting("The bill passed: the senate voted 60-40.") is True
+
+
+async def test_judge_tally_reconciles_when_floor_and_judge_flag_same_clause(monkeypatch):
+    """#116(c): when the deterministic floor AND the judge flag the SAME clause,
+    the span is deduped so supported + (non-advisory) unsupported never exceeds
+    checkable on the 'llm' path."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    sid = str(uuid4())
+    body = (
+        "The central bank raised rates by fifty basis points [1].\n"
+        "Inflation has spiralled completely out of control nationwide.\n"
+    )
+    citations = [{"marker": "[1]", "signal_id": sid}]
+    # Two claims; the uncited 2nd is flagged by BOTH the floor (no_citation) and
+    # the judge (unsupported).
+    judge = _StubJudge('{"verdicts": ["supported", "unsupported"]}')
+    rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
+    assert rep.judge_status == "llm"
+    non_advisory = [
+        s for s in rep.unsupported_spans
+        if s.reason not in ("double_counted", "hedge_laundering")
+    ]
+    # The shared clause appears ONCE, not twice.
+    assert len(non_advisory) == 1
+    assert rep.supported_claims + len(non_advisory) <= rep.checkable_claims
+
+
+async def test_judge_parses_fenced_json_verdicts(monkeypatch):
+    """#116(d): a reasoning-class judge that wraps verdicts in a ```json fence
+    (and emits prose around it) still parses — no fence-intolerant floor fallback."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    sid = str(uuid4())
+    body, citations = _cited_body(sid)  # 3 judgeable claims
+    fenced = (
+        "Here is my assessment of the three claims.\n"
+        "```json\n"
+        '{"verdicts": ["supported", "contradicted", "supported"]}\n'
+        "```\n"
+    )
+    judge = _StubJudge(fenced)
+    rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
+    assert rep.judge_status == "llm"
+    assert rep.judge_unavailable_reason is None
+    assert rep.faithfulness_score == pytest.approx(2 / 3)
+    assert any(s.reason == "judge_contradicted" for s in rep.unsupported_spans)
+
+
+async def test_judge_short_verdict_list_is_judge_error_not_silent_pass(monkeypatch):
+    """#116(d): a verdict list SHORTER than the graded claims must fail HONESTLY
+    to the floor labelled judge_error — never a silent zip-truncated partial pass."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    sid = str(uuid4())
+    body, citations = _cited_body(sid)  # 3 judgeable claims
+    judge = _StubJudge('{"verdicts": ["supported"]}')  # only ONE verdict
+    rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
+    assert rep.judge_status == "deterministic"
+    assert rep.judge_unavailable_reason == "judge_error"
+    # The floor's honest result over _cited_body (all citations resolve) — 1.0,
+    # NOT a fabricated pass off one verdict.
+    assert rep.faithfulness_score == 1.0
+
+
+def test_extract_json_objects_is_fence_and_prose_tolerant():
+    """#116(d): the JSON extractor unwraps a ```json fence, skips leading reasoning
+    prose, and ignores trailing text — returning the verdict object."""
+    from legba.data.provenance.verify import _extract_json_objects
+
+    # Fenced.
+    objs = _extract_json_objects('```json\n{"verdicts": ["supported"]}\n```')
+    assert any(o.get("verdicts") == ["supported"] for o in objs)
+    # Prose before + after a bare object.
+    objs = _extract_json_objects(
+        'Let me think... {"verdicts": ["unsupported", "supported"]} done.'
+    )
+    picked = next(o for o in objs if "verdicts" in o)
+    assert picked["verdicts"] == ["unsupported", "supported"]
+    # A stray prose brace does not shadow the real verdict object.
+    objs = _extract_json_objects('{note: bad} then {"verdicts": ["supported"]}')
+    assert any(o.get("verdicts") == ["supported"] for o in objs)
+
+
+def test_marker_to_evidence_combines_title_and_snippet():
+    """#116(e): the unit judge's evidence is title + snippet when both present, so
+    a properly-cited clause is graded against the signal's CONTENT, not a terse
+    headline. Title-only / source / id fallbacks are byte-preserved."""
+    from legba.data.provenance.verify import _marker_to_evidence
+
+    cits = [
+        {
+            "marker": "[1]",
+            "signal_id": "s-1",
+            "title": "Fed holds rates",
+            "snippet": "The FOMC left the target range unchanged at 5.25-5.50%.",
+        },
+        {"marker": "[2]", "signal_id": "s-2", "snippet": "Only a snippet here."},
+        {"marker": "[3]", "signal_id": "s-3", "title": "Title only"},
+    ]
+    ev = _marker_to_evidence(cits)
+    assert ev[1] == "Fed holds rates — The FOMC left the target range unchanged at 5.25-5.50%."
+    assert ev[2] == "Only a snippet here."  # snippet-only fallback
+    assert ev[3] == "Title only"  # title-only preserved
+
+
+# ---------------------------------------------------------------------------
 # Critique payload — the gate input + the verification detail block
 # ---------------------------------------------------------------------------
 

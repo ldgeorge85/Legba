@@ -245,6 +245,10 @@ class AnalystMethodResult:
 _MAX_INPUT_SIGNALS = 200        # hard backstop count (the token budget is the real bound)
 _MAX_TITLE_CHARS = 200
 _MAX_SNIPPET_CHARS = 1500       # fuller per-article context (was 400)
+# #116(e): a COMPACT snippet persisted onto each citation entry (data['citations'])
+# — the verify judge's evidence text, kept far tighter than the prompt-render
+# snippet so the JSONB row and the judge prompt stay bounded.
+_CITATION_SNIPPET_CHARS = 300
 _DEFAULT_INPUT_TOKEN_BUDGET = 32000
 _CHARS_PER_TOKEN = 4            # rough estimate; we don't tokenize on the hot path
 
@@ -490,10 +494,29 @@ def _build_citation_index(
                 signal_id = None
         title = row.get("title")
         source = row.get("source_url")
+        # #116(e): capture a compact evidence SNIPPET (the signal's own
+        # summary/lede) alongside the title so the faithfulness judge can confirm
+        # a specific claim against the cited signal's CONTENT, not just its
+        # headline (a title alone is often too terse → a properly-cited clause is
+        # mis-graded down). Same field precedence _render_signal uses.
+        data = row.get("data")
+        snippet = ""
+        if isinstance(data, dict):
+            raw_snip = (
+                data.get("summary")
+                or data.get("description")
+                or data.get("content_text")
+                or data.get("snippet")
+                or ""
+            )
+            if not isinstance(raw_snip, str):
+                raw_snip = str(raw_snip)
+            snippet = raw_snip.strip()[:_CITATION_SNIPPET_CHARS]
         index[n] = {
             "signal_id": signal_id,
             "title": str(title) if title is not None else None,
             "source": str(source) if source else None,
+            "snippet": snippet or None,
         }
     return index
 
@@ -534,6 +557,10 @@ def _extract_citations(
             citation["title"] = entry["title"]
         if entry.get("source"):
             citation["source"] = entry["source"]
+        # #116(e): carry the compact evidence snippet so the verify judge sees the
+        # cited signal's CONTENT, not just its headline (see _marker_to_evidence).
+        if entry.get("snippet"):
+            citation["snippet"] = entry["snippet"]
         citations.append(citation)
     return citations, marker_count, len(citations)
 
@@ -585,7 +612,7 @@ def _title_from_text(text: str, *, fallback_title: str) -> str:
     return fallback_title[:2048]
 
 
-def _unwrap_envelope(body: str) -> tuple[str, str | None]:
+def _unwrap_envelope(body: str, *, _max_depth: int = 6) -> tuple[str, str | None]:
     """D27 (second pass): unwrap a body that is itself a stringified
     ``{title, body}`` JSON envelope, returning ``(inner_body, inner_title)``.
 
@@ -598,32 +625,42 @@ def _unwrap_envelope(body: str) -> tuple[str, str | None]:
     ``title`` so the caller can prefer it over the static placeholder. When the
     input is NOT such an envelope, returns ``(body, None)`` unchanged — the
     plain-markdown / non-JSON path is byte-for-byte preserved.
+
+    #125: unwraps RECURSIVELY (bounded by ``_max_depth``) so an envelope nested
+    more than one level deep — ``body`` is a stringified envelope whose own
+    ``body`` is *again* a stringified envelope — is fully peeled to the innermost
+    markdown instead of leaving a raw JSON string in the body column. The lifted
+    title tracks the innermost envelope that carried one.
     """
     if not body:
         return body, None
-    candidate = body.strip()
-    if candidate.startswith("```"):
-        candidate = candidate.strip("`")
-        if candidate.lower().startswith("json"):
-            candidate = candidate[4:]
-        candidate = candidate.strip()
-    if not candidate.startswith("{"):
-        return body, None
-    try:
-        inner = json.loads(candidate)
-    except (json.JSONDecodeError, ValueError):
-        return body, None
-    if isinstance(inner, dict) and "body" in inner:
+    current = body
+    title: str | None = None
+    for _ in range(_max_depth):
+        candidate = current.strip()
+        if candidate.startswith("```"):
+            candidate = candidate.strip("`")
+            if candidate.lower().startswith("json"):
+                candidate = candidate[4:]
+            candidate = candidate.strip()
+        if not candidate.startswith("{"):
+            break
+        try:
+            inner = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            break
+        if not (isinstance(inner, dict) and "body" in inner):
+            break
         inner_body = inner.get("body")
-        if isinstance(inner_body, str) and inner_body.strip():
-            inner_title = inner.get("title")
-            title = (
-                inner_title.strip()
-                if isinstance(inner_title, str) and inner_title.strip()
-                else None
-            )
-            return inner_body, title
-    return body, None
+        if not (isinstance(inner_body, str) and inner_body.strip()):
+            break
+        inner_title = inner.get("title")
+        if isinstance(inner_title, str) and inner_title.strip():
+            title = inner_title.strip()
+        current = inner_body
+    if current is body:
+        return body, None
+    return current, title
 
 
 def _unwrap_envelope_body(body: str) -> str:
@@ -659,6 +696,72 @@ def _coerce_indicators(raw: Any) -> list[dict[str, Any]]:
             logger.debug("inline_target.indicator.dropped err=%s entry=%s", exc, entry)
             continue
     return out
+
+
+# #125: locate the ``"body": "..."`` field inside a broken/truncated envelope.
+_ENVELOPE_BODY_KEY_RE = re.compile(r'"body"\s*:\s*"', re.IGNORECASE)
+
+
+def _salvage_envelope_body(raw: str) -> str | None:
+    """#125: best-effort recovery of the inner markdown ``body`` from a
+    MALFORMED or TRUNCATED ``{"title": ..., "body": ...}`` JSON envelope that
+    :func:`json.loads` could not parse.
+
+    The parse-fallback branches of :func:`_coerce_finding` used to store the raw
+    LLM text verbatim. When that raw text is a *recognizable but broken* JSON
+    envelope (a truncated stream that cut off mid-``body``, or an envelope with
+    trailing corruption), storing it verbatim leaks a raw ``{"title": ...}``
+    JSON string into the body column — the exact residual #125 targets.
+
+    This fence-strips the raw, and when it still looks like a JSON object,
+    extracts the ``body`` string value by scanning from its opening quote to the
+    first UNESCAPED closing quote (or to end-of-text when the envelope is
+    truncated mid-string), then JSON-decodes the escapes so the body column holds
+    rendered markdown. Returns ``None`` when the raw is NOT an envelope object or
+    carries no ``body`` field — the caller then keeps the raw prose as-is (it is
+    not JSON scaffolding), preserving the plain-text fallback byte-for-byte.
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    if not text.startswith("{"):
+        return None
+    match = _ENVELOPE_BODY_KEY_RE.search(text)
+    if not match:
+        return None
+    start = match.end()  # first char of the string value
+    idx = start
+    escaped = False
+    end: int | None = None
+    while idx < len(text):
+        char = text[idx]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            end = idx
+            break
+        idx += 1
+    raw_value = text[start:end] if end is not None else text[start:]
+    # Decode JSON string escapes (\n, \", \uXXXX, ...). A truncated tail can
+    # leave the encoded string unparseable — fall back to a minimal unescape so
+    # we still surface markdown rather than the JSON wrapper.
+    try:
+        decoded = json.loads('"' + raw_value + '"')
+    except (json.JSONDecodeError, ValueError):
+        decoded = (
+            raw_value.replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace('\\"', '"')
+        )
+    decoded = decoded.strip()
+    return decoded or None
 
 
 def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
@@ -712,9 +815,14 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         # D27: the LLM authored prose that didn't parse as JSON — keep its text
         # as the body (rendered markdown) and lift a real title from it instead
         # of the static placeholder.
+        # #125: but if the un-parseable raw is a MALFORMED/TRUNCATED {title,body}
+        # envelope, salvage the inner markdown body first — never persist a raw
+        # {"title": ..., "body": ...} JSON string as the body column.
+        salvaged = _salvage_envelope_body(raw)
+        body = salvaged if salvaged is not None else raw
         return FindingPayload(
-            title=_title_from_text(raw, fallback_title=fallback_title),
-            body=raw[:65536],
+            title=_title_from_text(body, fallback_title=fallback_title),
+            body=body[:65536],
             confidence=0.3,
             tags=["unstructured"],
         )
@@ -763,9 +871,12 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         )
     except Exception as exc:                            # pragma: no cover
         logger.warning("inline_target.finding.coerce_failed err=%s", exc)
+        # #125: same envelope-salvage guard as the parse-failed branch.
+        salvaged = _salvage_envelope_body(raw)
+        body = salvaged if salvaged is not None else raw
         return FindingPayload(
-            title=_title_from_text(raw, fallback_title=fallback_title),
-            body=raw[:65536],
+            title=_title_from_text(body, fallback_title=fallback_title),
+            body=body[:65536],
             confidence=0.3,
             tags=["coerce_failed"],
         )

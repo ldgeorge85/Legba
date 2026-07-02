@@ -575,6 +575,99 @@ def test_coerce_finding_stringified_fenced_envelope_body():
 
 
 # ---------------------------------------------------------------------------
+# #125 — parse-fallback envelope salvage: never persist a raw {title, body} JSON
+# string as the body, even on a malformed/truncated envelope or a deeply-nested
+# one the single-level unwrap missed.
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_finding_truncated_envelope_does_not_store_raw_json():
+    """#125: a MALFORMED/TRUNCATED {title, body} envelope (the stream cut off
+    mid-body, so json.loads fails) must NOT land as a raw JSON string — the inner
+    markdown body is salvaged instead."""
+    raw = (
+        '{"title": "US: shutdown risk rises", '
+        '"body": "## Assessment\\n\\nThe federal government faces a funding lapse [1].'
+    )  # NOTE: truncated — no closing quote / brace.
+    finding = _coerce_finding(raw, fallback_title="Assessment for country_g20_us")
+    # The JSON wrapper is GONE — no scaffolding keys, no leading brace.
+    assert '"title"' not in finding.body
+    assert '"body"' not in finding.body
+    assert not finding.body.lstrip().startswith("{")
+    # The salvaged markdown IS present.
+    assert "The federal government faces a funding lapse" in finding.body
+    assert "unstructured" in finding.tags
+
+
+def test_coerce_finding_truncated_envelope_with_trailing_corruption():
+    """#125: a complete body string but corrupt trailing bytes (invalid JSON after
+    the body) also salvages the inner markdown rather than storing the wrapper."""
+    raw = (
+        '{"title": "AR", "body": "# Argentina inflation reaccelerates\\nDetail here."'
+        ", broken garbage ]]"
+    )
+    finding = _coerce_finding(raw, fallback_title="ph")
+    assert '"body"' not in finding.body
+    assert finding.body.startswith("# Argentina inflation reaccelerates")
+    # The lifted title comes from the salvaged markdown heading.
+    assert finding.title == "Argentina inflation reaccelerates"
+
+
+def test_coerce_finding_unwraps_triple_nested_envelope():
+    """#125: an envelope nested 2+ levels deep is fully peeled by the recursive
+    unwrap — no raw JSON string is left in the body column."""
+    innermost = "## Real markdown\n- a point"
+    lvl1 = json.dumps({"title": "L1", "body": innermost})
+    lvl2 = json.dumps({"title": "L2", "body": lvl1})
+    raw = json.dumps({"title": "Outer", "body": lvl2})
+    finding = _coerce_finding(raw, fallback_title="ph")
+    assert finding.title == "Outer"
+    assert finding.body == innermost
+    assert "{" not in finding.body.splitlines()[0]
+
+
+def test_coerce_finding_non_envelope_prose_preserved_on_parse_failure():
+    """#125: the salvage guard is envelope-only — plain LLM prose that fails to
+    parse is still kept verbatim (the byte-for-byte D27 fallback)."""
+    raw = "this is not json at all { incomplete"
+    finding = _coerce_finding(raw, fallback_title="Default Title")
+    assert finding.title == raw
+    assert raw in finding.body
+    assert "unstructured" in finding.tags
+
+
+def test_salvage_envelope_body_returns_none_for_non_envelope():
+    """#125: the salvage helper returns None (caller keeps raw) when the text is
+    not a JSON object or carries no body field."""
+    from legba.data.analysts.inline_target import _salvage_envelope_body
+
+    assert _salvage_envelope_body("just some prose, no braces") is None
+    assert _salvage_envelope_body('{"title": "no body field here"}') is None
+    assert _salvage_envelope_body("") is None
+
+
+def test_build_citation_index_captures_snippet():
+    """#116(e): the render-time index captures a compact evidence snippet from the
+    signal's data so the verify judge sees content, not just the headline."""
+    sid = uuid4()
+    sliced = [
+        {
+            "id": sid,
+            "title": "Fed decision",
+            "source_url": "https://x/1",
+            "data": {"summary": "The FOMC held the target range steady."},
+        },
+        {"id": uuid4(), "title": "No data row"},
+    ]
+    index = _build_citation_index(sliced)
+    assert index[1]["snippet"] == "The FOMC held the target range steady."
+    assert index[2]["snippet"] is None
+    # And _extract_citations carries the snippet onto the citation entry.
+    citations, _, _ = _extract_citations("A claim [1].", index)
+    assert citations[0]["snippet"] == "The FOMC held the target range steady."
+
+
+# ---------------------------------------------------------------------------
 # ORIENT — sorts produced_at descending, handles None
 # ---------------------------------------------------------------------------
 

@@ -31,6 +31,7 @@ recursive CTE where possible and use direct fetches for single-row checks.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -317,6 +318,26 @@ _NON_FACTUAL_HEADINGS = (
     "indicators to watch",
     "indicators",
     "watch",
+    # #116(b): broadened — the forward-looking "watch" block surfaces under many
+    # heading phrasings the assessors emit. All are forward-looking by
+    # construction (developments that WOULD confirm/break the read), so none is a
+    # present-fact assertion for EITHER the floor or the judge.
+    "what to watch",
+    "watch items",
+    "watch for",
+    "watchlist",
+    "watch list",
+    "signposts",
+    "leading indicators",
+    "key indicators",
+    "indicators & triggers",
+    "indicators and triggers",
+    "triggers to watch",
+    "developments to watch",
+    "things to watch",
+    "indicators to monitor",
+    "what would confirm",
+    "what would break",
 )
 
 # CALIBRATION (#1, 2026-07-01). The citation-presence floor was crushing HONEST
@@ -348,6 +369,20 @@ _SYNTHESIS_PREFIXES = (
     "the dominant",
     "net,",
     "net:",
+)
+
+# #116(b): a BOLDED label:value line — ``**Severity:** High``, ``**Confidence:**
+# Moderate``, ``**Time horizon:** 3-6 months`` — is document SCAFFOLDING the
+# assessor stamps onto a finding, NOT a first-order citable fact. The bold run is
+# the reliable signal (a plain ``Foo: bar`` sentence stays a claim); the colon
+# may sit INSIDE the bold (``**Severity:**``) or right after it (``**Severity**:``).
+# FLOOR-ONLY exemption — the judge still grades these spans (H1: exemptions must
+# not hide a claim from the judge).
+_LABELED_SCAFFOLD_RE = re.compile(
+    r"^(?:[-*>]\s+)*"                    # optional list / blockquote bullets
+    r"\*\*[^*\n:]{1,48}"                # ** + a short label (no colon/star yet)
+    r"(?::\s*\*\*|\*\*\s*:)",           # colon INSIDE the bold, or right AFTER it
+    re.IGNORECASE,
 )
 
 # ABSENCE / negative-finding markers — a clause asserting something was NOT
@@ -546,15 +581,31 @@ def _marker_to_evidence(citations: Any) -> dict[int, str]:
         m = _CLAIM_MARKER_RE.search(marker)
         if not m:
             continue
+        # (#116e) Feed the judge the cited signal's TITLE + SNIPPET (its captured
+        # summary/lede), mirroring the composition path's evidence_text — a title
+        # alone can be too terse for the judge to confirm a specific claim, so a
+        # properly-cited clause gets mis-graded DOWN. Fall back to title-only, then
+        # snippet-only, then the source URL, then the id — never fabricated.
         title = entry.get("title")
         source = entry.get("source")
-        if isinstance(title, str) and title.strip():
-            text = title.strip()
+        snippet = (
+            entry.get("snippet")
+            or entry.get("evidence_text")
+            or entry.get("summary")
+        )
+        title_txt = title.strip() if isinstance(title, str) and title.strip() else ""
+        snip_txt = snippet.strip() if isinstance(snippet, str) and snippet.strip() else ""
+        if title_txt and snip_txt:
+            text = f"{title_txt} — {snip_txt}"
+        elif title_txt:
+            text = title_txt
+        elif snip_txt:
+            text = snip_txt
         elif isinstance(source, str) and source.strip():
             text = source.strip()
         else:
             text = sid
-        out[int(m.group(1))] = str(text)[:400]
+        out[int(m.group(1))] = str(text)[:600]
     return out
 
 
@@ -775,6 +826,12 @@ def _is_fact_asserting(claim: str) -> bool:
     low = stripped.lower()
     # A markdown heading line is structure, not an assertion.
     if s.lstrip().startswith("#"):
+        return False
+    # (#116b) A bolded label:value line (**Severity:** High) is scaffolding, not a
+    # citable present-fact — FLOOR-ONLY (the judge still grades it via
+    # _is_judgeable_claim). Matched on the ORIGINAL span so the leading ``**`` is
+    # intact (the ``stripped`` form above has already lstripped the ``*`` bold).
+    if _LABELED_SCAFFOLD_RE.match(s.strip()):
         return False
     # The forward-looking watch section is explicitly NOT a present-fact claim.
     for head in _NON_FACTUAL_HEADINGS:
@@ -1095,6 +1152,71 @@ def _fold_indicators(
     )
 
 
+class _JudgeVerdictError(RuntimeError):
+    """The judge returned a structurally-invalid verdict set — a verdict count
+    that does not match the graded claims. Raised so :func:`_maybe_llm_judge`
+    fails to the deterministic floor labelled ``judge_error`` (#116d), rather than
+    silently zip-truncating to a partial pass that hides ungraded claims."""
+
+
+def _extract_json_objects(text: str) -> list[dict[str, Any]]:
+    """Every balanced top-level ``{...}`` block in ``text`` that parses as a JSON
+    dict, in order (#116d).
+
+    Fence- and prose-tolerant: a ```` ```json ```` (or bare ```` ``` ````) fence is
+    unwrapped first, and leading reasoning prose / trailing text around the object
+    are ignored — a reasoning-class judge may emit thinking before the strict-JSON
+    verdicts. Returns ``[]`` when nothing parses. The caller picks the object that
+    actually carries ``verdicts`` (so a stray brace in prose can't shadow it).
+    """
+    if not text:
+        return []
+    candidate = text.strip()
+    fence = re.search(r"```(?:json)?\s*\n?(.*?)```", candidate, re.DOTALL | re.IGNORECASE)
+    if fence:
+        candidate = fence.group(1).strip()
+    objs: list[dict[str, Any]] = []
+    i, n = 0, len(candidate)
+    while i < n:
+        if candidate[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_str = False
+        escaped = False
+        end: int | None = None
+        j = i
+        while j < n:
+            ch = candidate[j]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j + 1
+                    break
+            j += 1
+        if end is None:
+            break  # unbalanced tail — nothing complete left to extract
+        try:
+            obj = json.loads(candidate[i:end])
+            if isinstance(obj, dict):
+                objs.append(obj)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        i = end
+    return objs
+
+
 async def _maybe_llm_judge(
     floor: FaithfulnessReport,
     *,
@@ -1135,15 +1257,17 @@ async def _maybe_llm_judge(
         floor.judge_unavailable_reason = "judge_empty"
         return floor
 
-    # Refine: the judge's per-claim verdicts replace the floor's span set. A
-    # claim the floor passed but the judge marks unsupported/contradicted is
-    # ADDED as an unsupported span; the score becomes supported/checkable over
-    # the judge's verdicts, but never drops below nor rises above what the
-    # evidence supports — we take the MIN(floor, judge) score so the judge can
-    # only tighten, never inflate, the deterministic floor.
+    # Refine: the judge's per-claim verdicts replace the floor's per-claim
+    # grading. A claim the floor passed but the judge marks unsupported/
+    # contradicted is ADDED as an unsupported span; the score becomes supported/
+    # checkable over the judge's verdicts, but never drops below nor rises above
+    # what the evidence supports — we take the MIN(floor, judge) score so the
+    # judge can only tighten, never inflate, the deterministic floor.
     judged_spans: list[UnsupportedSpan] = []
+    judged_texts: set[str] = set()
     supported = 0
     for claim_text, verdict in verdicts:
+        judged_texts.add(claim_text.strip())
         if verdict == "supported":
             supported += 1
         else:
@@ -1154,12 +1278,32 @@ async def _maybe_llm_judge(
     checkable = len(verdicts)
     judge_score = 1.0 if checkable == 0 else supported / checkable
     refined_score = min(floor.faithfulness_score, judge_score)
+
+    # (#116c) Reconcile the surfaced span set so supported + unsupported ≤
+    # checkable on the 'llm' path:
+    #   * ADVISORY floor spans (double_counted / hedge_laundering) are structural
+    #     notes, NOT unsupported claims — surface them but keep them OUT of the
+    #     checkable tally (a hedge span can even sit on a SUPPORTED clause, so
+    #     counting it double-counts).
+    #   * a floor span whose claim text the judge ALSO graded is the SAME clause
+    #     seen twice (the judge's verdict is authoritative on this path) — DEDUP
+    #     it by text so the concatenation can't push supported + unsupported past
+    #     checkable.
+    advisory_spans = [
+        s for s in floor.unsupported_spans if s.reason in _ADVISORY_REASONS
+    ]
+    residual_floor_spans = [
+        s
+        for s in floor.unsupported_spans
+        if s.reason not in _ADVISORY_REASONS and s.text.strip() not in judged_texts
+    ]
     return FaithfulnessReport(
         faithfulness_score=refined_score,
         checkable_claims=max(floor.checkable_claims, checkable),
         supported_claims=supported,
-        # Surface BOTH the floor's structural spans and the judge's semantic ones.
-        unsupported_spans=floor.unsupported_spans + judged_spans,
+        # The judge's semantic spans + any floor structural span the judge did NOT
+        # re-grade + the advisory (uncounted) notes.
+        unsupported_spans=judged_spans + residual_floor_spans + advisory_spans,
         judge_status="llm",
         # Carry the floor's T7 evidence ceiling through — the judge only refines
         # the faithfulness number, never the double-count-corrected cap.
@@ -1253,13 +1397,25 @@ async def _run_judge(
         ),
     )
     content = getattr(response, "content", "") or ""
-    try:
-        parsed = json.loads(content.strip().strip("`"))
-    except (json.JSONDecodeError, ValueError):
-        return []
-    raw = parsed.get("verdicts") if isinstance(parsed, Mapping) else None
+    # (#116d) Fence/prose-tolerant parse: a reasoning-class judge may wrap the
+    # verdicts in a ```json fence or emit thinking around them, so scan for the
+    # object that actually carries ``verdicts`` instead of a fence-intolerant
+    # ``strip('`')`` that fails on ``` ```json\n{...}\n``` ```.
+    parsed = next(
+        (o for o in _extract_json_objects(content) if "verdicts" in o), None
+    )
+    if parsed is None:
+        return []  # no parseable verdict object → soft-fail to floor (judge_empty)
+    raw = parsed.get("verdicts")
     if not isinstance(raw, list):
         return []
+    # (#116d) HONEST length contract: the judge MUST return one verdict per graded
+    # claim. A short/long list previously zip-truncated to the shorter, silently
+    # passing the ungraded tail — fail to the floor labelled judge_error instead.
+    if len(raw) != len(claims):
+        raise _JudgeVerdictError(
+            f"judge returned {len(raw)} verdicts for {len(claims)} claims"
+        )
     out: list[tuple[str, str]] = []
     for claim, verdict in zip(claims, raw):
         v = str(verdict).strip().lower()
