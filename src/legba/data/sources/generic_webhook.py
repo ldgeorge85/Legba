@@ -28,16 +28,31 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Awaitable, Callable, ClassVar
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from ._contract import Signal, SourceContext, SourceHealth
+from .webhook_router import default_router
 
 logger = logging.getLogger(__name__)
 
 
 EmitSignal = Callable[[Signal], Awaitable[None]]
+
+
+# S1 idempotence: push signals carry a DETERMINISTIC id derived from
+# (source_id + content_hash) so a redelivered inbound envelope re-derives the
+# SAME id and ``write_canonical_signal``'s ``ON CONFLICT (id) DO NOTHING``
+# no-ops the second write (never a double-write). content_hash already covers
+# the full payload and source_id namespaces it, so genuinely distinct payloads
+# never collide. Stable, computed once at import.
+_SIGNAL_ID_NAMESPACE = uuid5(NAMESPACE_URL, "legba:signal:generic_webhook")
+
+
+def _deterministic_signal_id(source_id: str, content_hash: str) -> UUID:
+    return uuid5(_SIGNAL_ID_NAMESPACE, f"{source_id}:{content_hash}")
 
 
 class GenericWebhookConfig(BaseModel):
@@ -118,41 +133,101 @@ class GenericWebhookSourceHandler:
         signal = self._build_signal(ctx, payload)
         yield signal
 
-    # ----- InboundWebhookHandler.handle_webhook ---------------------------
+    # ----- InboundWebhookHandler.handle_webhook (S1 accept-and-enqueue) ----
 
     async def handle_webhook(self, request: Request) -> Response:
-        """Router entrypoint: read the request, ingest, emit each signal."""
+        """Accept-and-enqueue front (S1): validate + auth + publish RAW → 202.
+
+        MINIMAL work on the request path — the deep parse
+        (``_parse_body`` + ``_build_signal``) and the DB write move OFF-request
+        to :class:`legba.runtime.inbound_drain.InboundWebhookDrain`, which calls
+        :meth:`ingest_and_emit`. Order (fail-closed):
+
+          1. paused / unbound → 503;
+          2. read body + headers;
+          3. **verify the shared-secret token FIRST** — a mismatch is 401
+             BEFORE any enqueue (a bad POST never touches the stream);
+          4. cheap structural validate (non-empty body → else 400);
+          5. publish the RAW envelope to ``legba.inbound.<source_id>`` and
+             return **202 ACCEPTED-for-processing** (== the envelope's JetStream
+             publish-ack; NOT a written signal — the response never overstates
+             durability the stream can't guarantee).
+
+        A publish failure — no bound sink, or the stream's ``max_msgs`` buffer
+        cap hit — RAISES; we map it to 503 (honest backpressure), never a silent
+        drop.
+        """
         if self._paused:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="generic webhook source is paused",
             )
-        if self._ctx is None or self._emit_signal is None:
+        if self._ctx is None or self._router is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="handler not bound to a runtime emit callback",
+                detail="handler not bound to an inbound sink",
             )
         body = await request.body()
         headers = {k.lower(): v for k, v in request.headers.items()}
+        # (3) Auth FIRST — fail-closed BEFORE enqueue.
         try:
-            count = 0
-            async for sig in self.ingest(self._ctx, body, headers):
-                await self._emit_signal(sig)
-                count += 1
-            self._signals_total += count
-            self._last_inbound_at = datetime.now(tz=timezone.utc)
-            self._last_error = None
-        except ValueError as exc:
-            self._last_error = str(exc)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
-            ) from exc
+            self._verify_token(headers)
         except PermissionError as exc:
             self._last_error = str(exc)
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid webhook token",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid webhook token",
             ) from exc
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        # (4) Cheap structural validate only — the deep parse is the drain's job.
+        if not body:
+            self._last_error = "empty webhook body"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="empty webhook body",
+            )
+        # (5) Publish the RAW envelope + 202.
+        try:
+            await self._router.publish_inbound(self.source_id, body, headers)
+        except Exception as exc:
+            self._last_error = f"inbound enqueue failed: {exc}"
+            logger.warning(
+                "generic_webhook.enqueue.failed source_id=%s err=%s",
+                self.source_id, exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="inbound queue unavailable (backpressure)",
+            ) from exc
+        self._last_inbound_at = datetime.now(tz=timezone.utc)
+        self._last_error = None
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    # ----- drain-side ingest (off the request path) -----------------------
+
+    async def ingest_and_emit(self, body: bytes, headers: dict[str, str]) -> int:
+        """Parse + emit each signal from a RAW envelope — the drain's callback.
+
+        The OLD ``handle_webhook`` inner loop, now run OFF the request path by
+        the :class:`~legba.runtime.inbound_drain.InboundWebhookDrain`. Runs the
+        EXISTING emit path (``make_emit_callback._emit`` → ``_process_one`` →
+        ``write_canonical_signal`` → ``_publish``) unchanged. Returns the number
+        of signals emitted.
+
+        Raises ``ValueError`` (unparseable body) / ``PermissionError`` (token
+        re-verify mismatch) — the drain dead-letters these; the emit path is
+        idempotent on a redelivered envelope (deterministic ``signal_id`` +
+        the P-02 content_hash alias backstop), so an at-least-once redelivery
+        is harmless.
+        """
+        if self._ctx is None or self._emit_signal is None:
+            raise RuntimeError("handler not bound to a runtime emit callback")
+        count = 0
+        async for sig in self.ingest(self._ctx, body, headers):
+            await self._emit_signal(sig)
+            count += 1
+        self._signals_total += count
+        self._last_inbound_at = datetime.now(tz=timezone.utc)
+        self._last_error = None
+        return count
 
     # ----- lifecycle -------------------------------------------------------
 
@@ -162,8 +237,13 @@ class GenericWebhookSourceHandler:
     async def on_activate(self, ctx: SourceContext) -> None:
         self._ctx = ctx
         self._paused = False
-        if self._router is not None:
-            self.webhook_path = self._router.register_handler(self)
+        # Fall back to the process-wide default router (mirror discord.py) so
+        # the handler is always bound to the SAME router the bring-up wired the
+        # inbound sink onto + the drain resolves handlers from — the front's
+        # publish_inbound + the drain's get_handler then agree.
+        router = self._router or default_router()
+        self._router = router
+        self.webhook_path = router.register_handler(self)
 
     async def on_pause(self, ctx: SourceContext) -> None:
         self._paused = True
@@ -221,6 +301,7 @@ class GenericWebhookSourceHandler:
         basis = json.dumps(payload, sort_keys=True, default=str)
         content_hash = hashlib.sha256(basis.encode("utf-8")).hexdigest()
         return Signal(
+            signal_id=_deterministic_signal_id(ctx.source_id, content_hash),
             source_id=ctx.source_id,
             modality=cfg.modality,  # type: ignore[arg-type]
             media_ref=media_ref if isinstance(media_ref, str) else None,

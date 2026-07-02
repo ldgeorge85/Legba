@@ -89,6 +89,9 @@ class SourceFirstHandles:
     # Silent-stall liveness watchdog (W-1b §2) — observes signal + finding
     # traffic and alerts when the pipeline goes quiet. None when run_loops=False.
     liveness_watchdog: Any = None
+    # S1 inbound-webhook drain (durable pull consumer over legba.inbound.>).
+    # None when run_loops=False or the drain failed to start.
+    inbound_drain: Any = None
 
     async def stop(self) -> None:
         # Liveness watchdog first — stop the check loop + drop its subscriptions
@@ -98,6 +101,13 @@ class SourceFirstHandles:
                 await self.liveness_watchdog.stop()
             except Exception as exc:                            # pragma: no cover
                 logger.warning("source_first.liveness_watchdog.stop err=%s", exc)
+        # S1 inbound drain — stop the fetch loop + unsubscribe its pull consumer
+        # BEFORE the NATS store is torn down (same as the trigger-engine unbind).
+        if self.inbound_drain is not None:
+            try:
+                await self.inbound_drain.stop()
+            except Exception as exc:                            # pragma: no cover
+                logger.warning("source_first.inbound_drain.stop err=%s", exc)
         # Trigger engine first — stop consuming + ticking.
         if self.trigger_engine is not None:
             try:
@@ -269,6 +279,47 @@ def actor_invoke_timeout_seconds() -> int:
         )
         return ACTOR_INVOKE_TIMEOUT_DEFAULT_S
     return val
+
+
+# ---------------------------------------------------------------------------
+# S1 inbound stream sizing (env-overridable).
+# ---------------------------------------------------------------------------
+
+# Bounded buffer for the `legba_inbound` WORKQUEUE stream: the max number of
+# un-drained envelopes it holds before a publish is refused (front -> 503) and a
+# safety TTL after which an un-drained envelope ages out. Defaults are generous
+# — the drain normally keeps the stream near-empty — but bound a runaway burst
+# or a wedged drain so the stream can't grow without limit.
+INBOUND_MAX_MSGS_ENV = "LEGBA_INBOUND_MAX_MSGS"
+INBOUND_MAX_MSGS_DEFAULT = 50_000
+INBOUND_MAX_AGE_ENV = "LEGBA_INBOUND_MAX_AGE_SECONDS"
+INBOUND_MAX_AGE_DEFAULT_S = 3 * 24 * 3600  # 3 days
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Resolve a positive-int env var, falling back on unset/malformed/≤0."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("%s.bad_env value=%r — using default %d", name, raw, default)
+        return default
+    if val <= 0:
+        logger.warning("%s.non_positive value=%d — using default %d", name, val, default)
+        return default
+    return val
+
+
+def inbound_max_msgs() -> int:
+    """Buffer cap for the inbound stream (env :data:`INBOUND_MAX_MSGS_ENV`)."""
+    return _positive_int_env(INBOUND_MAX_MSGS_ENV, INBOUND_MAX_MSGS_DEFAULT)
+
+
+def inbound_max_age_seconds() -> int:
+    """Safety TTL for the inbound stream (env :data:`INBOUND_MAX_AGE_ENV`)."""
+    return _positive_int_env(INBOUND_MAX_AGE_ENV, INBOUND_MAX_AGE_DEFAULT_S)
 
 
 def _actor_proxy_factory(timeout_seconds: int | None = None):
@@ -559,6 +610,45 @@ async def bring_up_source_first_planes(
         "source_first.agency_streams.ready subjects=channels.>,governor.events.>"
     )
 
+    # ---- S1 inbound accept-and-enqueue front (signals ingestion track) ----
+    # NEW `legba_inbound` WORKQUEUE stream captures the RAW push envelopes the
+    # webhook front publishes to `legba.inbound.<source_id>`; the single durable
+    # InboundWebhookDrain consumes it OFF the request path (ingest ->
+    # write_canonical_signal -> legba.signals.>). WORKQUEUE + `max_msgs` gives
+    # bounded buffering + backpressure (a full buffer -> publish raises -> the
+    # front returns 503, never a silent drop); `max_age` is a safety TTL.
+    # ensure_stream is idempotent (stream_info-then-add) so this is safe every
+    # boot. Bind the front's publish sink onto the process-wide webhook router
+    # (closure over the JetStream publish) UNCONDITIONALLY — the front (mounted
+    # on the L-113 server) must be able to enqueue even in a test rig where the
+    # drain loop isn't launched.
+    from ..data.sources.webhook_router import (
+        INBOUND_STREAM_NAME,
+        INBOUND_SUBJECT_ROOT,
+        default_router as _default_webhook_router,
+    )
+
+    await nats_store.ensure_stream(
+        INBOUND_STREAM_NAME,
+        [f"{INBOUND_SUBJECT_ROOT}.>"],
+        retention="workqueue",
+        max_msgs=inbound_max_msgs(),
+        max_age_seconds=inbound_max_age_seconds(),
+        # discard=new → a full buffer REJECTS the new publish (publish_inbound
+        # raises → front 503 honest backpressure) instead of silently evicting the
+        # oldest already-202'd envelope (DiscardPolicy.OLD default). This is the
+        # load-bearing honesty guarantee for the accept-and-enqueue front (S1).
+        discard="new",
+    )
+    webhook_router = _default_webhook_router()
+    webhook_router.bind_inbound_sink(nats_store.publish_json)
+    logger.info(
+        "source_first.inbound_stream.ready stream=%s subject=%s.> max_msgs=%d "
+        "max_age_s=%d",
+        INBOUND_STREAM_NAME, INBOUND_SUBJECT_ROOT,
+        inbound_max_msgs(), inbound_max_age_seconds(),
+    )
+
     # ---- Agency plane (P-11) ------------------------------------------
     from ..data.analysts.agency import Agency
     from ..data.analysts.agency.tools import (
@@ -666,6 +756,7 @@ async def bring_up_source_first_planes(
     # ---- Launch the loops ---------------------------------------------
     trigger_task: asyncio.Task | None = None
     liveness_watchdog: Any = None
+    inbound_drain: Any = None
     if run_loops:
         await worker_pool.start()
         logger.info("source_first.worker_pool.started workers=%d", pool_size)
@@ -673,6 +764,28 @@ async def bring_up_source_first_planes(
             trigger_engine.run(), name="legba-trigger-engine",
         )
         logger.info("source_first.trigger_engine.started")
+
+        # S1 inbound drain — durable pull consumer draining `legba.inbound.>`
+        # OFF the request path. Best-effort start: a drain failure must not
+        # abort the whole runtime bring-up (the front still enqueues durably;
+        # the drain catches up once healthy). The stream + sink were provisioned
+        # above, unconditionally.
+        from .inbound_drain import InboundWebhookDrain
+
+        try:
+            inbound_drain = InboundWebhookDrain(nats_store, webhook_router)
+            await inbound_drain.start()
+            logger.info(
+                "source_first.inbound_drain.started consumer=%s",
+                inbound_drain.consumer_name,
+            )
+        except Exception as exc:                                # pragma: no cover
+            logger.warning(
+                "source_first.inbound_drain.start err=%s "
+                "(inbound webhooks will BUFFER on the stream until the drain "
+                "recovers — not dropped)", exc,
+            )
+            inbound_drain = None
 
         # Silent-stall liveness watchdog (W-1b §2): observe signal + finding
         # traffic and alert if the pipeline goes quiet. Best-effort — a
@@ -703,6 +816,7 @@ async def bring_up_source_first_planes(
         registered_targets=registered_targets,
         trigger_registrations=trigger_regs,
         liveness_watchdog=liveness_watchdog,
+        inbound_drain=inbound_drain,
     )
 
 

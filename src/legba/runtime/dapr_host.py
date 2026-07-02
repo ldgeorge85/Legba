@@ -889,8 +889,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     from ..data.schemas.analyst import AnalystDescriptor
     from ..data.schemas.target import TargetDescriptor
     from ..data.stack.nlp_service import NlpServiceClient
+    from ..data.provenance.verify import _llm_judge_enabled
     from .analyst_deps_builder import (
         AnalystDepsBuildError,
+        _verify_llm_component_id,
         build_analyst_run_method,
         build_llm_handler_from_stack_component,
     )
@@ -1646,6 +1648,34 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 confidence_gate=float(esc_tool_cfg.get("confidence_gate", 0.85)),
             )
 
+        # P0-T2 faithfulness verify — resolve the OPTIONAL judge LLM for the
+        # MANDATORY post-finding verify pass. The deterministic citation-presence
+        # floor runs regardless; this wires the cross-family 8B judge (the live
+        # ``slm.internal`` Llama-3.1-8B, an OpenAI-compat endpoint → vllm subprovider
+        # via infer_llm_subprovider, NOT special-cased) ONLY when BOTH hold:
+        #   * the descriptor declares ``method.llm.verify`` (the judge ref); AND
+        #   * the ``LEGBA_VERIFY_LLM_JUDGE`` flag gates the judge ON (the verify
+        #     seam's OWN helper is reused so the flag semantics are IDENTICAL).
+        # SOFT-FAIL: any resolution error → verify_judge=None + a warning; the
+        # floor still runs (labelled 'judge-unavailable'). NEVER raises into deps
+        # build. The handler is built through the SAME cached _llm_handler_factory
+        # → build_llm_handler_from_stack_component path every other LLM uses, so
+        # it is an LLMProviderHandler exposing chat_complete (verify.py's
+        # contract). Off/absent ref → None → the floor stands.
+        verify_judge: Any = None
+        verify_component_id = _verify_llm_component_id(ad)
+        if verify_component_id and _llm_judge_enabled():
+            try:
+                verify_judge = await _llm_handler_factory(verify_component_id)
+            except Exception as exc:  # noqa: BLE001 — soft-fail, floor still runs
+                verify_judge = None
+                logger.warning(
+                    "analyst_deps_resolver.verify_judge_resolve_failed "
+                    "actor_id=%s analyst=%s component_id=%s err=%s — the "
+                    "faithfulness verify degrades to its deterministic floor",
+                    actor_id, ad.identity.id, verify_component_id, exc,
+                )
+
         return _AnalystDeps(
             descriptor=ad,
             deps=standard_deps,
@@ -1658,6 +1688,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             escalation=escalation,
             gather_binding=gather_binding,
             gather_write_bindings=gather_write_bindings,
+            verify_judge=verify_judge,
         )
 
     register_target_deps_resolver(_target_deps_resolver)

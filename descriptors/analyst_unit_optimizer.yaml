@@ -1,0 +1,128 @@
+# P4-T6 — the SCOPED, MEASURED GEPA return: unit_optimizer.
+#
+# The "honest top" (P4): GEPA returns NOT as the always-on,
+# unmeasured monolith it was (the country_optimizer over country_assessor —
+# FROZEN, cadence null, SEAMS #30), but as a BOUNDED experiment over ONE P2
+# bounded unit (leadership_transition) whose promotion is gated on a REAL
+# before/after FAITHFULNESS delta measured by the SAME faithfulness judge
+# that gates the live unit findings (currently the core reasoning model,
+# llm.primary.openai_compat — NOT a cross-family judge; see the units'
+# verify block). A degenerate / insufficient-sample /
+# judge-unavailable delta is HONEST-NULL (never 0.0-faked) and can NEVER
+# promote. This descriptor is a CLONE of analyst_country_optimizer.yaml —
+# that monolith stays byte-frozen; this is the separate P4 return.
+#
+# kind: optimizer.  method.kind: dspy_compile (L-176; exempt from prompt_module).
+#
+# META analyst — NO subscription.targets, so the on-activate gate
+# (dapr_actors.py ~L1229 `if schedule:` → register_reminder) registers EXACTLY
+# ONE `run_cadence` reminder (a single global sweep per tick), NOT a per-target
+# fan-out. That is the flat-Dapr-job-count guarantee: the reminder-flood
+# incident class (777k err/12h from a >4 MB optimizer payload orphaning
+# per-activity reminders) cannot regress here because (a) one weekly reminder,
+# and (b) the training set is passed BY REFERENCE (TrainingSetRef, SEAMS #23) so
+# the serialized workflow input is always << 4 MB regardless of trainset size.
+
+identity:
+  id: unit_optimizer
+  name: Bounded-Unit Optimizer (DSPy + GEPA, faithfulness-measured)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: optimizer
+  type_signature:
+    input_type: legba.runtime.TraceCritiqueJoin
+    output_type: legba.runtime.PromptModuleCandidate
+  state: active
+  owner: p4_t6
+
+subscription:
+  # META analyst: walks analyst_traces ⋈ analyst_critiques for the ANALYZED
+  # unit — NOT the signal slice, and NO `targets` block. One global sweep per
+  # tick => ONE run_cadence reminder (the flat-job-count guarantee), like
+  # country_optimizer / calibration_tracking.
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: dspy_compile
+  # Small per-day cap: the SEARCH is bounded by max_metric_calls, and the new
+  # MEASURE stage (the paired faithfulness eval) is ~valset × (1 generate + 1
+  # verify) LLM calls — capped by faithfulness_valset_max (12) below. 150k
+  # leaves comfortable headroom for one weekly compile + measure.
+  budget_tokens_per_day: 150000
+
+cadence:
+  # WEEKLY — Mon 04:00 UTC, OFFSET from calibration_tracking (03:00) and the
+  # units' 01:00/13:00 fan-out so no hour stacks the compile onto a fan-out.
+  # One tick/week => one run_cadence reminder; the transient workflow-instance
+  # reminders DRAIN on completion (no stuck >4 MB orchestrator => no orphaned
+  # per-activity reminders). Flat Dapr scheduler job count across a weekly tick.
+  fallback_schedule: "0 4 * * 1"
+  # 6h inter-compile floor — FAR below the 7d weekly interval (so the cadence
+  # never halves, per the cooldown==interval lesson), but short enough that an
+  # operator can force-run the experiment more than once a week for iterative
+  # validation without waiting out a 6-day lock. The weekly reminder still fires
+  # exactly once/week; this only bounds EXTRA (force) compiles. CONSERVATIVE
+  # ALTERNATIVE: set fallback_schedule: null for on-demand-only, inheriting this
+  # as the inter-compile floor.
+  cooldown_seconds: 21600
+
+outputs:
+  - kind: nats_stream
+    config:
+      channel: prompt_module_candidates
+
+eval:
+  optimizer:
+    # SCOPED to ONE bounded unit — NOT country_assessor (the frozen monolith).
+    analyzed_analyst_id: leadership_transition
+
+    # inline_target UNITS carry their live prompt as the DESCRIPTOR
+    # method.system_prompt, NOT a Python prompt module. So:
+    #   * parent_prompt_module_path stays legba.prompts.inline_target.v1 — used
+    #     ONLY as the dspy STUDENT-module skeleton that gives GEPA its structure.
+    #   * parent_system_prompt_source: descriptor — the worker loads the REAL
+    #     baseline text (for the operator diff snapshot) from the ANALYZED unit's
+    #     method.system_prompt, NOT by importing legba.prompts.*. This forks from
+    #     the country/india optimizers (which import a real prompt module).
+    parent_prompt_module_path: legba.prompts.inline_target.v1
+    parent_system_prompt_source: descriptor
+
+    # NEW P4-T6 key — selects the MEASURE stage. Default everywhere else is
+    # `critique_proxy` (the cheap deterministic SEARCH heuristic), so
+    # country_optimizer is untouched. `faithfulness` turns on the paired
+    # before/after faithfulness eval (parent arm = the EXISTING measured
+    # Faithfulness-verify overall_score; candidate arm = generate-under-candidate
+    # then verify with the SAME faithfulness judge — currently the core model,
+    # llm.primary.openai_compat, not a cross-family judge).
+    fitness_metric: faithfulness
+
+    # Bootstrap thresholds — small so the first cycle fires against the current
+    # ~19-target × 2/day leadership_transition trace/finding stream.
+    min_traces_required: 8
+    min_critiques_required: 0
+
+    # PAIRED-eval + promotion gates (read by the MEASURE stage + should_auto_promote):
+    #   * min_paired            — floor on rows scored in BOTH arms; below it the
+    #                             delta is HONEST-NULL (degenerate), never promotable.
+    #   * min_promote_delta     — the candidate faithfulness must beat the parent
+    #                             by at least this margin (subsumes a noise floor).
+    #   * faithfulness_valset_max — cap on the held-out valset the paired eval
+    #                             scores (bounds candidate-arm LLM spend).
+    min_paired: 8
+    min_promote_delta: 0.03
+    faithfulness_valset_max: 12
+
+    # human_gated — this unit NEVER auto-promotes. The deliverable is the
+    # MEASURED candidate (the delta is the product); wiring a promoted unit
+    # prompt back into inline_target synthesis is a declared follow-up seam
+    # (inline_target reads _effective_system_prompt, not
+    # resolve_promoted_system_prompt) — keeping the experiment honest (measure
+    # first). Even a hand-edited promotion_gate='promoted' cannot reach inference
+    # unless the candidate carries data.eval.promotable='true' (a positive,
+    # non-degenerate, sufficiently-sampled measured delta).
+    promotion_policy: human_gated

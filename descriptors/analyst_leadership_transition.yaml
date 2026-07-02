@@ -1,0 +1,164 @@
+# P2-T2 — bounded reasoning UNIT: leadership_transition.
+#
+# A "unit": NOT a new Python kind module and NOT a _KIND_MODULE_NAMES
+# entry — just an inline_target DESCRIPTOR carrying its OWN method.system_prompt +
+# scope predicate + eval.rubric (T1 unit-factory, validated live). The
+# descriptor-supplied prompt drives synthesis; the cite-the-prose [N] markers +
+# the faithfulness-verify gate already cover inline_target findings for free, so
+# this unit inherits provenance + verify with zero new code.
+#
+# Bounded question: LEADERSHIP-TRANSITION RISK per G20 country — probability and
+# timing of a change in the country's top leadership, and by what mechanism.
+# One of 4 topic units fanning out across the 19 G20 targets; this unit fires
+# 2x/day at the staggered 01:00 / 13:00 UTC slot so the 4 units spread across
+# the clock and the shared per-day token budget stays capped.
+
+identity:
+  id: leadership_transition
+  name: Leadership-Transition Risk Unit
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p2_t2
+
+subscription:
+  targets:
+    # Scope by the `g20` tag — one run per G20 country target (same fan-out set
+    # as country_assessor). has_tag is valid on the analyst.subscription surface.
+    predicate: 'has_tag("g20") or has_tag("watch")'
+    data_types: [signal]
+    # 72h (was 24h): the unit integrates ~3 days of raw signals, not just today.
+    time_window: 72h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# Tier-1 knowledge-grounding, ported from the retired country_assessor monolith
+# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + assessed
+# situations + graph structure as a fenced "CURRENT CONTEXT" preamble so this
+# unit integrates the multi-week substrate, not only the fresh signal slice.
+# target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
+# off from ground truth (the grounding-quality provenance gate applies).
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+method:
+  kind: llm_planner
+  # Topic-scoped prompt (NOT the generic country_assessor system prompt): it
+  # bounds the model to the leadership-transition question only and pins the
+  # STRICT JSON FindingPayload contract so cite-the-prose [N] markers + the
+  # verify gate keep working.
+  system_prompt: |
+    You are the LEADERSHIP-TRANSITION RISK unit for ONE G20 country target.
+    Your bounded question — answer ONLY this, nothing else — is: how likely,
+    and on what timing, is a change in this country's TOP leadership (the head
+    of government / head of state) in the near term, and by what MECHANISM —
+    an election upset, constitutional succession, a coup or military
+    intervention, a forced resignation, a no-confidence vote, or a cabinet
+    collapse?
+
+    Read ONLY the target's signals provided to you. Number them [1], [2], [3]…
+    in the order given and treat them as your sole evidence. Do NOT assess the
+    country's broader economy, security, diplomacy, or any topic outside
+    leadership-transition risk — other units own those.
+
+    Method:
+    - Identify the DRIVERS bearing on a transition: mass protests or unrest,
+      corruption / legal scandals, leader health or age, military posture and
+      loyalty, coalition arithmetic, the election / polling calendar, and elite
+      or party defections.
+    - Weigh which transition MECHANISM (if any) is most plausible and on what
+      HORIZON (weeks vs. months), then name the single most plausible
+      near-term trajectory.
+    - Separate evidence from inference: prefix every inferred judgement with
+      "Assessed:". Never state a probability, coup, or resignation as an
+      established fact unless a cited signal actually reports it.
+
+    Every key claim MUST cite the signal(s) it rests on with bracketed markers
+    like [2] or [1][4]. Uncited key claims are not allowed.
+
+    Produce EXACTLY ONE finding. Respond with STRICT JSON and nothing else — no
+    prose before or after, no code fences:
+    {
+      "title": "<short headline naming the country + its transition-risk level>",
+      "body": "<github-markdown. Begin with a one-line **BLUF:** giving the
+        bottom-line transition likelihood + timing. Then a `### Key points`
+        section of cited bullets ([N] on each). Then a `### Assessment`
+        section naming the most plausible mechanism + near-term trajectory,
+        every inferred judgement prefixed 'Assessed:'. Then an
+        `### Indicators to watch` section of concrete near-term signposts that
+        would raise or lower the risk.>",
+      "confidence": 0.0,
+      "evidence": ["<the signal reference id/url for each [N] you cited>"],
+      "tags": ["severity:low", "topic:leadership_transition"]
+    }
+    The "confidence" is your calibrated 0.0-1.0 confidence in the assessed
+    likelihood. "tags" MUST contain EXACTLY ONE severity tag from
+    severity:low | severity:moderate | severity:elevated | severity:high |
+    severity:critical (reflecting the transition risk) PLUS the unit topic tag
+    topic:leadership_transition; you may add other short topical tags. If the
+    signals contain nothing bearing on leadership transition, say so plainly in
+    the body, set a low confidence, and tag severity:low.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # P0: faithfulness VERIFY judge — currently the SAME core reasoning model
+    # (llm.primary.openai_compat, gpt-oss-120B) that writes this unit, NOT a
+    # cross-family judge (temporary: the 8B Llama-3.1-8B judge proved too weak —
+    # harsh + mis-aimed — so the strong model runs the judging to prove the flow;
+    # a dedicated reasoning judge is planned). KNOWN LIMITATION: same-model judging
+    # shares blind spots, so this signal is weaker than an independent judge.
+    # Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic
+    # citation-presence floor if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1536
+  budget_tokens_per_day: 300000
+  # If the per-analyst cap is projected to be crossed on a signal-dense day,
+  # pause THIS unit until the next UTC budget bucket rather than demoting to a
+  # paid fallback (the primary is the self-hosted core plane; no cheap fallback
+  # is wired). The staggered cadence below sizes this pause as the safety net,
+  # not the norm.
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Flood discipline: 4 topic units × 19 G20 targets. This unit fires 2x/day at
+  # the staggered 01:00 / 13:00 UTC slot so the 4 units spread across the clock
+  # and no single hour stacks all four fan-outs into one budget bucket.
+  fallback_schedule: "0 1,13 * * *"
+  # 11h — below the 12h interval. Stamped per-(analyst,target) at run-completion;
+  # a cooldown == the 12h interval would land past the next scheduled fire and
+  # silently halve each country's cadence (12h→24h). 11h keeps a 1h margin.
+  cooldown_seconds: 39600
+
+# eval.rubric — the rubric the critic→optimizer eval loop grades this unit's
+# findings against (REQUIRED; the critic hard-fails without it). Scoped to the
+# leadership-transition question. Weights sum to 1.0.
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "driver_grounding",
+       "weight": 0.4,
+       "description": "Are the named transition drivers (protests, scandals, leader health, military posture, coalition arithmetic, polls, defections) and the actors involved traceable to the cited signals [N]? Penalize unsupported or hallucinated drivers."},
+      {"name": "trajectory_plausibility",
+       "weight": 0.35,
+       "description": "Is the assessed transition mechanism and near-term timing a plausible reading of the cited evidence, and is inference clearly labelled 'Assessed:' rather than asserted as established fact? Penalize unwarranted certainty about a coup/resignation/upset."},
+      {"name": "severity_calibration",
+       "weight": 0.25,
+       "description": "Do the stated confidence and the single severity tag match the strength of the cited evidence for an imminent transition? Penalize both overconfidence and under-confidence."}
+    ], "scale": "0.0-1.0"}

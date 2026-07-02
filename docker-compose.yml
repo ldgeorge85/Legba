@@ -35,9 +35,17 @@ services:
     # B-1: optional password auth. When LEGBA_REDIS_PASSWORD is set in .env
     # (cutover), redis requires AUTH; empty/unset keeps the open dev
     # behaviour — redis treats `--requirepass ""` as "no password set".
-    command: ["redis-server", "--requirepass", "${LEGBA_REDIS_PASSWORD:-}"]
+    # Infra tuning: bound the keyspace so the (already-selected) allkeys-lru
+    # eviction can actually fire. Default maxmemory=0 is unbounded → redis grows
+    # until it pressures the host. `--maxmemory-policy allkeys-lru` is declared
+    # here too: the image default is `noeviction`, so without it a fresh recreate
+    # would drop back to never-evict.
+    command: ["redis-server", "--requirepass", "${LEGBA_REDIS_PASSWORD:-}", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
     environment:
       LEGBA_REDIS_PASSWORD: ${LEGBA_REDIS_PASSWORD:-}
+    # Container backstop above the 1gb maxmemory (caps are hard OOM-kill limits,
+    # so keep headroom over the intended working set).
+    mem_limit: 1500m
     ports:
       # B-1: loopback-only — published substrate ports bypassed the Caddy
       # perimeter on a public-TLS host. Host tooling keeps using 127.0.0.1.
@@ -57,6 +65,46 @@ services:
       POSTGRES_USER: legba
       POSTGRES_PASSWORD: legba
       POSTGRES_DB: legba
+    # Infra memory tuning (PG18 on a 31GB/8-CPU box). apache/age inherits the
+    # official postgres docker-entrypoint, which runs initdb setup and then
+    # `exec "$@"`, so a `postgres -c key=value ...` command is passed straight
+    # through. These `-c` overrides sit ON TOP of postgresql.conf (they replace
+    # only the listed GUCs; the entrypoint/healthcheck/volume/env are untouched).
+    # Defaults being replaced: shared_buffers 128MB, effective_cache_size 4GB,
+    # work_mem 4MB, maintenance_work_mem 64MB, max_wal_size 1GB, wal_buffers 4MB,
+    # random_page_cost 4, effective_io_concurrency 16. `shared_preload_libraries`
+    # is NOT a default replacement — it re-asserts the image's own AGE preload.
+    command:
+      - "postgres"
+      # CRITICAL: apache/age's DEFAULT CMD is
+      # ["postgres","-c","shared_preload_libraries=age"] — the AGE extension is
+      # preloaded THROUGH the command, not postgresql.conf. Overriding `command:`
+      # REPLACES that default, so this flag MUST be re-asserted here or AGE stops
+      # loading and every graph/cypher call fails.
+      - "-c"
+      - "shared_preload_libraries=age"
+      - "-c"
+      - "shared_buffers=8GB"
+      - "-c"
+      - "effective_cache_size=24GB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=1GB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "wal_buffers=64MB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+    # Parallel-worker / hash-join shared memory. Default /dev/shm is 64MB, which
+    # is tight once shared_buffers is cranked; give it room.
+    shm_size: 1gb
+    # Container backstop above shared_buffers (8GB) + per-connection work_mem
+    # headroom. A hard cap below shared_buffers would OOM-kill on warmup.
+    mem_limit: 12g
     ports:
       - "127.0.0.1:5432:5432"  # B-1: loopback-only
     volumes:
@@ -70,6 +118,8 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
+    # Infra tuning: container backstop (no in-process cap knob touched).
+    mem_limit: 2g
     ports:
       - "127.0.0.1:6333:6333"  # B-1: loopback-only
       - "127.0.0.1:6334:6334"  # B-1: loopback-only
@@ -93,18 +143,26 @@ services:
     environment:
       LEGBA_NATS_TOKEN: ${LEGBA_NATS_TOKEN:-}
     entrypoint: ["/bin/sh", "-c"]
+    # Infra tuning: `-c /etc/nats/nats.conf` bounds the JetStream stores (memory
+    # 2GB / file 10GB). The nats:2-alpine CLI has NO --max_memory_store /
+    # --max_file_store flags (JetStream Options expose only -js and -sd), so the
+    # limits live in the mounted conf; the existing --jetstream/--store_dir/-m
+    # flags and the auth-token branching are preserved unchanged.
     command:
       - >-
         if [ -n "$$LEGBA_NATS_TOKEN" ]; then
-        exec nats-server --jetstream --store_dir /data -m 8222 --auth "$$LEGBA_NATS_TOKEN";
+        exec nats-server --jetstream --store_dir /data -m 8222 -c /etc/nats/nats.conf --auth "$$LEGBA_NATS_TOKEN";
         else
-        exec nats-server --jetstream --store_dir /data -m 8222;
+        exec nats-server --jetstream --store_dir /data -m 8222 -c /etc/nats/nats.conf;
         fi
+    # Container backstop above the 2GB JetStream memory store.
+    mem_limit: 3g
     ports:
       - "127.0.0.1:4222:4222"  # B-1: loopback-only
       - "127.0.0.1:8222:8222"  # B-1: loopback-only — HTTP monitoring
     volumes:
       - nats_data:/data
+      - ./docker/nats.conf:/etc/nats/nats.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz || exit 1"]
       interval: 5s
@@ -127,6 +185,8 @@ services:
     # — placement, scheduler, sidecar — on the same pinned tag.
     image: daprio/dapr:1.17.9
     profiles: ["dapr", "runtime"]
+    # Infra tuning: container backstop (control-plane service — tiny footprint).
+    mem_limit: 512m
     entrypoint: ["/placement"]
     command: ["-port", "50005"]
     ports:
@@ -168,6 +228,8 @@ services:
     # recurrence stall). Give etcd time to checkpoint. NEVER partial-clear the
     # data dir — full-wipe only (RUNBOOK §0).
     stop_grace_period: 45s
+    # Infra tuning: container backstop (etcd-backed reminder store — small).
+    mem_limit: 512m
     depends_on:
       dapr-scheduler-init:
         condition: service_completed_successfully
@@ -210,6 +272,8 @@ services:
   dapr-sidecar:
     image: daprio/dapr:1.17.9  # pinned (P-14) — see dapr-placement note
     profiles: ["dapr", "runtime"]
+    # Infra tuning: container backstop (daprd sidecar — actor/workflow gRPC).
+    mem_limit: 512m
     # P-14: the sidecar reads .env so the local.env secret store
     # (dapr/components/secretstore.yaml) can resolve LEGBA_DAPR_PG_CONNSTRING
     # — the actor state store's Postgres DSN — without any plaintext
@@ -316,6 +380,8 @@ services:
       dockerfile: docker/Dockerfile.registry
     profiles: ["runtime"]
     env_file: .env
+    # Infra tuning: container backstop.
+    mem_limit: 1g
     environment:
       LEGBA_DATA_PG_HOST: postgres
       LEGBA_DATA_PG_PORT: "5432"
@@ -351,6 +417,8 @@ services:
       dockerfile: docker/Dockerfile.runtime
     profiles: ["runtime"]
     env_file: .env
+    # Infra tuning: container backstop (actor host — analyst inference fan-out).
+    mem_limit: 4g
     environment:
       LEGBA_DATA_PG_HOST: postgres
       LEGBA_DATA_PG_PORT: "5432"
@@ -448,6 +516,8 @@ services:
     # runtime image's HEALTHCHECK (curl :6090/healthz) would always fail here.
     healthcheck:
       disable: true
+    # Infra tuning: container backstop, sized for GEPA/dspy compile spikes.
+    mem_limit: 3g
     env_file: .env
     environment:
       LEGBA_DATA_PG_HOST: postgres

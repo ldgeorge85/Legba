@@ -440,6 +440,16 @@ class MethodBlock(BaseModel):
         "dspy_compile",
     ]
     prompt_module: str | None = None
+    # P2-T1 (unit-factory): an INLINE system prompt for a bounded reasoning unit.
+    # A new inline_target unit (e.g. "leadership-transition risk") is JUST a
+    # descriptor — its OWN scope predicate (subscription.targets.predicate) + its
+    # OWN system prompt + its OWN eval.rubric, with NO new Python kind module.
+    # ``prompt_module`` resolves a "module:attr" path to a prompt constant;
+    # ``system_prompt`` lets a unit carry the prompt text VERBATIM in the
+    # descriptor (no Python at all). The deps-builder prefers ``prompt_module``
+    # when it resolves, else falls back to this inline string; unset on both →
+    # the kind default _SYSTEM_PROMPT. Inert for kinds that ignore it.
+    system_prompt: str | None = None
     impl: str | None = None
     # Deterministic kind only: which sub-handler the dispatcher routes to (one of
     # `legba.data.analysts.deterministic.SUB_HANDLERS`). The runtime injects this
@@ -478,8 +488,18 @@ class MethodBlock(BaseModel):
 
     @model_validator(mode="after")
     def _impl_or_prompt(self) -> "MethodBlock":
-        if self.kind in self._LLM_PROMPT_REQUIRED_KINDS and not self.prompt_module:
-            raise ValueError(f"method.kind={self.kind} requires prompt_module")
+        # An LLM-bearing kind needs a system prompt — supplied EITHER as a
+        # ``prompt_module`` ("module:attr" path) OR, for a P2-T1 bounded unit
+        # authored entirely in the descriptor, as an inline ``system_prompt``
+        # string. One of the two must be present.
+        if (
+            self.kind in self._LLM_PROMPT_REQUIRED_KINDS
+            and not self.prompt_module
+            and not (self.system_prompt and self.system_prompt.strip())
+        ):
+            raise ValueError(
+                f"method.kind={self.kind} requires prompt_module or system_prompt"
+            )
         if self.kind == "deterministic" and not self.impl:
             raise ValueError("method.kind=deterministic requires impl")
         return self

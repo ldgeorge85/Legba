@@ -73,7 +73,14 @@ method:
   # a later revision attaches the LLM narrative, set a real per-day cap.
 
 cadence:
-  fallback_schedule: "*/30 * * * *"
+  # ── P0-T6 SEQUENCED FREEZE (SUBTRACT) ──────────────────────────
+  # fallback_schedule is NULLED to freeze this forecast-as-claim predictor: the
+  # dapr_actors on-activate gate (`if schedule:`, ~L1198) registers NO reminder
+  # for a null schedule. A forecast is a CLAIM that must be SCORED before it
+  # ships. FREEZE, NOT deletion — RETURNS at P4 behind the Brier scoreboard
+  # alongside country_predictor. Declared in docs/SEAMS.md. To restore: set
+  # fallback_schedule back to "*/30 * * * *" (the prior every-30-min cadence).
+  fallback_schedule: null
   cooldown_seconds: 900
 
 outputs:

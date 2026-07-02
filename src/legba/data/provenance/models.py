@@ -92,6 +92,22 @@ class MetaFindingPayload(_AnalystOutputBase):
     contributing_analysts: list[str] = Field(default_factory=list)
 
 
+class ScorecardPayload(_AnalystOutputBase):
+    """P4-T2 banded per-country verdict — the HONEST top of the system.
+
+    A *perspective over* already-verified sub-claims: one row per active G20
+    country (``kind='scorecard'``, generic ``analyst_outputs`` table), whose
+    ``data.bands`` carries the T1 :func:`scorecard_banding.band_target` verdict
+    VERBATIM (per-dimension band / basis / eval / reason + the composition node).
+    Its ``derived_from`` NAMES exactly the verified basis findings the bands rest
+    on, so a P1 lineage walk resolves them with zero dangling. All scorecard
+    structure lives inside the free-form inherited ``data`` dict so
+    ``extra='forbid'`` at the top level never rejects the bands.
+    """
+
+    kind_marker: Literal["scorecard"] = "scorecard"
+
+
 class AlertPayload(_AnalystOutputBase):
     """Operator-routed alert (severity-gated, NATS-emitted)."""
 

@@ -18,11 +18,11 @@ Provides:
   * `legba.data.smoke`             — sanity verification utilities.
 
 Phase 1 task L-001. See:
-  * /usr/local/deployments/myshit/personal/plans/legba_execution_plan.md
-  * /usr/local/deployments/myshit/personal/plans/design/legba_data_mapping.md
-  * /usr/local/deployments/myshit/personal/plans/design/legba_storage_layout.md
-  * /usr/local/deployments/myshit/personal/plans/design/legba_descriptor_schemas.md
-  * /usr/local/deployments/myshit/personal/plans/design/legba_observability.md
+  * planning/legba_execution_plan.md
+  * planning/design/legba_data_mapping.md
+  * planning/design/legba_storage_layout.md
+  * planning/design/legba_descriptor_schemas.md
+  * planning/design/legba_observability.md
 """
 
 from __future__ import annotations

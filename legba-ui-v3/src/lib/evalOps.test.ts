@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildScorecards,
+  calibrationBanner,
   critScoreTrend,
   scoreBand,
   lagSeverity,
@@ -13,11 +14,42 @@ import {
   chainHealth,
   actorRollup,
   relTime,
+  ACUTE_TARGET_N,
+  bandTone,
+  isInsufficient,
+  insufficientLabel,
+  evalBadge,
   type ScorecardRow,
   type ConsumerLagRow,
   type GovernorEventRow,
   type AuditEntryRow,
+  type CalibrationScoreboard,
+  type DimensionEval,
 } from './evalOps'
+
+// A fully-populated, honest scoreboard we mutate per-case.
+function cal(over: Partial<CalibrationScoreboard> = {}): CalibrationScoreboard {
+  return {
+    available: true,
+    produced_at: '2026-06-30T00:00:00Z',
+    brier: 0.2,
+    brier_exogenous: 0.18,
+    exogenous_sample_size: 12,
+    sample_size: 40,
+    insufficient_exogenous: false,
+    self_consistency_only: false,
+    brier_forecast_acute: 0.11,
+    brier_skill_score: 0.25,
+    forecast_acute_sample_size: 18,
+    forecast_acute_ready: true,
+    forecast_acute_degenerate: false,
+    forecast_acute_status: 'ready',
+    forecast_unproven: false,
+    calibration_thin: false,
+    refs: ['cal-1'],
+    ...over,
+  }
+}
 
 // --------------------------------------------------------------------------
 // scorecard
@@ -89,6 +121,82 @@ describe('scoreBand', () => {
     expect(scoreBand(0.9)).toBe('good')
     expect(scoreBand(0.6)).toBe('warn')
     expect(scoreBand(0.2)).toBe('bad')
+  })
+})
+
+// --------------------------------------------------------------------------
+// calibration / skill scoreboard — the honest-top reducer (P4-T4)
+// --------------------------------------------------------------------------
+describe('calibrationBanner', () => {
+  it('absent (null / unavailable) reads "no calibration finding yet", not insufficient', () => {
+    for (const c of [null, undefined, cal({ available: false })]) {
+      const b = calibrationBanner(c)
+      expect(b.absent).toBe(true)
+      expect(b.exogenous.label).toBe('no calibration finding computed yet')
+      expect(b.exogenous.insufficient).toBe(false) // distinct from insufficient-sample
+      expect(b.exogenous.value).toBeNull()
+      expect(b.acute.bss).toBeNull()
+    }
+  })
+
+  it('insufficient exogenous sample -> the VERBATIM message, no number', () => {
+    const b = calibrationBanner(
+      cal({ insufficient_exogenous: true, exogenous_sample_size: 3, sample_size: 40 }),
+    )
+    expect(b.exogenous.insufficient).toBe(true)
+    expect(b.exogenous.value).toBeNull()
+    expect(b.exogenous.label).toBe('INSUFFICIENT exogenous sample (n_exo=3/40)')
+  })
+
+  it('null exogenous brier is treated as insufficient (no leaked number)', () => {
+    const b = calibrationBanner(cal({ brier_exogenous: null, brier: null }))
+    expect(b.exogenous.insufficient).toBe(true)
+    expect(b.exogenous.value).toBeNull()
+  })
+
+  it('sufficient exogenous sample shows the Brier number', () => {
+    const b = calibrationBanner(cal({ insufficient_exogenous: false, brier_exogenous: 0.174 }))
+    expect(b.exogenous.insufficient).toBe(false)
+    expect(b.exogenous.value).toBe(0.174)
+    expect(b.exogenous.label).toBe('0.174')
+  })
+
+  it('degenerate acute pilot -> "skill claim withheld", NO bss number', () => {
+    // gate order: degenerate wins even when ready + a positive bss is present.
+    const b = calibrationBanner(
+      cal({ forecast_acute_degenerate: true, forecast_acute_ready: true, brier_skill_score: 0.9 }),
+    )
+    expect(b.acute.tag).toBe('degenerate')
+    expect(b.acute.label).toBe('degenerate — skill claim withheld')
+    expect(b.acute.bss).toBeNull()
+  })
+
+  it('not-ready acute pilot -> accumulating (n/target), no number', () => {
+    const b = calibrationBanner(
+      cal({ forecast_acute_ready: false, forecast_acute_sample_size: 11 }),
+    )
+    expect(b.acute.tag).toBe('accumulating')
+    expect(b.acute.label).toBe(`accumulating (n=11/${ACUTE_TARGET_N})`)
+    expect(b.acute.bss).toBeNull()
+  })
+
+  it('ready + non-degenerate + positive bss -> the BSS number, tag ready', () => {
+    const b = calibrationBanner(
+      cal({ forecast_acute_ready: true, forecast_acute_degenerate: false, brier_skill_score: 0.32 }),
+    )
+    expect(b.acute.tag).toBe('ready')
+    expect(b.acute.bss).toBe(0.32)
+    expect(b.acute.label).toBe('BSS 0.320')
+  })
+
+  it('ready but non-positive bss -> still withheld, NO bare number', () => {
+    for (const bss of [0, -0.1, null]) {
+      const b = calibrationBanner(
+        cal({ forecast_acute_ready: true, forecast_acute_degenerate: false, brier_skill_score: bss }),
+      )
+      expect(b.acute.tag).not.toBe('ready')
+      expect(b.acute.bss).toBeNull()
+    }
   })
 })
 
@@ -313,5 +421,75 @@ describe('relTime', () => {
     expect(relTime(null)).toBe('never')
     expect(relTime('not-a-date')).toBe('never')
     expect(relTime(new Date().toISOString())).toMatch(/s ago$/)
+  })
+})
+
+// --------------------------------------------------------------------------
+// country banded scorecard — the honest-top drillable card (P4-T3/T5)
+// --------------------------------------------------------------------------
+function ev(over: Partial<DimensionEval> = {}): DimensionEval {
+  return {
+    faithfulness: 0.88,
+    correctness_vs_reference: 0.71,
+    n_labeled: 12,
+    faithfulness_flagged: false,
+    ...over,
+  }
+}
+
+describe('isInsufficient', () => {
+  it('true only for the insufficient-evidence band', () => {
+    expect(isInsufficient({ band: 'insufficient-evidence' })).toBe(true)
+    expect(isInsufficient({ band: 'elevated' })).toBe(false)
+    expect(isInsufficient({ band: 'watch' })).toBe(false)
+  })
+})
+
+describe('bandTone', () => {
+  it('maps insufficient-evidence to its own honest tone (never a severity)', () => {
+    expect(bandTone('insufficient-evidence')).toBe('insufficient')
+  })
+  it('maps known severity bands', () => {
+    expect(bandTone('critical')).toBe('critical')
+    expect(bandTone('high')).toBe('high')
+    expect(bandTone('severe')).toBe('high')
+    expect(bandTone('elevated')).toBe('elevated')
+    expect(bandTone('watch')).toBe('watch')
+    expect(bandTone('moderate')).toBe('watch')
+    expect(bandTone('good')).toBe('good')
+    expect(bandTone('stable')).toBe('good')
+  })
+  it('falls back to watch for an unknown label (no invented severity)', () => {
+    expect(bandTone('mystery')).toBe('watch')
+  })
+})
+
+describe('insufficientLabel', () => {
+  it('renders each honest reason as a human string', () => {
+    expect(insufficientLabel('no-finding')).toBe('no unit finding yet')
+    expect(insufficientLabel('verify-failed')).toBe('faithfulness verify never ran')
+    expect(insufficientLabel('below-floor')).toBe('below confidence floor')
+    expect(insufficientLabel('low-faithfulness')).toBe('excluded: low faithfulness')
+    expect(insufficientLabel('no-severity-tag')).toBe('no severity emitted')
+  })
+  it('degrades gracefully for an unknown / missing reason', () => {
+    expect(insufficientLabel('weird')).toBe('insufficient (weird)')
+    expect(insufficientLabel(null)).toBe('insufficient')
+    expect(insufficientLabel(undefined)).toBe('insufficient')
+  })
+})
+
+describe('evalBadge', () => {
+  it('composes faithfulness + correctness + n when measured', () => {
+    expect(evalBadge(ev())).toBe('faithfulness 0.88 | correctness 0.71 (n=12)')
+  })
+  it('shows only the measured axes', () => {
+    expect(evalBadge(ev({ correctness_vs_reference: null }))).toBe('faithfulness 0.88 (n=12)')
+    expect(evalBadge(ev({ faithfulness: null }))).toBe('correctness 0.71 (n=12)')
+  })
+  it('unmeasured when both axes are null (never a fabricated number)', () => {
+    expect(evalBadge(ev({ faithfulness: null, correctness_vs_reference: null }))).toBe('unmeasured')
+    expect(evalBadge(null)).toBe('unmeasured')
+    expect(evalBadge(undefined)).toBe('unmeasured')
   })
 })

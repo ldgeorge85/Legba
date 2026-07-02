@@ -32,7 +32,7 @@
  * (attachFitOnResize) once sized, gated on `useVisibleSize`.
  */
 import { useQuery } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type cytoscape from 'cytoscape'
 import type { Core, ElementDefinition, StylesheetStyle } from 'cytoscape'
 import CytoscapeComponent from 'react-cytoscapejs'
@@ -48,8 +48,27 @@ import {
 } from '@/lib/graphModel'
 import { GraphControls } from '@/components/GraphControls'
 import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
-import { useSelection } from '@/state/selection'
+import { selectRow, useSelection, type Selection } from '@/state/selection'
 import { cn } from '@/lib/cn'
+import { ArrowRight, Clock, Route, Share2 } from 'lucide-react'
+import { extractCitations, type Citation } from '@/lib/citationsModel'
+import {
+  signalGeoPoints,
+  type GeoPoint,
+  type SignalGeoRow,
+} from '@/lib/geoPoints'
+import {
+  findingPoints,
+  signalPoints,
+  situationPoints,
+  type TimelinePoint,
+  type TLFinding,
+  type TLSignal,
+  type TLSituation,
+} from '@/lib/timelinePoints'
+import { useWorldState } from '@/v4/world/worldState'
+import { ReadGeoLens } from '@/v4/world/LeafletWorldMap'
+import { ReadTimelineLens } from '@/v4/world/TimeScrubber'
 
 /** Edge as served — mirrors `GraphEdge` (entities_api.py). */
 interface GraphEdge {
@@ -346,6 +365,640 @@ function Centered({ children }: { children: React.ReactNode }) {
       data-testid="why-entity-graph-state"
     >
       {children}
+    </div>
+  )
+}
+
+// ===========================================================================
+// P1-T7 — Selection-scoped LENSES over a country / finding READ.
+//
+// Three lenses over the SAME read, all brushing the SAME global selection:
+//   • Temporal — a timeline (`ReadTimelineLens`) + geo (`ReadGeoLens`) of the
+//     read's evidence (the country's signals/findings/situations), with the
+//     read's directly-cited signals emphasised.
+//   • Node graph — the read's claim graph (`ReadGraphLens` below): the read at
+//     the centre, the country it assesses, and its cited-evidence signals.
+//
+// Clicking any point/node `selectRow`s the underlying row → every room brushes
+// and the Inspector re-opens that row (its evidence). The lens stays anchored
+// to the last country/finding read even when a signal point is then selected,
+// so a drill into evidence doesn't tear the lens off its read.
+// ===========================================================================
+
+/** Per-kind node fill for the claim graph. */
+const LENS_NODE_COLOR: Record<string, string> = {
+  finding: '#fbbf24', // amber-400 — analyst output (the read)
+  signal: '#60a5fa', // blue-400 — cited evidence
+  target: '#34d399', // emerald-400 — the country assessed
+}
+
+/** The read a lens is anchored to. */
+interface LensRead {
+  kind: string
+  id: string
+  label: string
+  targetId: string | null
+}
+
+// ---------------------------------------------------------------------------
+// P1-T9 — the ONE graph verb: "is there a path A→B / who's the broker?".
+//
+// GET /api/v1/graph/path?source=&target= returns the shortest relationship path
+// between two actors + the highest-betweenness broker ON that path. The AGE path
+// engine is lazily imported on the backend and SOFT-FAILS to `found:false` + a
+// `detail` string ('graph-path engine unavailable in this build (...)') until
+// the backend decouple deploys — rendered HONESTLY, never a fabricated path or
+// an invented score. The server clamps len/budget; nothing is capped here.
+// ---------------------------------------------------------------------------
+
+/** One hop on the path — a REAL AGE relationship edge. Mirrors `PathEdge`
+ *  (graph_structure_api.py); endpoints are entity ids (canonical names). */
+interface GraphPathEdge {
+  source: string
+  target: string
+  label: string
+}
+
+/** The highest-betweenness node ON the path. Mirrors `PathBroker`. */
+interface GraphPathBroker {
+  node: string
+  betweenness: number
+}
+
+/** GET /graph/path body. Mirrors `GraphPath` (graph_structure_api.py). */
+interface GraphPathResp {
+  found: boolean
+  source: string
+  target: string
+  path: string[]
+  edges: GraphPathEdge[]
+  length: number | null
+  broker: GraphPathBroker | null
+  max_len: number
+  detail: string
+}
+
+/**
+ * The compact find-path / broker verb that lives atop the node-graph lens. Two
+ * actor inputs + a Find-path button → GET /graph/path; renders the ordered node
+ * + REAL-AGE-edge chain (every node + edge clickable → `selectRow` to its entity
+ * row) and names the broker + its betweenness. 'no path' and 'engine
+ * unavailable' degrade to the response's honest `detail` string — there is no
+ * client-side fabrication of a path or a score, and len/budget is the server's.
+ */
+function FindPathControl() {
+  const [source, setSource] = useState('')
+  const [target, setTarget] = useState('')
+  const [submitted, setSubmitted] = useState<{ source: string; target: string } | null>(null)
+
+  const pathQ = useQuery<GraphPathResp>({
+    enabled: !!submitted,
+    queryKey: ['graph-path', submitted?.source ?? '', submitted?.target ?? ''],
+    queryFn: async () => {
+      const sub = submitted
+      // Unreachable: the query is gated by `enabled: !!submitted`.
+      if (!sub) throw new Error('no actors submitted')
+      return apiGet<GraphPathResp>(
+        `/graph/path?source=${encodeURIComponent(sub.source)}&target=${encodeURIComponent(sub.target)}`,
+      )
+    },
+    retry: false,
+  })
+
+  const submit = () => {
+    const s = source.trim()
+    const t = target.trim()
+    if (!s || !t) return
+    setSubmitted({ source: s, target: t })
+  }
+
+  const data = pathQ.data ?? null
+  const broker = data?.broker ?? null
+  const brokerNode = broker?.node ?? null
+
+  return (
+    <div
+      className="shrink-0 border-b border-slate-800 bg-surface-300 px-3 py-2"
+      data-testid="find-path-control"
+    >
+      <div className="flex items-center gap-1.5">
+        <Route className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
+        <input
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+          }}
+          placeholder="source actor"
+          aria-label="path source actor"
+          className="min-w-0 flex-1 rounded border border-slate-700 bg-surface-200 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-slate-500 focus:outline-none"
+        />
+        <ArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+        <input
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit()
+          }}
+          placeholder="target actor"
+          aria-label="path target actor"
+          className="min-w-0 flex-1 rounded border border-slate-700 bg-surface-200 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-slate-500 focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!source.trim() || !target.trim() || pathQ.isFetching}
+          className="shrink-0 rounded border border-slate-600 bg-surface-100 px-2.5 py-1 text-xs font-medium text-slate-100 hover:bg-surface-200 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {pathQ.isFetching ? 'Finding…' : 'Find path'}
+        </button>
+      </div>
+
+      {submitted && (
+        <div className="mt-2 text-xs" data-testid="find-path-result">
+          {pathQ.isFetching ? (
+            <span className="text-slate-500">Searching the relationship graph…</span>
+          ) : pathQ.isError ? (
+            <span className="text-amber-300">
+              Path lookup failed
+              {pathQ.error instanceof ApiError ? ` (${pathQ.error.status})` : ''}.
+            </span>
+          ) : data && data.found ? (
+            <div>
+              <div className="flex flex-wrap items-center gap-1">
+                {data.path.map((node, i) => {
+                  const edge = i < data.path.length - 1 ? data.edges[i] : undefined
+                  const isBroker = brokerNode != null && node === brokerNode
+                  return (
+                    <Fragment key={`${node}-${i}`}>
+                      <button
+                        type="button"
+                        onClick={() => selectRow('entity', node, node, { origin: 'find-path' })}
+                        title={isBroker ? 'broker on this path — select entity' : 'select entity'}
+                        className={cn(
+                          'rounded border px-1.5 py-0.5 font-mono hover:bg-surface-100',
+                          isBroker
+                            ? 'border-amber-500 text-amber-200'
+                            : 'border-slate-700 text-slate-200',
+                        )}
+                      >
+                        {node}
+                      </button>
+                      {edge && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            selectRow('entity', edge.target, edge.target, {
+                              origin: 'find-path-edge',
+                            })
+                          }
+                          title={`${edge.label || 'related'} → ${edge.target} (select entity)`}
+                          className="inline-flex items-center gap-0.5 text-slate-400 hover:text-slate-200"
+                        >
+                          <ArrowRight className="h-3 w-3" aria-hidden />
+                          <span className="font-mono">{edge.label || 'rel'}</span>
+                        </button>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-400">
+                <span>
+                  {data.length != null
+                    ? `${data.length} hop${data.length === 1 ? '' : 's'}`
+                    : `${data.path.length} nodes`}
+                </span>
+                {broker ? (
+                  <span>
+                    broker{' '}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        selectRow('entity', broker.node, broker.node, {
+                          origin: 'find-path-broker',
+                        })
+                      }
+                      className="font-mono text-amber-200 hover:underline"
+                    >
+                      {broker.node}
+                    </button>{' '}
+                    · betweenness {broker.betweenness.toFixed(3)}
+                  </span>
+                ) : (
+                  <span className="text-slate-500">no broker on this path</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <span className="text-slate-400">
+              {data?.detail?.trim() || 'no path between these actors'}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The node-graph lens — a small claim graph of one read: the read at the
+ * centre, the country it assesses (a distinct node only for a finding read —
+ * a country read IS the country), and a node per cited-evidence signal. Reuses
+ * the ego-graph's crash-safe cytoscape mount (#90).
+ */
+export function ReadGraphLens({ read, citations }: { read: LensRead; citations: Citation[] }) {
+  const cyRef = useRef<Core | null>(null)
+  const fitCleanup = useRef<(() => void) | null>(null)
+  const { ref: canvasRef, visible } = useVisibleSize<HTMLDivElement>()
+
+  const elements = useMemo<ElementDefinition[]>(() => {
+    const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+    const centerColor = read.kind === 'finding' ? LENS_NODE_COLOR.finding : LENS_NODE_COLOR.target
+    const nodes: ElementDefinition[] = [
+      {
+        group: 'nodes',
+        data: {
+          id: `read:${read.id}`,
+          label: clip(read.label, 40),
+          color: centerColor,
+          size: 48,
+          is_center: true,
+          selKind: read.kind,
+          selId: read.id,
+          name: read.label,
+        },
+      },
+    ]
+    const edges: ElementDefinition[] = []
+    if (read.kind === 'finding' && read.targetId) {
+      nodes.push({
+        group: 'nodes',
+        data: {
+          id: `target:${read.targetId}`,
+          label: read.targetId,
+          color: LENS_NODE_COLOR.target,
+          size: 30,
+          selKind: 'target',
+          selId: read.targetId,
+          name: read.targetId,
+        },
+      })
+      edges.push({
+        group: 'edges',
+        data: {
+          id: 'e-target',
+          source: `read:${read.id}`,
+          target: `target:${read.targetId}`,
+          w: 2,
+          color: '#475569',
+          label: 'assesses',
+        },
+      })
+    }
+    const seen = new Set<string>()
+    for (const c of citations) {
+      if (seen.has(c.refId)) continue
+      seen.add(c.refId)
+      const lbl = c.title && c.title.trim() ? c.title : c.marker
+      // Kind-aware evidence node: a composition cites a FINDING (sub-claim), a unit
+      // cites a SIGNAL. Drill to the right record kind — never a phantom signal for
+      // a finding-ref (the id prefix + selKind follow c.refKind).
+      const nodeId = `${c.refKind === 'finding' ? 'finding' : 'sig'}:${c.refId}`
+      nodes.push({
+        group: 'nodes',
+        data: {
+          id: nodeId,
+          label: clip(lbl, 36),
+          color: LENS_NODE_COLOR.signal,
+          size: 24,
+          selKind: c.refKind,
+          selId: c.refId,
+          name: c.title ?? c.refId,
+        },
+      })
+      edges.push({
+        group: 'edges',
+        data: {
+          id: `e-${c.refId}`,
+          source: `read:${read.id}`,
+          target: nodeId,
+          w: 2,
+          color: '#475569',
+          label: 'cites',
+        },
+      })
+    }
+    return [...nodes, ...edges]
+  }, [read, citations])
+
+  const onCyReady = useCallback((cy: Core) => {
+    cyRef.current = cy
+    cy.removeAllListeners()
+    cy.on('tap', 'node', (evt) => {
+      const node = evt.target
+      selectRow(
+        String(node.data('selKind')),
+        String(node.data('selId')),
+        node.data('name') ?? node.data('label'),
+        { origin: 'read-graph-lens' },
+      )
+    })
+    fitCleanup.current?.()
+    fitCleanup.current = attachFitOnResize(cy, { layout: CONCENTRIC_LAYOUT, padding: 24 })
+  }, [])
+
+  useEffect(() => () => fitCleanup.current?.(), [])
+
+  // Centre-only (no target, no citations) ⇒ nothing to graph — but the find-path
+  // verb works over the WHOLE relationship graph, so keep it mounted above an
+  // honest empty state rather than blanking the lens.
+  const graphRegion =
+    elements.length <= 1 ? (
+      <Centered>
+        <div>No cited evidence to graph for this read</div>
+        <div className="mt-1 font-mono text-xs text-slate-500">{read.label}</div>
+      </Centered>
+    ) : (
+      <div
+        ref={canvasRef}
+        className="relative h-full w-full min-h-[300px] bg-surface-200"
+        data-testid="read-graph-lens"
+      >
+        {visible && (
+          <CytoscapeComponent
+            cy={onCyReady}
+            elements={elements}
+            stylesheet={STYLESHEET}
+            layout={PRESET_NOOP}
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+            userZoomingEnabled
+            userPanningEnabled
+            minZoom={0.2}
+            maxZoom={3}
+          />
+        )}
+      </div>
+    )
+
+  return (
+    <div
+      className="flex h-full w-full min-h-0 flex-col"
+      data-testid="read-graph-lens-wrap"
+    >
+      <FindPathControl />
+      <div className="min-h-0 flex-1">{graphRegion}</div>
+    </div>
+  )
+}
+
+// --- read resolution + evidence pool ---------------------------------------
+
+interface ReadResolved {
+  targetId: string | null
+  citations: Citation[]
+}
+
+/** A `/findings` row as the resolver reads it (envelope under `data`). */
+interface FindingEnvelopeRow {
+  id: string
+  analyst_id?: string | null
+  produced_at?: string
+  title?: string | null
+  data?: unknown
+}
+
+/** The lineage-walk root the finding read resolves through (shared endpoint —
+ *  a minimal local shape so this stays decoupled from the lineage graph model). */
+interface LineageRootResp {
+  root?: {
+    body?: Record<string, unknown> | null
+    target_id?: string | null
+    title?: string | null
+  }
+}
+
+/** A `/signals` pool row — the geo fields ({@link SignalGeoRow}) plus the
+ *  timeline fields the lens adapts to {@link TLSignal}. */
+interface PoolSignal extends SignalGeoRow {
+  category?: string | null
+  produced_at?: string
+  event_timestamp?: string | null
+}
+
+interface EvidencePool {
+  signals: PoolSignal[]
+  findings: TLFinding[]
+  situations: TLSituation[]
+}
+
+/** Resolve a read to its country (`target_id`) + cited-evidence citations. A
+ *  country read pulls the newest `country_composition` finding (the P3 verified
+ *  synthesis); a finding read walks the lineage root. Both degrade to an empty
+ *  citation list, never throw. */
+async function resolveRead(read: LensRead): Promise<ReadResolved> {
+  if (read.kind === 'target') {
+    try {
+      const page = await apiGet<{ data: FindingEnvelopeRow[] }>(
+        `/findings?analyst_id=country_composition&target_id=${encodeURIComponent(read.id)}&limit=5`,
+      )
+      let newest: FindingEnvelopeRow | null = null
+      for (const r of page.data ?? []) {
+        if (!newest || Date.parse(r.produced_at ?? '') > Date.parse(newest.produced_at ?? '')) {
+          newest = r
+        }
+      }
+      const body =
+        newest && newest.data && typeof newest.data === 'object'
+          ? (newest.data as Record<string, unknown>)
+          : null
+      return { targetId: read.id, citations: extractCitations(body) }
+    } catch {
+      return { targetId: read.id, citations: [] }
+    }
+  }
+  try {
+    const rep = await apiGet<LineageRootResp>(
+      `/lineage/finding/${encodeURIComponent(read.id)}?direction=upstream&depth=6`,
+    )
+    const root = rep.root
+    const body = root?.body && typeof root.body === 'object' ? root.body : null
+    return { targetId: root?.target_id ?? null, citations: extractCitations(body) }
+  } catch {
+    return { targetId: null, citations: [] }
+  }
+}
+
+/** Fetch a country's evidence pool (signals + findings + situations). Each leg
+ *  degrades to empty so one missing read surface can't blank the lens. */
+async function fetchEvidencePool(targetId: string): Promise<EvidencePool> {
+  const enc = encodeURIComponent(targetId)
+  const [sig, fin, sit] = await Promise.all([
+    apiGet<{ data: PoolSignal[] }>(`/signals?target_id=${enc}&limit=200`).catch(() => ({
+      data: [] as PoolSignal[],
+    })),
+    apiGet<{ data: TLFinding[] }>(`/findings?target_id=${enc}&limit=100`).catch(() => ({
+      data: [] as TLFinding[],
+    })),
+    apiGet<{ data: TLSituation[] }>(`/situations?target_id=${enc}&limit=100`).catch(() => ({
+      data: [] as TLSituation[],
+    })),
+  ])
+  return { signals: sig.data ?? [], findings: fin.data ?? [], situations: sit.data ?? [] }
+}
+
+/** Adapt a pool signal row to the pure timeline-point input shape. */
+function adaptSignalTL(s: PoolSignal): TLSignal {
+  return {
+    id: s.id,
+    title: s.title ?? s.id,
+    category: s.category ?? '',
+    produced_at: s.produced_at ?? '',
+    published_at: s.event_timestamp ?? null,
+  }
+}
+
+function LensTab({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: typeof Clock
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium',
+        active
+          ? 'border-slate-600 bg-surface-100 text-slate-100'
+          : 'border-transparent text-slate-400 hover:bg-surface-200 hover:text-slate-200',
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" aria-hidden />
+      {label}
+    </button>
+  )
+}
+
+function LensState({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-surface-300 px-4 text-center text-sm text-slate-500">
+      {children}
+    </div>
+  )
+}
+
+/**
+ * The lens SWITCHER over the current read — Temporal (timeline + geo) and Node
+ * graph, both scoped to the read's evidence and brushing the same global
+ * selection. Reads the global selection (or an optional `selection` prop) and
+ * anchors to the last country/finding read so drilling into a cited signal
+ * doesn't tear the lens off its read.
+ *
+ * WIRING: render `<ReadLenses />` in the Why room (it is self-contained — it
+ * reads the selection store, fetches the read's evidence, and publishes the
+ * `worldState.readScope` so the World map brushes the same read).
+ */
+export function ReadLenses({ selection }: { selection?: Selection | null }) {
+  const storeSel = useSelection((s) => s.selection)
+  const sel = selection !== undefined ? selection : storeSel
+  const setReadScope = useWorldState((s) => s.setReadScope)
+  const [read, setRead] = useState<LensRead | null>(null)
+  const [lens, setLens] = useState<'temporal' | 'graph'>('temporal')
+
+  // Anchor to the last country/finding selection (sticky read).
+  useEffect(() => {
+    if (sel && (sel.kind === 'target' || sel.kind === 'finding')) {
+      setRead({ kind: sel.kind, id: sel.id, label: sel.label ?? sel.id, targetId: null })
+    }
+  }, [sel])
+
+  const selectedId = sel?.id ?? null
+
+  const resolveQ = useQuery<ReadResolved>({
+    enabled: !!read,
+    queryKey: ['read-lens-resolve', read?.kind ?? '', read?.id ?? ''],
+    queryFn: () => resolveRead(read as LensRead),
+    retry: false,
+  })
+  const resolved = resolveQ.data ?? null
+  const targetId = resolved?.targetId ?? null
+  const citations = useMemo(() => resolved?.citations ?? [], [resolved])
+  const evidenceIds = useMemo(() => new Set(citations.map((c) => c.refId)), [citations])
+
+  const poolQ = useQuery<EvidencePool>({
+    enabled: !!targetId,
+    queryKey: ['read-lens-pool', targetId ?? ''],
+    queryFn: () => fetchEvidencePool(targetId as string),
+    retry: false,
+  })
+  const pool = poolQ.data ?? null
+
+  const timelinePts = useMemo<TimelinePoint[]>(() => {
+    if (!pool) return []
+    return [
+      ...signalPoints(pool.signals.map(adaptSignalTL)),
+      ...findingPoints(pool.findings),
+      ...situationPoints(pool.situations),
+    ]
+  }, [pool])
+  const geoPts = useMemo<GeoPoint[]>(() => (pool ? signalGeoPoints(pool.signals) : []), [pool])
+
+  // Publish the active read + evidence so the World map brushes the same read.
+  useEffect(() => {
+    if (!read || !resolved) return
+    setReadScope({
+      kind: read.kind,
+      id: read.id,
+      targetId,
+      label: read.label,
+      signalIds: citations.map((c) => c.refId),
+    })
+    return () => setReadScope(null)
+  }, [read, resolved, targetId, citations, setReadScope])
+
+  if (!read) {
+    return <LensState>Select a country or a finding to open its temporal &amp; graph lenses.</LensState>
+  }
+
+  const graphRead: LensRead = { ...read, targetId }
+
+  return (
+    <div className="flex h-full w-full min-h-0 flex-col bg-surface-300" data-testid="read-lenses">
+      <div className="flex shrink-0 items-center gap-1 border-b border-slate-800 px-3 py-2">
+        <LensTab active={lens === 'temporal'} onClick={() => setLens('temporal')} icon={Clock} label="Temporal" />
+        <LensTab active={lens === 'graph'} onClick={() => setLens('graph')} icon={Share2} label="Node graph" />
+        <div className="ml-auto min-w-0 truncate text-xs text-slate-500" title={read.label}>
+          {citations.length} cited{targetId ? ` · ${targetId}` : ''}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1">
+        {lens === 'temporal' ? (
+          resolveQ.isLoading || poolQ.isLoading ? (
+            <LensState>Loading the read&rsquo;s evidence…</LensState>
+          ) : (
+            <div className="flex h-full w-full min-h-0 flex-col">
+              <div className="min-h-0 flex-1 border-b border-slate-800">
+                <ReadGeoLens points={geoPts} evidenceIds={evidenceIds} selectedId={selectedId} />
+              </div>
+              <div className="h-[44%] min-h-[150px]">
+                <ReadTimelineLens points={timelinePts} evidenceIds={evidenceIds} selectedId={selectedId} />
+              </div>
+            </div>
+          )
+        ) : resolveQ.isLoading ? (
+          <LensState>Loading the read&rsquo;s evidence…</LensState>
+        ) : (
+          <ReadGraphLens read={graphRead} citations={citations} />
+        )}
+      </div>
     </div>
   )
 }

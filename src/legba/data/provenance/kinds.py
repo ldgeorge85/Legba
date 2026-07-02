@@ -57,6 +57,7 @@ from .models import (
     NexusPayload,
     PredictionPayload,
     PromptModuleCandidatePayload,
+    ScorecardPayload,
     SituationPayload,
 )
 
@@ -99,6 +100,13 @@ class OutputKind(str, Enum):
     # asymmetric lineage node — empty `derived_from`, excluded from the
     # downstream lineage fan-out (§3.5).
     JOURNAL = "journal"
+    # The 12th kind — P4-T2 banded per-country verdict (the HONEST top of the
+    # the system). Lands in the generic `analyst_outputs` table, one row per
+    # active G20 country. A *perspective over* already-verified sub-claims: its
+    # `derived_from` NAMES the basis findings the bands rest on (a P1 lineage walk
+    # resolves them), and NO band ever exists without a real basis id — an
+    # insufficient-evidence dimension carries an empty-but-explicit basis.
+    SCORECARD = "scorecard"
 
 
 class _TraceOnly:
@@ -164,6 +172,9 @@ _PROMPT_MODULE_CANDIDATE_URI = (
 )
 # Matches the DB default on `journal_entries.schema_uri` (0048_journal.sql).
 _JOURNAL_URI       = "iglu:legba/journal/jsonschema/1-0-0"
+# P4-T2 banded per-country verdict — lands in the generic `analyst_outputs`
+# table (no dedicated table / DB default), so the URI is declared here only.
+_SCORECARD_URI     = "iglu:legba/scorecard/jsonschema/1-0-0"
 
 
 KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
@@ -256,6 +267,15 @@ KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
         # META analyst: target_id is None → renders as `_`; the subject omits
         # target_id, so the {target_id}-less pattern is correct (plan §3.4).
         nats_subject_pattern="analyst.{analyst_id}.journal",
+    ),
+    OutputKind.SCORECARD: OutputKindSpec(
+        kind=OutputKind.SCORECARD,
+        table="analyst_outputs",              # generic table (NOT dedicated)
+        payload_model=ScorecardPayload,
+        schema_uri=_SCORECARD_URI,
+        # META producer: one side-written row per active G20 country. The
+        # {target_id}-less subject mirrors the journal pattern.
+        nats_subject_pattern="analyst.{analyst_id}.scorecard",
     ),
 }
 

@@ -223,7 +223,13 @@ def _cluster(
     Each finding dict must carry ``id``, ``produced_at`` (comparable) and either
     an already-computed ``situation_signature`` or ``data`` to derive from.
     """
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    # Cluster key is (situation_signature, analyst_id): a finding supersedes only
+    # PRIOR findings of the SAME analyst within a situation. Different analysts
+    # sharing a target-level signature (e.g. the 4 bounded units all stamped
+    # `sig:country_g20_us`) are DIFFERENT dimensions and must NOT supersede each
+    # other — a country's leadership read is not made stale by its narrative read.
+    # (For the single-analyst-per-signature monolith this is a no-op.)
+    groups: dict[tuple[str, Any], list[dict[str, Any]]] = defaultdict(list)
     for f in findings:
         sig = f.get("situation_signature")
         if not sig:
@@ -233,9 +239,9 @@ def _cluster(
         if not sig:
             continue
         f["_sig"] = sig
-        groups[sig].append(f)
-    # Only signatures with >1 finding are supersession candidates.
-    return {sig: rows for sig, rows in groups.items() if len(rows) > 1}
+        groups[(sig, f.get("analyst_id"))].append(f)
+    # Only (signature, analyst) keys with >1 finding are supersession candidates.
+    return {key: rows for key, rows in groups.items() if len(rows) > 1}
 
 
 def _pick_latest(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -326,7 +332,7 @@ async def _fetch_findings(
     where = " AND ".join(clauses)
     rows = await conn.fetch(
         f"""
-        SELECT id, title, data, produced_at, situation_signature
+        SELECT id, title, data, produced_at, situation_signature, analyst_id
         FROM analyst_outputs
         WHERE {where}
         ORDER BY produced_at DESC, id DESC
@@ -342,6 +348,7 @@ async def _fetch_findings(
             "data": r["data"],
             "produced_at": r["produced_at"],
             "situation_signature": r["situation_signature"],
+            "analyst_id": r["analyst_id"],
         })
     return out
 
@@ -372,7 +379,7 @@ async def _resolve_pool(
         )
         groups = _cluster(findings, sub_handler_fallback=sub_handler_fallback)
 
-        for sig, rows in groups.items():
+        for (sig, _cluster_analyst_id), rows in groups.items():
             latest = _pick_latest(rows)
             latest_id = latest["id"]
             reason = (
@@ -449,7 +456,7 @@ def _resolve_synthetic(
     clusters: list[dict[str, Any]] = []
     live_sigs: set[str] = set()
 
-    for sig, members in groups.items():
+    for (sig, _cluster_analyst_id), members in groups.items():
         latest = _pick_latest(members)
         latest_id = str(latest.get("id"))
         superseded = [str(r.get("id")) for r in members if str(r.get("id")) != latest_id]

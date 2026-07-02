@@ -76,6 +76,7 @@ from .models import (
     PromptModuleCandidatePayload,
     JournalPayload,
     JournalClaim,
+    ScorecardPayload,
 )
 from .writes import (
     SignalRow,
@@ -153,6 +154,7 @@ __all__ = [
     "ConsultResponsePayload",
     "PromptModuleCandidatePayload",
     "JournalPayload",
+    "ScorecardPayload",
     "JournalClaim",
     # L-114 — write wrappers
     "SignalRow",

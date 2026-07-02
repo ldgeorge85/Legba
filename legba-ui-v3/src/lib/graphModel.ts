@@ -21,6 +21,27 @@
  * expose that as the edge `rel` so the panel can color + filter by it.
  */
 
+/**
+ * The receipt-chain receipt for the analyst run that produced a row — mirrors
+ * `ReceiptChainNode` in `data/registry/lineage_api.py`. HONESTY CONTRACT: this
+ * is a SHA-256 hash-chain, NOT an Ed25519 signature. `chain_consistent` is
+ * RE-COMPUTED server-side (the trace is re-hashed and compared to the stored
+ * `receipt_hash`); a mutated / forked row re-hashes differently → `false`.
+ * `badge` is fixed to the honest string `'chain-consistent (single-node)'` —
+ * never "signed" / "tamper-proof".
+ */
+export interface ReceiptChainNode {
+  run_id: string
+  receipt_hash: string
+  prev_receipt_hash: string | null
+  /** RE-COMPUTED per node, not the trust of a stored flag. */
+  chain_consistent: boolean
+  /** Present only when an audit_checkpoint covers this row's receipt_hash. */
+  signer_did?: string | null
+  /** Fixed honest label — `'chain-consistent (single-node)'`. */
+  badge: string
+}
+
 /** Lineage node — mirrors `LineageNode` in `data/registry/lineage_api.py`. */
 export interface LineageNode {
   id: string
@@ -34,6 +55,17 @@ export interface LineageNode {
   /** The report payload (summary/body/assessment/…) — present on the ROOT node
    *  only; the Inspector renders it as the report. Null on walk nodes. */
   body?: Record<string, unknown> | null
+  /** The acquisition source's real article URL — populated for signal rows, null
+   *  for analyst-output / situation kinds. The clickable END of a lineage walk. */
+  canonical_url?: string | null
+  media_ref?: string | null
+  modality?: string | null
+  mime_type?: string | null
+  /** The receipt-chain receipt for the run that produced this row — present on
+   *  the ROOT *and* every walk node that maps to an analyst run (P1-T4). Signals
+   *  / source-ingested rows carry `null` honestly (no producing trace to
+   *  re-hash). See {@link ReceiptChainNode} for the honesty contract. */
+  receipt?: ReceiptChainNode | null
 }
 
 /** Lineage edge — `parent` ∈ `child.derived_from`. */
@@ -641,4 +673,109 @@ export function buildLineageElements(
   }
 
   return { nodes, edges }
+}
+
+// ---------------------------------------------------------------------------
+// Progressive one-hop-at-a-time reveal (P1-T5 — The Why's signed-lineage walk).
+//
+// The drill-down must be *walkable a step at a time*: show the root, then reveal
+// the next hop on demand, each hop carrying its honest receipt badge, the trail
+// ending at a real source URL. These pure helpers are the single home for that
+// projection so `LineageGraph` (the cytoscape surface) and `ProvenanceTrail`
+// (the textual chip line) stay in lock-step + are testable without a DOM.
+// ---------------------------------------------------------------------------
+
+/** The honest per-row receipt badge string (mirrors `_RECEIPT_BADGE` in
+ *  `lineage_api.py`). A SHA-256 hash-chain *consistency* check — NOT a
+ *  signature; never render this as "signed" / "tamper-proof". */
+export const RECEIPT_BADGE = 'chain-consistent (single-node)'
+
+/**
+ * The single PRIMARY PATH of a lineage report, ordered oldest (deepest ancestor
+ * / source) → newest (the selected root). A row can have several parents (it's a
+ * DAG); we follow the parent that climbs furthest back (greatest `depth`, ties
+ * broken by the oldest `produced_at`) so the trail reads as one line. The walk
+ * is cycle-guarded (the substrate walk can re-converge). Empty for no report.
+ */
+export function buildPrimaryTrail(report: LineageReport | undefined): LineageNode[] {
+  if (!report) return []
+  const byId = new Map<string, LineageNode>()
+  byId.set(report.root.id, report.root)
+  for (const n of report.nodes) byId.set(n.id, n)
+
+  // parents[child] = [parent ids] — report edges are parent→child derivations.
+  const parents = new Map<string, string[]>()
+  for (const e of report.edges) {
+    if (!byId.has(e.parent) || !byId.has(e.child)) continue
+    const arr = parents.get(e.child)
+    if (arr) arr.push(e.parent)
+    else parents.set(e.child, [e.parent])
+  }
+
+  // Walk root → deepest ancestor (newest → oldest), then reverse.
+  const newestToOldest: LineageNode[] = []
+  const seen = new Set<string>()
+  let cur: LineageNode | undefined = report.root
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id)
+    newestToOldest.push(cur)
+    let next: LineageNode | undefined
+    for (const pid of parents.get(cur.id) ?? []) {
+      if (seen.has(pid)) continue
+      const p = byId.get(pid)
+      if (!p) continue
+      if (
+        !next ||
+        p.depth > next.depth ||
+        (p.depth === next.depth && p.produced_at < next.produced_at)
+      ) {
+        next = p
+      }
+    }
+    cur = next
+  }
+  return newestToOldest.reverse()
+}
+
+/** The deepest `depth` present across a report's walk nodes (0 when the root has
+ *  no recorded derivations). Bounds the progressive reveal. */
+export function maxLineageDepth(report: LineageReport | undefined): number {
+  if (!report) return 0
+  let m = 0
+  for (const n of report.nodes) if (n.depth > m) m = n.depth
+  return m
+}
+
+export interface ProgressiveLineage {
+  /** Cytoscape elements for the DAG revealed up to `revealedDepth`. */
+  elements: GraphElements
+  /** The deepest hop available in the report. */
+  maxDepth: number
+  /** The depth actually revealed (clamped to `[1, max(1, maxDepth)]`). */
+  revealedDepth: number
+  /** Whether every available hop is now revealed. */
+  atFull: boolean
+}
+
+/**
+ * Project a lineage report into cytoscape elements revealed ONE HOP AT A TIME:
+ * `revealedDepth` bounds the visible derivation rings (reusing
+ * {@link buildLineageElements}' depth gate + orphan-safe re-parenting), so the
+ * panel starts as a short trail and grows a ring per "expand". `revealedDepth`
+ * is clamped to at least 1 (the root + its first hop) and at most the report's
+ * own `maxDepth`, so a click can never reveal a hop that isn't there (no
+ * dead-ends). Pure + DOM-free.
+ */
+export function buildProgressiveLineageElements(
+  report: LineageReport | undefined,
+  revealedDepth: number,
+  opts: { visibleKinds?: ReadonlySet<string> } = {},
+): ProgressiveLineage {
+  const maxDepth = maxLineageDepth(report)
+  const clamped = Math.max(1, Math.min(revealedDepth, Math.max(1, maxDepth)))
+  const elements = buildLineageElements(report, {
+    maxDepth: clamped,
+    visibleKinds: opts.visibleKinds,
+  })
+  return { elements, maxDepth, revealedDepth: clamped, atFull: clamped >= maxDepth }
 }

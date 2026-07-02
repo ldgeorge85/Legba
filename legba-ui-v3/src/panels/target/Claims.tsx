@@ -30,6 +30,7 @@ import {
   claimSeverities,
   toClaims,
   type Claim,
+  type DecayInfo,
   type FindingRow,
 } from '@/lib/claimsModel'
 
@@ -67,6 +68,31 @@ function severityDot(sev: string): string {
     default:
       return 'bg-slate-500'
   }
+}
+
+/** Tailwind classes for the freshness/decay chip, by bucket. */
+function decayChipClass(label: DecayInfo['label']): string {
+  switch (label) {
+    case 'expired':
+      return 'bg-accent-critical/20 text-accent-critical'
+    case 'stale':
+      return 'bg-accent-warning/20 text-accent-warning'
+    default: // 'decaying'
+      return 'bg-slate-600/40 text-slate-400'
+  }
+}
+
+/** A human tooltip explaining WHY a claim reads as decaying/stale/expired. */
+function freshnessTitle(decay: DecayInfo): string {
+  const parts: string[] = []
+  if (decay.label === 'expired') parts.push('expired — past its valid-until')
+  else if (decay.label === 'stale') parts.push('stale — past its valid-until')
+  else if (decay.label === 'decaying') parts.push('confidence decaying with age')
+  if (decay.decay !== null && decay.decay < 0)
+    parts.push(`confidence decayed ${decay.decay.toFixed(2)}`)
+  if (decay.validUntil) parts.push(`valid until ${new Date(decay.validUntil).toLocaleString()}`)
+  if (decay.lastDecayAt) parts.push(`last decayed ${new Date(decay.lastDecayAt).toLocaleString()}`)
+  return parts.join(' · ')
 }
 
 export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
@@ -245,7 +271,26 @@ function ClaimItem({
           className={cn('inline-block w-2 h-2 rounded-full shrink-0', severityDot(c.severity))}
           title={c.severity}
         />
-        <span className="flex-1 truncate">{c.statement}</span>
+        <span
+          className="flex-1 truncate"
+          style={c.decay.opacity < 1 ? { opacity: c.decay.opacity } : undefined}
+        >
+          {c.statement}
+        </span>
+        {/* P1-T6 freshness/decay indicator — a stale/expired claim fades + flags
+            here so an aged claim is never silently surfaced as current. */}
+        {c.decay.label !== 'fresh' && (
+          <span
+            className={cn(
+              'px-1 py-0.5 rounded text-[9px] uppercase tracking-wide shrink-0',
+              decayChipClass(c.decay.label),
+            )}
+            title={freshnessTitle(c.decay)}
+            data-testid={`target-claim-decay-${c.id}`}
+          >
+            {c.decay.label}
+          </span>
+        )}
         {uncorroborated && (
           <span
             className="px-1 py-0.5 rounded bg-accent-warning/20 text-accent-warning text-[9px] uppercase tracking-wide shrink-0"
@@ -276,6 +321,43 @@ function ClaimItem({
               subject has no live dispute (the common case → zero noise). */}
           <ContestedBadge subject={c.statement} />
 
+          {/* P1-T6 why-NOT (verify path): the faithfulness verify pass flagged
+              span(s) of this claim's prose as unsupported — surfaced inline,
+              never silently dropped. The OTHER why-not path — a live dispute —
+              is the ContestedBadge above. Absent verify block → nothing here. */}
+          {c.whyNot && (
+            <div
+              className="rounded border border-accent-warning/40 bg-accent-warning/10 p-2 space-y-1"
+              data-testid={`target-claim-whynot-${c.id}`}
+            >
+              <div className="flex flex-wrap items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent-warning">
+                why not — unsupported by verify
+                {c.whyNot.faithfulnessScore !== null && (
+                  <span className="font-mono normal-case text-slate-400">
+                    faithfulness {(c.whyNot.faithfulnessScore * 100).toFixed(0)}%
+                  </span>
+                )}
+                {c.whyNot.judgeStatus && (
+                  <span className="font-mono normal-case text-slate-500">
+                    · {c.whyNot.judgeStatus}
+                  </span>
+                )}
+              </div>
+              <ul className="space-y-1">
+                {c.whyNot.unsupportedSpans.map((s, i) => (
+                  <li key={`${i}-${s.reason}`} className="text-[11px] text-slate-300">
+                    <span className="text-slate-200">“{s.text}”</span>{' '}
+                    <span className="text-accent-warning">— {s.reasonLabel}</span>
+                    {s.markers.length > 0 && (
+                      <span className="ml-1 font-mono text-slate-500">
+                        cited {s.markers.map((m) => `[${m}]`).join(' ')}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {tags.length > 0 && (
             <div className="flex flex-wrap gap-1" data-testid={`target-claim-tags-${c.id}`}>
@@ -306,6 +388,24 @@ function ClaimItem({
             {c.analyst_id ?? 'unknown analyst'} · {new Date(c.produced_at).toLocaleString()}
             {c.corroborationSources !== null && ` · ${c.corroborationSources} independent source(s)`}
           </div>
+
+          {/* P1-T6 freshness/decay detail — rendered only when the row actually
+              carries a decay/temporal signal (degrade to nothing otherwise). */}
+          {(c.decay.decay !== null || c.decay.validUntil || c.decay.expired) && (
+            <div
+              className="text-[10px] text-slate-500"
+              data-testid={`target-claim-freshness-${c.id}`}
+            >
+              freshness: <span className="text-slate-400">{c.decay.label}</span>
+              {c.decay.decay !== null &&
+                c.decay.decay < 0 &&
+                ` · confidence decayed ${c.decay.decay.toFixed(2)}`}
+              {c.decay.validUntil &&
+                ` · valid until ${new Date(c.decay.validUntil).toLocaleDateString()}`}
+              {c.decay.lastDecayAt &&
+                ` · last decayed ${new Date(c.decay.lastDecayAt).toLocaleDateString()}`}
+            </div>
+          )}
 
           <div>
             <span className="text-[10px] uppercase tracking-wide text-slate-400">

@@ -1,0 +1,72 @@
+# unit_correctness_scorer — the P2-T5 per-unit correctness-vs-reference scorer.
+#
+# A `deterministic`-kind META analyst (sub_handler=unit_correctness_scorer) —
+# Phase 2 measures each small reasoning UNIT individually, and "is the unit's read
+# RIGHT?" needs a labeled reference answer to score against (distinct from
+# faithfulness, "is the prose faithful to its cites?"). This wires the BUILT
+# handler that, per bounded unit (leadership_transition / energy_security /
+# escalation / narrative_coordination), compares the unit's LATEST head finding
+# grounding against the operator-authored gold rows in `unit_reference_labels`
+# (migration 0057).
+#
+# The metric is Source-ID Overlap — canonical-source RECALL (best-label disjunctive
+# max per target, simple per-unit mean over scored targets), deterministic + LLM-
+# free + $0. It is the HONEST DETERMINISTIC FLOOR beneath a later semantic
+# correctness judge — exactly as calibration's exogenous Brier is the floor beneath
+# the segregated forecast pilot. Companion Jaccard + citations-only recall ride
+# along as DIAGNOSTICS, never the headline.
+#
+# HONESTY (the T5 done-criterion): with the gold table empty (its state today),
+# every unit reports `correctness_vs_reference = None` with a status string — never
+# a fabricated or default number. A real 0.0 arises ONLY when a finding cited NONE
+# of the canonical evidence for its best label.
+#
+# Each per-run FindingPayload carries, per unit, {unit, faithfulness,
+# correctness_vs_reference, n_labeled, n_findings} (+ the diagnostics + per_target).
+#
+# META analyst: no subscription.targets => single global sweep per tick; reads the
+# analyst_outputs (findings + faithfulness critiques) + unit_reference_labels tables
+# directly via deps.pg_pool. Pure SQL, NO LLM — staggered off the other
+# deterministic maintenance analysts so they don't co-fire.
+
+identity:
+  id: unit_correctness_scorer
+  name: Per-Unit Correctness vs Reference (gold)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p2_t5_unit_correctness
+
+subscription:
+  # META analyst: one global sweep per tick over the bounded units' findings +
+  # faithfulness critiques + gold labels. Reads directly via deps.pg_pool (the
+  # calibration_tracking / situation_clustering precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: unit_correctness_scorer
+  # No LLM block, no token budget — pure SQL set-overlap over the gold labels +
+  # the units' findings.
+
+cadence:
+  # Once daily, OFFSET from the other deterministic maintenance analysts
+  # (calibration_tracking "20 3 * * *", hypothesis_lifecycle, fact_decay,
+  # situation_clustering) so the correctness sweep runs on its own staggered
+  # minute and never co-fires.
+  fallback_schedule: "30 3 * * *"
+  cooldown_seconds: 79200        # 22h (below the 24h interval)
+
+outputs: []

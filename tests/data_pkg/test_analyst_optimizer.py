@@ -359,9 +359,10 @@ def test_collect_derived_trace_ids_skips_malformed_ids() -> None:
 
 @pytest.mark.asyncio
 async def test_run_method_dispatches_workflow_with_correct_shape() -> None:
-    """The kind hands the workflow exactly the joined trace+critique
-    training rows, plus the analyst identity, plus the GEPA hyperparams
-    from deps.  Verifying the wire shape so we catch param drift."""
+    """The kind hands the durable workflow a training-set REFERENCE (not the
+    inlined rows — the 4 MB gRPC-cap pass-by-reference fix, #86), plus the
+    analyst identity + the GEPA hyperparams from deps. Verifying the wire shape
+    so we catch param drift."""
     stub_client = _StubTemporalClient()
     deps = OptimizerDeps(temporal_client=stub_client, max_generations=4)
 
@@ -382,7 +383,14 @@ async def test_run_method_dispatches_workflow_with_correct_shape() -> None:
     assert wf_input.analyst_id == "inline_target.brazil"
     assert wf_input.parent_prompt_module_path == "legba.prompts.inline_target.brazil.v1"
     assert wf_input.max_generations == 4
-    assert len(wf_input.training_set) == 7
+    # _StubTemporalClient models the DURABLE (Dapr) client, so the 7 joined rows
+    # pass BY REFERENCE (the 4 MB gRPC-cap fix, #86): the inline training_set is
+    # intentionally empty and the ref re-fetches the identical rows in-activity.
+    # (The inline path is exercised by test_optimizer_payload_by_reference.py.)
+    assert wf_input.training_set == []
+    assert wf_input.training_set_ref is not None
+    assert wf_input.training_set_ref.analyzed_analyst_id == "inline_target.brazil"
+    assert wf_input.training_set_ref.until_ts
     # The candidate payload landed under finding.data["candidate"].
     candidate_dict = result.finding.data["candidate"]
     candidate = PromptModuleCandidatePayload(**candidate_dict)

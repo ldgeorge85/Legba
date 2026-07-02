@@ -85,7 +85,13 @@ import html
 import re
 from functools import lru_cache
 
-import pycountry
+try:
+    import pycountry
+except ModuleNotFoundError:  # pragma: no cover — slim deploy images (the registry)
+    # omit the gazetteer dep. The full ISO-3166 set loads only where pycountry is
+    # installed (the runtime); slim images fall back to the curated subset below.
+    # This keeps a registry-side import of the handler package from hard-crashing.
+    pycountry = None  # type: ignore[assignment]
 
 from .vocabulary import ENTITY_CLASSES
 
@@ -601,14 +607,15 @@ def is_junk_entity(name: str) -> bool:
 @lru_cache(maxsize=1)
 def _country_name_set() -> frozenset[str]:
     names: set[str] = set()
-    for c in pycountry.countries:
-        names.add(c.name.lower())
-        common = getattr(c, "common_name", None)
-        official = getattr(c, "official_name", None)
-        if isinstance(common, str):
-            names.add(common.lower())
-        if isinstance(official, str):
-            names.add(official.lower())
+    if pycountry is not None:
+        for c in pycountry.countries:
+            names.add(c.name.lower())
+            common = getattr(c, "common_name", None)
+            official = getattr(c, "official_name", None)
+            if isinstance(common, str):
+                names.add(common.lower())
+            if isinstance(official, str):
+                names.add(official.lower())
     # A few canonical short names pycountry stores in non-obvious forms, so a
     # name an alias resolves to ("Russia", "South Korea", …) still matches the
     # gazetteer and gets COUNTRY_CLASS. Conservative + curated.

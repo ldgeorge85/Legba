@@ -46,7 +46,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,39 @@ class OptimizerWorkflowInput:
     # Per-2026-05-16 decision: 50 GT rows default per analyst.
     min_traces_required: int = 50
     min_critiques_required: int = 0
+
+    # ── P4-T6 — the SCOPED, MEASURED GEPA return (faithfulness fitness) ──────────
+    # ALL new fields carry defaults so the dataclass round-trips unchanged: an
+    # in-flight ``country_optimizer`` input (or any pre-P4-T6 serialized dict fed
+    # to ``OptimizerWorkflowInput(**wf_input)`` by workflow.py) deserializes with
+    # these defaults, and ``dataclasses.asdict`` re-emits them — the byte-shape of
+    # the frozen monolith's result is unaffected (its fitness_metric stays the
+    # default ``critique_proxy``, so the MEASURE stage below never engages for it).
+    #
+    #   * ``fitness_metric``          — ``critique_proxy`` (default; the cheap
+    #     deterministic SEARCH heuristic that is the REPORTED fitness today) or
+    #     ``faithfulness`` (P4-T6: the paired before/after faithfulness MEASURE
+    #     stage). Only ``unit_optimizer`` opts into ``faithfulness``.
+    #   * ``min_paired`` / ``min_promote_delta`` / ``faithfulness_valset_max`` —
+    #     the paired-eval + promotion gates (mirrored onto data.eval so
+    #     should_auto_promote can re-check them). Below ``min_paired`` the delta
+    #     is HONEST-NULL (degenerate, never promotable).
+    #   * ``parent_system_prompt_source`` — ``""`` (import the Python prompt
+    #     module, the country/india path) or ``"descriptor"`` (load the ANALYZED
+    #     analyst's ``method.system_prompt`` — the inline_target UNIT path, whose
+    #     live prompt IS the descriptor system_prompt, not a Python module).
+    #   * ``optimizer_analyst_id`` — the OPTIMIZER analyst's OWN id (e.g.
+    #     ``unit_optimizer``). The worker resolves its ``eval.optimizer`` config
+    #     (fitness_metric + the gates + parent_system_prompt_source) from THIS id
+    #     when the caller left them at defaults, so the config lives on the
+    #     descriptor (single source of truth) rather than being re-plumbed through
+    #     the actor's options.
+    fitness_metric: str = "critique_proxy"
+    min_paired: int = 8
+    min_promote_delta: float = 0.03
+    faithfulness_valset_max: int = 12
+    parent_system_prompt_source: str = ""
+    optimizer_analyst_id: str = ""
 
     def __post_init__(self) -> None:
         # ``OptimizerWorkflowInput(**wf_input)`` (workflow.py rehydrates the
@@ -388,7 +421,14 @@ async def validate_training_set_activity(
     "reason": str}``.  The workflow consults this BEFORE invoking the
     expensive GEPA loop so an under-trained analyst short-circuits
     cleanly rather than wasting LLM budget.
+
+    P4-T6: resolve the OPTIMIZER descriptor's eval.optimizer thresholds FIRST
+    (each Dapr activity gets its own serialized input copy, so this must run here
+    too, not only in the compile) — else a scoped unit optimizer is gated on the
+    monolith's default min_traces_required and short-circuits before the MEASURE
+    stage. Best-effort; a fetch failure leaves the passed-in defaults.
     """
+    await _apply_optimizer_eval_config(workflow_input)
     n = len(workflow_input.training_set)
     if n < workflow_input.min_traces_required:
         return {
@@ -415,6 +455,666 @@ async def validate_training_set_activity(
 
 
 # ---------------------------------------------------------------------------
+# P4-T6 — the MEASURED fitness (paired before/after FAITHFULNESS) + gates
+# ---------------------------------------------------------------------------
+#
+# The "honest top": GEPA's SEARCH stage keeps its cheap
+# deterministic proxy (``_score_prompt_on_dataset`` — honestly a heuristic,
+# NEVER the reported fitness). When ``fitness_metric == 'faithfulness'`` a
+# SEPARATE MEASURE stage computes a REAL paired before/after faithfulness delta
+# over a held-out valset of the analyzed unit's most-recent findings, using the
+# SAME ``llm.verify.slm_8b`` judge that gates the live findings:
+#
+#   * PARENT arm (BEFORE) = the EXISTING measured faithfulness — the latest
+#     ``Faithfulness verify%`` critique's ``overall_score`` per finding
+#     (analyst_outputs kind='critique', the scorecard_banding _GATHER pattern).
+#     ZERO extra LLM cost — it is the live descriptor prompt's real production
+#     faithfulness.
+#   * CANDIDATE arm (AFTER) = generate-under-candidate over that finding's
+#     reconstructed signal slice, then ``verify_finding_faithfulness`` under the
+#     same judge.
+#
+# A degenerate / insufficient-sample / judge-unavailable / empty-arm delta is
+# HONEST-NULL (means + delta = None, degenerate=True, promotable=False) — NEVER
+# 0.0-faked. ``correctness_vs_reference`` stays ``{status:insufficient_sample,
+# brier:null}`` (unit_reference_labels is n≈1). No candidate can promote without
+# a positive, non-degenerate, sufficiently-sampled MEASURED delta.
+
+_FAITHFULNESS_FITNESS = "faithfulness"
+_MIN_REFERENCE_LABELS = 20  # correctness_vs_reference floor (kept honest-null below it)
+
+
+def _delta_gates_ok(
+    candidate_score: float | None,
+    parent_score: float | None,
+    *,
+    eval_degenerate: bool,
+    judge_available: bool,
+    n_paired: int,
+    min_paired: int,
+    min_delta: float,
+) -> tuple[bool, str]:
+    """The MEASUREMENT gate — shared by the candidate ``promotable`` stamp AND
+    :func:`legba.data.analysts.optimizer.should_auto_promote`.
+
+    Returns ``(ok, reason)``. The degeneracy / judge / sample / margin checks run
+    in THIS order and BEFORE any promotion-policy branch, so a degenerate or
+    absent delta can never slip through on policy alone. ``ok`` is exactly the
+    ``data.eval.promotable`` truth value: a positive (>= ``min_delta``),
+    non-degenerate, judge-scored, sufficiently-paired measured improvement.
+    """
+    if candidate_score is None or parent_score is None or eval_degenerate:
+        return False, "degenerate_or_absent_delta"
+    if not judge_available:
+        return False, "faithfulness_judge_unavailable"
+    if n_paired < min_paired:
+        return False, f"insufficient_paired_sample:{n_paired}<{min_paired}"
+    if (candidate_score - parent_score) < min_delta:
+        return False, "delta_below_margin"
+    return True, "delta_ok"
+
+
+def _mean(values: Any) -> float | None:
+    """Arithmetic mean, or ``None`` for an empty sequence (honest-null, not 0.0)."""
+    vals = [float(v) for v in values if v is not None]
+    return (sum(vals) / len(vals)) if vals else None
+
+
+def _correctness_vs_reference(n_labels: int) -> dict[str, Any]:
+    """The honest-null correctness sub-block.
+
+    ``unit_reference_labels`` is n≈1 (degenerate), so correctness-vs-reference is
+    permanently insufficient-sample for now — reported in its OWN key with
+    ``brier:null`` (NEVER 0.0-faked, NEVER pooled into the headline faithfulness).
+    """
+    return {
+        "status": "insufficient_sample",
+        "n_labels": int(n_labels),
+        "brier": None,
+        "min_labels_required": _MIN_REFERENCE_LABELS,
+    }
+
+
+def _honest_null_eval(
+    *,
+    min_paired: int,
+    min_delta: float,
+    judge_model: str,
+    judge_available: bool,
+    degenerate_reason: str,
+    n_paired: int = 0,
+    n_labels: int = 0,
+    parent_mean: float | None = None,
+) -> dict[str, Any]:
+    """Build the HONEST-NULL eval record: means + delta = None, degenerate=True,
+    promotable=False. ``parent_mean`` may still be reported (it is real even when
+    the candidate arm couldn't be scored) but the DELTA is null — you cannot
+    subtract an absent candidate mean."""
+    return {
+        "fitness_metric": _FAITHFULNESS_FITNESS,
+        "parent_faithfulness_mean": parent_mean,
+        "candidate_faithfulness_mean": None,
+        "faithfulness_delta": None,
+        "n_paired": int(n_paired),
+        "min_paired": int(min_paired),
+        "min_promote_delta": float(min_delta),
+        "judge_model": judge_model,
+        "judge_available": bool(judge_available),
+        "degenerate": True,
+        "degenerate_reason": degenerate_reason,
+        "promotable": False,
+        "correctness_vs_reference": _correctness_vs_reference(n_labels),
+    }
+
+
+def _pair_faithfulness(
+    parent_scores: Mapping[str, float],
+    candidate_scores: Mapping[str, float],
+    *,
+    min_paired: int,
+    min_delta: float,
+    judge_model: str,
+    n_labels: int,
+) -> dict[str, Any]:
+    """PURE pairing math: pair over the IDENTICAL finding ids scored in BOTH arms,
+    then compute means + delta + promotability. HONEST-NULL when < ``min_paired``.
+
+    Split out (no I/O) so the before/after arithmetic + the honest-null / promote
+    boundary are unit-testable without a DB or an LLM.
+    """
+    common = [fid for fid in parent_scores if fid in candidate_scores]
+    n_paired = len(common)
+    parent_mean_all = _mean(parent_scores.values())
+    if n_paired < min_paired:
+        return _honest_null_eval(
+            min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
+            judge_available=True, n_paired=n_paired, n_labels=n_labels,
+            parent_mean=parent_mean_all,
+            degenerate_reason=f"insufficient_paired_sample:{n_paired}<{min_paired}",
+        )
+    parent_mean = _mean(parent_scores[fid] for fid in common)
+    candidate_mean = _mean(candidate_scores[fid] for fid in common)
+    delta = float(candidate_mean) - float(parent_mean)
+    promotable, _reason = _delta_gates_ok(
+        candidate_mean, parent_mean,
+        eval_degenerate=False, judge_available=True,
+        n_paired=n_paired, min_paired=min_paired, min_delta=min_delta,
+    )
+    return {
+        "fitness_metric": _FAITHFULNESS_FITNESS,
+        "parent_faithfulness_mean": round(float(parent_mean), 4),
+        "candidate_faithfulness_mean": round(float(candidate_mean), 4),
+        "faithfulness_delta": round(delta, 4),
+        "n_paired": n_paired,
+        "min_paired": int(min_paired),
+        "min_promote_delta": float(min_delta),
+        "judge_model": judge_model,
+        "judge_available": True,
+        "degenerate": False,
+        "degenerate_reason": None,
+        "promotable": bool(promotable),
+        "correctness_vs_reference": _correctness_vs_reference(n_labels),
+    }
+
+
+# --- worker-side descriptor config resolution (best-effort, honest-null on fail) ---
+
+
+async def _get_descriptor_typed(analyst_id: str) -> dict[str, Any] | None:
+    """Best-effort typed-descriptor fetch (mirrors dspy_lm's registry hop).
+
+    Returns the JSON-dumped descriptor dict or ``None`` on ANY failure — the
+    caller then degrades (config defaults / honest-null), never crashes.
+    """
+    registry = None
+    try:
+        from ..registry_client import RegistryHTTPClient
+
+        registry = RegistryHTTPClient()
+        typed = await registry.get_descriptor_typed(analyst_id, family="analyst")
+        return typed if isinstance(typed, dict) else None
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.info(
+            "optimizer.eval.descriptor_fetch_failed analyst=%s err=%r", analyst_id, exc,
+        )
+        return None
+    finally:
+        if registry is not None and hasattr(registry, "aclose"):
+            try:
+                await registry.aclose()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
+
+
+async def _apply_optimizer_eval_config(workflow_input: OptimizerWorkflowInput) -> None:
+    """Fill ``fitness_metric`` + the paired gates + ``parent_system_prompt_source``
+    from the OPTIMIZER descriptor's ``eval.optimizer`` when the caller left them
+    at defaults.
+
+    The config's single source of truth is the descriptor (not the actor's
+    per-run options), so the worker resolves it here — keyed by
+    ``optimizer_analyst_id``. No-ops when the caller already set a non-default
+    ``fitness_metric`` (test injection / on-demand override) or when there is no
+    ``optimizer_analyst_id`` (older inputs). Best-effort: a fetch failure leaves
+    the defaults (``critique_proxy`` → the MEASURE stage never engages).
+    """
+    if workflow_input.fitness_metric != "critique_proxy":
+        return  # already explicitly configured by the caller
+    if not workflow_input.optimizer_analyst_id:
+        return
+    typed = await _get_descriptor_typed(workflow_input.optimizer_analyst_id)
+    if not typed:
+        return
+    cfg = ((typed.get("eval") or {}).get("optimizer")) or {}
+    if not isinstance(cfg, dict):
+        return
+    fm = cfg.get("fitness_metric")
+    if isinstance(fm, str) and fm:
+        workflow_input.fitness_metric = fm
+    src = cfg.get("parent_system_prompt_source")
+    if isinstance(src, str) and src:
+        workflow_input.parent_system_prompt_source = src
+    # min_traces_required / min_critiques_required gate the pre-compile
+    # validation (validate_training_set_activity). They MUST resolve from the
+    # descriptor too — else a scoped unit optimizer (min_traces_required=8) is
+    # measured against the monolith default (50) and short-circuits as
+    # skipped_validation before the MEASURE stage ever runs (P4-T6 live bug).
+    for key in (
+        "min_paired",
+        "faithfulness_valset_max",
+        "min_traces_required",
+        "min_critiques_required",
+    ):
+        val = cfg.get(key)
+        if isinstance(val, int) and not isinstance(val, bool):
+            setattr(workflow_input, key, int(val))
+    mpd = cfg.get("min_promote_delta")
+    if isinstance(mpd, (int, float)) and not isinstance(mpd, bool):
+        workflow_input.min_promote_delta = float(mpd)
+
+
+async def _load_parent_text_from_descriptor(analyzed_analyst_id: str) -> str | None:
+    """Load an inline_target UNIT's live baseline prompt = its descriptor
+    ``method.system_prompt`` (NOT a Python prompt module).
+
+    inline_target units carry their prompt VERBATIM in the descriptor, so the
+    ``parent_system_prompt_source: descriptor`` fork loads the baseline snapshot
+    from here. ``None`` on any failure → the caller falls back to the Python
+    module path (which for a unit yields the honest ``<<missing prompt module>>``
+    marker rather than a wrong baseline).
+    """
+    typed = await _get_descriptor_typed(analyzed_analyst_id)
+    if not typed:
+        return None
+    sysp = ((typed.get("method") or {}).get("system_prompt"))
+    if isinstance(sysp, str) and sysp.strip():
+        return sysp
+    return None
+
+
+# --- the paired MEASURE stage (parent arm real; candidate arm best-effort) ---
+
+# Parent arm: the analyzed unit's freshest active findings + their LATEST folded
+# ``Faithfulness verify%`` critique score — the EXACT scorecard_banding _GATHER
+# LATERAL pattern, minus the target filter (all targets). f.body + f.data feed
+# the candidate-arm regeneration; f.derived_from gives the signal lineage roots.
+_PARENT_FAITHFULNESS_SQL = """
+    SELECT f.id::text        AS finding_id,
+           f.body            AS body,
+           f.data            AS data,
+           f.derived_from    AS derived_from,
+           v.faithfulness_score AS faithfulness_score
+      FROM analyst_outputs f
+      LEFT JOIN LATERAL (
+          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
+            FROM analyst_outputs cr
+           WHERE cr.kind = 'critique'
+             AND cr.data->>'analyzed_output_id' = f.id::text
+             AND cr.data->>'overall_score' IS NOT NULL
+             AND cr.title LIKE 'Faithfulness verify%'
+           ORDER BY cr.produced_at DESC, cr.id DESC
+           LIMIT 1
+      ) v ON TRUE
+     WHERE f.kind = 'finding'
+       AND f.analyst_id = $1
+       AND f.superseded_by IS NULL
+     ORDER BY f.produced_at DESC, f.id DESC
+     LIMIT $2
+"""
+
+_REFERENCE_LABEL_COUNT_SQL = """
+    SELECT COUNT(*)::int AS n FROM unit_reference_labels WHERE unit_analyst_id = $1
+"""
+
+
+async def _paired_faithfulness_eval(
+    workflow_input: OptimizerWorkflowInput,
+    *,
+    candidate_text: str,
+    parent_text: str,
+) -> dict[str, Any]:
+    """MEASURE stage: the REAL paired before/after faithfulness delta.
+
+    Returns the honest eval record (see the section header). ALWAYS returns a
+    dict — every failure mode degrades to HONEST-NULL (means/delta None,
+    degenerate=True, promotable=False) rather than raising into the workflow.
+    The PARENT arm (existing measured faithfulness) is real + zero-LLM; the
+    CANDIDATE arm (generate-under-candidate + verify) is best-effort and marks
+    any un-regeneratable / un-judgeable row UNPAIRED (excluded from n_paired),
+    NEVER scored 0 — so a lossy reconstruction under-counts the sample rather
+    than under-measuring the candidate.
+    """
+    min_paired = int(workflow_input.min_paired)
+    min_delta = float(workflow_input.min_promote_delta)
+    valset_max = int(workflow_input.faithfulness_valset_max)
+    analyzed = str(workflow_input.analyst_id)
+    judge_model = "llm.verify.slm_8b"
+
+    pg_store = None
+    try:
+        from ...data.postgres import PostgresStore
+
+        pg_store = PostgresStore.from_env()
+        await pg_store.connect()
+        async with pg_store.pool.acquire() as conn:
+            rows = await conn.fetch(_PARENT_FAITHFULNESS_SQL, analyzed, valset_max)
+            try:
+                n_labels = int(
+                    (await conn.fetchrow(_REFERENCE_LABEL_COUNT_SQL, analyzed))["n"]
+                )
+            except Exception:  # noqa: BLE001 — labels table optional / empty
+                n_labels = 0
+
+        parent_scores: dict[str, float] = {}
+        finding_rows: dict[str, Mapping[str, Any]] = {}
+        for r in rows:
+            fid = str(r["finding_id"])
+            fs = r["faithfulness_score"]
+            if fs is None:
+                continue  # no folded verify score → not a usable parent-arm row
+            parent_scores[fid] = float(fs)
+            finding_rows[fid] = r
+
+        if not parent_scores:
+            return _honest_null_eval(
+                min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
+                judge_available=False, n_labels=n_labels,
+                degenerate_reason="no_parent_faithfulness",
+            )
+
+        # Resolve BOTH handlers (candidate-arm synthesis + the verify judge). The
+        # judge is the SAME cross-family 8B that gates the live findings; if it
+        # can't be resolved OR the LLM-judge flag is off, the candidate arm is
+        # not on the same yardstick as the (judge-scored) parent → honest-null.
+        arm = await _resolve_candidate_arm(analyzed)
+        if arm is None:
+            return _honest_null_eval(
+                min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
+                judge_available=False, n_labels=n_labels,
+                parent_mean=_mean(parent_scores.values()),
+                degenerate_reason="faithfulness_judge_unavailable",
+            )
+        synth, judge, arm_cleanup = arm
+        try:
+            candidate_scores: dict[str, float] = {}
+            for fid, row in finding_rows.items():
+                try:
+                    cscore = await _candidate_faithfulness_for_finding(
+                        row=row, candidate_text=candidate_text,
+                        synth=synth, judge=judge, pool=pg_store.pool,
+                    )
+                except Exception as exc:  # noqa: BLE001 — one bad row is unpaired
+                    logger.info(
+                        "optimizer.faithfulness.candidate_row_failed finding=%s err=%r",
+                        fid, exc,
+                    )
+                    cscore = None
+                if cscore is not None:
+                    candidate_scores[fid] = float(cscore)
+        finally:
+            await arm_cleanup()
+
+        if not candidate_scores:
+            return _honest_null_eval(
+                min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
+                judge_available=True, n_labels=n_labels,
+                parent_mean=_mean(parent_scores.values()),
+                degenerate_reason="candidate_arm_empty",
+            )
+
+        return _pair_faithfulness(
+            parent_scores, candidate_scores,
+            min_paired=min_paired, min_delta=min_delta,
+            judge_model=judge_model, n_labels=n_labels,
+        )
+    except Exception as exc:  # noqa: BLE001 — the MEASURE stage must never wedge
+        logger.warning(
+            "optimizer.faithfulness.eval_failed analyst=%s err=%r — honest-null",
+            analyzed, exc,
+        )
+        return _honest_null_eval(
+            min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
+            judge_available=False, n_labels=0,
+            degenerate_reason=f"eval_error:{type(exc).__name__}",
+        )
+    finally:
+        if pg_store is not None:
+            try:
+                await pg_store.close()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
+
+
+async def _resolve_candidate_arm(
+    analyzed_analyst_id: str,
+) -> tuple[Any, Any, Any] | None:
+    """Resolve ``(synthesizer_handler, verify_judge_handler, cleanup)`` for the
+    candidate arm from the ANALYZED unit's ``method.llm.primary`` +
+    ``method.llm.verify`` components.
+
+    Returns ``None`` (→ honest-null) when the LLM-judge flag is off, the
+    descriptor / components can't be resolved, or the build fails — so the
+    candidate arm is scored on the SAME judge as the live findings or not at all.
+    """
+    import os
+
+    if not os.environ.get("LEGBA_VERIFY_LLM_JUDGE"):
+        # Parent-arm stored scores were judged (or floored) by the live pass; we
+        # only measure the candidate on the LLM judge when it is actually on, so
+        # before/after share a yardstick. Flag off → honest-null.
+        return None
+
+    typed = await _get_descriptor_typed(analyzed_analyst_id)
+    if not typed:
+        return None
+    llm_block = ((typed.get("method") or {}).get("llm")) or {}
+
+    def _component_id(ref: Any) -> str | None:
+        if isinstance(ref, dict):
+            return ref.get("raw")
+        if isinstance(ref, str):
+            return ref
+        return None
+
+    primary_id = _component_id(llm_block.get("primary"))
+    verify_id = _component_id(llm_block.get("verify"))
+    if not primary_id or not verify_id:
+        return None
+
+    pg = None
+    registry = None
+    try:
+        from ...data.config import PostgresConfig
+        from ...data.postgres import PostgresStore
+        from ...data.registry.credentials import CredentialVault
+        from ..analyst_deps_builder import build_llm_handler_from_stack_component
+        from ..registry_client import RegistryHTTPClient
+
+        pg = PostgresStore(PostgresConfig.from_env())
+        await pg.connect()
+        vault = CredentialVault(pg)
+
+        async def _secrets_resolve(secret_id: str) -> bytes:
+            return await vault.resolve(secret_id)
+
+        registry = RegistryHTTPClient()
+        synth = await build_llm_handler_from_stack_component(
+            primary_id, registry_client=registry, secrets_resolve=_secrets_resolve,
+        )
+        judge = await build_llm_handler_from_stack_component(
+            verify_id, registry_client=registry, secrets_resolve=_secrets_resolve,
+        )
+    except Exception as exc:  # noqa: BLE001 — unresolved → honest-null
+        logger.info(
+            "optimizer.faithfulness.arm_resolve_failed analyst=%s err=%r",
+            analyzed_analyst_id, exc,
+        )
+        for _h in (locals().get("synth"), locals().get("judge")):
+            if _h is not None and hasattr(_h, "on_deactivate"):
+                try:
+                    await _h.on_deactivate(None)
+                except Exception:  # pragma: no cover
+                    pass
+        if registry is not None and hasattr(registry, "aclose"):
+            try:
+                await registry.aclose()
+            except Exception:  # pragma: no cover
+                pass
+        if pg is not None:
+            try:
+                await pg.close()
+            except Exception:  # pragma: no cover
+                pass
+        return None
+
+    async def _cleanup() -> None:
+        """Await-able teardown — closes the two handlers' httpx clients + the
+        registry + the pg pool. Called from within the same running loop that
+        built them (the caller ``await``s it in its finally)."""
+        for h in (synth, judge):
+            if h is not None and hasattr(h, "on_deactivate"):
+                try:
+                    await h.on_deactivate(None)
+                except Exception:  # pragma: no cover
+                    pass
+        if registry is not None and hasattr(registry, "aclose"):
+            try:
+                await registry.aclose()
+            except Exception:  # pragma: no cover
+                pass
+        if pg is not None:
+            try:
+                await pg.close()
+            except Exception:  # pragma: no cover
+                pass
+
+    return synth, judge, _cleanup
+
+
+async def _candidate_faithfulness_for_finding(
+    *,
+    row: Mapping[str, Any],
+    candidate_text: str,
+    synth: Any,
+    judge: Any,
+    pool: Any,
+) -> float | None:
+    """Score ONE valset finding's candidate-arm faithfulness, or ``None`` (unpaired).
+
+    Reconstructs the finding's cited signal slice (from ``data['citations']`` →
+    the signal rows), re-renders it, generates under ``candidate_text``, resolves
+    the candidate's OWN ``[N]`` citations against that slice, and verifies with
+    the SAME judge. Returns ``None`` — marking the row UNPAIRED, NOT scored 0 —
+    whenever the slice can't be reconstructed or generation/parse fails, so a
+    lossy reconstruction shrinks n_paired rather than under-measuring the
+    candidate.
+    """
+    from ...data.analysts.inline_target import (
+        _build_citation_index,
+        _coerce_finding,
+        _extract_citations,
+        _normalize_citation_markers,
+        _render_signal,
+    )
+    from ...data.provenance.verify import verify_finding_faithfulness
+
+    data = row.get("data")
+    if isinstance(data, str):
+        import json as _json
+        try:
+            data = _json.loads(data)
+        except Exception:  # noqa: BLE001
+            data = None
+    citations = data.get("citations") if isinstance(data, Mapping) else None
+
+    # PREFERRED: the structured [N]->signal bridge (P0-T1) in cited order.
+    ordered: list[tuple[int, str]] = []
+    if citations:
+        for c in citations:
+            if not isinstance(c, Mapping):
+                continue
+            marker = str(c.get("marker") or "")
+            sid = c.get("signal_id")
+            digits = "".join(ch for ch in marker if ch.isdigit())
+            if digits and sid:
+                ordered.append((int(digits), str(sid)))
+        ordered.sort(key=lambda t: t[0])
+
+    # FALLBACK: a unit that does NOT yet persist structured data['citations']
+    # still NAMES its source signals in derived_from — reconstruct the slice from
+    # those (stored order, numbered [1..N]) so the candidate arm can regenerate
+    # instead of degrading the whole eval to candidate_arm_empty. Non-signal
+    # derived_from ids (if any) are dropped by _fetch_signal_render_rows, which
+    # fetches only real signals. This is what makes the paired MEASURE work on
+    # today's units (n_citations=0) rather than only on future cited findings.
+    if not ordered:
+        derived = row.get("derived_from") or []
+        ordered = [(i + 1, str(sid)) for i, sid in enumerate(derived) if sid]
+
+    if not ordered:
+        return None
+    signal_ids = [sid for _, sid in ordered]
+
+    signal_rows = await _fetch_signal_render_rows(pool, signal_ids)
+    if not signal_rows:
+        return None
+    # Preserve the cited [N] order (fetch returns id->row); drop unresolved ids.
+    slice_rows = [signal_rows[sid] for _, sid in ordered if sid in signal_rows]
+    if not slice_rows:
+        return None
+
+    user_prompt = "\n".join(
+        _render_signal(i, r) for i, r in enumerate(slice_rows, start=1)
+    )
+    resp = await synth.chat_complete(
+        [{"role": "user", "content": user_prompt}],
+        system=candidate_text,
+        max_tokens=1536,
+        temperature=0.0,
+    )
+    raw = getattr(resp, "content", "") or ""
+    if not raw.strip():
+        return None
+    finding = _coerce_finding(raw, fallback_title="candidate")
+    body = _normalize_citation_markers(str(getattr(finding, "body", "") or ""))
+    index = _build_citation_index(slice_rows)
+    cand_citations, _mc, _rc = _extract_citations(body, index)
+    report = await verify_finding_faithfulness(
+        body=body, citations=cand_citations, judge_llm=judge,
+    )
+    return float(report.faithfulness_score)
+
+
+async def _fetch_signal_render_rows(
+    pool: Any, signal_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Fetch signal rows by id → the render-shape dict ``_render_signal`` /
+    ``_build_citation_index`` expect (``id`` / ``title`` / ``source_url`` /
+    ``produced_at`` / ``data``). Maps the raw ``signals`` columns
+    (``payload`` / ``canonical_url`` / ``fetched_at``) onto that historical
+    shape, mirroring cross_target_raw's back-compat projection. Best-effort:
+    returns ``{}`` on any failure (→ the row is unpaired)."""
+    from uuid import UUID
+
+    ids: list[UUID] = []
+    for sid in signal_ids:
+        try:
+            ids.append(UUID(str(sid)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    if not ids:
+        return {}
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, canonical_url, payload, fetched_at
+              FROM signals
+             WHERE id = ANY($1::uuid[])
+            """,
+            ids,
+        )
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        payload = r["payload"]
+        if isinstance(payload, str):
+            import json as _json
+            try:
+                payload = _json.loads(payload)
+            except Exception:  # noqa: BLE001
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        out[str(r["id"])] = {
+            "id": r["id"],
+            "title": payload.get("title") or payload.get("headline"),
+            "source_url": r["canonical_url"],
+            "produced_at": r["fetched_at"],
+            "data": payload,
+        }
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Shared GEPA loop — used by BOTH the Dapr activity + the in-process path
 # ---------------------------------------------------------------------------
 
@@ -433,10 +1133,33 @@ async def _run_gepa_loop(
          when there's no LLM to call) but obviously not as effective —
          it exists so unit tests can exercise the algorithm wiring
          without a real LLM provider.
+
+    P4-T6 — when the OPTIMIZER descriptor's ``eval.optimizer.fitness_metric`` is
+    ``faithfulness`` (resolved into ``workflow_input`` here), a SEPARATE MEASURE
+    stage overrides the REPORTED ``eval_score`` / ``eval_score_delta`` with a
+    REAL paired before/after faithfulness delta (:func:`_paired_faithfulness_eval`);
+    the SEARCH stage's cheap proxy stays an internal heuristic. The whole record
+    (means, n_paired, judge status, correctness_vs_reference) lands in
+    ``diagnostics['eval']`` — honest-null when degenerate.
     """
-    parent_text = await _load_parent_prompt_text(
-        workflow_input.parent_prompt_module_path,
-    )
+    # Resolve fitness_metric + the paired gates + parent_system_prompt_source from
+    # the OPTIMIZER descriptor's eval.optimizer (best-effort; no-op when already
+    # set or when there is no optimizer_analyst_id — e.g. the frozen monolith).
+    await _apply_optimizer_eval_config(workflow_input)
+
+    # Parent (baseline) text. inline_target UNITS carry their live prompt as the
+    # DESCRIPTOR method.system_prompt, not a Python module — so the
+    # ``parent_system_prompt_source: descriptor`` fork loads it from there for the
+    # operator diff snapshot; everything else imports the prompt module.
+    parent_text = ""
+    if workflow_input.parent_system_prompt_source == "descriptor":
+        parent_text = await _load_parent_text_from_descriptor(
+            workflow_input.analyst_id
+        ) or ""
+    if not parent_text:
+        parent_text = await _load_parent_prompt_text(
+            workflow_input.parent_prompt_module_path,
+        )
 
     # Empty / undersized training-set path: return the parent unchanged
     # with a zero-delta score so the activity can't loop forever on an
@@ -465,22 +1188,66 @@ async def _run_gepa_loop(
 
     # Try dspy.GEPA path first — under an LM resolved from the analyzed
     # analyst's OWN provider (a custom dspy.BaseLM that never touches litellm).
-    gepa_result = _run_dspy_gepa_with_lm(
+    result = _run_dspy_gepa_with_lm(
         workflow_input,
         parent_text=parent_text,
         baseline_score=baseline_score,
     )
-    if gepa_result is not None:
-        return gepa_result
+    if result is None:
+        # Fallback — naive instruction search.  Generates a small set of
+        # candidate variants by light-touch mutation, scores each, returns
+        # the best one (or the parent if none beats the baseline).
+        result = _naive_candidate_search(
+            workflow_input,
+            parent_text=parent_text,
+            baseline_score=baseline_score,
+        )
 
-    # Fallback — naive instruction search.  Generates a small set of
-    # candidate variants by light-touch mutation, scores each, returns
-    # the best one (or the parent if none beats the baseline).
-    return _naive_candidate_search(
-        workflow_input,
-        parent_text=parent_text,
-        baseline_score=baseline_score,
+    # P4-T6 MEASURE stage — replace the SEARCH proxy's reported fitness with the
+    # REAL paired faithfulness delta (or honest-null). Opt-in via fitness_metric.
+    return await _apply_faithfulness_measure(
+        workflow_input, result, parent_text=parent_text,
     )
+
+
+async def _apply_faithfulness_measure(
+    workflow_input: OptimizerWorkflowInput,
+    result: OptimizerWorkflowResult,
+    *,
+    parent_text: str,
+) -> OptimizerWorkflowResult:
+    """Fold the paired-faithfulness MEASURE record into ``result`` (opt-in).
+
+    No-op for ``critique_proxy`` (the country_optimizer default → result byte-
+    unchanged). For ``faithfulness`` it runs :func:`_paired_faithfulness_eval`,
+    stamps ``diagnostics['eval']`` (the honest record), and OVERRIDES the top-
+    level ``eval_score`` / ``eval_score_delta`` with the measured candidate mean +
+    delta when NON-degenerate; on honest-null it sets both 0.0 (the payload's
+    float fields can't be null) while the authoritative null lives in
+    ``diagnostics['eval']`` (means/delta=None, degenerate=True, promotable=False).
+    """
+    if workflow_input.fitness_metric != _FAITHFULNESS_FITNESS:
+        return result
+    eval_record = await _paired_faithfulness_eval(
+        workflow_input,
+        candidate_text=result.candidate_prompt_module_text,
+        parent_text=parent_text,
+    )
+    result.diagnostics = dict(result.diagnostics or {})
+    result.diagnostics["eval"] = eval_record
+    result.diagnostics["fitness_metric"] = _FAITHFULNESS_FITNESS
+    delta = eval_record.get("faithfulness_delta")
+    cand_mean = eval_record.get("candidate_faithfulness_mean")
+    if not eval_record.get("degenerate") and delta is not None and cand_mean is not None:
+        result.eval_score = max(0.0, min(1.0, float(cand_mean)))
+        result.eval_score_delta = max(-1.0, min(1.0, float(delta)))
+    else:
+        # HONEST-NULL — the measured fitness is absent; do NOT let the SEARCH
+        # proxy masquerade as the reported faithfulness. Zero the float fields;
+        # diagnostics['eval'] carries the authoritative null + promotable=False.
+        result.eval_score = 0.0
+        result.eval_score_delta = 0.0
+    return result
 
 
 # ---------------------------------------------------------------------------

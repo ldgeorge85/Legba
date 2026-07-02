@@ -1,0 +1,153 @@
+# P2-T2 — bounded reasoning UNIT: narrative_coordination.
+#
+# A "unit" is just an inline_target DESCRIPTOR (T1 unit-factory pattern): no new
+# Python kind module, no _KIND_MODULE_NAMES entry. The descriptor-supplied
+# method.system_prompt drives synthesis; the platform-wide cite-the-prose [N]
+# marker pass + the faithfulness-verify gate already cover inline_target
+# findings for free, so this unit only has to emit the STRICT-JSON
+# FindingPayload and stay scoped to its ONE bounded question.
+#
+# Bounded question: is a COORDINATED narrative emerging across a G20 country's
+# sources (coordinated messaging / info-ops / propaganda surge / synchronized
+# narrative shift) — and around what — versus organic coverage?
+#
+# Scoped by subscription.targets.predicate has_tag("g20"): ONE unit, fanned out
+# across the 19 G20 country targets per tick. Staggered cron ("0 10,22") so the
+# 4 P2 units spread across the clock instead of stacking on one bucket.
+
+identity:
+  id: narrative_coordination
+  name: Narrative / Coordination Signals Unit
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"          # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p2_t2
+
+subscription:
+  targets:
+    # Scope by the `g20` tag — matches every country_g20_* target's scope.
+    predicate: 'has_tag("g20") or has_tag("watch")'
+    data_types: [signal]
+    # 72h (was 24h): the unit integrates ~3 days of raw signals, not just today.
+    time_window: 72h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# Tier-1 knowledge-grounding, ported from the retired country_assessor monolith
+# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + assessed
+# situations + graph structure as a fenced "CURRENT CONTEXT" preamble so this
+# unit integrates the multi-week substrate, not only the fresh signal slice.
+# target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
+# off from ground truth (the grounding-quality provenance gate applies).
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+method:
+  kind: llm_planner
+  # Inline, topic-scoped prompt (NOT the generic country_assessor prompt_module).
+  # It binds this unit to the narrative/coordination question ONLY and pins the
+  # STRICT-JSON FindingPayload contract so the [N] citation pass + verify gate
+  # keep working downstream.
+  system_prompt: |
+    You are the Narrative / Coordination Signals unit — a bounded reasoning unit
+    in the Legba decompositional oracle. You assess ONE G20 country target from its
+    last-24h signal slice and answer ONE bounded question, nothing else:
+
+      Is a COORDINATED narrative emerging across this country's sources —
+      coordinated messaging, information operations, propaganda surges, or
+      synchronized narrative shifts — and AROUND WHAT? Or is the coverage
+      organic?
+
+    Stay scoped. Do NOT assess the country's overall security, economy, leaders,
+    or general situation — only narrative & coordination dynamics.
+
+    The target signals are provided to you, each numbered [N]. Read them, then
+    look for coordination tells:
+      - the SAME framing / talking points appearing near-simultaneously across
+        multiple DISTINCT sources;
+      - sudden volume surges concentrated on one theme;
+      - lockstep messaging, repeated verbatim phrasing, or mirrored amplification;
+      - narrative shifts that move together rather than independently.
+    Always weigh these against the null hypothesis: a genuinely newsworthy event
+    naturally drawing heavy organic coverage is NOT coordination. Coordination is
+    a claim about SYNCHRONY and SOURCING, not about volume alone.
+
+    Produce exactly ONE finding. Every key claim MUST cite the specific
+    converging signal(s) it rests on with [N] markers (e.g. [1][4][7] when three
+    sources echo one frame). Never assert coordination without citing the
+    converging signals. If the slice shows no coordination, say so plainly with
+    low confidence and severity:low — still emit the finding.
+
+    Respond with STRICT JSON ONLY — no prose, no markdown fences, outside the
+    JSON object:
+    {"title": "<short headline naming the narrative, if any>",
+     "body": "<github-markdown: a one-line **BLUF** first; then **Key signals** — the converging signals and the narrative they form, each cited [N]; then **Assessment** — coordinated vs organic and your reasoning; then **Indicators to watch** as a short bulleted list>",
+     "confidence": <0.0-1.0 — how strongly the cited evidence supports a coordination conclusion>,
+     "evidence": [<the signal [N] references / source identifiers you relied on>],
+     "tags": [<ALWAYS exactly one severity tag scaled to how active/threatening the coordinated narrative is: "severity:low" | "severity:moderate" | "severity:elevated" | "severity:high" | "severity:critical">, "topic:narrative_coordination"]}
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # P0: faithfulness VERIFY judge — currently the SAME core reasoning model
+    # (llm.primary.openai_compat, gpt-oss-120B) that writes this unit, NOT a
+    # cross-family judge (temporary: the 8B Llama-3.1-8B judge proved too weak —
+    # harsh + mis-aimed — so the strong model runs the judging to prove the flow;
+    # a dedicated reasoning judge is planned). KNOWN LIMITATION: same-model judging
+    # shares blind spots, so this signal is weaker than an independent judge.
+    # Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic
+    # citation-presence floor if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1536
+  budget_tokens_per_day: 300000
+  # Budget retry policy: if the per-analyst daily cap is projected to be crossed,
+  # pause THIS unit until the next UTC bucket rather than demoting to a paid
+  # fallback (the primary is the self-hosted core plane; there is no cheap
+  # fallback wired). The staggered cadence keeps this pause a safety net, not the
+  # norm.
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Flood discipline: 4 P2 units × 19 G20 targets. This unit fires 2×/day at the
+  # STAGGERED hours below so the 4 units spread across the clock instead of all
+  # landing in one budget bucket.
+  fallback_schedule: "0 10,22 * * *"
+  # Per-(analyst, target) cooldown — MUST stay below the 12h (43200s) interval.
+  # Stamped at run-completion, a cooldown == the interval lands past the next
+  # scheduled fire and silently halves each country's cadence (12h→24h). 11h
+  # (39600s) keeps a margin while still absorbing a re-trigger inside the window.
+  cooldown_seconds: 39600
+
+# Eval rubric — the dimensions the critic→optimizer loop grades this unit's
+# findings against. REQUIRED; without it the critic hard-fails ("no eval.rubric").
+# Scoped to the narrative/coordination question; weights sum to 1.0.
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "coordination_discrimination",
+       "weight": 0.4,
+       "description": "Does the finding actually distinguish coordinated/synchronized messaging from organic coverage, citing the CONVERGING signals (near-simultaneous, cross-source, lockstep framing) rather than inferring coordination from raw volume? Penalize coordination claims the cited evidence does not support."},
+      {"name": "narrative_specificity",
+       "weight": 0.3,
+       "description": "Are the narrative theme, the participating sources/channels, and the framing concretely identified and each tied to its [N] signal? Penalize vague 'a narrative is emerging' with no named frame or cited sources."},
+      {"name": "severity_calibration",
+       "weight": 0.3,
+       "description": "Does the stated confidence and the single severity tag match the strength and synchrony of the cited evidence? Penalize both overcalling organic coverage as an operation and underplaying a clearly synchronized surge."}
+    ], "scale": "0.0-1.0"}
+  allow_self_correlated: true

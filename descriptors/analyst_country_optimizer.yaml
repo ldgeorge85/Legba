@@ -33,22 +33,19 @@ method:
   budget_tokens_per_day: 2000000
 
 cadence:
-  # ── A3: cadence sized to the daily compile cost ──
-  #
-  # The optimizer is NOT a per-target fan-out (substrate.direct_queries; it
-  # walks analyst_traces ⋈ analyst_critiques). ONE compile run per cadence
-  # tick. A GEPA/DSPy compile fires a bounded set of trial LLM calls over the
-  # trace set; the 200 000 tok/day cap envelopes a single daily compile with
-  # room for the trial fan-out (min_traces_required: 10 → tens of trial calls
-  # × ~3 000 tok ≈ well under 200k). Daily-at-03:00-UTC is correct on two
-  # counts: (1) one compile/day matches the 200k budget exactly — running it
-  # more often would not improve the human-gated candidate and would risk the
-  # cap; (2) 03:00 UTC is off-peak relative to the assessor's 6-hourly sweeps
-  # (00/06/12/18), so the compile's trial calls don't contend with the
-  # assessor fan-out for provider capacity or the global envelope.
-  fallback_schedule: "0 3 * * *"
-  # 6h cooldown ≫ the daily cadence gap is already implied, but kept explicit
-  # so a manual re-trigger can't kick off a second same-day compile.
+  # ── P0-T6 SEQUENCED FREEZE (SUBTRACT) ──────────────────────────
+  # fallback_schedule is NULLED to freeze the GEPA self-optimizer's cadence:
+  # the dapr_actors on-activate gate (`if schedule:`,
+  # src/legba/runtime/dapr_actors.py ~L1198) registers NO `run_cadence`
+  # reminder for a null schedule, so this analyst fires on no tick. This is a
+  # FREEZE, NOT a deletion — the optimizer (kind/eval/outputs all intact)
+  # RETURNS at P4 as a MEASURED experiment (a GEPA promotion gated on a real
+  # before/after delta), not an unverified always-on monolith. Declared in
+  # docs/SEAMS.md as a sequenced freeze. To restore: set fallback_schedule
+  # back to "0 3 * * *" (the prior daily-at-03:00-UTC compile cadence).
+  fallback_schedule: null
+  # Retained but inert without a schedule (no reminder to cool down). Kept so a
+  # P4 re-trigger inherits the same 6h floor between compiles.
   cooldown_seconds: 21600
 
 outputs:

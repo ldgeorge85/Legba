@@ -19,7 +19,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import type { Core, ElementDefinition, LayoutOptions, StylesheetStyle } from 'cytoscape'
-import { Loader2, GitBranch } from 'lucide-react'
+import { Loader2, GitBranch, ShieldCheck, ExternalLink, Plus, Minus } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { apiGet, ApiError } from '@/lib/api'
@@ -27,10 +27,13 @@ import { cn } from '@/lib/cn'
 import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { GraphControls } from '@/components/GraphControls'
 import {
-  buildLineageElements,
+  buildPrimaryTrail,
+  buildProgressiveLineageElements,
   kindColor,
   presentRowKinds,
   relationshipTypes,
+  RECEIPT_BADGE,
+  type LineageNode,
   type LineageReport,
 } from '@/lib/graphModel'
 import { useSelection, type SelectionKind } from '@/state/selection'
@@ -140,6 +143,11 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
   // always renders; hiding an intermediate kind re-parents its children to the
   // nearest visible ancestor (buildLineageElements) so the DAG stays connected.
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(() => new Set())
+  // P1-T5 — progressive one-hop-at-a-time reveal: how many derivation rings (by
+  // `depth`) are currently shown. Starts at the FIRST hop (root + its immediate
+  // parents) and grows one ring per "expand", so the DAG is walkable a step at a
+  // time down to the source rather than dumping the full graph at once.
+  const [revealedDepth, setRevealedDepth] = useState(1)
   // #90 — defer constructing cytoscape until this surface is on-screen + sized;
   // a fresh mount in a hidden 0×0 Dockview tab crashes on the auto-layout.
   const { ref: canvasRef, visible } = useVisibleSize<HTMLDivElement>()
@@ -172,13 +180,32 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
     [allKinds, hiddenKinds],
   )
 
-  const graph = useMemo(
+  // P1-T5 — the progressive projection: the DAG bounded to `revealedDepth` rings.
+  // Reuses the depth-gated, orphan-safe `buildLineageElements`, so hiding a kind
+  // still re-parents onto the nearest visible ancestor and the root always shows.
+  const progressive = useMemo(
     () =>
-      buildLineageElements(report, {
+      buildProgressiveLineageElements(report, revealedDepth, {
         visibleKinds: hiddenKinds.size > 0 ? visibleKinds : undefined,
       }),
-    [report, hiddenKinds, visibleKinds],
+    [report, revealedDepth, hiddenKinds, visibleKinds],
   )
+  const graph = progressive.elements
+
+  // A NEW walk root restarts the reveal at the first hop.
+  useEffect(() => {
+    setRevealedDepth(1)
+  }, [report?.root.id])
+
+  // The honest one-line walk (root → source) for the side HUD: each revealed hop
+  // shows its receipt badge; the deepest (signal) hop opens its real source URL.
+  const trail = useMemo(() => buildPrimaryTrail(report), [report])
+  const revealedTrail = useMemo(
+    // oldest→newest from the helper; keep only revealed hops, show root-first.
+    () => trail.filter((n) => n.depth <= progressive.revealedDepth).reverse(),
+    [trail, progressive.revealedDepth],
+  )
+  const canExpand = progressive.revealedDepth < progressive.maxDepth
 
   const elements = useMemo<ElementDefinition[]>(
     () => [
@@ -273,6 +300,75 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
         />
       )}
 
+      {/* P1-T5 — the one-hop-at-a-time provenance walk (top-right, clear of the
+          GraphControls chips top-left + the zoom cluster bottom-right). Each
+          revealed hop shows its honest receipt badge; the source hop opens its
+          real URL; "Expand" reveals the next hop down to the source. */}
+      {hasElements && (
+        <div className="pointer-events-auto absolute right-2 top-2 z-10 flex max-h-[72%] w-56 max-w-[72%] flex-col rounded-md border border-slate-800 bg-surface-300/95 p-2 text-xs backdrop-blur">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="font-medium text-slate-300">Provenance walk</span>
+            <span className="text-[10px] tabular-nums text-slate-500">
+              {progressive.maxDepth === 0
+                ? 'root only'
+                : `hop ${progressive.revealedDepth} / ${progressive.maxDepth}`}
+            </span>
+          </div>
+          <ol className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5">
+            {revealedTrail.map((n) => (
+              <li key={n.id} className="flex flex-col gap-0.5 border-l border-slate-800 pl-2">
+                <button
+                  type="button"
+                  title={n.title ?? n.row_kind}
+                  onClick={() =>
+                    select({
+                      kind: toSelectionKind(n.row_kind),
+                      id: n.id,
+                      label: n.title ?? n.id,
+                    })
+                  }
+                  className="flex items-center gap-1.5 text-left hover:text-slate-100"
+                >
+                  <span
+                    aria-hidden
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: kindColor(n.row_kind) }}
+                  />
+                  <span className="truncate text-slate-200">{n.title ?? n.row_kind}</span>
+                </button>
+                <ReceiptBadge node={n} />
+              </li>
+            ))}
+          </ol>
+          <div className="mt-2 flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={!canExpand}
+              onClick={() => setRevealedDepth((d) => d + 1)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                canExpand
+                  ? 'border-slate-600 text-slate-200 hover:bg-surface-100'
+                  : 'cursor-default border-slate-800 text-slate-600',
+              )}
+            >
+              <Plus size={11} aria-hidden />
+              {canExpand ? 'Expand next hop' : 'reached the source'}
+            </button>
+            {progressive.revealedDepth > 1 && (
+              <button
+                type="button"
+                onClick={() => setRevealedDepth((d) => Math.max(1, d - 1))}
+                className="inline-flex items-center gap-1 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300 transition-colors hover:bg-surface-100"
+              >
+                <Minus size={11} aria-hidden />
+                Collapse
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {visible && hasElements && (
         <CytoscapeComponent
           cy={onCyReady}
@@ -327,7 +423,7 @@ export default function LineageGraph({ kind, id }: LineageGraphProps) {
             'text-[10px] text-slate-500',
           )}
         >
-          click a node to select it across rooms · root ringed amber
+          one hop at a time — expand the walk to the source · root ringed amber
         </div>
       )}
     </div>
@@ -339,6 +435,56 @@ function Overlay({ children }: { children: React.ReactNode }) {
   return (
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-surface-300/60">
       {children}
+    </div>
+  )
+}
+
+/**
+ * The honest per-hop receipt indicator + source link for the provenance walk.
+ *
+ * Analyst hops carry a `receipt` — a SHA-256 chain *consistency* check the
+ * backend RE-COMPUTES per node (NOT a signature). We render that node's own
+ * `badge` verbatim (`'chain-consistent (single-node)'`) only when the re-hash
+ * matched; a mismatch DEGRADES to "chain inconsistent" rather than fabricating a
+ * green badge. Signal / source hops carry no receipt (`receipt=null`) and show
+ * no badge — instead they open their real `canonical_url`, so the walk ends at a
+ * clickable source and never dead-ends.
+ */
+function ReceiptBadge({ node }: { node: LineageNode }) {
+  const r = node.receipt
+  if (!r && !node.canonical_url) return null
+  return (
+    <div className="flex flex-wrap items-center gap-1 pl-3.5">
+      {r &&
+        (r.chain_consistent ? (
+          <span
+            className="inline-flex items-center gap-1 rounded bg-accent-ok/15 px-1 py-0.5 text-[9px] leading-none text-accent-ok"
+            title={`receipt ${r.receipt_hash.slice(0, 12)}… · re-hash matched`}
+          >
+            <ShieldCheck size={9} aria-hidden />
+            {r.badge || RECEIPT_BADGE}
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1 rounded bg-accent-critical/15 px-1 py-0.5 text-[9px] leading-none text-accent-critical"
+            title={`receipt ${r.receipt_hash.slice(0, 12)}… · re-hash MISMATCH`}
+          >
+            <ShieldCheck size={9} aria-hidden />
+            chain inconsistent
+          </span>
+        ))}
+      {node.canonical_url && (
+        <a
+          href={node.canonical_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={node.canonical_url}
+          className="inline-flex items-center gap-0.5 text-[9px] text-accent-info hover:underline"
+        >
+          <ExternalLink size={9} aria-hidden />
+          open source
+        </a>
+      )}
     </div>
   )
 }

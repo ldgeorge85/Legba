@@ -67,6 +67,7 @@ from .deterministic_handlers import (
     adversarial_signals,
     anomaly_detection,
     calibration_tracking,
+    composition_lineage_sweep,
     cross_source_coalesce,
     cross_source_dedup,
     entity_gc,
@@ -74,6 +75,7 @@ from .deterministic_handlers import (
     fact_contention_arbiter,
     fact_decay,
     finding_supersession,
+    forecast_scoreboard,
     hypothesis_lifecycle,
     situation_clustering,
     thematic_proposal,
@@ -81,8 +83,10 @@ from .deterministic_handlers import (
     integrity_sweep,
     nexus_decay,
     proposed_edge_governance,
+    scorecard_producer,
     signals_retention,
     structural_balance,
+    unit_correctness_scorer,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,6 +115,13 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     "anomaly_detection": OutputKind.FINDING,
     # Confidence-vs-outcome Brier/reliability tracking. A genuine finding.
     "calibration_tracking": OutputKind.FINDING,
+    # P2-T5 per-unit correctness-vs-reference (source-id overlap recall vs the
+    # gold labels) + faithfulness mean. A genuine measurement finding.
+    "unit_correctness_scorer": OutputKind.FINDING,
+    # P3-T6 composition lineage-integrity sweep — the crown's per-floor
+    # derived_from BFS over the composition roots (0 dangling/cycles on a healthy
+    # tower; NAMES a broken sub-claim floor). A substantive verification product.
+    "composition_lineage_sweep": OutputKind.FINDING,
     # Adversarial-signal scoring. A genuine finding.
     "adversarial_signals": OutputKind.FINDING,
     # Situation clustering — materializes the `situations` table from the
@@ -164,6 +175,22 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # proposed_edges into nexuses (via the live write_nexus side-write) + ages
     # out thin stale ones; the promotion/aging counts live in the trace.
     "proposed_edge_governance": TRACE_ONLY,
+    # P4-T2 banded-scorecard producer — the REAL product = the N side-written
+    # `kind=scorecard` rows (one banded verdict per active G20 country); the
+    # returned summary is a per-run RECEIPT fully audited in analyst_traces, so it
+    # belongs in the TRACE-ONLY bucket alongside structural_balance /
+    # proposed_edge_governance. NOTE the split is intentional: TRACE_ONLY governs
+    # ONLY the single returned summary finding — the per-country side-writes pick
+    # their OWN kind=scorecard inside write_analyst_output and are UNAFFECTED by
+    # this map (they are genuine persisted rows, not trace-only).
+    "scorecard_producer": TRACE_ONLY,
+    # P4-T7 acute-forecast scoreboard producer — the REAL product = the
+    # side-written `acute_forecasts` rows (issued / exogenously resolved by the
+    # forecast_acute writers this handler DRIVES); the returned summary is a
+    # per-run counts RECEIPT fully audited in analyst_traces. TRACE_ONLY so the
+    # receipt NEVER lands a finding / prediction / claim on any trust surface —
+    # forecasting surfaces ONLY as acute_forecasts rows + the T4 scoreboard.
+    "forecast_scoreboard": TRACE_ONLY,
 }
 
 # READ_SLICE defaults to the signals reader — graph_mining + anomaly +
@@ -179,6 +206,13 @@ SUB_HANDLERS: dict[str, Any] = {
     "anomaly_detection": anomaly_detection.handle,
     "structural_balance": structural_balance.handle,
     "calibration_tracking": calibration_tracking.handle,
+    # P2-T5 per-unit correctness-vs-reference scorer (deterministic, LLM-free) —
+    # source-id overlap RECALL of each bounded unit's latest head finding vs the
+    # operator-authored gold rows; honest-None when nothing is scorable.
+    "unit_correctness_scorer": unit_correctness_scorer.handle,
+    # P3-T6 composition lineage-integrity sweep — per-floor derived_from BFS
+    # (validate_lineage) over the world/country composition roots. Refuses loud.
+    "composition_lineage_sweep": composition_lineage_sweep.handle,
     # L-203 migrated maintenance modules
     "adversarial_signals": adversarial_signals.handle,
     "entity_gc": entity_gc.handle,
@@ -213,6 +247,15 @@ SUB_HANDLERS: dict[str, Any] = {
     # Proposed-edge governance (FIX P3-1) — promotes corroborated co_occurs
     # proposed_edges to nexuses + flips status; ages out thin stale ones.
     "proposed_edge_governance": proposed_edge_governance.handle,
+    # P4-T2 banded-scorecard producer — global sweep over active G20 countries;
+    # side-writes one kind=scorecard row per country (data.bands = the T1 verdict,
+    # T5 eval folded), returns a TRACE_ONLY summary receipt.
+    "scorecard_producer": scorecard_producer.handle,
+    # P4-T7 acute-forecast scoreboard producer — weekly-idempotent driver for the
+    # forecast_acute pilot (issue → exogenous-resolve → count). Side-writes the
+    # acute_forecasts rows via the existing forecast_acute writers; returns a
+    # TRACE_ONLY counts receipt. Forecasting surfaces only in the T4 scoreboard.
+    "forecast_scoreboard": forecast_scoreboard.handle,
 }
 
 

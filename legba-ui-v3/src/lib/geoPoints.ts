@@ -253,3 +253,70 @@ export function buildEntityGeoPoints(entities: GeoEntity[]): EntityGeoPoint[] {
   }
   return out
 }
+
+// ---------------------------------------------------------------------------
+// Read-scoped geo lens (P1-T7) — place a `/signals` row's evidence on the map.
+// ---------------------------------------------------------------------------
+
+/** A `/signals` row as the read-lens consumes it — the subset we geo-place. The
+ *  typed `geo[]` column carries ISO-2 codes; `data.geo.{lat,lon}` may carry a
+ *  precise fix. */
+export interface SignalGeoRow {
+  id: string
+  title?: string | null
+  source_id?: string | null
+  data?: Record<string, unknown> | null
+  /** Typed `geo` column — ISO-2 country codes the geocode filter stamped. */
+  geo?: string[]
+}
+
+/**
+ * Resolve ONE signal row to a single map point, preferring its own precise
+ * `data.geo.{lat,lon}` and falling back to the FIRST ISO-2 in its typed `geo[]`
+ * column resolved to a country centroid (signals frequently carry only the
+ * ISO-2 geo tag, no lat/lon payload, so without this they never reach the map).
+ * Returns null when neither resolves.
+ */
+export function signalGeoPoint(row: SignalGeoRow): GeoPoint | null {
+  const g = extractGeo(row)
+  if (g) {
+    return {
+      id: row.id,
+      lat: g.lat,
+      lon: g.lon,
+      title: row.title ?? row.id,
+      kind: 'signal',
+      source_id: row.source_id ?? null,
+      country: g.country,
+      country_iso2: g.country_iso2,
+    }
+  }
+  for (const iso of row.geo ?? []) {
+    const fix = resolveCountry(iso)
+    if (fix) {
+      return {
+        id: row.id,
+        lat: fix.lat,
+        lon: fix.lon,
+        title: row.title ?? row.id,
+        kind: 'signal',
+        source_id: row.source_id ?? null,
+        country: fix.name,
+        country_iso2: fix.iso2,
+      }
+    }
+  }
+  return null
+}
+
+/** Geo-place a read's signal pool (the lens map markers), dropping rows that
+ *  resolve to no geo. Mirrors {@link buildGeoPoints} but with the ISO-2 column
+ *  fallback the read-scoped pool relies on. */
+export function signalGeoPoints(rows: SignalGeoRow[]): GeoPoint[] {
+  const out: GeoPoint[] = []
+  for (const r of rows) {
+    const p = signalGeoPoint(r)
+    if (p) out.push(p)
+  }
+  return out
+}

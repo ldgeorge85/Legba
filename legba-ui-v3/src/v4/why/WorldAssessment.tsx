@@ -22,9 +22,12 @@ import { Globe } from 'lucide-react'
 import { apiGet } from '@/lib/api'
 import { selectRow, useSelection } from '@/state/selection'
 import type { WorldAssessment as WorldAssessmentT } from '@/v4/why/types'
+import { CountryUnitsAssessment } from '@/v4/why/CountryUnitsAssessment'
 
 const ASSESSOR_ID = 'world_assessor'
-const COUNTRY_ASSESSOR_ID = 'country_assessor'
+// P3 — the per-country VERIFIED composition (the product for a selected country).
+// Replaces the RETIRED `country_assessor` monolith, whose output is stale/undated.
+const COUNTRY_COMPOSITION_ID = 'country_composition'
 
 /** Minimal view of a `/findings` row — only the fields we project from. The
  *  feed may also carry a `payload` alias for `data`, so we accept either. */
@@ -204,7 +207,7 @@ function EmptyState({ targetId }: { targetId?: string | null }) {
         <div className="max-w-md text-xs leading-relaxed text-slate-500">
           The{' '}
           <span className="font-mono text-slate-400">
-            {targetId ? 'country_assessor' : 'world_assessor'}
+            {targetId ? 'country_composition' : 'world_assessor'}
           </span>{' '}
           synthesizes one every ~6h.
         </div>
@@ -215,15 +218,15 @@ function EmptyState({ targetId }: { targetId?: string | null }) {
 
 export default function WorldAssessment() {
   // #89 polish — the reading column FOLLOWS the selection: a selected country
-  // (kind:'target') shows ITS country_assessor one-pager in the same column;
-  // otherwise the world_assessor synthesis. World mode keeps the shared
-  // 'world-assessment-findings' query key (cache-shared with the banner +
-  // Inspector compact teaser); country mode gets a per-target key.
+  // (kind:'target') shows ITS country_composition (the P3 verified synthesis) in
+  // the same column; otherwise the world_assessor composition. World mode keeps
+  // the shared 'world-assessment-findings' query key (cache-shared with the
+  // banner + Inspector compact teaser); country mode gets a per-target key.
   const selection = useSelection((s) => s.selection)
   const targetId = selection?.kind === 'target' ? selection.id : null
-  const assessorId = targetId ? COUNTRY_ASSESSOR_ID : ASSESSOR_ID
+  const assessorId = targetId ? COUNTRY_COMPOSITION_ID : ASSESSOR_ID
   const queryUrl = targetId
-    ? `/findings?analyst_id=${COUNTRY_ASSESSOR_ID}&target_id=${encodeURIComponent(targetId)}&limit=5`
+    ? `/findings?analyst_id=${COUNTRY_COMPOSITION_ID}&target_id=${encodeURIComponent(targetId)}&limit=5`
     : `/findings?analyst_id=${ASSESSOR_ID}&limit=5`
 
   const { data, isLoading, error } = useQuery<FindingsResponse>({
@@ -246,6 +249,53 @@ export default function WorldAssessment() {
     }
     return newest ? projectAssessment(newest) : null
   }, [data, assessorId])
+
+  // P2-T8 / P3 — for a selected COUNTRY the bounded UNITS are shown as the
+  // headline; the country_composition (the verified P3 synthesis OVER those
+  // units) renders in a collapsible below. Rendered independent of the
+  // composition query state so the units show immediately (they carry their own
+  // loading).
+  if (targetId) {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="country-read-column">
+        <CountryUnitsAssessment targetId={targetId} />
+        <details className="mt-8 border-t border-slate-800 pt-4" data-testid="country-composition-synthesis">
+          <summary className="cursor-pointer text-label uppercase tracking-wider text-slate-500">
+            Country composition (verified) · country_composition (the P3 synthesis over the units above)
+          </summary>
+          {assessment ? (
+            <div className="mt-3">
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-200">{assessment.title}</h2>
+                <button
+                  type="button"
+                  onClick={() => selectRow('finding', assessment.id, assessment.title, { origin: 'assessment' })}
+                  className="shrink-0 rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
+                  data-testid="composition-trace"
+                  title="Trace this composition's provenance / inputs in The Why"
+                >
+                  Trace the flow →
+                </button>
+              </div>
+              {assessment.summary.trim() !== '' ? (
+                <div className="text-sm text-slate-300">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                    {assessment.summary}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">This synthesis was published without a written summary.</p>
+              )}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-slate-500" data-testid="composition-pending">
+              {isLoading ? 'Loading the composition…' : `No verified composition for ${targetId} yet.`}
+            </p>
+          )}
+        </details>
+      </div>
+    )
+  }
 
   if (isLoading) return <LoadingSkeleton />
 
@@ -270,8 +320,14 @@ export default function WorldAssessment() {
     >
       <header className="mb-5 border-b border-slate-800 pb-4">
         <div className="text-label uppercase tracking-wider text-slate-500" data-testid="world-assessment-scope">
-          {targetId ? `${targetId} · country assessment` : 'World assessment'}
+          {targetId ? `${targetId} · country assessment` : 'world_assessor finding · one producer'}
         </div>
+        {!targetId && (
+          <div className="mt-1 text-xs leading-relaxed text-slate-500" data-testid="world-assessment-framing">
+            The composed, verified world view, synthesized over the per-country
+            compositions &mdash; live now.
+          </div>
+        )}
         <div className="mt-1 flex items-start justify-between gap-3">
           <h1 className="text-xl font-semibold text-slate-100">{assessment.title}</h1>
           {/* #89 — drop the operator into the lineage flow (ProvenanceTrail +

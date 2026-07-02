@@ -1,0 +1,173 @@
+# P2-T2 bounded reasoning unit — energy_security.
+#
+# A "unit": a topic-scoped inline_target analyst that answers ONE
+# bounded question per G20 country and emits a single cited FindingPayload.
+# Per T1 (validated live) a unit needs NO new Python kind module and NO
+# _KIND_MODULE_NAMES entry — it is just an inline_target DESCRIPTOR carrying its
+# OWN method.system_prompt + scope predicate + eval.rubric. The descriptor-
+# supplied prompt drives synthesis; the cite-the-prose [N] markers + the
+# faithfulness VERIFY gate already cover inline_target findings for free, so the
+# strict FindingPayload JSON below keeps both honest.
+#
+# Bounded question: how much ENERGY-SECURITY PRESSURE does this country face,
+# and what is the most plausible near-term trajectory?
+#
+# One of 4 topic units fanning out across the same 19 G20 targets. To spread the
+# load across the clock each unit fires 2x/day on a staggered hour pair; this
+# unit fires at 04:00 and 16:00 UTC (cadence.fallback_schedule below).
+
+identity:
+  id: energy_security
+  name: Energy-Security Pressure Unit
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p2_t2
+
+subscription:
+  targets:
+    # Same G20 fan-out as country_assessor: scope by the `g20` tag → one run per
+    # country target. has_tag is valid on the analyst.subscription surface.
+    predicate: 'has_tag("g20") or has_tag("watch")'
+    data_types: [signal]
+    # 72h (was 24h): the unit integrates ~3 days of raw signals, not just today.
+    time_window: 72h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# Tier-1 knowledge-grounding, ported from the retired country_assessor monolith
+# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + assessed
+# situations + graph structure as a fenced "CURRENT CONTEXT" preamble so this
+# unit integrates the multi-week substrate, not only the fresh signal slice.
+# target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
+# off from ground truth (the grounding-quality provenance gate applies).
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+method:
+  kind: llm_planner
+  # Unit-OWNED system prompt (NOT the country_assessor generic prompt). Scoped
+  # tightly to the energy-security pressure question so synthesis stays bounded.
+  # Instructs the STRICT FindingPayload JSON contract so cite-the-prose [N]
+  # markers + the faithfulness verify gate keep working.
+  system_prompt: |
+    You are the ENERGY-SECURITY PRESSURE unit of the Legba intelligence oracle.
+    You assess ONE bounded question for a single G20 country: how much
+    energy-security pressure does this country currently face, and what is the
+    most plausible near-term trajectory?
+
+    ENERGY-SECURITY PRESSURE means, and ONLY means:
+      - supply disruptions (outages, curtailments, shut-ins, force-majeure,
+        export halts, strikes affecting energy production or transport);
+      - price shocks (sharp spikes or collapses in oil, gas, power, or fuel
+        prices, or the fiscal/subsidy strain they create);
+      - infrastructure threats to the grid, pipelines, refineries, LNG
+        terminals, ports, or nuclear plants (attack, sabotage, accident,
+        extreme weather, or cyber);
+      - import/export dependency shifts (new supply deals, lost suppliers,
+        transit-route risk, strategic-reserve draws, demand swings);
+      - sanctions or embargo effects on this country's energy trade.
+    Stay STRICTLY inside this scope. Ignore signals with no energy-security
+    bearing — do not drift into general politics, conflict, or economics unless
+    it directly moves this country's energy supply, price, or infrastructure.
+
+    INPUT: a numbered list of this country's recent signals. Each signal is
+    addressable by its bracketed marker [N].
+
+    TASK:
+      1. Read the target signals.
+      2. Produce EXACTLY ONE finding that answers ONLY the energy-security
+         pressure question for this country — nothing broader.
+      3. Every key claim MUST cite the signal(s) it rests on with the bracketed
+         marker [N]. Assert no energy fact that no signal supports; if the slice
+         is thin or off-topic, say so plainly and lower your confidence.
+      4. Judge severity from the cited evidence, then name the most plausible
+         near-term trajectory (escalating / steady / easing) and the concrete
+         indicators that would confirm it.
+
+    OUTPUT: respond with STRICT JSON and NOTHING ELSE — no preamble, no prose
+    outside the single JSON object:
+    {"title": "<short headline: the country + its energy-security pressure>",
+     "body": "<github-markdown: a one-line **BLUF:** summary; then a `Key points`
+       list where every point cites its [N]; then a short `Assessment` of
+       severity and the most plausible near-term trajectory; then an
+       `Indicators to watch` list>",
+     "confidence": <0.0-1.0, matching the strength of the cited evidence>,
+     "evidence": [<the signal markers/ids your claims rest on>],
+     "tags": [<exactly ONE severity tag from
+       severity:low | severity:moderate | severity:elevated | severity:high |
+       severity:critical>, "energy_security"]}
+
+    RULES:
+      - tags MUST contain EXACTLY ONE severity:* tag AND the topic tag
+        "energy_security" — no more, no fewer of these two.
+      - If NO signal bears on energy security, return a finding that states so,
+        tagged severity:low, with confidence <= 0.3.
+      - Severity reflects CITED pressure, not speculation; confidence reflects
+        how strongly the cited signals support your read.
+      - Emit the JSON object only.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # P0: faithfulness VERIFY judge — currently the SAME core reasoning model
+    # (llm.primary.openai_compat, gpt-oss-120B) that writes this unit, NOT a
+    # cross-family judge (temporary: the 8B Llama-3.1-8B judge proved too weak —
+    # harsh + mis-aimed — so the strong model runs the judging to prove the flow;
+    # a dedicated reasoning judge is planned). KNOWN LIMITATION: same-model judging
+    # shares blind spots, so this signal is weaker than an independent judge.
+    # Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic
+    # citation-presence floor if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1536
+  budget_tokens_per_day: 300000
+  # Budget retry left at pause_until_next_window: on a projected over-cap day the
+  # actor pauses THIS unit until the next UTC bucket rather than demoting to a
+  # paid fallback (primary is the self-hosted core plane; no cheap fallback is
+  # wired). The staggered 2x/day cadence keeps the pause the safety net, not the
+  # norm.
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Staggered hour pair so the 4 topic units spread across the clock instead of
+  # firing the whole G20 fan-out at once: this unit fires 04:00 and 16:00 UTC.
+  fallback_schedule: "0 4,16 * * *"
+  # Per-(unit, target) cooldown — keyed by target_filter in the actor. MUST stay
+  # BELOW the 12h interval (43200s): a cooldown == interval is stamped at run
+  # completion and lands past the next scheduled fire, silently halving each
+  # country's cadence (12h -> 24h). 11h (39600s) keeps a 1h margin while still
+  # absorbing a coalesced re-trigger inside the window.
+  cooldown_seconds: 39600
+
+# eval.rubric — the topic-scoped rubric the critic grades this unit's findings
+# against (and the contract the verify gate's faithfulness floor backs up).
+# REQUIRED for the critic->optimizer loop; without it the critic hard-fails.
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "energy_grounding",
+       "weight": 0.4,
+       "description": "Are the energy-security specifics — disrupted supply, price moves, named infrastructure, suppliers/routes, sanctions/embargoes, quantities and dates — verifiable against the cited signals [N]? Penalize unsupported or hallucinated energy claims and off-topic drift outside energy security."},
+      {"name": "severity_calibration",
+       "weight": 0.35,
+       "description": "Does the single severity tag and the stated confidence match the strength of the cited energy-security pressure? Penalize both overstated alarm on thin evidence and understated severity against strong cited disruption."},
+      {"name": "trajectory_plausibility",
+       "weight": 0.25,
+       "description": "Is the named near-term trajectory (escalating / steady / easing) grounded in the cited evidence, and are the indicators-to-watch specific, observable, and on-topic for this country's energy security?"}
+    ], "scale": "0.0-1.0"}

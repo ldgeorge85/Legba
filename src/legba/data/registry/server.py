@@ -244,6 +244,13 @@ def create_app(
     from .journal_proposals_api import build_journal_proposals_router
     app.include_router(build_journal_proposals_router(deps), prefix="/api/v1")
 
+    # Labeled reference-set (gold) surface (P2-T4) — per-bounded-unit correctness
+    # labels the Phase-2 scorer compares a unit's live read against. POST records
+    # one (unit, target) gold answer grounded to canonical_source_ids; GET reads
+    # them back filtered by unit/target. Backs unit_reference_labels (mig 0057).
+    from .labels_api import build_labels_router
+    app.include_router(build_labels_router(deps), prefix="/api/v1")
+
     # Entity knowledge-graph read API — entity_profiles + signal_entity_links
     # + proposed_edges for the Entities / Entity-Graph / Entity-Detail panels.
     from .entities_api import build_entities_router

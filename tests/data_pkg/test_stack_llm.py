@@ -513,7 +513,7 @@ async def test_health_check_no_api_key():
     h._instance_id = "x"  # noqa: SLF001
     result = await h.health_check()
     assert result.state == HealthState.UNHEALTHY
-    assert "api_key not resolved" in result.detail
+    assert "auth credential not resolved" in result.detail
 
 
 @pytest.mark.asyncio

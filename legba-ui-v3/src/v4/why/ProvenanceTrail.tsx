@@ -25,9 +25,14 @@
  */
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, ShieldCheck, ExternalLink } from 'lucide-react'
 import { apiGet, ApiError } from '@/lib/api'
-import type { LineageNode, LineageReport } from '@/lib/graphModel'
+import {
+  buildPrimaryTrail,
+  RECEIPT_BADGE,
+  type LineageNode,
+  type LineageReport,
+} from '@/lib/graphModel'
 import { useSelection, type Selection, type SelectionKind } from '@/state/selection'
 import type { ProvenanceRef } from './types'
 import ProvenanceChip from '@/v4/components/ProvenanceChip'
@@ -72,60 +77,14 @@ interface TrailStep {
 }
 
 /**
- * Build the ordered oldest→newest primary path from a lineage report.
+ * Build the ordered oldest→newest primary-path steps from a lineage report.
  *
- * The report is a DAG of `parent → child` edges (`parent ∈ child.derived_from`).
- * Starting at the root (the selected row, newest), we repeatedly hop to the
- * parent with the greatest `depth` — the chain that reaches furthest back —
- * until we run out of resolvable parents. We then reverse so the result reads
- * oldest (deepest ancestor) → newest (the selected root).
- *
- * Cycle-guarded by a visited set (the substrate walk can re-converge).
+ * The single-line walk itself (root → deepest ancestor, greatest-depth parent)
+ * lives in the shared `buildPrimaryTrail` (so the lineage DAG panel walks the
+ * exact same line); here we just wrap each node as a clickable `TrailStep`.
  */
 function buildPrimaryPath(report: LineageReport): TrailStep[] {
-  const byId = new Map<string, LineageNode>()
-  byId.set(report.root.id, report.root)
-  for (const n of report.nodes) byId.set(n.id, n)
-
-  // parents[child] = [parent ids]
-  const parents = new Map<string, string[]>()
-  for (const e of report.edges) {
-    if (!byId.has(e.parent) || !byId.has(e.child)) continue
-    const arr = parents.get(e.child)
-    if (arr) arr.push(e.parent)
-    else parents.set(e.child, [e.parent])
-  }
-
-  // Walk root → deepest ancestor (newest → oldest).
-  const newestToOldest: LineageNode[] = []
-  const seen = new Set<string>()
-  let cur: LineageNode | undefined = report.root
-  while (cur && !seen.has(cur.id)) {
-    seen.add(cur.id)
-    newestToOldest.push(cur)
-    const parentIds = parents.get(cur.id) ?? []
-    // Pick the parent that climbs furthest back (greatest depth); ties broken
-    // by oldest produced_at so the chosen chain is the most "original".
-    let next: LineageNode | undefined
-    for (const pid of parentIds) {
-      if (seen.has(pid)) continue
-      const p = byId.get(pid)
-      if (!p) continue
-      if (
-        !next ||
-        p.depth > next.depth ||
-        (p.depth === next.depth && p.produced_at < next.produced_at)
-      ) {
-        next = p
-      }
-    }
-    cur = next
-  }
-
-  // Reverse to oldest → newest, and tag the root step so its chip renders active.
-  return newestToOldest
-    .reverse()
-    .map((node) => ({ ref: nodeToRef(node), node }))
+  return buildPrimaryTrail(report).map((node) => ({ ref: nodeToRef(node), node }))
 }
 
 interface ProvenanceTrailProps {
@@ -237,6 +196,11 @@ export default function ProvenanceTrail({ selection }: ProvenanceTrailProps) {
                   : undefined
               }
             />
+            {/* P1-T5 — the honest per-hop receipt badge + source link (analyst
+                hops show 'chain-consistent (single-node)'; signal hops have no
+                receipt and open their real source URL). Renders nothing for hops
+                with neither (the common case), so the chip line stays clean. */}
+            <HopReceipt node={step.node} />
             {i < steps.length - 1 && (
               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-600" aria-hidden />
             )}
@@ -264,5 +228,55 @@ export default function ProvenanceTrail({ selection }: ProvenanceTrailProps) {
         <p className="text-[10px] text-slate-600">no upstream lineage recorded</p>
       )}
     </div>
+  )
+}
+
+/**
+ * The honest per-hop receipt indicator + source link, inline beside a trail chip.
+ *
+ * Analyst hops carry a `receipt` — a SHA-256 chain *consistency* check the
+ * backend RE-COMPUTES per node (NOT a signature). We render that node's own
+ * `badge` verbatim (`'chain-consistent (single-node)'`) only when the re-hash
+ * matched; a mismatch DEGRADES to "chain inconsistent" rather than fabricating a
+ * green badge. Signal / source hops carry no receipt (`receipt=null`) and show
+ * no badge — instead they expose their real `canonical_url`, so the line ends at
+ * a clickable source. Renders nothing when a hop has neither.
+ */
+function HopReceipt({ node }: { node: LineageNode }) {
+  const r = node.receipt
+  if (!r && !node.canonical_url) return null
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1">
+      {r &&
+        (r.chain_consistent ? (
+          <span
+            className="inline-flex items-center gap-1 rounded bg-accent-ok/15 px-1 py-0.5 text-[9px] leading-none text-accent-ok"
+            title={`receipt ${r.receipt_hash.slice(0, 12)}… · re-hash matched`}
+          >
+            <ShieldCheck className="h-2.5 w-2.5" aria-hidden />
+            {r.badge || RECEIPT_BADGE}
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1 rounded bg-accent-critical/15 px-1 py-0.5 text-[9px] leading-none text-accent-critical"
+            title={`receipt ${r.receipt_hash.slice(0, 12)}… · re-hash MISMATCH`}
+          >
+            <ShieldCheck className="h-2.5 w-2.5" aria-hidden />
+            chain inconsistent
+          </span>
+        ))}
+      {node.canonical_url && (
+        <a
+          href={node.canonical_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={node.canonical_url}
+          className="inline-flex items-center gap-0.5 text-[9px] text-accent-info hover:underline"
+        >
+          <ExternalLink className="h-2.5 w-2.5" aria-hidden />
+          source
+        </a>
+      )}
+    </span>
   )
 }

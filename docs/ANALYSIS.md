@@ -37,9 +37,23 @@ It has four moving parts:
 3. **Action-pack agency** — the governed, allow-listed bundle of external tools an
    analyst may invoke (enqueue media jobs, emit to channels, discover sources),
    with a per-pack governor and a global budget envelope. (§5)
-4. **The eval loop** — `critic` analysts grade outputs against rubrics; the
-   `optimizer` analyst runs a DSPy + GEPA reflective prompt-evolution loop (as a
-   Dapr Workflow) whose promotion is human-gated. (§6)
+4. **The eval loop** — a **mandatory faithfulness verify** pass scores every cited
+   finding for groundedness and folds `effective_confidence`; `critic` analysts
+   grade outputs against rubrics; the `optimizer` returns only as a scoped,
+   measured `unit_optimizer` experiment (the old always-on monolith is
+   cadence-frozen). (§6)
+
+Those four parts are the *mechanics*. The **product** they assemble is a
+bottom-up reasoning spine (§3.11): four bounded reasoning units answer one narrow
+question each per country desk — the 19 G20 members plus a five-desk
+high-consequence **watch tier** (Israel, Iran, Ukraine, Taiwan, North Korea), 24
+desks in all; a per-country composition and then a world
+composition synthesize the *verified* sub-claims; a deterministic banded scorecard
+writes one honest per-desk verdict; and a skill scoreboard reports how well each
+unit and each forecast actually did. Every claim on that spine is cited to source,
+checked by the faithfulness verify pass (which measures *groundedness — does each
+claim follow from its cited evidence — not truth in the world*), and drillable
+through a receipt chain to the original signal.
 
 The methodology those parts express — JDL data-fusion levels, the confidence
 architecture, hypotheses / ACH, the entity knowledge graph, and temporal-graph
@@ -172,7 +186,8 @@ built-in `AnalystKind` enum — so the count of built-in kinds is unchanged and 
 journal rides on top.
 
 The **twelve** built-in kinds the deps-builder dispatches
-(`build_analyst_run_method`; the same twelve are in `_KIND_MODULE_NAMES`, walked
+(`build_analyst_run_method`; these twelve — plus the `journal_assessor` extension
+kind that rides on top — are the module names in `_KIND_MODULE_NAMES`, walked
 by `discover_analyst_kinds`):
 
 | Kind | Method | Reads | Writes |
@@ -211,27 +226,31 @@ connection — the receipt vs. side-write split is called out in the Writes colu
 
 | Kind | `method.kind` | Reads | Core op | Writes (`OutputKind`) | LLM? | Cadence |
 |---|---|---|---|---|---|---|
-| **`inline_target`** | `llm_planner` | one target's 24h signal slice (`subscription.targets`, `has_tag("g20")`) | 7-phase envelope WAKE→ORIENT(newest 20)→PLAN→GROUND→REASON→REFLECT→NARRATE | **FINDING** | yes (one `chat_complete`) | **6h** (`0 */6 * * *`) |
+| **`inline_target`** (the 4 bounded UNITS) | `llm_planner` | one desk's 72h signal slice + grounding preamble (`subscription.targets`, `has_tag("g20") or has_tag("watch")`) | 7-phase envelope WAKE→ORIENT(token-budget packed, ≤200 backstop)→PLAN→GROUND→REASON→REFLECT→NARRATE, then the mandatory faithfulness VERIFY | **FINDING** (cited) | yes (one `chat_complete` + the faithfulness verify judge, currently the same core model) | **2×/day** staggered per unit (`0 1,13` / `0 4,16` / `0 7,19` / `0 10,22`) |
 | **`relationship_reifier`** | `llm_planner` (META) | `proposed_edges` co-mention pairs + open facts | small-LLM types each pair → canonical predicate + **signed polarity** | **NEXUS** side-write (`write_nexus`); FINDING receipt | yes (8B-path, 384-tok JSON/pair) | **12h** (`45 */12 * * *`) |
 | **`deterministic` / `graph_mining`** | `deterministic` (`sub_handler: graph_mining`) | signed `nexus` rows + the Apache AGE subgraph | `networkx` communities / centrality / proxy-chains | `graph_metrics` sink + **FINDING** | **no** | **12h** (`52 */12 * * *`) |
 | **`competing_hypotheses`** (alias `ach`) | `llm_planner` (META) | focal situations × current facts × signed nexuses | evidence × hypothesis matrix + diagnosticity → `confirmed` / `refuted` | **HYPOTHESIS** side-write (`write_hypothesis`); FINDING receipt | yes (LLM proposes set + scores cells, budget-gated) | **12h** (`50 */12 * * *`) |
-| **`predictor`** | `stat_forecaster` | a 14d (`336h`) signal window for the target | daily-aggregated AutoARIMA forecast (point + CI) | **PREDICTION** | no LLM in the critical path (optional narrative only) | **12h** (`0 */12 * * *`) |
+| **`predictor`** | `stat_forecaster` | a 14d (`336h`) signal window for the target | daily-aggregated AutoARIMA forecast (point + CI) | **PREDICTION** | no LLM in the critical path (optional narrative only) | **RETIRED + STOPPED** — forecast-as-claim (`country_predictor` retired, `india_energy_predictor` cadence-nulled); ~539 historical prediction rows remain in the DB, unread; forecasting now returns only via the scored `forecast_scoreboard` (§7.10) |
 | `cross_target_raw` | `llm_planner` | raw signals across N subscribed targets | one multi-target pass | FINDING (`cross_target=true`) | yes | available kind — not in the live bring-up set (no descriptor) |
-| `meta_findings_synthesizer` | `llm_planner` (META) | other analysts' first-order findings | second-order synthesis | FINDING (`meta=true`) | yes | 12h (`30 */12 * * *`) |
+| `meta_findings_synthesizer` (the COMPOSITIONS) | `llm_planner` (META) | other analysts' verify-passed findings (the 4 units → `country_composition`; the country reads → `world_assessor`) | verify-floored, cited second-order synthesis | FINDING (`meta=true`) + its own faithfulness VERIFY | yes | per-country `30 11,23`; global world `0 0,12` |
 | `cross_analyst_correlator` | `llm_planner` | many analysts' outputs | contradiction / agreement / blind-spot detector | FINDING | yes | 12h (`45 */12 * * *`) |
 | `critic` | `critic` | one analyst output + its `eval.rubric` | LLM judge → per-dimension scores | **CRITIQUE** | yes (heterogeneity-guarded) | 2h (`0 */2 * * *`) |
-| `optimizer` | `dspy_compile` | an analyst's traces ⋈ critiques | DSPy + GEPA compile (Dapr Workflow) | **PROMPT_MODULE_CANDIDATE** | yes (isolated worker) | daily (`0 3 * * *`) |
+| `optimizer` (`unit_optimizer`) | `dspy_compile` | one measured unit's traces ⋈ critiques | DSPy + GEPA compile (Dapr Workflow) with a real before/after **faithfulness** delta; human-gated, never auto-promotes on a degenerate/non-positive delta | **PROMPT_MODULE_CANDIDATE** | yes (isolated worker) | weekly (`0 4 * * 1`); the old `country_optimizer` monolith is cadence-FROZEN — descriptor still `state=active`, `fallback_schedule` nulled (§6) |
 | `consult_on_demand` | `react_loop` | free-form question + scope predicate | single-turn ReAct over 4 read tools | FINDING | yes | on-demand (no `fallback_schedule`) |
 | `deep_consult` | `react_loop` | free-form deep-research question | schedules the deep-consult Dapr Workflow | FINDING | yes (within the workflow) | on-demand (no `fallback_schedule`) |
-| **`journal_assessor`** (extension kind) | `llm_planner` (META, in-actor GATHER one-soul arc) | the whole organism via its own `journal_read` self-instruments (its own last entry / consolidation, plus `get_assessments` / `get_graph_structure` / `get_critic_scores` / `get_calibration` / `get_run_health` / `get_budget_status` / …) | one-soul PLAN→GATHER→NARRATE arc; narrate a coherent first-person POV OVER the system | **JOURNAL** → `journal_entries`, OFF-chain (empty `derived_from`) | yes (per-phase split: gpt-oss / vLLM gather + Opus 4.8 voice) | **12h** entry (`0 0,12 * * *`) / **daily** consolidator (`0 2 * * *`) |
+| **`journal_assessor`** (extension kind) | `llm_planner` (META, in-actor GATHER one-soul arc) | the whole organism via its own `journal_read` self-instruments (its own last entry / consolidation, plus `get_assessments` / `get_graph_structure` / `get_critic_scores` / `get_calibration` / `get_run_health` / `get_budget_status` / …) | one-soul PLAN→GATHER→NARRATE arc; narrate a coherent first-person POV OVER the system | **JOURNAL** → `journal_entries`, OFF-chain (empty `derived_from`) | yes (per-phase split: gpt-oss / vLLM gather + Opus 4.8 voice) | **ON cadence** — 12h entry (`0 0,12`) + daily consolidation (`0 2`); an introspective instrument that writes only `journal_entries` and cannot pollute product output (§3.10) |
+| **`scorecard_producer`** | `deterministic` (`sub_handler`, META) | already-verified claims (14-day window) per active desk tagged `g20`/`watch` | high-precision banding rules (severity × effective_confidence, demote-never-promote); one honest row per desk | **SCORECARD** side-write; TRACE_ONLY receipt | **no** ($0) | daily (`40 4 * * *`) |
+| **`forecast_scoreboard`** | `deterministic` (`sub_handler`, META) | the `acute_forecasts` pilot table | weekly issue → **exogenous** resolve → count of the acute-binary forecast pilot; abstains on a degenerate p-vector | `acute_forecasts` rows; TRACE_ONLY receipt (never a claim/finding) | **no** ($0) | weekly |
+| **`unit_correctness_scorer`** | `deterministic` (`sub_handler`, META) | each unit's findings vs operator gold labels (`unit_reference_labels`) | per-unit faithfulness + correctness-vs-reference (honest-null when a unit has 0 labels) | FINDING (the skill-scoreboard feed) | **no** ($0) | daily |
 
 Each cadence pairs with a `cooldown_seconds` held **below** the interval — a
 cooldown stamped at run-completion that equals the interval lands past the next
-fire and silently halves the cadence (the 6h→12h trap noted in
-`analyst_country_assessor.yaml`). The eleven `OutputKind` values are FINDING,
-SITUATION, HYPOTHESIS, PREDICTION, ALERT, META_FINDING, CRITIQUE, FACT, NEXUS,
-PROMPT_MODULE_CANDIDATE, JOURNAL (`provenance/kinds.py:76-101`) — the eleventh,
-`JOURNAL`, lands OFF the fact/finding/nexus chain (§3.10).
+fire and silently halves the cadence (the 6h→12h / 12h→24h trap noted in the unit
+descriptors). The **twelve** `OutputKind` values are FINDING, SITUATION,
+HYPOTHESIS, PREDICTION, ALERT, META_FINDING, CRITIQUE, FACT, NEXUS,
+PROMPT_MODULE_CANDIDATE, JOURNAL, SCORECARD (`provenance/kinds.py`) — `JOURNAL`
+lands OFF the fact/finding/nexus chain (§3.10), and `SCORECARD` is the
+deterministic banded per-country verdict (§3.11).
 
 ### 3.1 `inline_target`
 
@@ -246,9 +265,14 @@ wrapped as a DSPy module), REFLECT (parse + validate JSON into a payload; malfor
 JSON downgrades to an unstructured finding rather than crashing), NARRATE (stamp
 `derived_from` lineage and tags), PERSIST (the actor host does the substrate
 write). The kind handler stays pure so the optimizer can replay it
-deterministically. This is the kind the 19 G20 country assessors instantiate (§8),
-and the kind that carries the **knowledge-grounding** injection for the
-world / country assessors — see §7.9.
+deterministically. This is the kind the **four bounded reasoning units**
+instantiate — one narrow question each, fanned out across the 24 country desks (the
+19 G20 members plus the 5-desk watch tier; §3.11, §8) — and the kind that carries the
+**knowledge-grounding** injection (§7.9); a
+landed unit finding then clears the mandatory **faithfulness verify** pass (§6.2).
+The earlier monolithic `country_assessor` was an `inline_target` too, now retired
+and stopped — nothing in the spine reads it, though its ~1.2k historical findings
+remain in the DB, unread (§3.11).
 
 #### 3.1.1 How `inline_target` is defined + wired
 
@@ -258,9 +282,15 @@ pass that resolves the descriptor's references into a runnable handler, and a
 pure run-time envelope. Three real files carry it — the kind module
 `data/analysts/inline_target.py`, the builder branch
 `runtime/analyst_deps_builder.py`, and the descriptor schema
-`data/schemas/analyst.py` — instantiated by the two descriptors
-`descriptors/analyst_country_assessor.yaml` and
-`descriptors/analyst_world_assessor.yaml`.
+`data/schemas/analyst.py` — instantiated live by the four bounded-unit
+descriptors (`descriptors/analyst_leadership_transition.yaml`,
+`analyst_energy_security.yaml`, `analyst_escalation.yaml`,
+`analyst_narrative_coordination.yaml`; §3.11). The earlier monolithic
+`descriptors/analyst_country_assessor.yaml` was the original archetype and is now
+**retired** (live head `state='retired'`, removed from bringup); the values traced
+below are the units'. `analyst_world_assessor.yaml` was repointed off
+`inline_target` to `meta_findings_synthesizer` — it is now the world composition
+(§3.11), no longer an `inline_target`.
 
 **The descriptor anatomy.** An `AnalystDescriptor` (`schemas/analyst.py:578`)
 declares:
@@ -271,36 +301,50 @@ declares:
   (`schemas/analyst.py:399,409,419`). `llm.primary` is a `stack_ref`
   `FactoryValue` (`raw: llm.primary.openai_compat`, `expected_family:
   llm_provider`) the builder resolves against the live stack; `method.llm`
-  also carries `max_tokens` and the per-analyst `budget_tokens_per_day`. The
-  country assessor caps `max_tokens: 1536` / `budget_tokens_per_day: 400000`;
-  the world assessor `2048` / `120000`.
+  also carries `max_tokens` and the per-analyst `budget_tokens_per_day`. Each
+  bounded unit caps `max_tokens: 1536` / `budget_tokens_per_day: 300000`, and —
+  the load-bearing addition — declares a `method.llm.verify` stack_ref
+  (`raw: llm.primary.openai_compat`) that names the faithfulness judge (§6.2) —
+  **currently the SAME core model** as the producer, **not** cross-family. That is
+  a deliberate, temporary choice after the earlier cross-family 8B judge
+  (`llm.verify.slm_8b`) proved too weak; a dedicated reasoning judge is planned
+  (known limitation: same-model judging shares blind spots). Units carry their
+  prompt **inline** as `method.system_prompt`, not a
+  `prompt_module` (the T7 unit-factory pattern — a unit is just a topic-scoped
+  descriptor, no new Python module).
 - `subscription.targets` (`schemas/analyst.py:258`) — a `predicate` +
   `time_window` (`schemas/analyst.py:223,225`). **The presence of a `targets`
-  block is the per-target fan-out switch**: `country_assessor.yaml` declares
-  `predicate: 'has_tag("g20")'`, `time_window: 24h`, and the actor fans out one
-  worker run per matched G20 target. `world_assessor.yaml` **omits** `targets`
-  entirely (`AnalystActor._cadence_targets()` returns `None` → exactly one
-  global run with `target_filter=None`, reading the tenant-wide 24h slice). One
-  field flips the kind between 19 per-country runs and one world-picture run.
+  block is the per-target fan-out switch**: each unit declares
+  `predicate: 'has_tag("g20") or has_tag("watch")'`, `time_window: 72h`, and the
+  actor fans out one worker run per matched desk. A META analyst (the compositions,
+  the scorecard) **omits** `targets` entirely (`AnalystActor._cadence_targets()`
+  returns `None` → exactly one global run with `target_filter=None`). One field
+  flips a kind between the 24 per-desk runs and one global run. Adding a desk is
+  register-a-target (tag it `g20` or `watch`), no code change.
 - `cadence.fallback_schedule` + `cadence.cooldown_seconds`
-  (`schemas/analyst.py:455`) — `0 */6 * * *` with `cooldown_seconds: 21000`
-  (5h50m, held below the 6h interval per the §3.0 cooldown trap).
+  (`schemas/analyst.py:455`) — each unit fires **2×/day** on a staggered hour pair
+  (e.g. `0 1,13 * * *`) with `cooldown_seconds: 39600` (11h, held below the 12h
+  interval per the §3.0 cooldown trap); the four units stagger across the clock so
+  no hour stacks the whole G20 fan-out into one budget bucket.
 - the `grounding` block (`schemas/analyst.py:596` → `GroundingBlock`) —
-  `enabled: true`, `scope: [target_geo, slice_entities]`, `sources: [substrate]`,
-  `max_facts: 30` (the Tier-1 current-world-state injection; §7.9).
-- `action_packs` (`schemas/analyst.py:590`) — the country assessor grants
-  `media_processing`, `incident_response`, `escalate_finding` (§5 / §5.0).
-- `outputs` bindings (`schemas/analyst.py:586`) — the country assessor binds
-  `a2a_skill` (`intelligence.g20_country_assessment`), `stix_bundle` (TLP:amber
-  + file sink), and `alert` (`min_severity: high`); the world assessor binds
-  only the `a2a_skill`. The `FindingPayload` lands in `analyst_outputs` via the
-  kind's default `OUTPUT_KIND.FINDING` regardless of bindings.
+  `enabled: true`, `scope: [target_geo, slice_entities]`,
+  `sources: [substrate, situations, graph_structure]`, `max_facts: 30` (the Tier-1
+  current-world-state injection; §7.9).
+- `action_packs` (`schemas/analyst.py:590`) — the bounded units grant **none**;
+  the retired `country_assessor` monolith was the analyst that granted the
+  `media_processing` / `incident_response` / `escalate_finding` seed packs
+  (§5 / §5.0).
+- `outputs` bindings (`schemas/analyst.py:586`) — the units bind **no** output
+  channels; the `FindingPayload` lands in `analyst_outputs` via the kind's default
+  `OUTPUT_KIND.FINDING` regardless. (The world composition binds a single
+  `a2a_skill` `intelligence.world_assessment`; §3.11.)
 - `eval.rubric` (`schemas/analyst.py:515`) — the weighted-dimension JSON the
-  `country_critic` grades the finding against; required for the critic→optimizer
-  loop. The critic now runs on the SAME core self-hosted plane as the analyst
-  (`llm.primary.openai_compat`), so `allow_self_correlated: true` — it is no
-  longer a cross-provider check (§3.8 / §6). The hosted Anthropic plane
-  (`claude-opus-4-8`) is reserved for the consult / deep-consult kinds only.
+  `critic` grades the finding against (each unit ships its own topic-scoped
+  rubric); required for the critic→optimizer loop. The critic now runs on the SAME
+  core self-hosted plane as the analyst (`llm.primary.openai_compat`), so
+  `allow_self_correlated: true` — it is no longer a cross-provider check (§3.8 / §6).
+  The hosted Anthropic plane (`claude-opus-4-8`) is reserved for the consult /
+  deep-consult kinds only.
 
 **The build-time wiring.** At startup `discover_analyst_kinds`
 (`data/analysts/__init__.py:104`) walks the kind modules and registers each by
@@ -311,13 +355,16 @@ descriptor whose `identity.kind` is `inline_target`, it dispatches into
 1. **resolves the LLM** — the `method.llm.primary` StackRef is resolved via
    `build_llm_handler_from_stack_component` (`analyst_deps_builder.py:218`,
    called at `:342`) into a live chat handler.
-2. **resolves the prompt module** → the system prompt string
-   (`analyst_deps_builder.py:347`), from `method.prompt_module`.
+2. **resolves the effective system prompt** → the string the runner uses
+   (`analyst_deps_builder.py:347`), from `method.prompt_module` **or** — for the
+   bounded units — the inline `method.system_prompt`.
 3. **applies the GEPA promoted-prompt override** — `resolve_promoted_system_prompt`
    (`analyst_deps_builder.py:355`) reads the operator-promoted champion
    instruction for this analyst id from Postgres and overrides the static
    system prompt when one is promoted (closing the optimizer's promotion loop;
-   §6.4).
+   §6.4). (For the bounded units this write-back is a **declared follow-up seam** —
+   the `unit_optimizer` *measures* a candidate today but a promoted unit prompt is
+   not yet auto-fed back into unit synthesis; §6.3.)
 4. **installs the grounding hook** — `_build_grounding_hook`
    (`analyst_deps_builder.py:360`, defined at `:378`) returns a closure that
    prepends the dated current-context preamble when `grounding.enabled`, else
@@ -331,8 +378,10 @@ descriptor whose `identity.kind` is `inline_target`, it dispatches into
 single LLM call so the optimizer can replay it (`inline_target.py`):
 
 - **WAKE** (`:546`) — open the envelope.
-- **ORIENT** (`:549`) — deterministically sort + trim to the newest
-  `_MAX_INPUT_SIGNALS = 20` signals (`:175`, `:207`).
+- **ORIENT** (`:549`) — deterministically sort by relevance and **pack signals
+  under the input-token budget** (the real bound); `_MAX_INPUT_SIGNALS = 200` is
+  only a hard backstop count so a flood can't blow the packer, **not** a fixed
+  "newest 20" trim (`:244`, `:305`).
 - **PLAN** (`:584`) — render the prompt + select the token budget.
 - **GROUND** (`:592`) — when grounded, prepend the dated "AUTHORITATIVE CURRENT
   CONTEXT" preamble (§7.9); a no-op when the hook is `None`.
@@ -365,7 +414,11 @@ them into a second-order `FindingPayload` marked `meta=true` with
 `contributing_analysts`. The lineage walker backtracks one hop to the first-order
 findings and two hops to the underlying signals. Inputs are capped (default 15
 findings) and its token budget is the smallest of the LLM kinds — its inputs are
-already structured.
+already structured. This is the kind that backs **both** composition legs of the
+reasoning spine (§3.11): `country_composition` (a `targets` block → per-country
+fan-out) and `world_assessor` (no `targets` block → one global run). When a
+descriptor declares `method.llm.verify`, its `READ_SLICE` also applies the
+faithfulness-verify floor, so a composition admits only verify-passed sub-claims.
 
 ### 3.4 `cross_analyst_correlator`
 
@@ -454,9 +507,17 @@ training query joins against.
 whole organism — its own self, state, and flow — narrating a coherent
 first-person point of view *over* the rest of the system rather than synthesizing
 another finding about the world. Its thesis: *"Poetry without evidence is noise.
-Evidence without perspective is just a log file."* It is **LIVE** —
-deployed and live-validated (a real off-chain entry, `honesty_flags` forced
-deterministically from substrate metrics, receipt-chained, in-voice).
+Evidence without perspective is just a log file."* It was built and live-validated (a real off-chain entry, `honesty_flags` forced
+deterministically from substrate metrics, receipt-chained, in-voice), and it
+**runs on cadence** as an introspective instrument: the entry tier
+(`journal_assessor`, `fallback_schedule: "0 0,12 * * *"`) and the consolidation
+tier (`journal_consolidator`, `fallback_schedule: "0 2 * * *"`) both tick (§3.0).
+Because it writes **only** `journal_entries` — off the fact/finding/nexus chain —
+it can never pollute product output, so running it live carries no risk to the
+reasoning spine. It is an observability / self-narration surface **beside** the
+spine, not a producer **in** it. (Routing a journal reflection back into the
+system as an actionable change — via the human-gated `journal_proposals` queue —
+is a **future** item, not yet wired end-to-end.)
 
 **Off the fact/finding/nexus chain — a perspective OVER the chain, not a member
 of it.** This is the single most important framing. A journal row is the **11th
@@ -537,6 +598,81 @@ renders entries with provenance chips that deep-link to the cited record, stylin
 > real in-browser render** at the time of writing. Wave 5 — a critic + an
 > optimizer over the journal's **own voice** — is **future / designed-not-built**,
 > gated on first building a critic actuator.
+
+---
+
+### 3.11 The reasoning spine — units → composition → scorecard → verify
+
+The kinds above are the *mechanics*; this is how they compose into the product.
+The spine is built bottom-up out of **existing** kinds configured by descriptor —
+no new Python kind was added for any leg — and every leg is cited and, where it
+makes a factual claim, faithfulness-verified (§6.2). The exemplar domain shown is
+geopolitics / the 24 country desks; nothing in the machinery is desk-specific — the
+fan-out predicate (`has_tag("g20") or has_tag("watch")`) and the unit prompts are
+configuration, and adding a desk is register-a-target with the right coverage tag.
+
+**1 — Four bounded reasoning units (`inline_target`).** `leadership_transition`,
+`energy_security`, `escalation`, `narrative_coordination` are each a topic-scoped
+`inline_target` descriptor that fans out one run per desk
+(`has_tag("g20") or has_tag("watch")` — the 19 G20 members plus the 5-desk watch
+tier) and answers **one narrow question**. Each run assembles a cited
+72h raw-signal slice **plus a Tier-1 grounding preamble of accumulated facts, signed
+nexuses, and situations** (§7.9) — so a unit integrates over accumulated state, not
+just the newest window — then synthesizes a
+strict-JSON `FindingPayload` whose prose carries `[N]` markers mapped to the
+signal ids, then clears the mandatory faithfulness verify pass; the fold
+`effective_confidence = min(confidence, faithfulness_overall_score)` is applied at
+read time (§6.2). Skill is a **per-unit** number (§5 below), never a platform
+boast. Adding a unit is a new descriptor, not new code.
+
+**2 — Per-country composition (`country_composition`, `meta_findings_synthesizer`).**
+A per-country second-order finding that reads the four verified units *for that
+country* and writes a hedged, cited synthesis. Its `READ_SLICE` honors the run's
+`target_filter` and admits **only** faithfulness-verify-passed sub-claims above the
+floor — unverified sub-claims never enter the composition. A country whose four
+units produced no verify-passed sub-claim yields an empty slice, and the kind emits
+an honest `confidence = 0.0` "no source findings to synthesize" finding rather than
+inventing a read. `derived_from` back-walks one hop to the four units, two hops to
+their cited signals; the composition then gets its own faithfulness verify over the
+`[[ref:<uuid>]]` → sub-claim bridge.
+
+**3 — World composition (`world_assessor`, `meta_findings_synthesizer`).**
+`world_assessor` was **repointed off `inline_target`** onto
+`meta_findings_synthesizer`: it is no longer a first-order raw-signal one-pager
+(that verdict-from-nowhere framing was retired). It now composes over the
+per-country reads into one cited, hedged world view that drills country → units →
+source, and runs the same faithfulness verify over its own citations. It is a
+single global run per tick (no `targets` block) and binds one `a2a_skill`
+`intelligence.world_assessment`.
+
+**4 — Banded scorecard (`scorecard_producer`, deterministic META, `SCORECARD`).**
+A pure-SQL, LLM-free ($0) META sweep that enumerates every active target tagged
+`g20`/`watch` and writes **one** banded `kind='scorecard'`
+row per desk from high-precision **rules** over the already-verified
+claims (severity tag × `effective_confidence`, banded over a 14-day window,
+**demote-never-promote**). Every band names the verified-claim id it rests on
+(`basis`, a real `analyst_outputs.id`), and the row's `derived_from` names those
+ids so a lineage walk resolves with zero dangling refs. A dimension with no
+qualifying verified claim reads **`insufficient-evidence`** with an explicit
+`reason` — never a fabricated band — and a per-claim faithfulness below the floor
+demotes the band to **`low-faithfulness`**. A country with no qualifying claim at
+all still emits an all-insufficient row (never omit, never invent), so the read
+route returns exactly one honest card per active country.
+
+**5 — Skill scoreboard (per-unit eval + calibration + forecast).** How well the
+spine actually does is reported honestly, per leg, with no aggregate boast:
+`unit_correctness_scorer` (deterministic META) reports **per-unit** faithfulness
+plus **correctness-vs-reference** against operator gold labels, **honest-null**
+when a unit has no labels; the exogenous calibration **Brier** (§7.4) and the
+acute-forecast **BSS** (§7.10) are each reported separately, and a *no-skill* or
+*insufficient-sample* result is **published, not hidden**.
+
+Honest state of the spine today: the live scorecard is a **mix** — some countries
+band from verified claims while others (e.g. the US) read all-insufficient because
+their units' faithfulness is genuinely low; the correctness-vs-reference gold set
+is **tiny** (n≈1, reported insufficient-sample); and the acute-forecast pilot
+currently reports **no proven skill** (§7.10). The system surfaces those weak spots
+rather than papering over them — that is the point.
 
 ---
 
@@ -805,34 +941,93 @@ an operator gates promotion.
 ### 6.1 Traces and critiques
 
 Every analyst run records an `analyst_traces` row and extends a per-analyst,
-tamper-evident **SHA-256 receipt chain** (`runtime/receipt_chain_factory.py`,
-`data/provenance/receipts.py`): each run links to the prior via `prev_receipt_hash`,
-hydrated from the analyst's last trace at first use. The chain follows the analyst
-identity across descriptor versions. (This is distinct from the descriptor
-**registry's** Ed25519-signed audit log, which signs descriptor mutations — see
-`ARCHITECTURE.md`.) A `critic` run (§3.8) lands a trace-level
+**chain-consistent (single-node) SHA-256 receipt chain**
+(`runtime/receipt_chain_factory.py`, `data/provenance/receipts.py`): each run links
+to the prior via `prev_receipt_hash`, hydrated from the analyst's last trace at
+first use, so a broken or reordered link is detectable on a single-node replay.
+(These receipts are **not** signed — they carry no cryptographic authorship or
+tamper-proofing; that guarantee belongs only to the descriptor **registry's**
+separate Ed25519-signed audit log, which signs descriptor mutations — see
+`ARCHITECTURE.md`.) The chain follows the analyst
+identity across descriptor versions. A `critic` run (§3.8) lands a trace-level
 `analyst_critiques` row keyed by `run_id`.
 
-### 6.2 The critic
+Per-analyst **run-timing** off those traces is exposed read-only at
+`GET /api/v1/v3/eval/analyst_runtime` (`data/registry/v3_api.py`) — per analyst over
+a window: run count, avg/max wall-clock seconds, last run, and non-success count —
+a lightweight observability surface over the same `analyst_traces` rows.
 
-The critic is an LLM judge against the analyzed analyst's `eval.rubric`, with the
-heterogeneity guard of §3.8. Rubrics are operator-authored content the descriptor's
-`eval.rubric` field points at — the same manual quality procedures an analyst
-would apply by hand, encoded for the critic to apply at scale.
+### 6.2 The mandatory faithfulness verify — and the critic
 
-The critic is not a spectator: it **actuates**. The surfaced confidence of a graded
-finding is `effective_confidence = min(confidence, critic_score)` — a finding the
-critic graded poorly surfaces a *lowered* confidence rather than its own self-reported
-one (`data/registry/substrate_reads_api.py`, the S3 critic-actuator fields). The raw
-`confidence`, the `critic_score`, and the folded `effective_confidence` are all stored
-side-by-side, so the down-weighting is auditable, not destructive.
+Two graders feed the same actuation gate. Both persist a `critique` row and both
+fold into `effective_confidence`, so a poorly-supported finding surfaces a
+*lowered* confidence rather than its own self-reported one.
+
+**The faithfulness verify pass (mandatory).** Every cited finding is scored for
+**groundedness** — does each fact-asserting claim actually follow from the signal
+it cites? — by `verify_finding_faithfulness` (`data/provenance/verify.py`, the
+P0-T2 pass). This measures *faithfulness to the cited evidence, not truth in the
+world* — the distinction is the whole honesty thesis. A **deterministic floor**
+(always on) checks every claim's `[N]` marker against the resolved citation
+bridge: a claim asserting a fact with no marker, or a marker resolving to no real
+signal id, is an **unsupported** span, and the score is the fraction of checkable
+claims that are supported. An **optional LLM judge** — **currently the same core
+model** (`llm.primary.openai_compat`, gpt-oss-120B) that produced the finding,
+**not** cross-family (a deliberate, temporary choice after the 8B judge
+`llm.verify.slm_8b`/"legba-slm" proved too weak — known limitation, dedicated
+reasoning judge planned), flag-gated on `LEGBA_VERIFY_LLM_JUDGE` —
+refines the per-claim verdicts; when the flag is off or the judge is unreachable
+the result **degrades to the floor** and is labelled `judge-unavailable`, never a
+fabricated number. The verdict lands as a `critique` titled "Faithfulness
+verify …" carrying `overall_score`, and `effective_confidence = min(confidence,
+overall_score)` is folded at read time (`substrate_reads_api.py`). A planted
+fabrication is flagged unsupported. The four bounded units, the per-country
+composition, and the world composition all declare `method.llm.verify` and so all
+run this pass; the generalized pass recognizes a composition's `[[ref:<uuid>]]` →
+sub-claim bridge and checks each composed clause against the cited sub-claim's own
+text.
+
+**The critic (rubric grader).** The critic is a separate LLM judge against the
+analyzed analyst's `eval.rubric`, with the heterogeneity guard of §3.8. Rubrics
+are operator-authored content the descriptor's `eval.rubric` field points at — the
+same manual quality procedures an analyst would apply by hand, encoded for the
+critic to apply at scale.
+
+Neither grader is a spectator: both **actuate**. The surfaced confidence of a
+graded finding is `effective_confidence = min(confidence, critic_score)` — where
+`critic_score` is the grader's `overall_score` (the faithfulness verify's, for a
+verified finding) — so a finding graded poorly surfaces a *lowered* confidence
+(`data/registry/substrate_reads_api.py`, the critic-actuator fields). The raw
+`confidence`, the score, and the folded `effective_confidence` are all stored
+side-by-side, so the down-weighting is auditable, not destructive — and the fold
+**never hard-deletes**; a low-confidence finding drops to a visible low-confidence
+tier.
 
 ### 6.3 The optimizer — DSPy + GEPA as a Dapr Workflow
 
+The optimizer returns as a **scoped, measured experiment**, not an always-on
+monolith. It runs today as the `unit_optimizer` descriptor over exactly one
+bounded unit (`leadership_transition`), and every candidate it emits carries a
+**real before/after paired faithfulness delta** measured on the same faithfulness
+verify judge (currently the core model, not cross-family — §6.2) that gates the
+live findings: the parent arm is the unit's existing
+faithfulness `overall_score`; the candidate arm generates under the candidate
+prompt and re-verifies. A degenerate, insufficiently-paired, or non-positive delta
+is **honest-null and can never promote** — the measurement gates run *before* any
+policy branch (`should_auto_promote`). The delta is the deliverable: promotion stays
+`human_gated`, and even a hand-flipped `promoted` cannot reach inference without a
+positive, non-degenerate, sufficiently-sampled measured delta. The old always-on
+monolithic `country_optimizer` (over the retired `country_assessor`) is
+**cadence-frozen** — the descriptor still reads `state=active` but its
+`fallback_schedule` is nulled (SEAMS #30) — so the reminder-flood regression class
+cannot recur. Live example delta: parent 0.34 → candidate 0.29 (−0.05) — a
+*negative* delta, so no promotion.
+
 The optimizer (`optimizer.py`) reads an analyst's `analyst_traces` joined with its
-`analyst_critiques` (default window 30 days, default minimum 50 ground-truth rows,
-hard cap 500), and runs the **GEPA** evolutionary loop (reflective Pareto-frontier
-prompt evolution, arXiv 2507.19457) over them to emit a candidate `prompt_module`.
+`analyst_critiques` (window + minimums are descriptor-set; the `unit_optimizer`
+bootstraps at `min_traces_required: 8`), and runs the **GEPA** evolutionary loop
+(reflective Pareto-frontier prompt evolution, arXiv 2507.19457) over them to emit a
+candidate `prompt_module`.
 
 GEPA is a multi-hour deterministic outer loop driving non-deterministic LLM
 activities, so it is the **one** analyst whose work needs a durable-workflow
@@ -1237,9 +1432,15 @@ SQL (`value !~ '^Q[0-9]+$'`) and a Python backstop, so it never injects an unrea
 resolves nothing) yields no preamble and the run proceeds un-grounded — grounding is
 an enrichment, never a gate. And it is **opt-in and token-capped** (`max_facts`), so an
 analyst that doesn't declare the block is untouched. Grounding is opted IN on the
-`world_assessor` and `country_assessor` descriptors. **Canary passed live:** a US
-assessment's context now contains "United States — head of state: Donald Trump (since
-2025-01-20)".
+**four bounded reasoning units** (`leadership_transition`, `energy_security`,
+`escalation`, `narrative_coordination`), which read
+`sources: [substrate, situations, graph_structure]` — the retired `country_assessor`
+monolith carried it first. Because this preamble is drawn from **accumulated** facts,
+signed nexuses, and situations (not just the 72h raw window), a unit reasons over
+state that integrates over time — e.g. lines like "US head of government Trump since
+2025-01-20; US–Iran active conflict since 2026-02-28; NATO member since 1949".
+**Canary passed live:** a US unit's context now contains
+"United States — head of state: Donald Trump (since 2025-01-20)".
 
 **Tier 2 — vector `world_context` collection.** A curated unstructured-brief
 collection (free-text background the structured facts can't carry) is a **declared
@@ -1266,13 +1467,25 @@ not that the method is hand-waved, but that the *result* is not yet earned.
   no trend can be fit it degrades to a `naive_mean` baseline and labels itself as
   such (`forecast_method`) rather than dressing a flat mean as a model. It answers
   *"how much activity next period?"* — a magnitude estimate, not an event call.
+  **This forecast-as-claim leg is now retired and stopped** (`country_predictor`
+  retired, `india_energy_predictor` cadence-nulled; SEAMS #31 / #32) — neither
+  ticks, though ~539 historical prediction rows remain in the DB, unread: a numeric
+  forecast is a *claim*, and the direction's rule is measure-and-verify before a
+  forecast ships as product. Forecasting now returns only through the scored acute
+  pilot below, which reports **no proven skill** yet (honest — see below).
 - **Acute-hazard probabilistic forecasting (`forecast_acute`, the pilot).** A
   **rare-event / Poisson-process** model: the count of severe hazards in a
   region-week (frozen class-K sources — USGS M4.5+ earthquakes, NASA EONET events)
   is treated as Poisson with rate λ estimated from the historical record, and the
   forecast is the **tail probability** P(≥1 event in the FORWARD week) = 1 − e^(−λ).
   It answers a sharp **binary** question — *"will at least one severe acute hazard
-  occur in country X next week?"*.
+  occur in country X next week?"*. It is driven by the deterministic META
+  `forecast_scoreboard` analyst (weekly: **issue** the forward forecasts → **resolve**
+  closed windows exogenously by the upstream event time → **count**). Its only
+  persisted product is `acute_forecasts` rows plus a **TRACE_ONLY** receipt — never a
+  finding, prediction, or free-text claim on any trust surface — and the numbers
+  surface **solely** on the calibration scoreboard route
+  (`GET /api/v1/v3/eval/calibration`).
 
 **The verification theory (what makes it falsifiable).**
 
@@ -1440,7 +1653,8 @@ disputed value as settled truth:
   (fact-keyed) and the target **Claims** panel (subject-keyed).
 
 **Build / validation state (honest).** All waves (0, 1, 2, 2b, 4, 5) are **built,
-deployed, and enabled on this instance** (migration head **0055**; both
+deployed, and enabled on this instance** (the contested-claims schema landed at
+migrations `0054`–`0055`; the live migration head is now **0057**; both
 `LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` ship **OFF by
 default** in code and compose, set to `1` only here via the gitignored `.env`).
 Proven **live**: the detect-only arbiter (Q·C·R·F surfaced the better-supported
@@ -1460,15 +1674,31 @@ observed live**; it awaits an asymmetric near-tie in the soak. Plan + decisions:
 The analysis plane is live in the real stack, cold-startable from empty volumes
 (applying the single `0001_baseline.sql` schema migration):
 
-- Real RSS sources (BBC, Deutsche Welle, Al Jazeera) produce ~200 enriched signals,
-  each carrying geo, language, and entity classes promoted to indexed columns.
-- Those signals fan out on `legba.signals.>` to **19 G20 country targets**.
-- Each target is coalesced (§2) by a country-assessor `inline_target` analyst,
-  producing distinct per-country findings with full `derived_from` provenance and
-  per-analyst receipt chains.
+- Real RSS/API sources (BBC, Deutsche Welle, Al Jazeera, and ~50 poll sources in
+  all) produce enriched signals, each carrying geo, language, and entity classes
+  promoted to indexed columns.
+- Those signals fan out on `legba.signals.>` to the **24 country desks** — the 19
+  G20 members plus a high-consequence **watch tier** (Israel, Iran, Ukraine,
+  Taiwan, North Korea; `country_watch_il/ir/ua/tw/kp`). Adding a desk is
+  register-a-target with a `g20`/`watch` coverage tag, no code change.
+- Each desk is coalesced (§2) into the **four bounded reasoning units**
+  (`inline_target`), each answering one narrow question over the desk's 72h slice
+  plus its accumulated-state grounding preamble, emitting a cited finding that then
+  clears the mandatory **faithfulness verify** pass (§6.2) — with full `derived_from`
+  provenance and per-analyst receipt chains.
+- `country_composition` synthesizes each desk's four verify-passed unit findings
+  into one hedged, cited per-desk read; `world_assessor` composes those desk
+  reads into one cited world view (§3.11).
+- `scorecard_producer` enumerates every active `g20`/`watch` desk and writes one
+  banded verdict row per desk from rules over the already-verified claims — an
+  all-insufficient row where no claim qualifies, never a fabricated band.
 - An ongoing `entity_resolution` deterministic analyst (§4.1) keeps an entity
   knowledge graph (`entity_profiles` / `signal_entity_links` / `proposed_edges`)
   current.
+
+The live scorecard is honestly a **mix**: some countries band from verified claims,
+while others (e.g. the US) read all-insufficient because their units' faithfulness
+is genuinely low — the system surfaces that rather than papering over it.
 
 ### Future seams (not yet end-to-end — see `docs/SEAMS.md`)
 

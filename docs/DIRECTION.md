@@ -5,25 +5,68 @@ NOT ship yet. This is the public answer to "where is RBAC / STIX / MCP / …?" �
 one page per item, each grounded in the code as it exists today, with the
 integration points named so the design is checkable against the tree.*
 
-Legba is **a source-first platform for automated analysis & knowledge fusion**:
-it ingests open-source feeds and fuses them into a provenance-tracked knowledge
-substrate (signals → entities/facts → relations/nexuses → situations →
-per-target assessments), every output traceable to its sources. The moat is
-**provenance, auditability, and the descriptor-driven, source-first,
-self-hostable (AGPL) model** — not data access or analytic maturity. Geopolitical
-/ G20 country assessment is the proven exemplar use case, not the system
-identity.
+Legba is **a source-first, decompositional intelligence system**: it ingests
+open-source feeds and turns them into **cited, faithfulness-verified, drillable
+reports** over whatever domain you configure. The analysis spine runs bottom-up —
+signals → temporal `facts` / reified `nexuses` → **four bounded reasoning units**
+(each answering one narrow question over a cited signal slice) → a **per-country
+composition** over the verified units → a **world composition** over the country
+reads → a **banded scorecard** — and every claim is cited to its source, checked
+by a **mandatory faithfulness pass**, and auditable hop-by-hop back to the
+original signal via a SHA-256 receipt chain. What sets Legba apart is the
+discipline, not the data: **cited synthesis + a mandatory verify pass + a hash-
+chained provenance record, on a descriptor-driven, source-first, self-hostable
+(AGPL) engine** — not privileged data access or analytic maturity. The engine is
+domain-agnostic; **geopolitical country assessment across 24 scoped country desks
+— the 19 G20 economies plus a high-consequence watch tier (Israel, Iran, Ukraine,
+Taiwan, North Korea; descriptor ids `country_watch_il/ir/ua/tw/kp`) — is the shown
+exemplar, not the system's identity**. (A "target" here is a scoped subject/desk a
+roster of analysts works, not a surveilled entity; the units + `country_composition`
+subscribe on `has_tag("g20") or has_tag("watch")`, so adding a country is
+register-a-target, no code.) Swap the sources, desks, and units and the same
+pipeline reports over any domain.
 
-**Two further axes, beyond designed-vs-built.** Even among the **built**
-features, this document and the README distinguish the **proven core** (source
-acquisition → enrichment → fan-out → per-target findings + provenance + temporal
-facts + UI — the product) from **experimental / research** surfaces that are
-built and traceable but carry **no validated skill metric**: calibration /
-outcome-resolution, the GEPA optimizer, ACH competing-hypotheses scoring, and the
-advanced graph analytics. In particular **no forecast-accuracy / Brier-skill claim
-is made anywhere**; the exogenous outcome resolver fires but is unvalidated. The
-per-page status lines below grade *built vs designed*; treat the analysis-leg
-"built" items above as experimental research, not proven capability.
+**Honesty is the product — and honesty means measuring groundedness, not
+truth.** The mandatory verify pass scores whether each claim *follows from its
+cited evidence* (a faithfulness score in `[0,1]`, from an LLM judge — currently
+the same core reasoning model that writes the analysis, not cross-family (a
+deliberate, temporary choice; see `AI_MODELS.md` §3) — plus a deterministic
+citation-presence floor); it does **not** adjudicate
+whether the claim is true about the world. That distinction is load-bearing
+everywhere below. Within the **built** system this document still separates the
+**measured core** — the four units, the per-country and world compositions, the
+banded scorecard, and the provenance / drill-down that carries them — from **the
+ambitious legs, which now return ONLY as measured, honestly-reported
+experiments**:
+
+- **Skill is a per-unit number**, never a platform-wide boast: per-unit
+  faithfulness + correctness-vs-reference, honest-null where unmeasured. The live
+  banded scorecard is deliberately a *mix* — some country dimensions band from a
+  qualifying verified claim, others read `insufficient-evidence` with an explicit
+  reason (e.g. the US card currently reads all-insufficient because that unit's
+  faithfulness is genuinely low), and the correctness-vs-reference gold set is
+  tiny (n=1, reported insufficient-sample). No band is ever fabricated.
+- **Forecasting** returns ONLY as a precise-question `acute_forecasts` Brier /
+  BSS scoreboard (question + window + probability + auto-resolve), surfaced solely
+  on the calibration route, **never** as a free-text claim or finding. It
+  **currently reports NO proven skill** — a degenerate / geography-dominated
+  probability vector abstains (zero rows) and the skill number is withheld rather
+  than dressed up. That null result is *published*, not hidden. The forecast-as-claim
+  predictors (`country_predictor`, `india_energy_predictor`) are **retired / frozen and
+  stopped**; their ~539 historical `prediction` rows remain in the DB, unread by the
+  spine — forecasting returns *only* as the scoreboard above, no longer as a free-text claim.
+- **The GEPA self-optimizer** returns scoped to ONE measured unit
+  (`leadership_transition`) as a `unit_optimizer` descriptor; every candidate
+  carries a REAL before/after paired faithfulness delta measured on the same
+  faithfulness judge (currently the core model, not cross-family; a live run read parent `0.34` → candidate `0.29`, delta `-0.05`), stays
+  `promotion_gate = human_gated`, and can never auto-promote on an absent /
+  degenerate / non-positive delta. The old monolithic `country_optimizer` stays
+  **cadence-frozen** (its descriptor is still `state: active`, but it no longer ticks —
+  no reminder-flood regression).
+
+The point is unchanged: a leg with no proven skill is stated as having none,
+right here, rather than quietly overclaimed. The per-page status lines below grade
+*built vs designed*.
 
 The rule that shapes this document: **a feature that is not built is a declared
 seam that fails loud — never a quiet stub, never fabricated output.** Each page
@@ -91,7 +134,10 @@ the registry bearer) — one password, one identity, no session lifecycle.
    scope, tenant}`); routers declare their floor via a dependency factory
    (`require_scope("operator")`) wrapping the existing
    `Depends(require_bearer)` sites (`consult_api.py::invoke_consult`,
-   `substrate_reads_api.py`, `lineage_api.py`, the descriptor/vault routers).
+   `substrate_reads_api.py`, `lineage_api.py`, the new per-analyst runtime-eval
+   route `GET /api/v1/v3/eval/analyst_runtime` (`v3_api.py::eval_analyst_runtime`
+   — a natural `read`-scope floor: run count, avg/max wall-clock, last run,
+   non-success, from `analyst_traces`), the descriptor/vault routers).
    Token records live in Postgres (hashed), rotatable per-scope; the resolved
    scope is stamped into `AuditEntry.actor_role` instead of the constant.
    Dev mode (env unset → accept-all, logged once at WARN) survives unchanged —
@@ -187,7 +233,7 @@ table-stake: a platform whose findings cannot land in OpenCTI / MISP /
 EclecticIQ is a silo. The wire format is STIX 2.1 over TAXII 2.1.
 
 **What exists (built).** The bundle producer already ships as an output kind:
-`src/legba/data/outputs/stix_bundle.py` (`KIND_NAME = "stix_bundle"`, L-195).
+`src/legba/data/outputs/stix_bundle.py` (`KIND_NAME = "stix_bundle"`, L-120).
 Mapping: `FindingPayload` → `report` (`threat-report`); `SituationPayload` →
 `incident` + wrapping `report`; `HypothesisPayload` → `report`
 (`analysis`-typed, hypothesis label); `AlertPayload` → `indicator` at
@@ -211,6 +257,16 @@ loud `RuntimeError` guard, not a stub).
 **What does not exist.** Serving TAXII (a collections endpoint a peer can
 poll), MISP sync, and signal→`observed-data` mapping. No live TAXII server is
 provisioned, so no in-tree descriptor carries a real `taxii` binding yet.
+
+**Honest note on current bindings.** The two descriptors that declared the
+`outputs.stix_bundle` binding — `analyst_country_assessor` and
+`analyst_country_predictor` — were both taken out of the live path by the P0–P4
+sequencing (`country_assessor` **retired**, superseded by the units +
+composition; the forecast-as-claim `country_predictor` **frozen**,
+`fallback_schedule: null`). The producer and the emit dispatch are built and
+exercised, but **no active analyst currently emits a bundle**; re-binding the
+export to a live output (the units / compositions / the banded scorecard) is the
+near step, not new plumbing.
 
 **Chosen approach.**
 
@@ -258,7 +314,7 @@ still HTTP-only.
 **What exists (built).** `src/legba/ui/mcp_server.py` is a working stdio MCP
 server (entry point `legba-mcp`, MCP protocol 2025-11-25 via the `mcp` SDK).
 Its catalog is entirely descriptor-driven: `create_server` reads
-`MCP_TOOL_REGISTRY` (`src/legba/data/outputs/mcp_tool.py`, L-194), which the
+`MCP_TOOL_REGISTRY` (`src/legba/data/outputs/mcp_tool.py`, L-377), which the
 runtime populates at descriptor-activate time from `outputs.mcp_tool`
 blocks. The registry gives: validated per-tool config (`McpToolConfig` —
 tool-name shape, object-typed input schema), two dispatch modes
@@ -629,8 +685,13 @@ Three tiers:
    dated "AUTHORITATIVE CURRENT CONTEXT (treat as ground truth over prior knowledge)"
    preamble built from the current authoritative facts (the temporal-honesty gate,
    preferring `seed`/`curated` provenance) about the target geo + slice entities.
-   Degrade-not-drop, token-capped, bare-QID-skipping. Opted in on `world_assessor` +
-   `country_assessor`; canary passed live.
+   Degrade-not-drop, token-capped, bare-QID-skipping. Opted in on **the four bounded
+   units** (`leadership_transition` / `energy_security` / `escalation` /
+   `narrative_coordination`) — the grounding was **ported off the now-retired
+   `country_assessor` monolith onto the units** (2026-07-01), which also widened the
+   raw-signal window to 72h so a unit integrates the multi-week substrate, not only
+   the fresh slice. The per-country and world compositions read already-grounded,
+   already-verified units and so need no preamble of their own. Canary passed live.
 3. **Tier 2 — vector `world_context` collection (designed, NOT built).** A curated
    unstructured-brief collection for free-text background the structured facts can't
    carry. The `GroundingBlock` accepts `vector:world_context` as a source so
@@ -642,8 +703,10 @@ Three tiers:
 `collect_grounding_candidates` (`src/legba/runtime/grounding.py`); the GROUND phase
 (`src/legba/data/analysts/inline_target.py`); `_build_grounding_hook`
 (`src/legba/runtime/analyst_deps_builder.py`); the seed adapters
-(`src/legba/data/seed/adapters/wikidata_leaders.py`, `world_baseline.py`);
-`descriptors/analyst_world_assessor.yaml` + `analyst_country_assessor.yaml`.
+(`src/legba/data/seed/adapters/wikidata_leaders.py`, `world_baseline.py`); the
+four unit descriptors carrying the `grounding:` block
+(`descriptors/analyst_leadership_transition.yaml`, `analyst_energy_security.yaml`,
+`analyst_escalation.yaml`, `analyst_narrative_coordination.yaml`).
 
 **Status:** Tier 0 + Tier 1 **built** (deployed + canary-verified live); Tier 2
 (vector `world_context`) **designed, NOT built** — gated on the embedder-through-port

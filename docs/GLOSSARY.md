@@ -4,10 +4,11 @@
 # Glossary
 
 Legba uses a handful of coined terms (`source-first`, `substrate`, `descriptor`,
-`signal`, `nexus`, `situation`, `seam`, `agency`…) and some method names from
-analysis tradecraft. This page defines each one in plain language first, then
-precisely. New here? Skim **Core concepts** top-to-bottom; everything else is a
-reference to dip into.
+`signal`, `nexus`, `situation`, `seam`, `agency`, plus the analysis-spine terms
+`bounded unit`, `composition`, `faithfulness verify`, `scorecard`…) and some
+method names from analysis tradecraft. This page defines each one in plain
+language first, then precisely. New here? Skim **Core concepts** top-to-bottom;
+everything else is a reference to dip into.
 
 This file defines **concepts**, which are stable. For volatile specifics —
 how many sources are live, which features are proven vs experimental, the
@@ -28,7 +29,8 @@ things that consume data. A source ingests an observation once, enriches it once
 and publishes one canonical, target-agnostic **signal**; the **fan-out** plane
 then routes that single signal to every **target** whose **predicate** matches.
 The slogan is *"ingest once, enrich once, match many"* — one BBC feed serves
-nineteen country targets without re-fetching.
+all twenty-four country desks (the 19 G20 plus a 5-country **watch** tier)
+without re-fetching.
 *Note: "source-first" describes acquisition architecture. It is unrelated to the
 AGPL "source-available" license — though Legba is also that.*
 
@@ -50,8 +52,9 @@ routed to.
 A passive subscriber declaring *what to watch*. It selects a slice of the shared
 signal pool by predicate and is what analysts produce assessments about. A target
 does no acquisition of its own.
-*Note: targets are not geo-only — scope is polymorphic (geographic, organizational,
-or entity-based).*
+*Note: a "target" is really a scoped **subject / desk** — a named scope-frame a set
+of analysts work — not a surveilled entity. Targets are not geo-only either: scope
+is polymorphic (geographic, organizational, or entity-based).*
 
 **analyst** — A declared unit that reasons over matched signals and writes typed
 outputs.
@@ -75,6 +78,9 @@ bringup scripts are create-only.*
 The primary typed output — a written analytic conclusion carrying `derived_from`
 provenance and a **receipt-chain** entry. A finding is itself re-published as a
 derived signal, so downstream analysts can react to it.
+*Note: every cited finding is scored by the mandatory **faithfulness verify**
+pass, and its surfaced confidence is folded to **effective_confidence** at read
+time.*
 
 **situation** — A durable thematic cluster of related findings/signals — a
 non-geographic frame.
@@ -85,11 +91,55 @@ are Legba's deliberate stand-in for an *events table* (there is no events table)
 situation write-path has known maturity gaps flagged in the project's data-quality
 audits.*
 
-**per-target assessment** — The final analytic product about **one specific**
-target.
-A reasoned judgment about a single target (e.g. one G20 country), coalesced from
-its matched signals — the top of the pipeline. Produced by **country_assessor**.
-(Its sibling **world_assessor** is target-less — see those entries.)
+**bounded reasoning unit / unit** — A narrow, single-question LLM analyst — the
+base building block of the analysis spine.
+One of four `inline_target` analysts — **leadership_transition**,
+**energy_security**, **escalation**, **narrative_coordination** — each scoped to
+every country desk by a `has_tag("g20") or has_tag("watch")` fan-out — the 19 G20
+desks plus a 5-country **watch tier** (Israel, Iran, Ukraine, Taiwan, North Korea;
+descriptor ids `country_watch_il/ir/ua/tw/kp`), 24 desks in all — and each
+answering ONE narrow
+question (e.g. "how likely, and on what timing, is a change in this country's top
+leadership, and by what mechanism?"). A unit is a *descriptor*, not new code: it
+inherits cited synthesis plus the **faithfulness verify** gate for free. Each run
+assembles a cited 72h signal slice plus a **grounding preamble** of accumulated
+substrate facts, synthesizes exactly one strict-JSON finding whose prose carries
+`[N]` citation markers, then runs the mandatory verify. Skill is reported PER
+UNIT, never as a platform boast.
+
+**composition** — A second-order finding that synthesizes already-**verified**
+sub-claims, never raw signals.
+Two analysts run on the `meta_findings_synthesizer` kind: **country_composition**
+reads the four verified units for one country desk (G20 or watch-tier) and writes a
+hedged, cited per-country read; **world_assessor** (repointed to the same kind) composes over
+the per-country reads into one cited, hedged world view. An unverified sub-claim
+never enters a composition — the read slice INNER-JOINs on the faithfulness
+critique and admits only verify-passed claims above the floor. A country whose
+units produced no verify-passed claim yields an empty slice and an honest
+confidence-0.0 "nothing to synthesize" finding rather than an invented read. Each
+cited clause drills country → unit → source.
+
+**scorecard / banded scorecard** — One deterministic, banded verdict row per
+active desk (any target tagged `g20`/`watch`), derived only from already-verified claims.
+Produced by **scorecard_producer** (a deterministic META analyst; the 12th
+**OutputKind**, `scorecard`). Each tick it bands every active g20/watch desk over the
+four unit dimensions across a rolling 14-day window, from a few high-precision rules on each finding's
+`severity:<level>` tag and its folded **effective_confidence** —
+demote-never-promote. Every band NAMES the verified-claim id it rests on; a
+dimension with no qualifying verified claim reads `insufficient-evidence` with an
+explicit machine reason (never a fabricated band); a per-claim faithfulness below
+a floor demotes to `low-faithfulness`. No LLM, $0.
+*Note: the live scorecard is honestly a MIX — some countries band, some read
+all-insufficient (e.g. the US, whose unit faithfulness is genuinely low). That is
+the design, not a bug.*
+
+**per-target assessment** — The analytic product about **one specific** target —
+now produced by **composition**, not a monolith.
+A reasoned, cited judgment about a single target (e.g. one country desk — G20 or
+watch-tier). Since
+2026-07 this is **country_composition**'s hedged synthesis over that desk's
+four verified reasoning **units** — NOT the retired **country_assessor**
+one-pager. Its global sibling is the world composition (see **world_assessor**).
 
 **knowledge fusion / data fusion** — Linking many separate observations into one
 connected, deduplicated, time-aware picture.
@@ -102,9 +152,24 @@ Legba does not claim that defense/aerospace level of rigor.*
 **provenance / lineage** — The traceable record of where every output came from.
 *Provenance* is the recorded origin and derivation history of a row; *lineage* is
 the walkable chain (over `derived_from` links) from any output back to the raw
-signals and sources behind it. Together with auditability and the self-hostable
-model, this is the project's stated differentiator — **not** data access or
-analytic maturity.
+signals and sources behind it — `GET /api/v1/lineage/finding/{id}` walks it hop by
+hop to the real source URL with zero dangling links (a lineage-integrity sweep
+prunes dangling `derived_from`). The project's stated differentiator is this
+**discipline** — every claim cited, checked by the mandatory **faithfulness verify**
+pass, and drillable to source — together with auditability and the self-hostable
+model; **not** data access or analytic maturity.
+
+**measured experiment** — An ambitious capability that returns ONLY as an
+honestly-measured pilot, never as an always-on producer.
+Legba's discipline for its harder legs: rather than ship an unmeasured optimizer or
+forecaster, each returns scoped to a single measured surface that PUBLISHES a
+no-skill / insufficient-sample result instead of hiding it. The **unit_optimizer**
+(GEPA over one bounded unit) carries a real before/after **faithfulness** delta and
+can never auto-promote on a degenerate or non-positive one; the acute-forecast
+**scoreboard** (**forecast_scoreboard**) reports a Brier/BSS that currently shows
+NO proven skill. The always-on monoliths stay cadence-frozen (`country_optimizer`)
+or retired (the forecast-as-claim predictors). See **unit_optimizer**,
+**forecast_scoreboard**, **degeneracy guard**.
 
 **the exemplar use case (G20 country assessment)** — The flagship demo domain that
 *proves* the pipeline — not the system's identity.
@@ -112,7 +177,8 @@ Geopolitical assessment of the G20 countries is the proven end-to-end demonstrat
 of the source → enrich → fan-out → assess pipeline. The same pipeline applies to
 any domain you can point a source at.
 *Note: there is **no code per country** — the G20 targets are materialized from one
-**discovery** template. Geopolitics is the exemplar, not the product's identity.*
+**discovery** template, and the newer 5-country **watch tier** was added by simply
+registering a target (no code). Geopolitics is the exemplar, not the product's identity.*
 
 ---
 
@@ -386,16 +452,17 @@ score only ranks clusters for the **surfaced winner vs abstain** decision; it ne
 edits a fact.
 
 **OutputKind** — The fixed set of typed outputs an analyst can emit.
-The eleven typed kinds (finding, situation, hypothesis, prediction, alert,
-meta_finding, critique, fact, nexus, prompt-module candidate, **journal**). A
-registry maps each kind to its table, pydantic payload model, schema URI, and
-NATS subject. `analyst_outputs` is the generic table for kinds without a dedicated
-table.
+The twelve typed kinds (finding, situation, hypothesis, prediction, alert,
+meta_finding, critique, fact, nexus, prompt-module candidate, **journal**,
+**scorecard**). A registry maps each kind to its table, pydantic payload model,
+schema URI, and NATS subject. `analyst_outputs` is the generic table for kinds
+without a dedicated table.
 *Note: maintainer analysts write fact/nexus/entity straight into their substrate
 tables as a **side-write** (see TRACE_ONLY) rather than posting them to the
-findings feed. The 11th kind, **journal**, is the deliberate exception that lands
-in its own `journal_entries` table **off** the fact/finding/nexus chain — see
-**Journal (OutputKind)**.*
+findings feed. The 11th kind, **journal**, lands in its own `journal_entries`
+table **off** the fact/finding/nexus chain (see **Journal (OutputKind)**). The
+12th kind, **scorecard**, is the deterministic banded per-country verdict — one
+side-written `analyst_outputs` row per active g20/watch desk (see **scorecard**).*
 
 **TRACE_ONLY / side-write** — An analyst run that writes its real result straight
 into the knowledge tables and records only an audit trace.
@@ -404,14 +471,20 @@ tables (a "side-write") and emit only a trace row, no feed entry.
 *Note: a no-change meta run is forced to trace-only so it doesn't spam the findings
 feed.*
 
-**receipt chain / hash-chained receipts** — A tamper-evident log where each run's
-record hashes the previous one.
-Each analyst run appends a trace row whose `receipt_hash` chains (SHA-256) over the
-previous run's hash, so run history can't be silently altered. Periodic
-**Ed25519-signed** `audit_checkpoints` sign the chain head for independent
-verification.
-*Note: the positioning shorthand "Ed25519 hash-chained receipts" refers to this
-combination (SHA-256 chaining + Ed25519 checkpoints).*
+**receipt chain / hash-chained receipts** — A hash-chained audit log where each
+run's record hashes the previous one.
+Each analyst run appends an `analyst_traces` row whose `receipt_hash` chains
+(SHA-256) over the previous run's hash, so the run history is internally consistent
+and self-checking: a lineage node carries a `chain_consistent` boolean and the UI
+shows a **"chain-consistent (single-node)"** badge. This is hash-**chaining**, not a
+cryptographic **signature** on the output — analyst findings are **not** signed or
+tamper-proof, and this glossary does not claim they are. Separately, Ed25519-signed
+`audit_checkpoints` on the **descriptor audit-log** sign that log's head for
+independent verification — that signing applies to the audit checkpoints, not to
+analyst outputs.
+*Note: read the receipt chain as single-node integrity (SHA-256 chaining), not a
+signed / tamper-proof guarantee on findings; the Ed25519 signing lives only on the
+descriptor audit checkpoints.*
 
 **content-hashed identity** — A record's version *is* the hash of its content.
 Descriptors and signals are identified by a hash of their body, so any change is
@@ -435,12 +508,17 @@ adding a content type needs no schema change.
 *Note: some renderers and the media extractors (Whisper/VLM/OCR) are placeholders /
 declared seams — the registry slot exists ahead of the handler.*
 
-**grounding / knowledge grounding** — Injecting current facts into an analyst's
-prompt so the LLM isn't wrong about recent events.
+**grounding / grounding preamble** — Injecting accumulated current facts into an
+analyst's prompt so the LLM isn't wrong about recent events.
 At run time, the GROUND phase prepends a dated "authoritative current context"
-preamble of currently-valid facts (heads of state, alliances) pulled from the
-substrate — correcting the hosted LLM's stale training cutoff. Restricted to
-still-valid facts (`superseded_by IS NULL`) of **seed/curated** provenance only.
+preamble of currently-valid facts, nexuses, and assessed situations pulled from the
+substrate (e.g. "US head of government: Trump since 2025-01-20; US in active
+conflict with Iran since 2026-02-28; NATO member since 1949") — correcting the
+hosted LLM's stale training cutoff and explicitly **superseding** stale model
+priors. Restricted to still-valid facts (`superseded_by IS NULL`, in the validity
+window) of **seed/curated** provenance only. The four **bounded reasoning units**
+opt in, so each read integrates the multi-week substrate, not just the fresh 72h
+signal slice.
 *Note: the designed Tier-2 vector `world_context` is a seam; grounding currently
 uses structured seed/curated facts only.*
 
@@ -465,29 +543,75 @@ extensions) classifying what an analyst reads and writes (`inline_target`,
 `method.kind` names *how* it reasons (`llm_planner`, `react_loop`,
 `stat_forecaster`, `deterministic`, `dspy_compile`…).
 
-**inline_target** — The per-target LLM analyst that assesses one target and emits
-a finding.
-The base LLM-planner kind: it reads one target's recent signal slice and produces a
-first-order finding. Used by **country_assessor** and **world_assessor**, and the
-kind that can opt into grounding and **agency** tools.
+**inline_target** — The per-target LLM analyst kind: reads one target's signal
+slice plus a grounding preamble and emits one cited finding.
+The base LLM-planner kind. It reads one target's recent signal slice, prepends the
+**grounding preamble**, and produces a first-order cited finding whose prose
+carries `[N]` markers, then runs the **faithfulness verify** pass. It is the kind
+behind the four **bounded reasoning units**, and the kind that opts into grounding
+and **agency** tools. (The retired **country_assessor** and the now-composition
+**world_assessor** were its former users.)
 
-**country_assessor** — The exemplar per-country analyst.
-An `inline_target` LLM analyst that fans out **one run per matched G20 country**
-(predicate `has_tag("g20")`, ~6h cadence, grounding opted-in), producing a distinct
-**per-target assessment** finding for each country.
+**country_assessor** — RETIRED (2026-07): the former monolithic per-country
+one-pager.
+An `inline_target` analyst that fanned out one run per G20 country. It is now
+**retired and stopped** — live head `state='retired'`, removed from bringup —
+because nothing
+in the trusted spine reads it and, as a still-firing feeder, it was the single
+largest producer of *unverified* monolithic output (the verdict-from-nowhere
+pollution the units supersede). The four **bounded reasoning units** plus
+**country_composition** now produce the per-country read. (Descriptor kept for
+history; see [SEAMS.md](SEAMS.md).)
+*Note: this is not a clean slate — ~1.2k historical country_assessor findings
+**remain** in the DB, unread (nothing in the spine reads them); they were left in
+place rather than purged.*
 
-**world_assessor** — The exemplar **global** analyst (target-less).
-A sibling `inline_target` analyst that **omits `targets`** entirely, so it runs
-**exactly once on cadence** and produces a single world-level assessment finding —
-not a per-specific-target product. (It is the canary for grounding and cadence
-health.)
+**world_assessor** — The **global composition** (target-less): one cited, hedged
+world view per cadence tick.
+Repointed from `inline_target` to `meta_findings_synthesizer`: it no longer writes
+a raw-signal executive one-pager (that verdict-from-nowhere framing was retired).
+Declaring no `targets`, it runs **exactly once per tick**, composing over the
+per-country **country_composition** reads — every factual clause cited to a
+verified country read, drillable country → unit → source, with the mandatory
+**faithfulness verify** folded. It was NOT retired; it *graduated* into the world
+composition. (Still the canary for grounding + cadence health.)
+
+**faithfulness verify** — The mandatory pass that scores whether each cited claim
+follows from its cited evidence (**groundedness, not truth**).
+Runs on every cited finding. A DETERMINISTIC citation-presence **floor** (always
+on) checks each fact-asserting claim in the prose against the resolved `citations`
+bridge: a claim with no `[N]` marker, or one resolving to no real signal, is an
+UNSUPPORTED span, and the score is the fraction of checkable claims that are
+supported. An OPTIONAL LLM judge — CURRENTLY the same core model
+(`llm.primary.openai_compat`, gpt-oss-120B) that produced the finding, NOT
+cross-family (a deliberate, temporary choice after the 8B judge
+`legba-slm`/`llm.verify.slm_8b` proved too weak; flag-gated, soft-fail; known
+limitation — same-model judging shares blind spots, dedicated reasoning judge
+planned) — refines the per-claim verdicts; when
+it is off or unreachable the result degrades to the floor and is LABELLED
+`judge-unavailable`, never a fabricated number. The verdict persists as a
+`critique` so the critic-actuation gate folds `effective_confidence =
+min(confidence, overall_score)`. It measures GROUNDEDNESS — does the claim follow
+from its cite — not whether the claim is true in the world; a planted fabrication
+is flagged unsupported.
+
+**effective_confidence** — The read-time floor `min(confidence, faithfulness_score)`
+that gates a low-confidence tier.
+An output's surfaced confidence is folded down to the minimum of its self-stated
+confidence and its faithfulness-verify score, so a poorly-grounded claim can only be
+demoted, never inflated. It gates a visible low-confidence tier (never a hard
+delete) and drives the **scorecard**'s demote-never-promote banding. When verify
+never ran, effective_confidence is `None` — a first-class `verify-failed` state, not
+a value papered over.
 
 **META analyst / meta-finding** — An analyst that reads other analysts'
 conclusions, not raw signals.
 An analyst with no single-target binding that runs once globally (on cadence) over
 other analysts' outputs or the whole graph, producing second-order findings
-(analysis-of-analysis), e.g. `cross_analyst_correlator` or the
-`relationship_reifier`. The **journal_assessor** is also a global META analyst, but
+(analysis-of-analysis), e.g. the **composition** analysts (`country_composition`,
+`world_assessor`), the deterministic `scorecard_producer`,
+`cross_analyst_correlator`, or the `relationship_reifier`. The **journal_assessor**
+is also a global META analyst, but
 the one that cuts **across** the whole flow rather than one slice — see **Journal
 assessor**.
 *Note: after any change to what an analyst reads, a no-target meta analyst must be
@@ -544,8 +668,11 @@ own reader.
 
 **the 7-phase envelope / GROUND phase** — The fixed deterministic stages wrapping
 a single analyst LLM call.
-Named stages (WAKE/ORIENT/PLAN/GROUND/REASON/REFLECT/NARRATE/PERSIST) that wrap one
-LLM call so a run is reproducible and replayable. The **GROUND** phase injects the
+Named stages (WAKE/ORIENT/PLAN/GROUND/REASON/REFLECT/NARRATE) that wrap one
+LLM call so a run is reproducible and replayable (the mandatory faithfulness
+**VERIFY** is a separate pass that follows NARRATE). The **ORIENT** phase packs the
+scoped signal slice under the input-token budget (with a `_MAX_INPUT_SIGNALS = 200`
+hard backstop) — not a fixed newest-N trim. The **GROUND** phase injects the
 grounding preamble between PLAN and REASON.
 
 **competing_hypotheses / ACH** — A structured method scoring rival hypotheses
@@ -564,13 +691,28 @@ balance (±2 transitions auto-flip it confirmed/refuted), later resolvable again
 outcomes.
 
 **predictor / forecast_acute** — A statistical forecasting analyst, and the
-hazard-forecast pilot.
+acute-hazard forecast pilot.
 The `predictor` kind fits a time-series model (AutoARIMA, falling back to a
 naive-mean baseline) over recent signal counts. `forecast_acute` is the pilot
 estimating P(≥1 severe hazard) per G20 country at a 7-day horizon via a Poisson
 rate model.
-*Built but UNPROVEN — **no forecast-skill claim is made**; the pilot currently
-reports "degenerate / accumulating".*
+*The forecast-as-**claim** producers (`country_predictor`, `india_energy_predictor`)
+are RETIRED / frozen and STOPPED — a numeric forecast is a claim that must be scored
+before it ships. (Not a clean slate: ~539 historical prediction rows **remain** in
+the DB, unread.) Forecasting now returns ONLY as the **forecast_scoreboard** Brier/BSS
+scoreboard, never a free-text claim. **No forecast-skill claim is made**: a
+degenerate / geography-dominated
+vector ABSTAINS (zero rows) and the pilot currently reports NO proven skill.*
+
+**forecast_scoreboard** — The deterministic weekly driver of the acute-forecast
+pilot — the only honest home of a forecast number.
+A `deterministic` META analyst that issues one binary forecast per G20 country for
+the next weekly window and exogenously resolves closed ones. The numbers surface
+ONLY on the calibration scoreboard route (`GET /api/v1/v3/eval/calibration`), NEVER
+as a free-text claim or finding; the per-run finding is a **TRACE_ONLY** receipt.
+Skill is segregated and WITHHELD (`brier_forecast_acute=None`,
+`forecast_unproven=True`) until the BSS is positive on a non-degenerate, at-sample
+pilot.
 
 **calibration / outcome-resolution** — Checking whether stated confidence matches
 real outcomes.
@@ -607,22 +749,35 @@ deep-consult), so it is currently a same-model judge — a deliberate, reversibl
 choice, not a fixed property.
 *Note: the critic **actuates** — `effective_confidence = min(self-confidence,
 critic_score)` — so a poor grade can only auditably reduce surfaced confidence,
-never inflate it.*
+never inflate it. The mandatory **faithfulness verify** pass is the always-on
+member of this critic family, persisting its verdict as the `critique` this same
+gate folds.*
 
-**optimizer / GEPA** — A self-improvement loop that evolves analyst prompts from
-traces and critiques.
+**optimizer / GEPA / unit_optimizer** — A self-improvement loop that evolves an
+analyst's prompt from traces and critiques, returned as a **measured experiment**.
 GEPA is a reflective, Pareto-frontier prompt-evolution method (run via DSPy in an
-isolated worker) that mutates an analyst's prompt module from logged traces and
-critiques, producing a champion candidate.
-*Built but UNPROVEN; promotion of a champion to the live system prompt is
-**operator-gated**, never automatic. `litellm`/`dspy` are barred from the
-production inference path — dspy lives only in the opt-in optimizer worker.*
+isolated worker) that mutates a prompt module from logged traces and critiques,
+producing a champion candidate. The always-on, unmeasured monolith
+(`country_optimizer` over the retired `country_assessor`) is **cadence-frozen** (its
+descriptor is still `state='active'`, but its cadence no longer fires); GEPA
+returns as **unit_optimizer**, scoped to ONE bounded unit
+(`leadership_transition`), where every candidate carries a REAL before/after
+**faithfulness** delta measured by the same faithfulness judge (currently the core
+model, not cross-family) that gates the live findings
+(live: parent 0.34 → candidate 0.29, delta −0.05).
+*Promotion stays **human-gated** and can NEVER auto-fire on a degenerate, absent,
+or non-positive delta — the deliverable is the measured delta, not an auto-promote.
+`litellm`/`dspy` are barred from the production inference path — dspy lives only in
+the opt-in optimizer worker.*
 
 **eval loop** — The analyst → critic → optimizer → calibration self-improvement
 cycle.
 The cycle by which the system grades its own analysts (critic), evolves better
 prompts (optimizer), and checks confidence against outcomes (calibration).
-*All three legs are built but unproven research surfaces.*
+*The auto-improvement legs (optimizer, exogenous calibration) remain unproven
+research surfaces. The one grading leg that is LIVE and load-bearing is the
+mandatory **faithfulness verify** — a critic-family gate that folds
+**effective_confidence** on every cited finding.*
 
 **consult / deep_consult** — On-demand analysts that answer operator questions over
 the substrate.
@@ -702,7 +857,9 @@ view that answers "are all sources firing? how is the queue? which cadence trigg
 are stalled?" in one operator page. Composes four layers: **Acquisition** (per-source
 firing matrix, `GET /api/v1/v3/system/source-firing`), **Analysis** (per-analyst
 cadence health, `GET /api/v1/v3/system/analyst-cadence`, read from `analyst_traces`
-rather than the NULL `actor_state.last_run_at`), **Queues** (consumer backpressure,
+rather than the NULL `actor_state.last_run_at`; per-analyst run timing — count,
+avg/max wall-clock seconds, last run, non-success count — at
+`GET /api/v1/v3/eval/analyst_runtime`), **Queues** (consumer backpressure,
 the orphan-filtered `GET /api/v1/v3/streams/consumer_lag`), and **Infra** (substrate
 reachability). *Note: tsc-green with both new routes serving live data, but pending
 its first real in-browser render at the time of writing.*
@@ -798,8 +955,8 @@ not built.*
 license.
 Released under the GNU Affero GPL-3.0-or-later; its §13 network clause requires offering
 source to users of a network service run on modified code, and copyleft keeps derivatives
-open. Self-hostability under AGPL is part of the stated moat; commercial/dual-licensing is
-intended (a CLA is needed before outside contributions).
+open. Self-hostability under AGPL is part of what sets Legba apart (you run and verify it
+yourself); commercial/dual-licensing is intended (a CLA is needed before outside contributions).
 *Note: AGPL "source-available" is a licensing fact — distinct from the "source-first"
 acquisition architecture.*
 

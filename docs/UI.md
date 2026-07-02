@@ -1,10 +1,20 @@
 # Legba UI — Operator Console
 
-`legba-ui-v3` is the operator console for the source-first Legba platform: a
-single-page **Vite + React + TypeScript** app whose workspace is a
-[Dockview](https://dockview.dev) tiling surface. The operator opens **panels**
-into a draggable grid; each panel is a self-contained read (or authoring)
-surface over one slice of the substrate, the registry, or the runtime.
+`legba-ui-v3` is the operator console for Legba — the decompositional analysis
+system that turns a firehose of sources into **cited, faithfulness-verified,
+drillable** reads over whatever domain the deployment configures (the shown
+exemplar is geopolitics / G20). It is a single-page **Vite + React +
+TypeScript** app whose workspace is a [Dockview](https://dockview.dev) tiling
+surface. The operator opens **panels** into a draggable grid; each panel is a
+self-contained read (or authoring) surface over one slice of the substrate, the
+registry, or the runtime.
+
+The read/drill product surfaces — the **cited read card** in the Inspector, the
+**banded per-country scorecard** and the **honest skill scoreboard** in Eval
+Scorecard, and the **provenance lineage DAG** in The Why — are described in §3.
+The system MEASURES groundedness (does each claim follow from its cited
+evidence?), not truth; the UI is written to state that plainly and to show weak
+or unmeasured results honestly rather than hide them.
 
 The console is **descriptor-driven**. Two registries cooperate:
 
@@ -217,18 +227,42 @@ The redesign's keystone is the **Inspector** — a single, persistent, docked-ri
 tile that headlines the whole panel set.
 
 - **Inspector** (`system.inspector`) — the unified selection-linked detail
-  surface (`components/inspector/InspectorPanel.tsx`). It is driven entirely by
-  the unified selection store (`src/state/selection.ts`, `useSelection`): click
-  any row / map dot / graph node / id anywhere and its full detail loads here,
-  with every referenced id rendered as a `RecordLink` so the next selection is
-  one click away and a breadcrumb (drill-through `history`) trails behind you. It
-  is built atop the existing `PanelChrome` + `DescriptorView` and reuses the Why
-  provenance trail (`GET /lineage/{kind}/{id}`) — not a new rendering stack. With
-  nothing selected it shows the world-assessment one-pager rather than dead
-  space. The store is **capped at one selection** (brushing-and-linking degrades
-  past ~3 surfaces — which is the design reason for three rooms + one Inspector,
-  not 82 panels). It ships in `personal` and `cis`, and is the right rail of the
-  boot grid and the Monitoring / Investigation / Focus presets.
+  surface (`components/inspector/InspectorPanel.tsx`) and the console's primary
+  **read** surface. It is driven entirely by the unified selection store
+  (`src/state/selection.ts`, `useSelection`): click any row / map dot / graph
+  node / id anywhere and its full detail loads here, with every referenced id
+  rendered as a `RecordLink` so the next selection is one click away and a
+  breadcrumb (drill-through `history`) trails behind you. It is built atop the
+  existing `PanelChrome` + `DescriptorView` and reuses the Why provenance trail
+  (`GET /lineage/{kind}/{id}`) — not a new rendering stack. With nothing selected
+  it shows a call-to-action empty state ("click a finding, signal, entity,
+  target, or any id"); the world assessment is now just a FINDING and opens here
+  like any other when selected. The store is **capped at one selection**
+  (brushing-and-linking degrades past ~3 surfaces — which is the design reason
+  for three rooms + one Inspector, not 82 panels). It ships in `personal` and
+  `cis`, and is the right rail of the boot grid and the Monitoring / Investigation
+  / Focus presets.
+
+  For a finding the Inspector renders the **cited read card**
+  (`components/inspector/CitedAssessment.tsx`) at the top — this is the drillable
+  product read. The report prose renders with its inline `[N]` markers turned
+  into clickable citation chips: a chip scrolls to and flashes the matching row
+  in the **Evidence** panel below, whose title is itself a `RecordLink` into the
+  cited signal (so a claim drills to its source). A header strip carries the
+  citation count, a **faithfulness-verify label** (`ShieldCheck` + the
+  `faithfulness_score` when the merged body carries the verify block, else an
+  honest `unverified` label — never a fabricated score), and the per-unit
+  **eval badge** (`UnitEvalBadge`, below). A legacy / uncited finding degrades
+  honestly: its prose renders plainly under an explicit "uncited (legacy
+  finding)" marker with no fabricated anchors and no empty evidence panel.
+
+  The **UnitEvalBadge** (`components/inspector/UnitEvalBadge.tsx`, off
+  `GET /api/v1/eval/scores`) shows a bounded reasoning unit's honest eval — a
+  server-composed string like `verified | faithfulness 0.45 | unmeasured (0
+  labels)` rendered verbatim (the "no invented number" contract lives on the
+  server). It renders **nothing** when the analyst id is not a bounded unit, the
+  scorer has never run, or the fetch fails — a non-unit finding gets no badge
+  rather than a fabricated one.
 
 ### The Journal (reflective voice)
 
@@ -237,6 +271,12 @@ tile that headlines the whole panel set.
   organism (its own self / state / flow), narrating a coherent point of view
   *over* the rest of the system rather than cutting one slice of it. *"Poetry
   without evidence is noise. Evidence without perspective is just a log file."*
+  The `journal_assessor` runs **on cadence** as an introspective instrument — a
+  12h entry tier (`journal_assessor`) plus a daily `journal_consolidator` — and
+  writes **only** `journal_entries`, off the fact / finding / nexus chain, so the
+  reflective voice can never pollute product output. This panel reads the
+  accruing entries live (routing those reflections back into the product via the
+  human-gated proposal queue is a future item, not yet done).
   Renders `GET /api/v1/journal` (`panels/system/Journal.tsx`) with three stacked
   regions:
   - **The current inner landscape** — the single open
@@ -303,7 +343,10 @@ tile that headlines the whole panel set.
     1h/24h, last outcome, and a healthy / stale / silent badge. It reads
     **`analyst_traces`** (the actual run record) rather than
     `actor_state.last_run_at` — which is NULL — so it surfaces the cadence
-    liveness the Actor Health panel structurally could not.
+    liveness the Actor Health panel structurally could not. The companion
+    per-analyst run-timing route `GET /api/v1/v3/eval/analyst_runtime` reads the
+    same `analyst_traces` for run count, avg/max wall-clock seconds, last run,
+    and non-success count over a window.
   - **Queues** — consumer backpressure off the orphan-filtered
     `GET /api/v1/v3/streams/consumer_lag`: the `num_pending` headline lag with
     orphaned/deleted durables filtered out (the fix for the "tons of targets, all
@@ -334,18 +377,42 @@ Why ship in `personal` and `cis`.
   sources → targets → analysts → packs (`v4/flow`), with NiFi-style live
   telemetry. The node highlight reads `useSelection` (its former local
   `selectedNodeId` was retired into the store).
-- **Why · Provenance** (`v4.why`) — The Why: selection-driven provenance. With
-  nothing selected it shows the world assessment; select a finding/situation
-  anywhere and it traces that row's lineage in place (`v4/why`, a Cytoscape
-  lineage render wrapped in a crash boundary). Tabbed within the map group in the
-  boot grid.
+- **Why · Provenance** (`v4.why`) — The Why: selection-driven provenance and the
+  **lineage DAG**. With nothing selected the room renders an in-panel **node
+  picker** (recent findings / situations / entities) so it is useful on its own;
+  select a finding / situation / signal anywhere and it renders the
+  `ProvenanceTrail` chip chain (oldest → newest) plus the full `LineageGraph`
+  (a Cytoscape render wrapped in a crash boundary), and an entity renders its
+  relationship ego-graph. For a finding or a country a **Lineage / Lenses**
+  toggle switches between the one-hop-at-a-time receipt DAG and the temporal /
+  node-graph lenses. Each lineage hop carries its **SHA-256 receipt hash** and a
+  `chain_consistent` boolean: a hop that re-hashes to its stored `receipt_hash`
+  shows the honest badge `chain-consistent (single-node)` (**not** "signed" /
+  "tamper-proof" — analyst-trace provenance is a hash-chained receipt, not an
+  Ed25519 signature); a mismatched re-hash flags the hop. Signal hops render a
+  `ModalityRef` link out to the real source URL, so a walk always reaches the
+  clickable acquisition source. Tabbed within the map group in the boot grid.
 
 Two former panels from this group were **hidden** by #90 Wave A (still in the
 bundle, see *Consolidated / hidden by #90* below): **World Assessment**
-(`v4.assessment`) — the `world_assessor`'s situational one-pager is a FINDING and
-is now shown through the Inspector rather than its own panel — and **Casework
-Board** (`v4.case`), an Excalidraw board shelved because no pin entry points were
-wired.
+(`v4.assessment`) and **Casework Board** (`v4.case`, an Excalidraw board shelved
+because no pin entry points were wired). `v4.assessment` stays out of the default
+nav, but its component (`v4/why/WorldAssessment.tsx`) has since been re-pointed:
+for a **selected country** it renders the **bounded-unit read column**
+(`CountryUnitsAssessment`) as the headline — one card per bounded reasoning unit
+(**leadership_transition**, **energy_security**, **escalation**,
+**narrative_coordination**), each carrying its `UnitEvalBadge` and linking its
+latest cited read into the Inspector, with the **retired** `country_assessor`
+one-pager demoted to a collapsible "legacy monolith" below it. That producer is
+**stopped** — nothing in the spine reads it, and its ~1.2k historical findings
+remain in the DB (unread), so the column surfaces whatever legacy one-pager
+already exists but no new ones accrue; the bounded units + the per-country
+composition supersede it. For the world view it renders the `world_assessor`
+finding. Note: the world-view copy in this component and in the
+`AssessmentBanner` strip still carries the earlier transitional framing ("one
+producer's finding, not a global verdict") and has not been fully re-pointed to
+the composed world view, so treat the world one-pager as one analyst's read until
+that copy lands.
 
 ### Daily driver
 
@@ -372,8 +439,9 @@ provenance trail and pairs Consult with Deep Consult).
 
   Plus localStorage **saved views**, a findings-only hourly sparkline, server-side
   target / analyst / severity filters, and #89 selection-follow — click a country
-  anywhere and the feed re-seeds to that country's `country_assessor` findings
-  *and* its geo signals. All grouping / sorting / view / row-mapping logic lives
+  anywhere and the feed re-seeds to that country's findings (a `target_id`
+  filter, so the bounded-unit reads are included) *and* its geo signals. All
+  grouping / sorting / view / row-mapping logic lives
   in `@/lib/findingsViews` so it is unit-tested without a DOM. A row click selects
   the row into the unified store (Inspector + Why follow); it also still deep-links
   provenance into Lineage.
@@ -383,11 +451,16 @@ provenance trail and pairs Consult with Deep Consult).
   `legba:open-lineage` cross-panel event, so a click in *any* panel
   (Findings, a target panel, Search, Alerts) deep-links here without route
   coupling. This is the spine of the console's provenance story — every output
-  carries `derived_from`, and this panel renders it. Signal nodes render a
-  `ModalityRef` — a modality badge plus a `canonical_url`/`media_ref` link — so a
-  walk reaches the clickable acquisition source. `ModalityRef` is driven by the
-  `modality → renderer` registry (`lib/modalityRenderers.tsx`), the UI half of
-  the modality → {extractor, renderer} registry (`DESIGN.md` §7.5).
+  carries `derived_from`, and this panel renders it hop by hop down to the real
+  source URL with zero dangling links (a lineage-integrity sweep prunes dangling
+  `derived_from`). Each node carries a **SHA-256 `receipt_hash`** and a
+  `chain_consistent` boolean; a re-hash-matched node shows the honest
+  `chain-consistent (single-node)` badge (a hash-chained receipt, **not** an
+  Ed25519 signature — do not read it as "signed" / "tamper-proof"). Signal nodes
+  render a `ModalityRef` — a modality badge plus a `canonical_url`/`media_ref`
+  link — so a walk reaches the clickable acquisition source. `ModalityRef` is
+  driven by the `modality → renderer` registry (`lib/modalityRenderers.tsx`), the
+  UI half of the modality → {extractor, renderer} registry (`DESIGN.md` §7.5).
 - **Consult** (`system.consult`) — an on-demand ReAct analyst workbench. POSTs
   to `/api/v1/consult` (the registry-side proxy in
   `src/legba/data/registry/consult_api.py`), which invokes the
@@ -553,11 +626,19 @@ The evaluation and operations surfaces (mostly `personal`-only).
 - **Optimizer Candidates** (`system.optimizer`) — the GEPA prompt-module
   candidate queue (`GET /v3/optimizer/candidates`), with a promote/reject review
   action (`POST .../{id}/review`) that mints a new analyst descriptor version.
-  The optimizer's GEPA loop runs as a **Dapr Workflow** on the daprd sidecar.
-  Each row flags the **real** method the workflow took (`dspy_gepa` vs a
-  fallback like `naive_best_of_n` — a worker-less deploy silently runs naive
-  search); a non-`dspy_gepa` method is amber-badged so operators don't assume
-  every candidate came from the full loop.
+  The self-optimizer returns as a **scoped, measured** experiment: the live
+  `unit_optimizer` runs over ONE bounded unit (`leadership_transition`), and each
+  candidate carries a **real before/after paired faithfulness delta** measured on
+  the same faithfulness verify judge (currently the core model, not cross-family; a recent live run: parent 0.34 → candidate 0.29,
+  delta −0.05). It stays `promotion_gate=human_gated` and can **never**
+  auto-promote on a degenerate, absent, or non-positive delta — promotion is the
+  operator's click. The old monolithic `country_optimizer` is **cadence-frozen**
+  (its descriptor is still `state=active`, but its cadence is nulled — no
+  reminder-flood regression). The loop runs as a **Dapr
+  Workflow** on the daprd sidecar; each row flags the **real** method it took
+  (`dspy_gepa` vs a fallback like `naive_best_of_n` — a worker-less deploy
+  silently runs naive search), amber-badging a non-`dspy_gepa` method so
+  operators don't assume every candidate came from the full loop.
 - **Prompt-Module Diff** (`system.optimizer.diff`) — candidate-vs-current
   prompt-module text diff before promotion (`GET /v3/optimizer/candidates/{id}/diff`).
   `current_text` is the parent-prompt snapshot the candidate's eval delta was
@@ -567,10 +648,54 @@ The evaluation and operations surfaces (mostly `personal`-only).
   dspy-free); a 404 only fires for an unknown candidate id, and candidates
   emitted before the snapshot field existed render an empty current side. Tier:
   `preview`.
-- **Eval Scorecard** (`system.eval_scorecard`) — per-analyst rubric scores over
-  time, critic-judge trend, and backtest accuracy where present. Sourced from
-  the cross-analyst `GET /v3/eval/scorecard` rollup over the dual-sink critique
-  rows (the UI's `buildScorecards` aggregates per analyst).
+- **Eval Scorecard** (`system.eval_scorecard`) — the measurement surface, three
+  stacked sections (`panels/system/EvalScorecard.tsx`), each written to publish a
+  no-skill / insufficient-sample result rather than hide it. All grouping / band /
+  gate logic lives in `@/lib/evalOps` so it is unit-tested without a DOM.
+  - **Skill scoreboard** (`GET /v3/eval/calibration`) — the honest top-line. Two
+    legs, each behind its own honesty gate: the **exogenous Brier** (shows a
+    number only when the exogenous sample is sufficient, else the verbatim
+    `INSUFFICIENT exogenous sample (n_exo=k/N)`), and the **acute-forecast BSS**
+    with a `ready` / `accumulating` / `degenerate` tag. The BSS number is shown
+    **only** when the pilot is ready, non-degenerate, and the skill score is
+    positive; a degenerate pilot reads `degenerate — skill claim withheld` and a
+    ready-but-non-positive pilot reads `ready — no positive skill yet` — never a
+    bare positive number. The acute pilot currently reports **no proven skill**
+    (it accumulates toward n=30 and abstains on a degenerate probability vector),
+    which the panel states plainly. Before any calibration finding exists the
+    whole strip reads "no forecast / calibration pilot has been computed yet"
+    (distinct from a failed pilot).
+  - **Banded per-country scorecard** (`GET /v3/eval/country_scorecard`) — one
+    honest card per active desk tagged `g20` **or** `watch`, each written by the
+    deterministic `scorecard_producer` (the 12th OutputKind, `scorecard`). The
+    roster is the 19 G20 country desks plus a high-consequence **watch** tier
+    (Israel, Iran, Ukraine, Taiwan, North Korea — descriptor ids
+    `country_watch_{il,ir,ua,tw,kp}`), 24 desks in all; the bands span **14
+    days**, so a card integrates over that window rather than a single tick.
+    Adding a country is register-a-target — the coverage tag alone cards it, no
+    code. Each card shows a
+    **band per dimension** (the four bounded units) derived by high-precision
+    rules over already-verified sub-claims; clicking a band expands its **basis**
+    — the verified sub-claim finding ids the band rests on, each a `RecordLink`
+    that drills into the Inspector's cited card + the lineage DAG. A dimension
+    with no qualifying verified claim renders an explicit
+    `insufficient — <reason>` state (a muted, non-severity tone, no number, no
+    drill target) rather than a fabricated band; a per-dimension aggregate
+    faithfulness below the floor flags `⚑ low faithfulness`. Each dimension also
+    carries its effective-confidence and a faithfulness + correctness eval badge,
+    and the card footer links the P3 per-country **composition** node (or "no
+    verified composition"). An empty list is a first-class "no scorecard computed
+    yet" state. The live board is honestly a **mix**: some countries band on
+    several dimensions while others read all-`insufficient` (e.g. the US, whose
+    unit faithfulness is genuinely low) — the card shows that rather than
+    manufacturing a band.
+  - **Per-analyst critic rollup** (`GET /v3/eval/scorecard`) — "is this analyst
+    getting better?": per-analyst rubric scores over time, the critic-judge
+    overall trend chart, per-axis rubric bars, and ground-truth backtest accuracy
+    where present (`buildScorecards` aggregates the dual-sink critique rows,
+    worst-scoring analysts first). A 404 while the cross-analyst rollup is unwired
+    degrades to an honest "endpoint pending" note pointing at the per-analyst
+    Critiques panel — never an error.
 - **Budget Ledger** (`system.budget`) — per-analyst tokens/runs/cost
   (`/budget/ledger`), the global per-bucket envelope (`/budget/envelope`), and
   budget-exhaustion demote events (`/budget/demotions`).
@@ -660,7 +785,7 @@ genuine deletion in #90 was the `v4.feed` rail and its `LiveFeed.tsx` /
 | `system.targets.roster` | one Targets panel | **Target Registry** (`registry.targets`) |
 | `v4.case` | Casework Board shelved — no pin entry points wired | — |
 | `system.tenant_view` | multitenancy not product-baked (ingestion-only) | — |
-| `v4.assessment` | the world assessment is a FINDING | shown via the **Inspector** |
+| `v4.assessment` | world assessment is a FINDING (opens in the Inspector); its component was re-pointed to the bounded-unit read column but the panel stays out of the default nav | **Inspector** (world one-pager) · bounded-unit reads still rendered by `WorldAssessment.tsx` |
 | `system.runtime` | same endpoint as Actor Health (a dup) | **Actor Health** (`system.actor_health`) |
 
 ### Cross-panel events

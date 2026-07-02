@@ -33,6 +33,8 @@ satisfying it can register.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
@@ -42,6 +44,88 @@ logger = logging.getLogger(__name__)
 
 
 WEBHOOK_PREFIX = "/api/v1/webhooks"
+
+# --- S1 accept-and-enqueue inbound front (signals ingestion track) ---------
+#
+# The inbound handler does MINIMAL work — validate + auth + publish the RAW
+# payload onto a NATS JetStream subject — and returns 202 immediately; a durable
+# drain (:class:`legba.runtime.inbound_drain.InboundWebhookDrain`) pulls the
+# stream and does the ingest -> write_canonical_signal -> legba.signals.> OFF
+# the request path. One subject per push source: ``legba.inbound.<source_id>``.
+INBOUND_SUBJECT_ROOT = "legba.inbound"
+INBOUND_STREAM_NAME = "legba_inbound"
+
+# The header keys the drain's ``ingest()`` needs re-materialised on the far
+# side — the shared-secret token (re-verified in the drain) and the content
+# type. Everything else on the inbound request is dropped from the envelope.
+INBOUND_HEADER_ALLOW: tuple[str, ...] = ("x-webhook-token", "content-type")
+
+
+def inbound_subject(source_id: str) -> str:
+    """Compose the per-source inbound subject ``legba.inbound.<source_id>``.
+
+    ``source_id`` may itself carry dots (``source.reuters.world``); the extra
+    tokens are harmless — the ``legba.inbound.>`` stream subject + drain filter
+    both match multi-token tails, and the drain resolves the handler from the
+    envelope's ``source_id`` field (not the subject), so no flattening is
+    needed here.
+    """
+    return f"{INBOUND_SUBJECT_ROOT}.{source_id}"
+
+
+def encode_inbound_envelope(
+    source_id: str, body: bytes, headers: dict[str, str],
+) -> bytes:
+    """Serialise the RAW inbound POST into a JetStream-publishable envelope.
+
+    JSON bytes ``{"source_id", "body_b64", "headers"}`` — the raw body is
+    base64-encoded because it is arbitrary bytes and NATS/JSON is text (a ~33%
+    inflation; a very large frame can approach the NATS ``max_payload``, see the
+    S1 risks). Only the :data:`INBOUND_HEADER_ALLOW` header subset the drain's
+    ``ingest()`` re-reads is carried.
+    """
+    hdrs = {k: headers[k] for k in INBOUND_HEADER_ALLOW if k in headers}
+    envelope = {
+        "source_id": source_id,
+        "body_b64": base64.b64encode(body).decode("ascii"),
+        "headers": hdrs,
+    }
+    return json.dumps(envelope).encode("utf-8")
+
+
+def decode_inbound_envelope(data: bytes) -> dict[str, Any]:
+    """Parse an inbound envelope back into ``{source_id, body, headers}``.
+
+    Raises :class:`ValueError` on a structurally-bad envelope (not JSON, not an
+    object, missing/typo'd ``source_id`` / ``body_b64``, bad base64) so the
+    drain dead-letters it rather than replaying un-parseable bytes forever.
+    """
+    try:
+        envelope = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"inbound envelope is not valid UTF-8 JSON: {exc}") from exc
+    if not isinstance(envelope, dict):
+        raise ValueError("inbound envelope must be a JSON object")
+    source_id = envelope.get("source_id")
+    if not source_id or not isinstance(source_id, str):
+        raise ValueError("inbound envelope missing a non-empty string source_id")
+    body_b64 = envelope.get("body_b64")
+    if not isinstance(body_b64, str):
+        raise ValueError("inbound envelope missing a string body_b64")
+    try:
+        body = base64.b64decode(body_b64, validate=True)
+    except Exception as exc:
+        raise ValueError(f"inbound envelope body_b64 is not valid base64: {exc}") from exc
+    headers = envelope.get("headers") or {}
+    if not isinstance(headers, dict):
+        raise ValueError("inbound envelope headers must be an object")
+    return {"source_id": source_id, "body": body, "headers": headers}
+
+
+# The injected sink shape: ``async (subject, payload_bytes) -> None`` — bound at
+# bring-up to :meth:`legba.data.nats.NatsStore.publish_json` (JetStream). The
+# awaited publish-ack is the durability boundary the front's 202 promises.
+InboundSink = Callable[[str, bytes], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +180,47 @@ class InboundWebhookRouter:
 
     def __init__(self) -> None:
         self._handlers: dict[str, InboundWebhookHandler] = {}
+        self._inbound_sink: InboundSink | None = None
         self._router = APIRouter(tags=["webhooks"])
         self._wire_routes()
+
+    # ------------------------------------------------------------------
+    # S1 accept-and-enqueue inbound front
+    # ------------------------------------------------------------------
+
+    def bind_inbound_sink(self, publish_callable: InboundSink) -> None:
+        """Bind the JetStream publish sink for the accept-and-enqueue front.
+
+        Called ONCE at bring-up with a closure over
+        :meth:`legba.data.nats.NatsStore.publish_json`. Injected (not imported)
+        so this module — mounted on the registry-side L-113 server — never pulls
+        ``nats`` into the slim image. Until a sink is bound
+        :meth:`publish_inbound` fails closed (the front returns 503).
+        """
+        self._inbound_sink = publish_callable
+
+    @property
+    def inbound_sink_bound(self) -> bool:
+        return self._inbound_sink is not None
+
+    async def publish_inbound(
+        self, source_id: str, body: bytes, headers: dict[str, str],
+    ) -> None:
+        """Publish the RAW inbound envelope to ``legba.inbound.<source_id>``.
+
+        The awaited JetStream publish-ack IS the durability boundary the front's
+        202 promises (accepted-for-processing == persisted in the stream, NOT
+        written to Postgres). Raises when no sink is bound OR when the stream's
+        buffer cap (``max_msgs``) is hit — the caller (the webhook front) maps a
+        raise to a 503 so backpressure is HONEST, never a silent drop.
+        """
+        if self._inbound_sink is None:
+            raise RuntimeError(
+                "inbound sink not bound — accept-and-enqueue front is not wired "
+                "(call bind_inbound_sink at bring-up)"
+            )
+        payload = encode_inbound_envelope(source_id, body, headers)
+        await self._inbound_sink(inbound_subject(source_id), payload)
 
     # ------------------------------------------------------------------
     # Registration
@@ -222,9 +345,16 @@ def reset_default_router() -> None:
 
 
 __all__ = [
+    "INBOUND_HEADER_ALLOW",
+    "INBOUND_STREAM_NAME",
+    "INBOUND_SUBJECT_ROOT",
+    "InboundSink",
     "InboundWebhookHandler",
     "InboundWebhookRouter",
     "WEBHOOK_PREFIX",
+    "decode_inbound_envelope",
     "default_router",
+    "encode_inbound_envelope",
+    "inbound_subject",
     "reset_default_router",
 ]

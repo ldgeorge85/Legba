@@ -197,6 +197,26 @@ export function situationSpans(rows: TLSituation[]): SituationSpan[] {
   return out
 }
 
+/**
+ * Read-scoped evidence partition (P1-T7) — split a timeline's points into the
+ * read's DIRECTLY-CITED evidence vs. the surrounding context, given the set of
+ * cited substrate ids (the read finding's `data.citations[].signal_id`, and
+ * optionally the read finding's own id). The temporal lens emphasises the
+ * evidence and fades the context. Pure; never mutates the input.
+ */
+export function partitionByEvidence(
+  points: TimelinePoint[],
+  evidenceIds: Set<string>,
+): { evidence: TimelinePoint[]; context: TimelinePoint[] } {
+  const evidence: TimelinePoint[] = []
+  const context: TimelinePoint[] = []
+  for (const p of points) {
+    if (evidenceIds.has(p.id)) evidence.push(p)
+    else context.push(p)
+  }
+  return { evidence, context }
+}
+
 /** Padded [min,max] X domain across all points + spans, or undefined. */
 export function timeDomain(
   points: TimelinePoint[],

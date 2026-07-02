@@ -32,6 +32,7 @@ from . import (
     proposed_edge_governance,
     signals_retention,
     structural_balance,
+    unit_correctness_scorer,
 )
 
 __all__ = [
@@ -51,4 +52,5 @@ __all__ = [
     "proposed_edge_governance",
     "signals_retention",
     "structural_balance",
+    "unit_correctness_scorer",
 ]

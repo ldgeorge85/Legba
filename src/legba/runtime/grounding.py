@@ -692,11 +692,18 @@ def is_per_country_target(target_id: str | None) -> bool:
 # ``country_<iso2>`` target id expands to the name a finding actually prints
 # ("country_g20_id" → 'indonesia'). The off-target guard checks BOTH the raw
 # slug token (matches a finding's ISO-coded ``geo`` tag) and the expanded
-# name(s) (matches the country named in the finding text). Covers the G20 set
-# the country_assessor fans out over; a miss only means a borderline finding is
-# (safely) published rather than suppressed.
+# name(s) (matches the country named in the finding text). Covers the G20 tier
+# (``country_g20_*``) AND the watch tier (``country_watch_*``: kp/tw/ua/il/ir).
+# A slug MISSING here is now SAFE, not silent suppression: ``finding_is_off_target``
+# fails OPEN when a desk has no name anchor beyond its bare ISO slug (it cannot
+# tell the desk's own country from another's, so it publishes). An entry here
+# therefore buys PRECISION — it lets the guard actually catch that desk's
+# off-target contamination — but is NOT required to avoid the 100%-TRACE_ONLY
+# regression that hit the unmapped kp/tw/ua watch desks. (A miss on the
+# OTHER-country gazetteer side likewise only means a borderline finding is
+# safely published rather than suppressed.)
 _TARGET_SLUG_TO_NAMES: dict[str, tuple[str, ...]] = {
-    "us": ("united states", "america"),
+    "us": ("united states", "america", "u.s.", "usa"),
     "cn": ("china",),
     "ru": ("russia",),
     "ir": ("iran",),
@@ -710,7 +717,7 @@ _TARGET_SLUG_TO_NAMES: dict[str, tuple[str, ...]] = {
     "fr": ("france",),
     "de": ("germany",),
     "it": ("italy",),
-    "gb": ("united kingdom", "britain"),
+    "gb": ("united kingdom", "britain", "uk"),
     "uk": ("united kingdom", "britain"),
     "jp": ("japan",),
     "kr": ("south korea", "korea"),
@@ -719,6 +726,12 @@ _TARGET_SLUG_TO_NAMES: dict[str, tuple[str, ...]] = {
     "au": ("australia",),
     "za": ("south africa",),
     "eu": ("european union",),
+    # Watch tier (non-G20 high-consequence desks). il/ir are already covered
+    # above; kp/tw/ua were MISSING → their desks self-suppressed to TRACE_ONLY
+    # (the P4 pre-push review C1). North Korea findings say "North Korea"/"DPRK".
+    "kp": ("north korea", "dprk"),
+    "tw": ("taiwan",),
+    "ua": ("ukraine",),
 }
 
 
@@ -775,6 +788,17 @@ def finding_is_off_target(
     own = target_scope_names(target_id) | {
         n.casefold() for n in extra_target_names if isinstance(n, str) and n.strip()
     }
+    # Fail-OPEN when there is no country-NAME anchor beyond the bare ISO slug: an
+    # unmapped desk slug (absent from _TARGET_SLUG_TO_NAMES, no caller-supplied
+    # name) yields own == {slug}, so we cannot tell the desk's OWN country from
+    # another's — and MUST NOT silently suppress a desk whose own country we
+    # simply do not recognise. This is the C1 regression class (kp/tw/ua were
+    # unmapped → their own name read as an off-target mention → 100% TRACE_ONLY).
+    # Degrading to permissive keeps "add a desk = register-a-target, no code"
+    # HONEST: a gazetteer entry buys PRECISION, it is never required to avoid
+    # silent suppression.
+    if own <= set(_target_id_geo_names(target_id)):
+        return False
     hay_parts: list[str] = []
     if isinstance(text, str):
         hay_parts.append(text)

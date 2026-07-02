@@ -28,10 +28,20 @@ from pydantic import BaseModel, Field
 
 from .api import RegistryAPIDeps, require_bearer
 
+# The shortest-path + broker engine lives in the dependency-light LEAF module
+# ``legba.data.graph_paths`` (stdlib + networkx + a caller-supplied AGE pool). It
+# imports NOTHING from the deterministic-handler package, so the slim REGISTRY
+# image can import it at module level — no pycountry/geocode runtime deps — and
+# ``/graph/path`` serves directly (no lazy import / soft-fail needed).
+from ..graph_paths import _MAX_PATH_LEN, shortest_path_with_broker
+
 # The metric rows whose payloads carry an `interesting` shortlist (#99).
 _STRUCTURE_METRIC_KINDS = ("structural_balance", "graph_mining")
 DEFAULT_LIMIT = 24
 MAX_LIMIT = 100
+# Default variable-length path cap for /graph/path (callers may request a
+# tighter K; the engine clamps to _MAX_PATH_LEN regardless).
+DEFAULT_PATH_MAX_LEN = _MAX_PATH_LEN
 
 
 class StructureItem(BaseModel):
@@ -47,6 +57,31 @@ class StructurePage(BaseModel):
     data: list[StructureItem] = Field(default_factory=list)
     scoped_entity: str | None = None
     computed_at: Any | None = None
+
+
+class PathEdge(BaseModel):
+    source: str
+    target: str
+    label: str = ""
+
+
+class PathBroker(BaseModel):
+    node: str
+    betweenness: float = 0.0
+
+
+class GraphPath(BaseModel):
+    """Shortest relationship path between two actors + the broker on it."""
+
+    found: bool = False
+    source: str
+    target: str
+    path: list[str] = Field(default_factory=list)
+    edges: list[PathEdge] = Field(default_factory=list)
+    length: int | None = None
+    broker: PathBroker | None = None
+    max_len: int = DEFAULT_PATH_MAX_LEN
+    detail: str = ""
 
 
 def _coerce_item(raw: Any, *, source: str) -> StructureItem | None:
@@ -135,6 +170,70 @@ def build_graph_structure_router(deps: RegistryAPIDeps) -> APIRouter:
 
         return StructurePage(
             data=items[:limit], scoped_entity=scoped, computed_at=latest_at,
+        )
+
+    @router.get("/graph/path", response_model=GraphPath)
+    async def graph_path(
+        source: str = Query(
+            ..., description="first actor identifier (matched against vertex .id)"
+        ),
+        target: str = Query(
+            ..., description="second actor identifier (matched against vertex .id)"
+        ),
+        max_len: int = Query(
+            default=DEFAULT_PATH_MAX_LEN,
+            description=(
+                "max relationship hops to search (clamped to the server cap; a "
+                "tighter bound is honoured, a larger one is not)"
+            ),
+        ),
+        principal: str = Depends(require_bearer),
+    ) -> GraphPath:
+        src = (source or "").strip()
+        dst = (target or "").strip()
+        if not src or not dst:
+            return GraphPath(
+                found=False, source=src, target=dst,
+                detail="both source and target are required",
+            )
+        if src == dst:
+            return GraphPath(
+                found=True, source=src, target=dst, path=[src], edges=[], length=0,
+                detail="source and target are the same actor",
+            )
+        # The shared substrate pool used by the structure endpoint above. The
+        # path engine is imported at module level from the graph_paths leaf
+        # (registry-safe — no handler-package deps), so call it directly.
+        pool = deps.descriptor_registry.pg
+        res = await shortest_path_with_broker(pool, src, dst, max_len=max_len)
+        edges = [
+            PathEdge(
+                source=str(e.get("source", "")),
+                target=str(e.get("target", "")),
+                label=str(e.get("label", "") or ""),
+            )
+            for e in (res.get("edges") or [])
+        ]
+        broker_raw = res.get("broker")
+        broker = (
+            PathBroker(
+                node=str(broker_raw.get("node", "")),
+                betweenness=float(broker_raw.get("betweenness", 0.0) or 0.0),
+            )
+            if isinstance(broker_raw, dict) and broker_raw.get("node")
+            else None
+        )
+        found = bool(res.get("found"))
+        return GraphPath(
+            found=found,
+            source=src,
+            target=dst,
+            path=[str(n) for n in (res.get("path") or [])],
+            edges=edges,
+            length=res.get("length"),
+            broker=broker,
+            max_len=int(res.get("max_len", DEFAULT_PATH_MAX_LEN)),
+            detail="" if found else "no path",
         )
 
     return router

@@ -1,0 +1,122 @@
+# P3-T1 — per-COUNTRY composition over the P2 verified UNIT sub-claims.
+#
+# The COMPOSITION leg: a second-order finding per G20 country that
+# reads the FOUR bounded P2 units for THAT country — leadership_transition,
+# energy_security, escalation, narrative_coordination — and synthesizes ONE
+# per-country read. It reuses the EXISTING meta_findings_synthesizer kind
+# (Approach A: CONFIGURE, no new Python kind); the per-country behavior is all
+# descriptor + the P3-T2 READ_SLICE change (target-scope + verify-floor).
+#
+# WHY this is per-country while analyst_meta_synthesizer.yaml is global: this
+# descriptor carries a `subscription.targets` block. The runtime's
+# `_cadence_targets` (dapr_actors.py) keys the per-target-vs-global split PURELY
+# on whether `subscription.targets` is present — present ⇒ it fans out one worker
+# per matched target with `target_filter=<country target id>`; absent ⇒ one
+# global run. So the SAME kind runs global under analyst_meta_synthesizer.yaml and
+# per-country here, with no code fork. The kind's READ_SLICE honors the run's
+# `target_filter` (P3-T2): it scopes the source-finding slice to that country AND
+# admits ONLY faithfulness-verify-PASSED sub-claims above the floor.
+#
+# HONESTY: a country whose four units produced no verify-passed sub-claim yields
+# an EMPTY slice ⇒ the kind's empty-slice path emits a confidence=0.0
+# "No source findings to synthesize" finding rather than inventing a read.
+#
+# derived_from is stamped by the kind from the contributing unit finding ids, so
+# the per-country composition lineage back-walks one hop to the four P2 units and
+# two hops to their cited signals.
+
+identity:
+  id: country_composition
+  name: Per-Country Composition (G20 units → one country read)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: meta_findings_synthesizer
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p3_t1
+
+subscription:
+  # PRESENT `targets` block ⇒ per-COUNTRY analyst. `_cadence_targets` matches the
+  # G20 tag (same fan-out set as country_assessor + the four units) and fires ONE
+  # worker per country with `target_filter=<country target id>`. has_tag is valid
+  # on the analyst.subscription surface.
+  targets:
+    predicate: 'has_tag("g20") or has_tag("watch")'
+    data_types: [finding]
+    time_window: 24h
+  # The synth reads the OUTPUTS of these four units, not raw signals. READ_SLICE
+  # resolves this set from other_analysts[].id and — because the run is
+  # target-scoped — restricts to the RUNNING country's findings, verify-floored.
+  # 24h window: each unit fires 2x/day, so a 24h look-back holds two fires of
+  # each of the four units for the country.
+  other_analysts:
+    - id: leadership_transition
+      data_types: [finding]
+      time_window: 24h
+    - id: energy_security
+      data_types: [finding]
+      time_window: 24h
+    - id: escalation
+      data_types: [finding]
+      time_window: 24h
+    - id: narrative_coordination
+      data_types: [finding]
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # Runtime dispatch is on identity.kind (meta_findings_synthesizer); method.kind
+  # only needs to be a valid enum. llm_planner matches the single-turn
+  # chat_complete shape the kind uses (same as analyst_meta_synthesizer.yaml).
+  kind: llm_planner
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  llm:
+    # MODEL POLICY (operator): synthesis on the CORE plane gpt-oss-120B via a
+    # stack_ref ($0). NEVER hardcode a model — keeping it a stack_ref makes
+    # switching to Opus later a one-line descriptor PUT.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # P3-T3: faithfulness VERIFY judge over the COMPOSITION itself. Currently the
+    # SAME core reasoning model (llm.primary.openai_compat, gpt-oss-120B) that
+    # writes the units + this composition — NOT a cross-family judge. Temporary:
+    # the 8B Llama-3.1-8B judge proved too weak (harsh + mis-aimed), so the strong
+    # model runs the judging to prove the flow; a dedicated reasoning judge is
+    # planned. KNOWN LIMITATION: same-model judging shares blind spots, so the
+    # faithfulness signal is weaker than an independent cross-family judge. The
+    # generalized verify pass recognizes this composition's [[ref:<uuid>]] →
+    # sub-claim bridge and hands the judge each cited SUB-CLAIM's text as the
+    # evidence to check each composed clause against. Gated by
+    # LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic floor (which still
+    # enforces the T7 anti-double-counting + hedge-laundering cap) if the
+    # component is unresolved. Model stays a switchable stack_ref.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # OFFSET after all four units land. Units fire at 01/13 (leadership), 04/16
+  # (energy), 07/19 (escalation), 10/22 (narrative). Compose at :30 past 11 and
+  # 23 UTC so the freshest full set of four is present before synthesis.
+  fallback_schedule: "30 11,23 * * *"
+  # 11h — below the 12h interval, stamped per-(analyst,target) at completion. A
+  # cooldown == the 12h interval would land past the next fire and silently halve
+  # each country's cadence (12h→24h). 11h keeps a 1h margin (matches the units).
+  cooldown_seconds: 39600
+
+outputs: []

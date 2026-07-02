@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .lifecycle import LifecycleState
 from .properties import (
@@ -40,10 +40,30 @@ class StackComponentBase(BaseModel):
 
 
 class LLMProviderConfig(BaseModel):
+    """LLM provider config.
+
+    Auth is a SWITCH (both modes supported, backward-compatible):
+
+      * Bearer  — set ``api_key`` (the historical, default mode; e.g. the
+        120B and the slm later). The handler sends
+        ``Authorization: Bearer <key>``.
+      * HTTP Basic — set ``api_user`` AND ``api_pass`` (e.g. the verify
+        judge / self-hosted Llama-3.1-8B fronted by Caddy Basic Auth
+        today). The handler sends ``Authorization: Basic <base64(user:pass)>``.
+
+    At least one auth mode MUST be configured (validated below). When BOTH
+    are present, Basic wins (see ``LLMProviderHandler._auth_headers``).
+    """
+
     model_config = ConfigDict(strict=True, extra="forbid")
 
     api_endpoint: Text
-    api_key: Secret
+    # Bearer credential — optional so a Basic-only component needs no dummy
+    # key. Mirrors the NLP service config's optional Secret idiom.
+    api_key: Secret | None = None
+    # HTTP Basic credentials — optional alternative to the bearer key.
+    api_user: Secret | None = None
+    api_pass: Secret | None = None
     model_name: Text
     max_tokens: Number
     timeout_seconds: Number = Field(
@@ -54,6 +74,21 @@ class LLMProviderConfig(BaseModel):
             "primary", ["primary", "fallback", "cheap"]
         )
     )
+
+    @model_validator(mode="after")
+    def _require_one_auth_mode(self) -> "LLMProviderConfig":
+        """Fail loud unless at least one auth mode is configured:
+        a bearer ``api_key``, OR the HTTP Basic pair (``api_user`` AND
+        ``api_pass``). A lone ``api_user`` or lone ``api_pass`` is not a
+        usable Basic credential and does not satisfy this requirement."""
+        has_bearer = self.api_key is not None
+        has_basic = self.api_user is not None and self.api_pass is not None
+        if not (has_bearer or has_basic):
+            raise ValueError(
+                "LLMProviderConfig requires at least one auth mode: set "
+                "api_key (Bearer) or both api_user and api_pass (HTTP Basic)"
+            )
+        return self
 
 
 class LLMProvider(StackComponentBase):

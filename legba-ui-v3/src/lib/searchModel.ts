@@ -29,6 +29,9 @@ export interface SearchHit {
   snippet: string
   /** Optional scoping facets used by the facet filter UI. */
   target_id: string | null
+  /** Authoring analyst id. Findings carry one (drives the analyst-set facet,
+   *  mirroring the server `analyst_id_in`); other kinds may omit it. */
+  analyst_id?: string | null
   owner_tenant: string | null
   severity: string | null
   /** ISO timestamp used for recency ranking; null sorts last. */
@@ -43,6 +46,14 @@ export interface SearchFacets {
   target_id: string
   owner_tenant: string
   severity: string // 'all' | low | medium | high | critical
+  /** Orphan reachability: when true keep ONLY NULL-target hits — the ~1115
+   *  unreachable findings (world_assessor reads + thematic proposals) that no
+   *  country view surfaces. Mirrors the server `target_id_null=true` finding
+   *  facet. */
+  orphans_only: boolean
+  /** Comma-separated analyst-id allow-list (mirrors the server `analyst_id_in`
+   *  facet). Empty = all analysts. */
+  analyst_id: string
 }
 
 export const DEFAULT_FACETS: SearchFacets = {
@@ -50,6 +61,8 @@ export const DEFAULT_FACETS: SearchFacets = {
   target_id: '',
   owner_tenant: '',
   severity: 'all',
+  orphans_only: false,
+  analyst_id: '',
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +84,7 @@ export function normFinding(row: Record<string, unknown>): SearchHit {
     title: str(row.title) || str(row.summary) || '(untitled finding)',
     snippet: str(row.body) || str(row.summary),
     target_id: strOrNull(row.target_id),
+    analyst_id: strOrNull(row.analyst_id),
     owner_tenant: strOrNull(row.owner_tenant),
     severity: strOrNull(row.severity),
     produced_at: strOrNull(row.produced_at),
@@ -151,7 +165,7 @@ export function scoreHit(hit: SearchHit, terms: string[]): number {
   if (terms.length === 0) return 0.5
   const title = hit.title.toLowerCase()
   const snippet = hit.snippet.toLowerCase()
-  const ident = `${hit.id} ${hit.target_id ?? ''}`.toLowerCase()
+  const ident = `${hit.id} ${hit.target_id ?? ''} ${hit.analyst_id ?? ''}`.toLowerCase()
   let s = 0
   for (const t of terms) {
     if (title.includes(t)) s += 0.5
@@ -161,12 +175,33 @@ export function scoreHit(hit: SearchHit, terms: string[]): number {
   return Math.min(1, s)
 }
 
+/** Parse a comma-separated analyst-id allow-list into a trimmed, non-empty set. */
+export function analystIdSet(csv: string): Set<string> {
+  return new Set(
+    csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
+}
+
 /** Does the hit pass the active facet selections? */
 export function passesFacets(hit: SearchHit, f: SearchFacets): boolean {
   if (!f.kinds.has(hit.kind)) return false
+  // Orphan reachability — keep only NULL-target hits. Kinds that carry no
+  // target (e.g. sources) report `target_id === null` and so pass.
+  if (f.orphans_only && hit.target_id !== null) return false
   if (f.target_id && (hit.target_id ?? '') !== f.target_id) return false
   if (f.owner_tenant && (hit.owner_tenant ?? '') !== f.owner_tenant) return false
   if (f.severity !== 'all' && (hit.severity ?? '') !== f.severity) return false
+  if (f.analyst_id) {
+    const allow = analystIdSet(f.analyst_id)
+    // A non-empty allow-list keeps only hits authored by one of those analysts;
+    // kinds without an analyst id are excluded while the filter is active.
+    if (allow.size > 0 && !(hit.analyst_id != null && allow.has(hit.analyst_id))) {
+      return false
+    }
+  }
   return true
 }
 

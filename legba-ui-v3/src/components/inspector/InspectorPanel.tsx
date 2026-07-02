@@ -13,15 +13,14 @@
  * assessment one-pager (parity with Why's empty state) — never dead space.
  */
 import { ChevronRight, ChevronLeft } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { PanelChrome } from '@/components/PanelChrome'
 import { DescriptorView } from '@/components/DescriptorView'
 import { RecordLink, refKindForField } from '@/components/inspector/RecordLink'
 import { useInspectorDetail, type InspectorDetail, type Ref } from './useInspectorDetail'
 import { useSelection, type Selection } from '@/state/selection'
 import ProvenanceTrail from '@/v4/why/ProvenanceTrail'
-import { MD_COMPONENTS } from '@/v4/why/WorldAssessment'
+import CitedAssessment from '@/components/inspector/CitedAssessment'
+import { extractCitations } from '@/lib/citationsModel'
 import type { PanelProps } from '@/types'
 
 /** Keys floated to the top of the BODY DescriptorView. */
@@ -143,6 +142,16 @@ function Breadcrumb({
 
 function DetailView({ detail }: { detail: InspectorDetail }) {
   const report = pickReport(detail.body)
+  // P1-T3: pull the finding's citation list out of the merged body
+  // (`body.data.citations`). Empty for a legacy / uncited finding — the card
+  // then renders the prose plainly with an honest "uncited" marker.
+  const citations = detail.kind === 'finding' ? extractCitations(detail.body) : []
+  // The faithfulness-verify block, read defensively — usually absent on the
+  // lineage read path, present only if the merged body carries it.
+  const verification =
+    detail.body.verification && typeof detail.body.verification === 'object'
+      ? (detail.body.verification as Record<string, unknown>)
+      : null
   // The report renders as markdown in its own section — drop it from the raw
   // metadata view so the long text isn't also shown collapsed into one line.
   const metaBody = report
@@ -151,13 +160,17 @@ function DetailView({ detail }: { detail: InspectorDetail }) {
   return (
     <>
       {/* The actual written report FIRST (the operator reached this finding to
-          READ it) — rendered markdown, not metadata. */}
+          READ it) — a CITED card: each `[N]` chip scrolls to its evidence row.
+          The card handles BOTH the cited and the honest uncited path. */}
       {report && (
         <Section label="Report">
-          <div className="text-body text-ink-1" data-testid="inspector-report">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-              {report.text}
-            </ReactMarkdown>
+          <div data-testid="inspector-report">
+            <CitedAssessment
+              text={report.text}
+              citations={citations}
+              verification={verification}
+              analystId={typeof detail.body.analyst_id === 'string' ? detail.body.analyst_id : null}
+            />
           </div>
         </Section>
       )}

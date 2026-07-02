@@ -41,6 +41,7 @@ Cost calculation:
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import socket
 from dataclasses import dataclass, field
@@ -324,6 +325,10 @@ class LLMProviderHandler:
     def __init__(self) -> None:
         self._cfg: LLMProviderConfig | None = None
         self._api_key: str | None = None
+        # HTTP Basic credentials (alternative to the bearer key); resolved
+        # from the vault in on_configure when api_user/api_pass are set.
+        self._api_user: str | None = None
+        self._api_pass: str | None = None
         self._client: httpx.AsyncClient | None = None
         self._tel: TelemetryHandle | None = None
         self._instance_id: str = ""
@@ -351,15 +356,45 @@ class LLMProviderHandler:
         self._instance_version = ctx.instance_version
         self._tel = ctx.telemetry()
 
-        # Resolve credential to plaintext bytes; never log the plaintext.
-        secret_id = cfg.api_key.raw
-        try:
-            secret_bytes = await ctx.secrets.resolve(secret_id)
-        except MissingSecretError as exc:
+        # Resolve credentials to plaintext; never log the plaintext. Auth is
+        # a switch: a bearer api_key OR an HTTP Basic api_user/api_pass pair.
+        # Each is optional in the schema; resolve whichever is configured and
+        # fail loud only when NEITHER resolves (see the guard below).
+        self._api_key = None
+        self._api_user = None
+        self._api_pass = None
+
+        if cfg.api_key is not None:
+            secret_id = cfg.api_key.raw
+            try:
+                secret_bytes = await ctx.secrets.resolve(secret_id)
+            except MissingSecretError as exc:
+                raise HardLLMFailure(
+                    f"vault missing api_key for {ctx.instance_id!r}: {secret_id!r}",
+                ) from exc
+            self._api_key = secret_bytes.decode("utf-8")
+
+        if cfg.api_user is not None and cfg.api_pass is not None:
+            user_id = cfg.api_user.raw
+            pass_id = cfg.api_pass.raw
+            try:
+                user_bytes = await ctx.secrets.resolve(user_id)
+                pass_bytes = await ctx.secrets.resolve(pass_id)
+            except MissingSecretError as exc:
+                raise HardLLMFailure(
+                    f"vault missing basic-auth credential for "
+                    f"{ctx.instance_id!r}: {user_id!r}/{pass_id!r}",
+                ) from exc
+            self._api_user = user_bytes.decode("utf-8")
+            self._api_pass = pass_bytes.decode("utf-8")
+
+        # Require at least one usable auth mode actually resolved.
+        has_basic = self._api_user is not None and self._api_pass is not None
+        if not self._api_key and not has_basic:
             raise HardLLMFailure(
-                f"vault missing api_key for {ctx.instance_id!r}: {secret_id!r}",
-            ) from exc
-        self._api_key = secret_bytes.decode("utf-8")
+                f"no auth credential resolved for {ctx.instance_id!r}: "
+                f"set api_key (Bearer) or api_user+api_pass (HTTP Basic)",
+            )
 
         # Reset the client iff the underlying endpoint shape changed.
         if self._cfg is None or self._cfg.api_endpoint.raw != cfg.api_endpoint.raw:
@@ -402,6 +437,8 @@ class LLMProviderHandler:
                 pass
             self._client = None
         self._api_key = None
+        self._api_user = None
+        self._api_pass = None
         self._cfg = None
 
     async def health_check(
@@ -430,11 +467,12 @@ class LLMProviderHandler:
                 detail=f"unparseable endpoint {endpoint!r}",
             )
 
-        if not self._api_key:
+        has_basic = self._api_user is not None and self._api_pass is not None
+        if not self._api_key and not has_basic:
             return StackComponentHealth(
                 component_id=self._instance_id, kind=self.kind,
                 state=HealthState.UNHEALTHY, checked_at=_now(),
-                detail="api_key not resolved (on_configure failed?)",
+                detail="auth credential not resolved (on_configure failed?)",
             )
 
         # Loop runs synchronously in a thread to avoid blocking the event
@@ -679,9 +717,25 @@ class LLMProviderHandler:
         return names
 
     def _auth_headers(self) -> dict[str, str]:
-        """Return the auth headers for HTTP calls. Default = OpenAI bearer."""
+        """Return the auth headers for HTTP calls.
+
+        Auth is a switch. PRECEDENCE: if HTTP Basic credentials (both
+        api_user AND api_pass) are present, send
+        ``Authorization: Basic <base64(user:pass)>`` (used by the verify
+        judge / Caddy-fronted slm today). Otherwise fall back to the
+        historical OpenAI-style ``Authorization: Bearer <api_key>`` —
+        unchanged, so every existing api_key-only component is byte-for-byte
+        backward-compatible.
+        """
+        if self._api_user is not None and self._api_pass is not None:
+            token = base64.b64encode(
+                f"{self._api_user}:{self._api_pass}".encode("utf-8")
+            ).decode("ascii")
+            authorization = f"Basic {token}"
+        else:
+            authorization = f"Bearer {self._api_key}"
         return {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": authorization,
             "Content-Type": "application/json",
         }
 

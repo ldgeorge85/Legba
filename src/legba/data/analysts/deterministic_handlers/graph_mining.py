@@ -42,11 +42,26 @@ from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 from ._graph_metrics_sink import write_graph_metric
 
+# P1-T9: the shortest-path + broker engine lives in the LEAF module
+# ``legba.data.graph_paths`` (stdlib + networkx + a caller-supplied AGE pool —
+# NO deterministic-handler-package deps) so the slim REGISTRY image can import
+# and serve ``/graph/path`` without pulling pycountry. Re-exported here so
+# graph_mining's public API + internal callers (``_augment_from_age`` /
+# the node-cap truncation) are unchanged — the definitions live in the leaf.
+from ...graph_paths import (  # noqa: F401  (re-exports)
+    _MAX_NODES,
+    _MAX_PATH_LEN,
+    _strip_agtype,
+    build_path_neighbourhood_cypher,
+    build_shortest_path_cypher,
+    shortest_path_with_broker,
+)
+
 logger = logging.getLogger(__name__)
 
-# Cap to keep deterministic mining bounded. Larger subgraphs should be
-# scoped at the descriptor level (predicate filter) rather than here.
-_MAX_NODES = 5_000
+# Cap to keep deterministic mining bounded (``_MAX_NODES`` is imported from the
+# graph_paths leaf above so the cap is single-sourced). Larger subgraphs should
+# be scoped at the descriptor level (predicate filter) rather than here.
 _MAX_PROXY_PATH_LEN = 3
 _MAX_PROXY_CHAINS = 200
 _MAX_INTERESTING = 12  # shared "interesting" shortlist cap (#99 contract).
@@ -323,19 +338,6 @@ async def _augment_from_age(
         )
         counters["edges_pulled"] += 1
     return counters
-
-
-def _strip_agtype(value: Any) -> str:
-    if value is None:
-        return ""
-    s = str(value).strip()
-    for suffix in ("::vertex", "::edge", "::path", "::numeric"):
-        if s.endswith(suffix):
-            s = s[: -len(suffix)]
-    s = s.strip()
-    if s.startswith('"') and s.endswith('"'):
-        s = s[1:-1]
-    return s
 
 
 # Heuristic mapping AGE edge labels → polarity. Anything not listed is
@@ -816,4 +818,9 @@ async def handle(
     )
 
 
-__all__ = ["handle"]
+__all__ = [
+    "handle",
+    "build_shortest_path_cypher",
+    "build_path_neighbourhood_cypher",
+    "shortest_path_with_broker",
+]

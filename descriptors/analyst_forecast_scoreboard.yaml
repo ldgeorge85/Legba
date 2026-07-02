@@ -1,0 +1,73 @@
+# forecast_scoreboard — P4-T7 acute-forecast scoreboard producer (deterministic META).
+#
+# A `deterministic`-kind META analyst (sub_handler=forecast_scoreboard) — the
+# dedicated DRIVER for the pre-registered acute-binary forecast pilot (#92). Each
+# tick it calls the EXISTING forecast_acute writers (it reimplements NO math):
+#   * issue_weekly_forecasts       — one binary forecast per G20 country for the
+#     NEXT weekly window (idempotent ON CONFLICT; internally ABSTAINS on a
+#     degenerate / geography-dominated p-vector — this producer never bypasses it);
+#   * resolve_open_acute_forecasts — grades every forecast whose forward window
+#     has closed + settled, EXOGENOUSLY, by the upstream event time;
+#   * pull_resolved_acute_forecasts — a read-only receipt count.
+#
+# HONESTY: forecasting returns as a MEASURED number, NEVER a free-text claim. The
+# ONLY persisted product is acute_forecasts rows + the analyst_traces receipt; the
+# returned FindingPayload is a per-run RECEIPT (counts only), marked TRACE_ONLY in
+# deterministic.py so it NEVER lands a finding / prediction / claim on any trust
+# surface. The forecast numbers surface ONLY in the T4 scoreboard
+# (GET /api/v1/v3/eval/calibration), fed by the SEGREGATED pilot Brier / BSS that
+# calibration_tracking folds from these same resolved rows — the project earns the
+# word "forecast" only when that BSS is positive on a non-degenerate at-sample
+# pilot, never before.
+#
+# This decouples the pilot from the daily calibration tick (where it lived as a
+# buried side-effect): forecast_scoreboard becomes the intended weekly driver,
+# calibration_tracking stays the metrics-folder + surface.
+#
+# META analyst: no subscription.targets => single global sweep per tick; reads +
+# writes the acute_forecasts / signals tables directly via deps.pg_pool (the
+# calibration_tracking / scorecard_producer precedent). Pure SQL, NO LLM, $0. It
+# carries NO by-value TrainingSetRef and no >4MB payload, so it cannot regress the
+# Dapr reminder-flood class (the scheduler job count stays flat).
+
+identity:
+  id: forecast_scoreboard
+  name: Acute-Forecast Scoreboard Producer (weekly pilot driver)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p4_honest_top
+
+subscription:
+  # META analyst: one global sweep per tick over the G20 acute-forecast pilot.
+  # Reads directly via deps.pg_pool (no per-target fan-out).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: forecast_scoreboard
+  # No LLM block, no token budget — pure SQL over the acute_forecasts pilot.
+
+cadence:
+  # Once daily (idempotent: issuance pins one forecast per country per weekly
+  # window via ON CONFLICT, so daily ticks between Mondays are no-ops). STAGGERED
+  # to fire 30 min BEFORE calibration_tracking's "20 3" so freshly-resolved acute
+  # rows are visible to that same-night metrics fold.
+  fallback_schedule: "50 2 * * *"
+  cooldown_seconds: 79200        # 22h (strictly below the 24h interval)
+
+# The acute_forecasts rows are side-written by the forecast_acute writers; the
+# returned summary is a TRACE_ONLY receipt. Nothing is a declared output.
+outputs: []

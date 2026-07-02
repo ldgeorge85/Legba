@@ -89,14 +89,25 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, Mapping
 from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
 
+from ..provenance._core import compute_receipt_hash
 from .api import RegistryAPIDeps, require_bearer
+
+
+# The ONLY badge this surface may emit for an analyst_traces chain. The chain
+# is a SHA-256 hash-chain (receipt_hash / prev_receipt_hash), NOT an Ed25519
+# signature — Ed25519 signing covers the audit checkpointer's chain HEAD, not
+# the individual trace row. So the honest claim is bounded to "this single
+# node re-hashes to the value the chain stored" — i.e. the row was not
+# mutated after it was recorded. We deliberately do NOT claim "signed",
+# "tamper-proof", or any Ed25519 guarantee for the per-row receipt.
+_RECEIPT_BADGE = "chain-consistent (single-node)"
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +145,11 @@ class _SubstrateTable:
     # reads it to render the report text); the lineage walk root carries
     # metadata only without this. Default NULL where the row has no payload.
     body_expr: str = "NULL::jsonb"
+    # The producing run id — joins the root to its analyst_traces receipt
+    # chain (root-only projection). Every substrate table except signals
+    # carries a literal ``run_id`` column; signals are source-ingested (no
+    # analyst run) so they project NULL.
+    run_id_expr: str = "run_id"
 
 
 # Every substrate table that carries universal provenance columns
@@ -156,6 +172,8 @@ _SUBSTRATE_TABLES: tuple[_SubstrateTable, ...] = (
         modality_expr="modality",
         mime_type_expr="mime_type",
         body_expr="payload",
+        # Signals are source-ingested, not analyst-run output — no run_id.
+        run_id_expr="NULL::uuid",
     ),
     # events table dropped in the source-first pivot (migration 0030 —
     # target-agnostic signals replaced the events concept; nothing has
@@ -222,6 +240,38 @@ _DEFAULT_DEPTH = 3
 # ---------------------------------------------------------------------------
 
 
+class ReceiptChainNode(BaseModel):
+    """The analyst_traces receipt-chain receipt for the run that produced a
+    node — surfaced on the ROOT and on every WALK node mapping to an analyst
+    run (P1-T4; the ROOT-only ``body`` payload stays root-only, but the receipt
+    travels with each node so the UI can drill the DAG one hop at a time).
+
+    HONESTY CONTRACT: the receipt chain is a SHA-256 hash-chain, not a
+    signature. ``receipt_hash`` / ``prev_receipt_hash`` are the values the
+    chain stored; ``chain_consistent`` is RE-COMPUTED here (the trace row is
+    re-hashed via :func:`compute_receipt_hash` and compared to the stored
+    ``receipt_hash``) — never the trust of a stored boolean. A mutated /
+    forked row re-hashes to a different value → ``chain_consistent=False``.
+
+    ``signer_did`` is populated ONLY when an ``audit_checkpoints`` row whose
+    ``chain_head_hash`` equals this trace's ``receipt_hash`` exists (i.e. an
+    Ed25519 checkpoint actually covers THIS row as the chain head it signed);
+    otherwise it is ``None`` — we never imply a signer that didn't sign.
+
+    ``badge`` is fixed to ``"chain-consistent (single-node)"``. No field here
+    claims "signed", "tamper-proof", or Ed25519 for the per-row receipt.
+    """
+
+    run_id: str
+    receipt_hash: str
+    prev_receipt_hash: str | None
+    # RE-COMPUTED, not the trust of any stored flag.
+    chain_consistent: bool
+    # Present only when an audit_checkpoint covers this row's receipt_hash.
+    signer_did: str | None = None
+    badge: str = _RECEIPT_BADGE
+
+
 class LineageNode(BaseModel):
     """One row in the lineage graph.
 
@@ -251,6 +301,13 @@ class LineageNode(BaseModel):
     media_ref: str | None = None
     modality: str | None = None
     mime_type: str | None = None
+    # The receipt-chain receipt for the run that produced this row — surfaced
+    # on the ROOT *and* on every WALK node that maps to an analyst run (P1-T4,
+    # so the P1-T5 UI can drill the DAG one hop at a time). Signals /
+    # source-ingested rows (and analyst_outputs predating the chain) carry None
+    # honestly — no producing trace to re-hash. See ``ReceiptChainNode`` for
+    # the honesty contract; ``chain_consistent`` is RE-COMPUTED per node.
+    receipt: ReceiptChainNode | None = None
 
 
 class LineageEdge(BaseModel):
@@ -294,6 +351,188 @@ def _parse_body(raw: object) -> dict[str, Any] | None:
     return None
 
 
+def _receipt_node_from_trace(
+    trace: Mapping[str, Any],
+    *,
+    covering_checkpoint: Mapping[str, Any] | None = None,
+) -> ReceiptChainNode:
+    """Build the honest receipt node for one ``analyst_traces`` row.
+
+    ``chain_consistent`` is computed by RE-HASHING the trace's content via
+    :func:`compute_receipt_hash` and comparing to the stored ``receipt_hash``
+    — a mutated payload (or a forked/relabelled row) re-hashes differently and
+    flips this to ``False``. We never read a stored consistency flag (there
+    isn't one, and trusting one would defeat the point).
+
+    ``output_payload`` is stored as jsonb and comes back from asyncpg as a JSON
+    string; we parse it so the re-hash sees the same Python object the writer
+    hashed. ``output_payload IS NULL`` was written as ``{}`` by the writer
+    (``json.dumps(output_payload or {})``), so a NULL column re-hashes against
+    ``{}`` to stay faithful to the recorded value.
+
+    ``signer_did`` is taken from a covering ``audit_checkpoints`` row ONLY —
+    i.e. one whose ``chain_head_hash`` equals this trace's ``receipt_hash``. If
+    no checkpoint signed this exact head, ``signer_did`` stays ``None``; the
+    badge never upgrades to "signed".
+    """
+    stored_hash: str = trace["receipt_hash"]
+    prev_hash: str | None = trace.get("prev_receipt_hash")
+
+    recomputed = compute_receipt_hash(
+        run_id=trace["run_id"],
+        analyst_id=trace["analyst_id"],
+        analyst_version=trace["analyst_version"],
+        input_row_refs=list(trace["input_row_refs"] or []),
+        prompt_module_hash=trace.get("prompt_module_hash"),
+        prompt_rendered=trace.get("prompt_rendered"),
+        output_row_refs=list(trace["output_row_refs"] or []),
+        output_payload=_parse_body(trace.get("output_payload")) or {},
+        run_ended_at=trace["run_ended_at"],
+        prev_receipt_hash=prev_hash,
+    )
+
+    signer_did: str | None = None
+    if covering_checkpoint is not None:
+        # Only honest when the checkpoint actually signed THIS receipt as the
+        # chain head it covered.
+        if covering_checkpoint.get("chain_head_hash") == stored_hash:
+            signer_did = covering_checkpoint.get("signer_did")
+
+    return ReceiptChainNode(
+        run_id=str(trace["run_id"]),
+        receipt_hash=stored_hash,
+        prev_receipt_hash=prev_hash,
+        chain_consistent=(recomputed == stored_hash),
+        signer_did=signer_did,
+        badge=_RECEIPT_BADGE,
+    )
+
+
+async def _covering_checkpoint(
+    conn: asyncpg.Connection,
+    trace: asyncpg.Record | Mapping[str, Any],
+) -> asyncpg.Record | None:
+    """Look up the ``audit_checkpoints`` row (if any) that COVERS this trace.
+
+    A checkpoint covers the trace only when it signed this exact ``receipt_hash``
+    as the chain head it checkpointed (the checkpointer signs heads, so non-head
+    rows stay uncovered → ``signer_did`` honestly None)."""
+    return await conn.fetchrow(
+        "SELECT signer_did, chain_head_hash FROM audit_checkpoints "
+        "WHERE analyst_id = $1 AND chain_head_hash = $2 "
+        "ORDER BY checkpointed_at DESC LIMIT 1",
+        trace["analyst_id"], trace["receipt_hash"],
+    )
+
+
+async def _receipt_for_trace(
+    conn: asyncpg.Connection,
+    trace: asyncpg.Record | None,
+) -> ReceiptChainNode | None:
+    """Wrap a fetched ``analyst_traces`` row into its honest receipt node,
+    resolving the covering checkpoint. ``None`` trace → ``None`` receipt
+    (a node with no producing analyst run — e.g. a raw signal)."""
+    if trace is None:
+        return None
+    checkpoint = await _covering_checkpoint(conn, trace)
+    return _receipt_node_from_trace(trace, covering_checkpoint=checkpoint)
+
+
+async def _fetch_trace_for_node(
+    conn: asyncpg.Connection,
+    *,
+    node_id: UUID,
+    run_id: UUID | None,
+) -> asyncpg.Record | None:
+    """Map ONE substrate row → its producing ``analyst_traces`` row, if any.
+
+    Two lookups, first hit wins (mirrors the root resolution):
+
+      1. ``analyst_traces.run_id = run_id`` (the direct producer link, when the
+         node projection carried a ``run_id`` — only the root does today, but
+         the helper stays general).
+      2. ``node_id = ANY(analyst_traces.output_row_refs)`` (the L-107 §7
+         lineage-into-chain: the trace records the rows it produced) — the path
+         every WALK child uses, since walk projections don't carry ``run_id``.
+
+    Returns ``None`` for rows with no producing trace (a raw signal, a
+    source-ingested row, or an analyst_output predating the receipt chain) —
+    honestly absent, never a fabricated receipt.
+    """
+    trace: asyncpg.Record | None = None
+    if run_id is not None:
+        trace = await conn.fetchrow(
+            "SELECT * FROM analyst_traces WHERE run_id = $1",
+            run_id,
+        )
+    if trace is None:
+        trace = await conn.fetchrow(
+            "SELECT * FROM analyst_traces WHERE $1 = ANY(output_row_refs) "
+            "ORDER BY run_started_at DESC LIMIT 1",
+            node_id,
+        )
+    return trace
+
+
+async def _fetch_receipt_for_root(
+    conn: asyncpg.Connection,
+    root: asyncpg.Record,
+) -> ReceiptChainNode | None:
+    """Resolve the receipt-chain receipt for the root row, if it came from a
+    recorded analyst run.
+
+    The finding/meta_finding/critique/etc. carries its producing run's
+    ``run_id`` (analyst_outputs.run_id). We map root → trace two ways and take
+    the first hit:
+
+      1. ``analyst_traces.run_id = root.run_id`` (the direct producer link).
+      2. ``root.id = ANY(analyst_traces.output_row_refs)`` (the L-107 §7
+         lineage-into-chain: the trace records the rows it produced) — covers
+         older rows whose ``run_id`` column wasn't populated.
+
+    Returns ``None`` for roots with no producing trace (e.g. a raw signal, or
+    an analyst_output predating the receipt chain) — honestly absent, not a
+    fabricated receipt.
+    """
+    # The root projection carries run_id (it's projected with_body); walk
+    # children do not, so read it defensively. asyncpg.Record raises KeyError
+    # for an absent column rather than returning None.
+    try:
+        run_id = root["run_id"]
+    except KeyError:
+        run_id = None
+
+    trace = await _fetch_trace_for_node(
+        conn, node_id=root["id"], run_id=run_id,
+    )
+    return await _receipt_for_trace(conn, trace)
+
+
+async def _attach_receipts_to_walk(
+    conn: asyncpg.Connection,
+    nodes: list[LineageNode],
+) -> None:
+    """Attach each WALK node's own receipt-chain receipt, in place (P1-T4).
+
+    P0-T4 enriched the ROOT only. To drill the DAG one hop at a time (the P1-T5
+    UI) EVERY analyst-produced node needs its receipt + recomputed
+    ``chain_consistent`` flag. We resolve each node's producing trace via the
+    ``output_row_refs`` containment path (walk projections don't carry
+    ``run_id``), then attach the honest single-node receipt.
+
+    Nodes with no producing analyst run — signals / source-ingested rows, or
+    analyst_outputs predating the receipt chain — keep ``receipt=None`` (the
+    field's default) honestly: there is no trace to re-hash, so we fabricate
+    nothing. ``chain_consistent`` is RE-COMPUTED per node (never a stored flag)
+    inside :func:`_receipt_node_from_trace`.
+    """
+    for node in nodes:
+        trace = await _fetch_trace_for_node(
+            conn, node_id=UUID(node.id), run_id=None,
+        )
+        node.receipt = await _receipt_for_trace(conn, trace)
+
+
 def _row_to_node(row: asyncpg.Record, *, depth: int) -> LineageNode:
     """Map a substrate row record to a ``LineageNode``. ``row`` must carry
     the canonical projected columns (see ``_projection``). The ``lineage_body``
@@ -320,10 +559,15 @@ def _projection(t: _SubstrateTable, *, with_body: bool = False) -> str:
     """Per-table SELECT projection — same column shape across every table
     so the BFS doesn't have to branch on table identity downstream.
 
-    ``with_body`` adds the report payload column (``lineage_body``) — used ONLY
-    for the root fetch so the heavy payload travels for one row, not every node
-    in the walk."""
-    body_col = f"{t.body_expr} AS lineage_body, " if with_body else ""
+    ``with_body`` adds the report payload column (``lineage_body``) AND the
+    producing ``run_id`` — both used ONLY for the root fetch so the heavy
+    payload + the receipt-chain join travel for one row, not every node in the
+    walk."""
+    body_col = (
+        f"{t.body_expr} AS lineage_body, {t.run_id_expr} AS run_id, "
+        if with_body
+        else ""
+    )
     return (
         f"SELECT id, {t.kind_expr} AS lineage_kind, "
         f"{t.title_expr} AS lineage_title, "
@@ -608,6 +852,9 @@ def build_lineage_router(deps: RegistryAPIDeps) -> APIRouter:
                 )
 
             root_node = _row_to_node(root_row, depth=0)
+            # Enrich the root with its producing run's receipt-chain receipt
+            # (recomputed chain-consistency + honest single-node badge).
+            root_node.receipt = await _fetch_receipt_for_root(conn, root_row)
             nodes: list[LineageNode] = []
             edges: list[LineageEdge] = []
             truncated = False
@@ -628,6 +875,12 @@ def build_lineage_router(deps: RegistryAPIDeps) -> APIRouter:
                 edges.extend(down_edges)
                 truncated = truncated or down_trunc
 
+            # P1-T4: attach EACH walk node's own receipt (recomputed
+            # chain_consistent + honest single-node badge) so the DAG can be
+            # drilled one hop at a time. Signal / source-ingested nodes carry
+            # receipt=None honestly (no producing analyst run to re-hash).
+            await _attach_receipts_to_walk(conn, nodes)
+
         return LineageReport(
             root=root_node,
             nodes=nodes,
@@ -642,5 +895,6 @@ __all__ = [
     "LineageNode",
     "LineageEdge",
     "LineageReport",
+    "ReceiptChainNode",
     "build_lineage_router",
 ]

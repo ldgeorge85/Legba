@@ -87,8 +87,15 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  fallback_schedule: "0 0,12 * * *"  # every 12h, on the hour (entry tier)
-  cooldown_seconds: 42000            # 11h40m — BELOW the 43200s interval (the trap, §11)
+  # UNFROZEN 2026-07-01 (operator decision): the journal STAYS RUNNING. It was
+  # integral to the original vision — the first-person reflective voice over the
+  # organism (writes ONLY journal_entries, off the fact/finding/nexus chain, so
+  # it cannot pollute product output). The earlier P0-T6 SUBTRACT froze this
+  # entry-tier cadence; that freeze is REVERSED. The 12h entry tick fires again
+  # alongside the daily consolidator. (Future, not now: route its reflections
+  # back via the human-gated journal_propose queue — never a direct fact write.)
+  fallback_schedule: "0 0,12 * * *"  # every 12h — the original entry-tier beat
+  cooldown_seconds: 42000            # 11h40m — below the 12h interval (the §11 trap)
 
 grounding:
   enabled: true

@@ -74,6 +74,8 @@ const DEFAULT_PANEL_FACETS: PanelFacets = {
   target_id: '',
   owner_tenant: '',
   severity: 'all',
+  orphans_only: false,
+  analyst_id: '',
 }
 
 /** Best-effort GET — resolves to [] on any error so one dead endpoint can't sink search. */
@@ -123,15 +125,23 @@ interface ScopeQuery {
   query: string
   target_id: string
   language: string
+  orphans_only: boolean
+  analyst_id: string
 }
 
 async function fanout(scope: ScopeQuery): Promise<PanelHit[]> {
   const q = scope.query ? `&q=${encodeURIComponent(scope.query)}` : ''
-  const tgt = scope.target_id ? `&target_id=${encodeURIComponent(scope.target_id)}` : ''
+  const targetTgt = scope.target_id ? `&target_id=${encodeURIComponent(scope.target_id)}` : ''
+  const analyst = scope.analyst_id ? `&analyst_id_in=${encodeURIComponent(scope.analyst_id)}` : ''
   const lang = scope.language ? `&language=${encodeURIComponent(scope.language)}` : ''
+  // Orphan reachability: a NULL-target sweep is mutually exclusive with a target
+  // scope. `target_id_null` is a finding-only facet, so the (target-agnostic)
+  // signal lane just drops its target scope rather than sending it.
+  const findingTgt = scope.orphans_only ? '&target_id_null=true' : targetTgt
+  const signalTgt = scope.orphans_only ? '' : targetTgt
   const [signals, findings, situations, sources] = await Promise.all([
-    softGet(`/signals?limit=100${tgt}${lang}`),
-    softGet(`/findings?limit=100${tgt}${q}`),
+    softGet(`/signals?limit=100${signalTgt}${lang}`),
+    softGet(`/findings?limit=100${findingTgt}${q}${analyst}`),
     softGet('/situations?limit=100'),
     softGet('/registry/sources'),
   ])
@@ -192,10 +202,23 @@ export default function GlobalSearchPanel({ registration, scope }: PanelProps) {
   const boundTarget = scope.target_id ?? ''
   const targetScope = facets.target_id || boundTarget
 
-  const scopeQuery: ScopeQuery = { query, target_id: targetScope, language }
+  const scopeQuery: ScopeQuery = {
+    query,
+    target_id: targetScope,
+    language,
+    orphans_only: facets.orphans_only,
+    analyst_id: facets.analyst_id,
+  }
 
   const { data, isFetching, error, refetch } = useQuery<PanelHit[]>({
-    queryKey: ['global-search', query, targetScope, language],
+    queryKey: [
+      'global-search',
+      query,
+      targetScope,
+      language,
+      facets.orphans_only,
+      facets.analyst_id,
+    ],
     queryFn: () => fanout(scopeQuery),
   })
 
@@ -213,7 +236,7 @@ export default function GlobalSearchPanel({ registration, scope }: PanelProps) {
       registration={registration}
       subtitle={`${ranked.length} result${ranked.length === 1 ? '' : 's'}${
         query ? ` for “${query}”` : ' (browse)'
-      }${targetScope ? ` · ${targetScope}` : ''}`}
+      }${facets.orphans_only ? ' · orphans' : targetScope ? ` · ${targetScope}` : ''}`}
       onRefresh={() => refetch()}
     >
       <form onSubmit={submit} className="flex items-center gap-2 mb-2 text-xs">
@@ -255,12 +278,41 @@ export default function GlobalSearchPanel({ registration, scope }: PanelProps) {
 
       {/* scope facets */}
       <div className="flex items-center gap-2 mb-2 text-xs flex-wrap">
+        <button
+          type="button"
+          onClick={() =>
+            setFacets((f) => ({ ...f, orphans_only: !f.orphans_only, target_id: '' }))
+          }
+          className={`shrink-0 rounded border px-2 py-1 ${
+            facets.orphans_only
+              ? 'border-accent-info text-accent-info'
+              : 'border-slate-700 text-slate-400 hover:text-slate-200'
+          }`}
+          title="show only NULL-target (orphan) findings — world reads + thematic proposals no country view reaches"
+          data-testid="search-facet-orphans"
+        >
+          orphans
+        </button>
         <input
-          className="flex-1 min-w-[110px] bg-surface-200 border border-slate-700 rounded p-1 px-2"
-          placeholder={boundTarget ? `target_id (${boundTarget})…` : 'target_id scope…'}
+          className="flex-1 min-w-[110px] bg-surface-200 border border-slate-700 rounded p-1 px-2 disabled:opacity-50"
+          placeholder={
+            facets.orphans_only
+              ? 'orphans (NULL target)'
+              : boundTarget
+                ? `target_id (${boundTarget})…`
+                : 'target_id scope…'
+          }
           value={facets.target_id}
+          disabled={facets.orphans_only}
           onChange={(e) => setFacets((f) => ({ ...f, target_id: e.target.value }))}
           data-testid="search-facet-target"
+        />
+        <input
+          className="w-28 bg-surface-200 border border-slate-700 rounded p-1 px-2"
+          placeholder="analyst_id_in…"
+          value={facets.analyst_id}
+          onChange={(e) => setFacets((f) => ({ ...f, analyst_id: e.target.value }))}
+          data-testid="search-facet-analyst"
         />
         <input
           className="w-28 bg-surface-200 border border-slate-700 rounded p-1 px-2"

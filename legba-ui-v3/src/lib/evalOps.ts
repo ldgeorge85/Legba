@@ -115,6 +115,123 @@ export function scoreBand(score: number): ScoreBand {
 }
 
 // ===========================================================================
+// Calibration / forecast-pilot skill scoreboard (system.eval — the honest top)
+// ===========================================================================
+
+/**
+ * The platform's honest skill scoreboard. Mirrors the registry route
+ * `GET /api/v1/v3/eval/calibration` (`CalibrationScoreboard`), itself the exact
+ * reduction of `SubstrateQueryPort.get_calibration`. `brier`/`brier_exogenous`
+ * is the EXOGENOUS-only headline; the acute-forecast pilot lives in its own
+ * keys and is never pooled in. `available` is false before any calibration
+ * finding exists (a distinct "no pilot yet" state, not a failed pilot).
+ */
+export interface CalibrationScoreboard {
+  available: boolean
+  produced_at: string | null
+  brier: number | null
+  brier_exogenous: number | null
+  exogenous_sample_size: number | null
+  sample_size: number | null
+  insufficient_exogenous: boolean | null
+  self_consistency_only: boolean | null
+  brier_forecast_acute: number | null
+  brier_skill_score: number | null
+  forecast_acute_sample_size: number | null
+  forecast_acute_ready: boolean
+  forecast_acute_degenerate: boolean
+  forecast_acute_status: string | null
+  forecast_unproven: boolean
+  calibration_thin: boolean
+  refs: string[]
+}
+
+export type AcuteTag = 'ready' | 'accumulating' | 'degenerate'
+
+export interface CalibrationBanner {
+  /** true when no calibration finding has ever been computed (≠ insufficient-sample) */
+  absent: boolean
+  /** exogenous headline — a Brier `value` when sufficient, else the honest message */
+  exogenous: { value: number | null; label: string; insufficient: boolean }
+  /** acute-forecast leg — a `bss` number ONLY when ready && !degenerate && bss>0 */
+  acute: { tag: AcuteTag; label: string; bss: number | null }
+}
+
+/** The n the acute pilot accumulates toward before a skill claim is admissible. */
+export const ACUTE_TARGET_N = 30
+
+/**
+ * Compute every displayed string by gating on the SAME flags the route returns,
+ * so a number can never leak past its honesty gate:
+ *
+ *  * EXOGENOUS Brier — absent → "no calibration finding computed yet"; else
+ *    `insufficient_exogenous` (or a null brier) → the verbatim
+ *    "INSUFFICIENT exogenous sample (n_exo=k/N)"; else the exogenous Brier.
+ *  * ACUTE BSS — `forecast_acute_degenerate` → "degenerate — skill claim withheld"
+ *    and NO number; else not ready → "accumulating (n=k/30)"; else ready &&
+ *    !degenerate && bss>0 → the BSS. A ready-but-non-positive pilot still shows
+ *    NO number (skill not yet earned).
+ *
+ * The reducer NEVER returns a bare positive BSS unless ready AND non-degenerate.
+ */
+export function calibrationBanner(
+  cal: CalibrationScoreboard | null | undefined,
+): CalibrationBanner {
+  if (!cal || !cal.available) {
+    // No calibration finding computed yet — distinct from insufficient-sample.
+    return {
+      absent: true,
+      exogenous: {
+        value: null,
+        label: 'no calibration finding computed yet',
+        insufficient: false,
+      },
+      acute: {
+        tag: 'accumulating',
+        label: 'no calibration finding computed yet',
+        bss: null,
+      },
+    }
+  }
+
+  // EXOGENOUS headline. A thin sample OR a null brier → the verbatim honest
+  // message; a number is shown ONLY when the exogenous sample is sufficient.
+  const brierExo = cal.brier_exogenous ?? cal.brier
+  // A null brier is always insufficient; the explicit `!= null` here also lets TS
+  // narrow `brierExo` to a number in the sufficient branch.
+  const exogenous =
+    brierExo != null && cal.insufficient_exogenous !== true
+      ? { value: brierExo, label: brierExo.toFixed(3), insufficient: false }
+      : {
+          value: null,
+          label: `INSUFFICIENT exogenous sample (n_exo=${cal.exogenous_sample_size ?? 0}/${cal.sample_size ?? 0})`,
+          insufficient: true,
+        }
+
+  // ACUTE-forecast BSS. Gate order matters: degenerate → withheld (no number)
+  // BEFORE ready, so a degenerate pilot can never show a skill number.
+  const bss = cal.brier_skill_score
+  let acute: CalibrationBanner['acute']
+  if (cal.forecast_acute_degenerate) {
+    acute = { tag: 'degenerate', label: 'degenerate — skill claim withheld', bss: null }
+  } else if (!cal.forecast_acute_ready) {
+    acute = {
+      tag: 'accumulating',
+      label: `accumulating (n=${cal.forecast_acute_sample_size ?? 0}/${ACUTE_TARGET_N})`,
+      bss: null,
+    }
+  } else if (typeof bss === 'number' && bss > 0) {
+    acute = { tag: 'ready', label: `BSS ${bss.toFixed(3)}`, bss }
+  } else {
+    // Ready + non-degenerate but no POSITIVE skill earned — still withheld,
+    // NO number (a non-positive BSS is not a skill claim).
+    acute = { tag: 'accumulating', label: 'ready — no positive skill yet', bss: null }
+  }
+
+  return { absent: false, exogenous, acute }
+}
+
+// ===========================================================================
 // NATS consumer-lag monitor (system.stream_lag)
 // ===========================================================================
 
@@ -456,6 +573,148 @@ export function actorRollup(
     errors += r.error_count
   }
   return { byKind, byLifecycle, errors, stale: byLifecycle['error'] ?? 0 }
+}
+
+// ===========================================================================
+// Country banded scorecard (system.eval — the honest-top drillable card, P4-T3/T5)
+// ===========================================================================
+
+/**
+ * The per-dimension eval fold (P4-T5). Each unit dimension carries the latest
+ * per-unit faithfulness + correctness from `unit_correctness_scorer`, honest-null
+ * when the scorer never measured it. `faithfulness_flagged` is true when the
+ * aggregate faithfulness sits below the banding `faith_floor` — a visible mark on
+ * the basis card even when the per-claim critic score passed.
+ */
+export interface DimensionEval {
+  faithfulness: number | null
+  correctness_vs_reference: number | null
+  n_labeled: number
+  faithfulness_flagged: boolean
+}
+
+/**
+ * One dimension's banded verdict — the exact `data.bands.dimensions[unit]` shape
+ * the T1 banding emits (T5-extended). `basis` NAMES the real verified
+ * `analyst_outputs.id`s the band rests on; it is `[]` (and never a synthesised
+ * id) iff the dimension is insufficient-evidence.
+ */
+export interface DimensionBand {
+  band: string
+  /** real analyst_outputs.id sub-claims — [] iff insufficient-evidence. */
+  basis: string[]
+  severity_tag: string | null
+  effective_confidence: number | null
+  confidence: number | null
+  /** the per-claim folded faithfulness (banding's own gather). */
+  critic_score: number | null
+  damped: boolean
+  reason: string
+  produced_at: string | null
+  eval: DimensionEval
+}
+
+/** The P3 composition aggregate node — the country-level verified composition. */
+export interface CompositionNode {
+  present: boolean
+  basis: string[]
+  effective_confidence?: number | null
+  produced_at?: string | null
+}
+
+/**
+ * The persisted banded scorecard for one G20 country. Mirrors the registry
+ * route `GET /api/v1/v3/eval/country_scorecard?target_id=` (`CountryScorecard`),
+ * itself a straight projection of the persisted `data.bands` (kind=scorecard
+ * row). One honest card per active country — a country with no verified claims
+ * still returns a row whose dimensions are ALL insufficient-evidence.
+ */
+export interface CountryScorecard {
+  target_id: string
+  id: string
+  produced_at: string
+  generated_at: string | null
+  floors: Record<string, number>
+  dimensions: Record<string, DimensionBand>
+  composition: CompositionNode
+}
+
+/** Coarse severity tone for a band pill. Insufficient is its own honest tone. */
+export type BandTone = 'good' | 'watch' | 'elevated' | 'high' | 'critical' | 'insufficient'
+
+/** True iff the dimension has no qualifying verified claim (an honest state). */
+export function isInsufficient(b: Pick<DimensionBand, 'band'>): boolean {
+  return b.band === 'insufficient-evidence'
+}
+
+/**
+ * Map a band label to a coarse tone. Insufficient-evidence is a first-class
+ * honest tone (never colored as a severity). Unknown labels fall back to
+ * 'watch' rather than inventing a severity.
+ */
+export function bandTone(band: string): BandTone {
+  switch (band) {
+    case 'insufficient-evidence':
+      return 'insufficient'
+    case 'critical':
+      return 'critical'
+    case 'high':
+    case 'severe':
+      return 'high'
+    case 'elevated':
+      return 'elevated'
+    case 'good':
+    case 'clear':
+    case 'nominal':
+    case 'low':
+    case 'stable':
+      return 'good'
+    case 'watch':
+    case 'moderate':
+      return 'watch'
+    default:
+      return 'watch'
+  }
+}
+
+/**
+ * Human string for WHY a band is insufficient — the machine `reason` rendered
+ * for an operator. Distinguishes the honest states (no finding yet / verify
+ * never ran / below floor / excluded for low faithfulness / no severity).
+ */
+export function insufficientLabel(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'no-finding':
+      return 'no unit finding yet'
+    case 'verify-failed':
+      return 'faithfulness verify never ran'
+    case 'below-floor':
+      return 'below confidence floor'
+    case 'low-faithfulness':
+      return 'excluded: low faithfulness'
+    case 'no-severity-tag':
+      return 'no severity emitted'
+    default:
+      return reason ? `insufficient (${reason})` : 'insufficient'
+  }
+}
+
+/**
+ * The per-dimension eval badge — the honest idiom (mirrors labels_api
+ * `_compose_badge`): a measured "faithfulness X | correctness Y (n=k)" ONLY when
+ * a number is present, else the verbatim "unmeasured". Never invents a number.
+ */
+export function evalBadge(ev: DimensionEval | null | undefined): string {
+  if (!ev) return 'unmeasured'
+  const parts: string[] = []
+  if (typeof ev.faithfulness === 'number') {
+    parts.push(`faithfulness ${ev.faithfulness.toFixed(2)}`)
+  }
+  if (typeof ev.correctness_vs_reference === 'number') {
+    parts.push(`correctness ${ev.correctness_vs_reference.toFixed(2)}`)
+  }
+  if (parts.length === 0) return 'unmeasured'
+  return `${parts.join(' | ')} (n=${ev.n_labeled ?? 0})`
 }
 
 /** Relative-time formatter shared by the ops panels. */

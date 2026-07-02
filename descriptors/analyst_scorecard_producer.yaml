@@ -1,0 +1,60 @@
+# scorecard_producer — P4-T2 banded-scorecard producer (deterministic META).
+#
+# A `deterministic`-kind META analyst (sub_handler=scorecard_producer) — the
+# MATERIALIZER of the honest top of the system. Each tick it runs the T1
+# scorecard_banding.gather_and_band over EVERY active G20 country and side-writes
+# ONE persisted `kind=scorecard` row per country (target_id=<country>,
+# data.bands = the per-dimension banded verdict, P4-T5 per-unit eval folded).
+#
+# HONESTY: a country with NO qualifying verified claim STILL emits an
+# all-insufficient scorecard row (never omit, never fabricate) so the read route
+# always returns exactly one honest card per active G20 country. No band exists
+# without a real basis id; the row's derived_from NAMES the verified basis
+# findings (a P1 lineage walk resolves them, zero dangling).
+#
+# META analyst: no subscription.targets => single global sweep per tick; reads
+# the substrate directly via deps.pg_pool (the calibration_tracking /
+# unit_correctness_scorer / situation_clustering precedent). Pure SQL, NO LLM,
+# $0. STAGGERED after the unit findings + composition + faithfulness-verify +
+# calibration_tracking (20 3) so fresh verified claims exist in-window.
+
+identity:
+  id: scorecard_producer
+  name: Banded-Scorecard Producer (per-country verdict)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p4_honest_top
+
+subscription:
+  # META analyst: one global sweep per tick over every active G20 country. Reads
+  # directly via deps.pg_pool (no per-target fan-out).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: scorecard_producer
+  # No LLM block, no token budget — pure SQL over the verified sub-claims.
+
+cadence:
+  # Once daily, STAGGERED after the unit findings + composition +
+  # faithfulness-verify + calibration_tracking's "20 3" so the banding gather
+  # reads a full window of fresh VERIFIED claims. A too-early tick would read
+  # no-finding for freshly-restarted units.
+  fallback_schedule: "40 4 * * *"
+  cooldown_seconds: 79200        # 22h (strictly below the 24h interval)
+
+# Side-writes (the N per-country kind=scorecard rows) are NOT declared outputs.
+outputs: []

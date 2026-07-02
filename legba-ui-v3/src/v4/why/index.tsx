@@ -18,26 +18,53 @@ import { apiGet, ApiError } from '@/lib/api'
 import { selectRow, useSelection } from '@/state/selection'
 import ProvenanceTrail from './ProvenanceTrail'
 import LineageGraph from './LineageGraph'
-import EntityGraph from './EntityGraph'
+import EntityGraph, { ReadLenses } from './EntityGraph'
 import { SELECTION_TO_ROW_KIND } from './types'
 
 export default function WhyRoom() {
   const sel = useSelection((s) => s.selection)
+  // P1-T5/T7: for a country/finding read the operator can switch between the
+  // signed-lineage DAG (one hop at a time) and the temporal/node-graph lenses.
+  const [view, setView] = useState<'lineage' | 'lenses'>('lineage')
 
   if (!sel) return <NodePicker />
 
   const rowKind = SELECTION_TO_ROW_KIND[sel.kind]
+  const canLens = sel.kind === 'finding' || sel.kind === 'target'
 
   return (
     <div className="h-full w-full flex flex-col bg-surface-300 min-h-0">
       <div className="shrink-0 border-b border-slate-800 p-3">
         <ProvenanceTrail selection={sel} />
+        {canLens && (
+          <div className="mt-2 flex gap-1">
+            {(['lineage', 'lenses'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={
+                  'rounded border px-2.5 py-1 text-xs font-medium ' +
+                  (view === v
+                    ? 'border-slate-600 bg-surface-100 text-slate-100'
+                    : 'border-transparent text-slate-400 hover:bg-surface-200 hover:text-slate-200')
+                }
+              >
+                {v === 'lineage' ? 'Lineage' : 'Lenses'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="flex-1 min-h-0">
         {sel.kind === 'entity' ? (
           <EntityGraph center={sel.id} />
+        ) : canLens && view === 'lenses' ? (
+          <ReadLenses selection={sel} />
         ) : rowKind ? (
           <LineageGraph kind={rowKind} id={sel.id} />
+        ) : canLens ? (
+          <ReadLenses selection={sel} />
         ) : (
           <div className="h-full flex items-center justify-center text-slate-500 text-sm">
             No lineage to trace for {sel.kind} “{sel.label ?? sel.id}”.
@@ -207,30 +234,106 @@ function PickerState({ icon: Icon, text }: { icon: typeof Activity; text: string
   )
 }
 
+/** Build the picker's findings URL with the P1-T2 reachability facets: an orphan
+ *  (NULL-target) sweep, a keyword full-text filter, and an analyst-set filter —
+ *  all server facets on GET /findings. */
+function findingsPickerUrl(opts: { orphans: boolean; q: string; analyst: string }): string {
+  const params = new URLSearchParams({ limit: '40' })
+  if (opts.orphans) params.set('target_id_null', 'true')
+  if (opts.q) params.set('q', opts.q)
+  if (opts.analyst) params.set('analyst_id_in', opts.analyst)
+  return `/findings?${params.toString()}`
+}
+
 function FindingsList() {
+  // P1-T2 reachability facets — surface the ~1115 NULL-target orphan findings
+  // (world_assessor reads + thematic proposals) plus keyword + analyst-set
+  // search, so nothing is unreachable from the graph room's picker.
+  const [orphans, setOrphans] = useState(false)
+  const [kwDraft, setKwDraft] = useState('')
+  const [analystDraft, setAnalystDraft] = useState('')
+  const [applied, setApplied] = useState<{ q: string; analyst: string }>({ q: '', analyst: '' })
+
+  const url = findingsPickerUrl({ orphans, q: applied.q, analyst: applied.analyst })
   const { data, isLoading, error } = useQuery<ListPage<FindingRow>>({
-    queryKey: ['why-picker', 'findings'],
-    queryFn: () => getList<FindingRow>('/findings?limit=40'),
+    queryKey: ['why-picker', 'findings', orphans, applied.q, applied.analyst],
+    queryFn: () => getList<FindingRow>(url),
     refetchInterval: 60_000,
   })
-  if (isLoading) return <PickerState icon={Activity} text="Loading recent findings…" />
-  if (error instanceof Error)
-    return <PickerState icon={FileText} text={`Couldn’t load findings: ${error.message}`} />
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setApplied({ q: kwDraft.trim(), analyst: analystDraft.trim() })
+  }
+
   const rows = data?.data ?? []
-  if (rows.length === 0) return <PickerState icon={FileText} text="No findings yet." />
+  const filtered = orphans || !!applied.q || !!applied.analyst
+
   return (
-    <div className="space-y-0.5">
-      {rows.map((r) => (
-        <PickerRow
-          key={r.id}
-          dot={DOT[r.severity ?? ''] ?? 'bg-slate-500'}
-          title={r.title?.trim() || '(untitled finding)'}
-          subtitle={r.analyst_id ?? undefined}
-          onClick={() =>
-            selectRow('finding', r.id, r.title ?? undefined, { origin: 'why-picker' })
+    <div className="space-y-1.5">
+      {/* reachability controls — orphan toggle + keyword/analyst filter */}
+      <form onSubmit={submit} className="flex flex-wrap items-center gap-1.5 px-1 pb-1 text-xs">
+        <button
+          type="button"
+          onClick={() => setOrphans((v) => !v)}
+          className={
+            'rounded border px-2 py-1 font-medium ' +
+            (orphans
+              ? 'border-accent-info text-accent-info'
+              : 'border-slate-700 text-slate-400 hover:text-slate-200')
           }
+          title="show only NULL-target (orphan) findings — world reads + thematic proposals no country view reaches"
+          data-testid="why-findings-orphans"
+        >
+          Orphans
+        </button>
+        <input
+          className="min-w-[80px] flex-1 rounded border border-slate-700 bg-surface-100 px-2 py-1 text-slate-200"
+          placeholder="keyword…"
+          value={kwDraft}
+          onChange={(e) => setKwDraft(e.target.value)}
+          data-testid="why-findings-keyword"
         />
-      ))}
+        <input
+          className="w-24 rounded border border-slate-700 bg-surface-100 px-2 py-1 text-slate-200"
+          placeholder="analyst_id…"
+          value={analystDraft}
+          onChange={(e) => setAnalystDraft(e.target.value)}
+          data-testid="why-findings-analyst"
+        />
+        <button
+          type="submit"
+          className="rounded border border-slate-700 px-2 py-1 text-slate-300 hover:bg-surface-100"
+          data-testid="why-findings-search"
+        >
+          go
+        </button>
+      </form>
+
+      {isLoading ? (
+        <PickerState icon={Activity} text="Loading findings…" />
+      ) : error instanceof Error ? (
+        <PickerState icon={FileText} text={`Couldn’t load findings: ${error.message}`} />
+      ) : rows.length === 0 ? (
+        <PickerState
+          icon={FileText}
+          text={filtered ? 'No findings match these facets.' : 'No findings yet.'}
+        />
+      ) : (
+        <div className="space-y-0.5">
+          {rows.map((r) => (
+            <PickerRow
+              key={r.id}
+              dot={DOT[r.severity ?? ''] ?? 'bg-slate-500'}
+              title={r.title?.trim() || '(untitled finding)'}
+              subtitle={r.analyst_id ?? undefined}
+              onClick={() =>
+                selectRow('finding', r.id, r.title ?? undefined, { origin: 'why-picker' })
+              }
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

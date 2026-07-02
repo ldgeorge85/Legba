@@ -39,7 +39,10 @@ from legba.data.analysts.inline_target import (
     KIND_NAME,
     PROMPT_MODULE_PATH,
     SCHEMA_VERSION,
+    _build_citation_index,
     _coerce_finding,
+    _extract_citations,
+    _normalize_citation_markers,
     _orient,
     _render_user_prompt,
     _title_from_text,
@@ -1300,3 +1303,190 @@ async def test_propose_fact_tool_refuses_without_writeback():
     result = await _wt.propose_fact_tool(call, pack, _Ctx())
     assert result.status == "failed"
     assert "writeback" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# P0-T1 — cite the prose: map [N] markers -> signal ids, persist data['citations']
+# ---------------------------------------------------------------------------
+
+
+def test_build_citation_index_maps_position_to_signal_id():
+    """The render-time index keys the 1-based slice position N to the signal id
+    (the same N _render_signal stamps onto each [N] block), plus cheap fields."""
+    ids = [uuid4() for _ in range(2)]
+    sliced = [
+        {"id": ids[0], "title": "First", "source_url": "https://a.example/1"},
+        {"id": str(ids[1]), "title": "Second"},  # str id is parsed to UUID str
+    ]
+    index = _build_citation_index(sliced)
+    assert index[1]["signal_id"] == str(ids[0])
+    assert index[1]["title"] == "First"
+    assert index[1]["source"] == "https://a.example/1"
+    assert index[2]["signal_id"] == str(ids[1])
+    # No source on row 2 → omitted (None).
+    assert index[2]["source"] is None
+
+
+def test_build_citation_index_indexes_unresolvable_id_as_none():
+    """A row with no/bad id is still indexed (signal_id None) so a marker over it
+    is counted as present-but-unmapped, never fabricated."""
+    sliced = [{"title": "no id here"}, {"id": "not-a-uuid", "title": "bad id"}]
+    index = _build_citation_index(sliced)
+    assert index[1]["signal_id"] is None
+    assert index[2]["signal_id"] is None
+
+
+def test_extract_citations_resolves_markers_to_ids():
+    """Over a known {N -> id} index, [N] markers in the prose resolve to citation
+    entries; the prose is the source, the entries carry the ids alongside."""
+    ids = [uuid4(), uuid4(), uuid4()]
+    index = {
+        1: {"signal_id": str(ids[0]), "title": "T1", "source": "https://x/1"},
+        2: {"signal_id": str(ids[1]), "title": "T2", "source": None},
+        3: {"signal_id": str(ids[2]), "title": None, "source": None},
+    }
+    body = (
+        "## Key developments\n"
+        "- Itaipu upgrade complete [1].\n"
+        "- Wind record set [2]; reaffirmed again [2].\n"  # dup marker → one entry
+        "- Petrobras Q1 published [3]."
+    )
+    citations, marker_count, resolved = _extract_citations(body, index)
+    # Three DISTINCT markers, all resolved.
+    assert marker_count == 3
+    assert resolved == 3
+    assert len(citations) == 3
+    cited_ids = {c["signal_id"] for c in citations}
+    assert cited_ids == {str(i) for i in ids}
+    # First entry carries its cheap fields; markers preserved verbatim.
+    first = citations[0]
+    assert first["marker"] == "[1]"
+    assert first["title"] == "T1"
+    assert first["source"] == "https://x/1"
+
+
+def test_extract_citations_counts_but_never_fabricates_unmapped_marker():
+    """An out-of-range or unresolved marker is COUNTED but produces NO entry —
+    no fabricated id."""
+    sig_id = uuid4()
+    index = {1: {"signal_id": str(sig_id), "title": "T", "source": None}}
+    # [1] resolves; [7] is out of range; [2] maps to an index with no id.
+    index[2] = {"signal_id": None, "title": "no id", "source": None}
+    body = "Claim A [1]. Claim B [2]. Claim C [7]."
+    citations, marker_count, resolved = _extract_citations(body, index)
+    assert marker_count == 3            # all three distinct markers counted
+    assert resolved == 1                # only [1] mapped to a real id
+    assert [c["signal_id"] for c in citations] == [str(sig_id)]
+    assert all(c["signal_id"] for c in citations)  # never a None/fabricated id
+
+
+def test_normalize_citation_markers_rewrites_fullwidth_brackets():
+    """REGRESSION (live 2026-06-30, energy_security unit): gpt-oss emitted CJK
+    lenticular brackets ``【3】`` instead of ASCII ``[3]`` — the [N] parser missed
+    them, so a correctly-cited finding resolved to ZERO citations (drill-to-source
+    broke + faithfulness scored 0.00). Normalize variant brackets that wrap an
+    integer to ASCII, then citations extract as if the model had used ``[N]``."""
+    ids = [uuid4(), uuid4(), uuid4()]
+    index = {
+        1: {"signal_id": str(ids[0]), "title": "T1", "source": None},
+        2: {"signal_id": str(ids[1]), "title": "T2", "source": None},
+        3: {"signal_id": str(ids[2]), "title": "T3", "source": None},
+    }
+    # Mixed variant glyphs (lenticular 【】, fullwidth ［］), incl. inner spaces.
+    raw = "Heat strain【1】. Grid stress ［2］. Rail incident 〔 3 〕."
+    normalized = _normalize_citation_markers(raw)
+    assert normalized == "Heat strain[1]. Grid stress [2]. Rail incident [3]."
+    # Idempotent on already-ASCII prose.
+    assert _normalize_citation_markers(normalized) == normalized
+    # And the normalized body now resolves all three markers.
+    citations, marker_count, resolved = _extract_citations(normalized, index)
+    assert marker_count == 3
+    assert resolved == 3
+    assert {c["signal_id"] for c in citations} == {str(i) for i in ids}
+
+
+def test_normalize_citation_markers_leaves_non_citation_glyphs_intact():
+    """Only digit-wrapping bracket pairs are rewritten; lenticular brackets around
+    NON-numeric prose (a legitimate stylistic use) are left untouched."""
+    raw = "The directive 【emergency powers】 was issued [4]."
+    # Worded lenticular bracket left intact; the ASCII [4] marker is unchanged.
+    assert _normalize_citation_markers(raw) == raw
+    assert "【emergency powers】" in _normalize_citation_markers(raw)
+
+
+@pytest.mark.asyncio
+async def test_run_method_persists_citations_in_finding_data():
+    """ACCEPTANCE: over a FIXTURE synthesized response whose prose carries [1]
+    and [2] against a KNOWN signal-id ordering, run_method persists
+    data['citations'] — a non-empty list whose ids are all real fixture ids, with
+    >=80% of the prose markers mapped — and the prose itself is untouched."""
+    # KNOWN ordering: ORIENT sorts produced_at DESC, so [1] = newest = sig_ids[0].
+    sig_ids = [uuid4() for _ in range(2)]
+    inputs = [
+        _signal_row(id_=sig_ids[0], produced_at="2026-05-19T14:00:00+00:00",
+                    title="Itaipu hydro upgrade", source_url="https://ex/itaipu"),
+        _signal_row(id_=sig_ids[1], produced_at="2026-05-18T09:30:00+00:00",
+                    title="Wind capacity record", source_url="https://ex/wind"),
+    ]
+    body = (
+        "## Key developments\n"
+        "- Itaipu turbine upgrade completed [1].\n"
+        "- Northeast wind capacity set a record [2]."
+    )
+    fixture = {
+        "title": "Brazil energy: capacity gains",
+        "body": body,
+        "confidence": 0.8,
+        "evidence": ["Itaipu upgrade", "Wind record"],
+        "tags": ["energy"],
+    }
+    llm = _StubLLMHandler(content_override=json.dumps(fixture))
+    deps = InlineTargetDeps(llm=llm)
+
+    result = await run_method(
+        inputs, {"target_id": "br_energy", "analyst_id": "analyst.br_energy"}, deps,
+    )
+
+    citations = result.finding.data.get("citations")
+    assert isinstance(citations, list) and citations            # non-empty list
+    fixture_ids = {str(i) for i in sig_ids}
+    # Every cited signal_id is one of the fixture's signal ids.
+    for c in citations:
+        assert c["signal_id"] in fixture_ids
+    # [1] -> newest signal, [2] -> next — verify the ordering mapping is right.
+    by_marker = {c["marker"]: c["signal_id"] for c in citations}
+    assert by_marker["[1]"] == str(sig_ids[0])
+    assert by_marker["[2]"] == str(sig_ids[1])
+
+    # >=80% of the [N] markers in the body map to a citation entry.
+    import re as _re
+    body_markers = {int(m) for m in _re.findall(r"\[(\d+)\]", result.finding.body)}
+    mapped = {int(c["marker"].strip("[]")) for c in citations}
+    assert len(mapped & body_markers) / len(body_markers) >= 0.8
+
+    # The prose is UNTOUCHED — citations are added alongside, not replacing it.
+    assert result.finding.body == body
+    assert "[1]" in result.finding.body and "[2]" in result.finding.body
+
+    # The reflect/coerce_finding trace step recorded the marker accounting
+    # (folded in — no extra reflect step, so the 7-phase envelope is unchanged).
+    cite_step = next(
+        s for s in result.intermediate_steps
+        if s.get("phase") == "reflect" and s.get("kind") == "coerce_finding"
+    )
+    assert cite_step["citation_markers"] == 2
+    assert cite_step["citations_resolved"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_method_no_markers_leaves_no_citations_key():
+    """A finding whose prose carries no [N] markers does NOT add a citations key
+    (no empty-list noise) — back-compat for non-citing synthesis."""
+    inputs = [_signal_row(id_=uuid4())]
+    fixture = {
+        "title": "t", "body": "Prose with no citation markers at all.",
+        "confidence": 0.5, "evidence": [], "tags": [],
+    }
+    llm = _StubLLMHandler(content_override=json.dumps(fixture))
+    result = await run_method(inputs, {"target_id": "t"}, InlineTargetDeps(llm=llm))
+    assert "citations" not in result.finding.data

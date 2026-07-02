@@ -25,9 +25,9 @@ PostgresCluster descriptor parsing, the per-tenant schema flow, and the
 AGE-vocabulary helpers.
 
 See:
-  * /usr/local/deployments/myshit/personal/plans/design/legba_kind_contracts.md
-  * /usr/local/deployments/myshit/personal/plans/design/legba_descriptor_schemas.md §5
-  * /usr/local/deployments/myshit/personal/plans/design/legba_data_mapping.md §4.5
+  * planning/design/legba_kind_contracts.md
+  * planning/design/legba_descriptor_schemas.md §5
+  * planning/design/legba_data_mapping.md §4.5
 """
 
 from __future__ import annotations

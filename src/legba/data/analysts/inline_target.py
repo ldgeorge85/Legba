@@ -119,6 +119,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Protocol, runtime_checkable
@@ -420,6 +421,120 @@ def _render_user_prompt(
     )
     body_lines = [_render_signal(i, row) for i, row in enumerate(inputs, start=1)]
     return header + "\n".join(body_lines)
+
+
+# ---------------------------------------------------------------------------
+# Citation index (P0-T1 — cite the prose)
+# ---------------------------------------------------------------------------
+#
+# The assessor prompt asks every claim to cite its signal ``[N]`` (see
+# ``_SYSTEM_PROMPT`` "## Key developments"), where ``N`` is the 1-based position
+# of the signal in the ORIENTed slice — the SAME index ``_render_signal`` stamps
+# onto each rendered block. That ``N -> signal.id`` correspondence is the only
+# bridge from the prose markers back to the substrate rows, so we capture it at
+# render time and reuse it in REFLECT to resolve the markers into structured
+# ``data['citations']`` (the prose itself is left intact — we ADD ids alongside it).
+
+# A bare ``[3]`` marker (not ``[3](url)`` / ``[3,4]`` / ``[link]``). Matches the
+# digits inside the brackets; the synthesis prose uses ``[N]`` per the prompt.
+_CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+# Non-ASCII citation brackets that wrap a bare integer. Some core-plane models
+# (gpt-oss, Qwen-family) emit full-width / CJK lenticular brackets — ``【3】`` /
+# ``［3］`` / ``〔3〕`` — instead of ASCII ``[3]``. Without normalization the
+# ``[N]`` parser misses them entirely, so a CORRECTLY-cited finding resolves to
+# ZERO citations: it breaks drill-to-source AND tanks the faithfulness verify
+# (an apparently-cited claim that the verifier can't bind to a signal). Only
+# digit-wrapping pairs are rewritten, so non-citation prose using these glyphs is
+# left intact. (Caught live 2026-06-30 on the energy_security unit: ``【3】【76】``
+# scored faithfulness 0.00 with 0 resolved citations.)
+_VARIANT_CITATION_RE = re.compile(r"[【［〔〖](\s*\d+\s*)[】］〕〗]")
+
+
+def _normalize_citation_markers(text: str) -> str:
+    """Rewrite ``【N】``/``［N］``-style citation brackets to ASCII ``[N]``.
+
+    Idempotent on already-ASCII prose. Run BEFORE ``_extract_citations`` and
+    persist the result so the stored prose, the marker parser, and the UI
+    citation chips all key on the SAME ``[N]``.
+    """
+    if not text:
+        return text
+    return _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
+
+
+def _build_citation_index(
+    sliced: list[Mapping[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Map each ``[N]`` index -> the signal it rendered for, plus cheap fields.
+
+    ``N`` is the 1-based position in the ORIENTed slice (``_render_signal``'s
+    ``idx``), so this is the authoritative reverse map for the markers the LLM
+    cites. Captures the signal_id (when the row carries a resolvable id) plus the
+    title/source that are already on the row, so a citation entry can render a
+    chip without re-joining the substrate. Rows with no resolvable id are still
+    indexed (id ``None``) so the parser can count a marker as present-but-unmapped
+    rather than silently swallow it.
+    """
+    index: dict[int, dict[str, Any]] = {}
+    for n, row in enumerate(sliced, start=1):
+        raw_id = row.get("id")
+        signal_id: str | None = None
+        if isinstance(raw_id, UUID):
+            signal_id = str(raw_id)
+        elif raw_id is not None:
+            try:
+                signal_id = str(UUID(str(raw_id)))
+            except (ValueError, AttributeError):
+                signal_id = None
+        title = row.get("title")
+        source = row.get("source_url")
+        index[n] = {
+            "signal_id": signal_id,
+            "title": str(title) if title is not None else None,
+            "source": str(source) if source else None,
+        }
+    return index
+
+
+def _extract_citations(
+    body: str,
+    index: Mapping[int, Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Resolve the ``[N]`` markers in ``body`` against the render-time index.
+
+    Returns ``(citations, marker_count, resolved_count)``:
+      * ``citations`` — one entry per DISTINCT marker that maps to a real
+        signal_id, in first-appearance order:
+        ``{"marker": "[N]", "signal_id": <id>, "title"?, "source"?}``. A marker
+        whose index has no resolvable signal_id is COUNTED but NOT emitted (no
+        fabricated id) — same for an out-of-range marker.
+      * ``marker_count`` — the number of DISTINCT ``[N]`` markers in the prose.
+      * ``resolved_count`` — how many of those resolved to a citation entry.
+    """
+    citations: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    marker_count = 0
+    for match in _CITATION_MARKER_RE.finditer(body or ""):
+        n = int(match.group(1))
+        if n in seen:
+            continue
+        seen.add(n)
+        marker_count += 1
+        entry = index.get(n)
+        if not entry or not entry.get("signal_id"):
+            # Out-of-range or unresolved index — count it, never fabricate an id.
+            continue
+        citation: dict[str, Any] = {
+            "marker": f"[{n}]",
+            "signal_id": entry["signal_id"],
+        }
+        if entry.get("title"):
+            citation["title"] = entry["title"]
+        if entry.get("source"):
+            citation["source"] = entry["source"]
+        citations.append(citation)
+    return citations, marker_count, len(citations)
 
 
 # ---------------------------------------------------------------------------
@@ -1020,6 +1135,26 @@ class InlineTargetDeps:
 
 
 # ---------------------------------------------------------------------------
+# Unit-factory (P2-T1): the descriptor-supplied system prompt drives synthesis
+# ---------------------------------------------------------------------------
+
+
+def _effective_system_prompt(deps: InlineTargetDeps) -> str:
+    """The system prompt that drives THIS unit's synthesis.
+
+    P2-T1 (unit-factory): a bounded reasoning unit is JUST a descriptor — its
+    OWN ``method.system_prompt`` / ``method.prompt_module`` is threaded into
+    ``deps.system_prompt`` by the deps-builder and drives the LLM synthesis here
+    (so a new unit needs NO new entry in ``_KIND_MODULE_NAMES``). Falls back to
+    the kind default ``_SYSTEM_PROMPT`` when ``deps.system_prompt`` is unset /
+    ``None`` — a directly-constructed deps or the bare-LLM back-compat path — so
+    both the GATHER suffix and the synthesis call always have a real prompt to
+    build on (and never crash on ``None + str``).
+    """
+    return deps.system_prompt or _SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
 # Phase 2.5 — GATHER: bounded substrate tool-call loop (S5 agentic assessors)
 # ---------------------------------------------------------------------------
 
@@ -1113,7 +1248,7 @@ async def _gather(
     # SEAM #22: the suffix is built by the caller (so it can splice the
     # web/write guidance from the bound packs' descriptors); fall back to the
     # read-only suffix when not supplied (back-compat: read-only assessors).
-    gather_system = deps.system_prompt + (gather_system or _GATHER_SYSTEM_SUFFIX)
+    gather_system = _effective_system_prompt(deps) + (gather_system or _GATHER_SYSTEM_SUFFIX)
     # PER-PHASE LLM SPLIT — prepend the gpt-oss "Reasoning: high" directive to the
     # GATHER system prompt ONLY when this deps opted in (the journal's gpt-oss/vLLM
     # gather plane). Default off → byte-for-byte unchanged for every assessor;
@@ -1372,6 +1507,11 @@ async def run_method(
 
     # --- PLAN ----------------------------------------------------------
     user_prompt = _render_user_prompt(sliced, target_id)
+    # P0-T1: capture the render-time {N -> signal_id} map so REFLECT can resolve
+    # the prose's [N] citation markers back to substrate ids. Built from the SAME
+    # ORIENTed slice _render_user_prompt rendered, so the 1-based N matches the
+    # [N] _render_signal stamped onto each block.
+    citation_index = _build_citation_index(sliced)
     steps.append({
         "phase": "plan",
         "kind": "render_prompt",
@@ -1453,7 +1593,9 @@ async def run_method(
             user_prompt=user_prompt,
             max_tokens=deps.max_tokens,
             temperature=deps.temperature,
-            system_prompt=deps.system_prompt,
+            # P2-T1: the descriptor-supplied unit prompt drives synthesis; fall
+            # back to the kind default when unset/None (see _effective_system_prompt).
+            system_prompt=_effective_system_prompt(deps),
         )
     except Exception:
         # Re-raise — let the runtime classify (TransientFailure /
@@ -1478,12 +1620,36 @@ async def run_method(
     # --- REFLECT -------------------------------------------------------
     fallback_title = f"Assessment for {target_id or 'target'}"
     finding = _coerce_finding(content, fallback_title=fallback_title)
+
+    # P0-T1 (cite the prose): parse the [N] markers the synthesis prose already
+    # carries (the prompt asks every key-development claim to cite its signal [N])
+    # and resolve each against the render-time {N -> signal_id} map. Persist the
+    # resolved mapping as data['citations'] ALONGSIDE the untouched prose — this
+    # is the substrate change the unit loop needs (machine-checkable claim->source
+    # binding); it needs no migration (FindingPayload.data is a free-form dict).
+    # Normalize any non-ASCII citation brackets (【N】 / ［N］) the model emitted
+    # to ASCII [N] BEFORE parsing, and persist the normalized prose so the body,
+    # the marker parser, and the UI drill-to-source chips all key on the same [N].
+    normalized_body = _normalize_citation_markers(finding.body)
+    if normalized_body != finding.body:
+        finding = finding.model_copy(update={"body": normalized_body})
+    citations, marker_count, resolved_count = _extract_citations(
+        finding.body, citation_index
+    )
+    if citations:
+        citation_data = dict(finding.data) if isinstance(finding.data, dict) else {}
+        citation_data["citations"] = citations
+        finding = finding.model_copy(update={"data": citation_data})
     steps.append({
         "phase": "reflect",
         "kind": "coerce_finding",
         "confidence": finding.confidence,
         "evidence_count": len(finding.evidence),
         "structured": "unstructured" not in finding.tags,
+        # Citation accounting folded into the coerce step so the 7-phase envelope
+        # sequence is unchanged (no extra reflect step).
+        "citation_markers": marker_count,
+        "citations_resolved": resolved_count,
     })
 
     # --- NARRATE -------------------------------------------------------

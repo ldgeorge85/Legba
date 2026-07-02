@@ -1,0 +1,158 @@
+# P2-T2 — bounded reasoning UNIT (inline_target): escalation.
+#
+# One of the four topic-scoped G20 reasoning units built on the validated
+# T1 unit-factory: a bounded unit is JUST an inline_target descriptor with its
+# OWN scope predicate + its OWN method.system_prompt + its OWN eval.rubric —
+# NO new Python kind module, NO _KIND_MODULE_NAMES entry. The descriptor-
+# supplied system_prompt drives synthesis; the deterministic cite-the-prose
+# [N] floor (always-on for inline_target findings) + the faithfulness verify
+# gate cover this unit's findings for free.
+#
+# TOPIC — escalation risk: military mobilization, border/maritime incidents,
+# diplomatic ruptures, alliance shifts, and proxy/conflict spillover. Assesses
+# the escalation vector + the most plausible near-term trajectory, weighting
+# materiel and confirmed troop/naval movement above rhetoric.
+#
+# Cadence discipline: 4 units × 19 G20 targets — this unit fires 2×/day at the
+# STAGGERED hours 07:00 / 19:00 UTC so the four units spread across the clock,
+# with budget_tokens_per_day capped to keep the fan-out inside budget.
+
+identity:
+  id: escalation
+  name: Escalation Risk Unit
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: p2_t2
+
+subscription:
+  targets:
+    # Scope by the `g20` tag — one run per G20 country target, mirroring
+    # country_assessor's fan-out (has_tag is valid on the subscription surface).
+    predicate: 'has_tag("g20") or has_tag("watch")'
+    data_types: [signal]
+    # 72h (was 24h): the unit integrates ~3 days of raw signals, not just today.
+    time_window: 72h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# Tier-1 knowledge-grounding, ported from the retired country_assessor monolith
+# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + assessed
+# situations + graph structure as a fenced "CURRENT CONTEXT" preamble so this
+# unit integrates the multi-week substrate, not only the fresh signal slice.
+# target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
+# off from ground truth (the grounding-quality provenance gate applies).
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+method:
+  kind: llm_planner
+  # Inline, topic-scoped system prompt — the unit carries its bounded question
+  # VERBATIM in the descriptor (no Python). The deps-builder uses this inline
+  # string (no prompt_module set). Drives the cited-prose JSON FindingPayload
+  # so the [N] markers + the verify gate keep working.
+  system_prompt: |
+    You are the ESCALATION RISK unit, one bounded reasoning unit of the Legba
+    intelligence oracle. You assess ONE question for ONE country target and
+    nothing else.
+
+    BOUNDED QUESTION — escalation risk.
+    Read ONLY the target country's signals provided in context. Assess the
+    country's near-term ESCALATION RISK across these vectors:
+      * military mobilization, force posture, and troop or naval movement;
+      * border or maritime incidents, standoffs, and airspace violations;
+      * diplomatic ruptures (envoy expulsions/recalls, severed ties, ultimatums);
+      * alliance shifts and bloc realignment;
+      * proxy activity and conflict spillover into or out of the country.
+    Identify the DOMINANT escalation vector and state the MOST PLAUSIBLE
+    near-term trajectory — de-escalation, steady tension, or escalation — and
+    say which. Rigorously DISTINGUISH rhetoric (statements, threats, posturing)
+    from materiel and confirmed troop or naval movement, weighting materiel and
+    verified movement far above words. Do NOT assess economic, governance, or
+    social-stability questions; those belong to other units.
+
+    PRODUCE EXACTLY ONE FINDING that answers ONLY this bounded question. Every
+    key claim MUST cite the signal it rests on with a bracketed marker [N] keyed
+    to that signal's index in the provided slice. Assert nothing the cited
+    signals do not support; if the evidence is thin, LOWER your confidence
+    rather than inventing specifics.
+
+    Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
+    matching exactly this shape:
+    {
+      "title": "<concise headline naming the country + the dominant escalation vector>",
+      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited findings, each ending with its [N] citation(s); then a '## Assessment' paragraph naming the dominant escalation vector and the most plausible near-term trajectory, explicitly distinguishing rhetoric from materiel/confirmed movement; then a '## Indicators to watch' bullet list of concrete near-term signals that would confirm escalation or de-escalation>",
+      "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
+      "evidence": [<the signal indices / source references you cited, as strings>],
+      "tags": ["escalation", "severity:<low|moderate|elevated|high|critical>"]
+    }
+
+    The "tags" array MUST contain the topic tag "escalation" PLUS EXACTLY ONE
+    severity tag drawn from {severity:low, severity:moderate, severity:elevated,
+    severity:high, severity:critical}, chosen to match the assessed escalation
+    risk. Output nothing but the single JSON object.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # P0: faithfulness VERIFY judge — currently the SAME core reasoning model
+    # (llm.primary.openai_compat, gpt-oss-120B) that writes this unit, NOT a
+    # cross-family judge (temporary: the 8B Llama-3.1-8B judge proved too weak —
+    # harsh + mis-aimed — so the strong model runs the judging to prove the flow;
+    # a dedicated reasoning judge is planned). KNOWN LIMITATION: same-model judging
+    # shares blind spots, so this signal is weaker than an independent judge.
+    # Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic
+    # citation-presence floor if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1536
+  # Per-day token cap for this unit's G20 fan-out — sized for the staggered
+  # twice-daily cadence (kept well under the country_assessor cap because each
+  # unit answers a single bounded question, not the full situational sweep).
+  budget_tokens_per_day: 300000
+  # On a projected per-day cap crossing, PAUSE this unit until the next UTC
+  # bucket rather than demoting to a paid fallback (the primary is the
+  # self-hosted core plane; there is no cheap fallback wired here).
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Staggered 2×/day at 07:00 and 19:00 UTC so the four bounded units spread
+  # across the clock instead of all firing on the same tick (flood discipline).
+  fallback_schedule: "0 7,19 * * *"
+  # Per-(unit, target) cooldown. 11h (39600s) sits BELOW the 12h interval
+  # between the staggered fires — a cooldown == the interval lands past the
+  # next scheduled fire and silently halves each country's cadence, so keep a
+  # margin. Absorbs a re-trigger inside the window without a second LLM call.
+  cooldown_seconds: 39600
+
+# eval.rubric — the rubric the critic grades this unit's escalation findings
+# against (REQUIRED for the critic→optimizer eval loop). Topic-scoped to the
+# escalation question; dimensions weight to 1.0 on a 0.0-1.0 scale.
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "vector_grounding",
+       "weight": 0.4,
+       "description": "Is the named dominant escalation vector (mobilization, border/maritime incident, diplomatic rupture, alliance shift, proxy spillover) grounded in the cited signals, and does the assessment correctly separate confirmed materiel/troop or naval movement from mere rhetoric? Penalize treating posturing or threats as materiel, and penalize unsupported specifics."},
+      {"name": "trajectory_plausibility",
+       "weight": 0.3,
+       "description": "Is the stated most-plausible near-term trajectory (de-escalation / steady tension / escalation) proportionate to and supported by the cited evidence, with concrete indicators-to-watch that would actually confirm or refute it?"},
+      {"name": "severity_calibration",
+       "weight": 0.3,
+       "description": "Do the stated confidence and the single severity tag match the strength of the cited evidence for escalation? Penalize both overconfidence on thin/rhetorical evidence and under-confidence on strong materiel evidence."}
+    ], "scale": "0.0-1.0"}

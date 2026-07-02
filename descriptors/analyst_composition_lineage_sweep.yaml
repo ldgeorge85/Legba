@@ -1,0 +1,74 @@
+# Composition Lineage Sweep analyst descriptor (P3-T6).
+#
+# The system's lineage-integrity VERIFICATION over the composition roots.
+# A NEW deterministic sub-handler (NOT an extension of integrity_sweep — that is
+# a single global count-based audit; a per-root multi-hop BFS would change its
+# contract). For each recent composition root (world_assessor /
+# country_composition, kind='finding', data.data.meta=true) it walks the
+# derived_from graph BACKWARD via legba.data.provenance.verify.validate_lineage
+# — world-read -> country-read -> unit sub-claim -> signal -> source — and
+# asserts no cycles / no (true) dangling / not depth_exhausted at ANY floor.
+# Single-table dangling (a signal leaf lives in `signals`, not analyst_outputs)
+# is post-filtered against the full lineage catalog, so a HEALTHY tower reports
+# 0 and a DELETED sub-claim under a live country read is NAMED.
+#
+# REFUSES LOUD: requires a live deps.pg_pool; a missing relation propagates
+# rather than zeroing. Read-only AUDIT — it COUNTS + NAMES, no repair.
+#
+# Target-agnostic + META: the subscription declares NO `targets` selector, so
+# the cadence heartbeat is a SINGLE global run (see _cadence_targets).
+#
+# Method:
+#   * kind = deterministic — pure SQL + the derived_from BFS, NO LLM.
+#   * impl = the deterministic kind dispatcher, routed by options.sub_handler
+#     (injected from method.sub_handler at fire time).
+#
+# Cadence:
+#   * fallback_schedule = "20 1,13 * * *" — 01:20 / 13:20 UTC, OFFSET AFTER the
+#     world composition lands (world_assessor at 00:00 / 12:00; country at
+#     11:30 / 23:30) so the freshest crown roots are present to sweep.
+#   * cooldown_seconds = 39600 (11h) — below the 12h interval (stamped at
+#     completion; == interval would silently halve the cadence). The sweep is
+#     idempotent + read-only.
+#
+# Registered via scripts/bringup_register_composition_lineage_sweep.py — NOT
+# inline through a test fixture.
+
+identity:
+  id: composition_lineage_sweep
+  name: Composition Lineage Sweep
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: composition_lineage_sweep
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick. The
+  # handler reads the composition roots directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: composition_lineage_sweep
+  # Deterministic kinds carry no LLM block and no per-day token budget — the
+  # whole run is pure SQL + the in-process derived_from BFS.
+
+cadence:
+  fallback_schedule: "20 1,13 * * *"
+  cooldown_seconds: 39600
+
+# No extra output sinks: the deterministic kind's per-sub-handler OUTPUT_KIND
+# (FINDING for composition_lineage_sweep) writes the per-run summary.
+outputs: []

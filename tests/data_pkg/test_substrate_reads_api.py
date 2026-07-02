@@ -210,6 +210,7 @@ async def _insert_critique(
     analyzed_output_id: UUID,
     overall_score: float,
     produced_at: datetime | None = None,
+    data_extra: dict | None = None,
 ) -> UUID:
     """Insert an L-175 critique row (kind='critique') graded against a finding.
 
@@ -217,6 +218,11 @@ async def _insert_critique(
     ``data`` (so ``data.overall_score`` + ``data.analyzed_output_id`` are the
     join keys S3's /findings LEFT JOIN reads), and the analyzed finding's id is
     the first ``derived_from`` edge.
+
+    ``data_extra`` (P0-T3) is merged into the critique's nested ``data`` key
+    (``data.data``) — mirrors how the faithfulness verify pass stores its
+    ``verification`` block via ``CritiquePayload.data`` so the /findings lateral
+    can surface ``data->'data'->'verification'``.
     """
     row_id = uuid4()
     ts = produced_at or datetime.now(timezone.utc)
@@ -226,6 +232,8 @@ async def _insert_critique(
         "overall_score": overall_score,
         "scores": {"factuality": overall_score},
     }
+    if data_extra is not None:
+        data["data"] = data_extra
     async with pg_store.acquire() as conn:
         await conn.execute(
             """
@@ -564,6 +572,261 @@ async def test_findings_latest_critique_wins(
     row = r.json()["data"][0]
     assert row["critic_score"] == pytest.approx(0.6, abs=1e-4)
     assert row["effective_confidence"] == pytest.approx(0.6, abs=1e-4)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_faithfulness_verification_block_surfaces(
+    substrate_app, client: AsyncClient,
+):
+    """P0-T3 / ACCEPTANCE 4: a finding with a faithfulness critique surfaces the
+    verification block naming the unsupported spans AND folds effective_confidence
+    down to the faithfulness score."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("verify-block")
+    fid = await _insert_finding(
+        pg_store, title="cited but partly fabricated", confidence=0.85, target_id=tid,
+    )
+    verification = {
+        "verification": {
+            "faithfulness_score": 0.5,
+            "checkable_claims": 2,
+            "supported_claims": 1,
+            "unsupported_spans": [
+                {"text": "A coup attempt overnight.", "reason": "no_citation", "markers": []},
+            ],
+            "judge_status": "deterministic",
+            "judge_unavailable_reason": "flag_off",
+        }
+    }
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.5, data_extra=verification,
+    )
+
+    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert row["id"] == str(fid)
+    # The gate demoted the surfaced confidence to the faithfulness score.
+    assert row["effective_confidence"] == pytest.approx(0.5, abs=1e-4)
+    # The verification block explains WHY (names the unsupported span).
+    assert row["verification"] is not None
+    assert row["verification"]["faithfulness_score"] == pytest.approx(0.5, abs=1e-4)
+    assert row["verification"]["unsupported_spans"][0]["reason"] == "no_citation"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_unverified_has_no_verification_block(
+    substrate_app, client: AsyncClient,
+):
+    """ACCEPTANCE 3: a finding with NO faithfulness critique → verification is
+    null (no fabricated block) and effective_confidence == confidence."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("verify-none")
+    await _insert_finding(
+        pg_store, title="legacy unverified", confidence=0.7, target_id=tid,
+    )
+    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    row = r.json()["data"][0]
+    assert row["verification"] is None
+    assert row["effective_confidence"] == pytest.approx(0.7, abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# P1-T1 — reachability facets: orphan (target_id_null), full-text (q),
+# analyst-set (analyst_id_in). The ~1100 NULL-target "orphan" findings are
+# unreachable from any country view without these.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_target_id_null_returns_only_orphans(
+    substrate_app, client: AsyncClient,
+):
+    """`target_id_null=true` returns ONLY NULL-target findings. We tag the two
+    orphans this test inserts with a unique analyst_id so we can isolate them
+    from the shared DB's other NULL-target rows, then assert each has a NULL
+    target_id."""
+    _, _, pg_store = substrate_app
+    analyst = f"orphan_{uuid4().hex[:10]}"
+    tid = _unique_target_id("orphan-targeted")
+    orphan_a = await _insert_finding(
+        pg_store, title="orphan a", target_id=None, analyst_id=analyst,
+    )
+    orphan_b = await _insert_finding(
+        pg_store, title="orphan b", target_id=None, analyst_id=analyst,
+    )
+    # A targeted finding by the same analyst must NOT appear.
+    await _insert_finding(
+        pg_store, title="has a target", target_id=tid, analyst_id=analyst,
+    )
+
+    r = await client.get(
+        "/api/v1/findings",
+        params={"target_id_null": "true", "analyst_id": analyst},
+    )
+    assert r.status_code == 200, r.text
+    rows = r.json()["data"]
+    ids = {row["id"] for row in rows}
+    assert ids == {str(orphan_a), str(orphan_b)}
+    # Every returned row really is a NULL-target orphan.
+    assert all(row["target_id"] is None for row in rows)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_q_matches_title_or_body_keyword(
+    substrate_app, client: AsyncClient,
+):
+    """`q` full-text-matches a keyword in title OR body. Scoped to this test's
+    analyst so the shared DB doesn't bleed in."""
+    _, _, pg_store = substrate_app
+    analyst = f"fts_{uuid4().hex[:10]}"
+    in_title = await _insert_finding(
+        pg_store, title="Sahel insurgency escalation", body="routine prose",
+        target_id=None, analyst_id=analyst,
+    )
+    in_body = await _insert_finding(
+        pg_store, title="routine title", body="A new insurgency cell emerged.",
+        target_id=None, analyst_id=analyst,
+    )
+    # No "insurgency" anywhere → must not match.
+    await _insert_finding(
+        pg_store, title="energy prices", body="spot demand up 12 %",
+        target_id=None, analyst_id=analyst,
+    )
+
+    r = await client.get(
+        "/api/v1/findings",
+        params={"q": "insurgency", "analyst_id": analyst},
+    )
+    assert r.status_code == 200, r.text
+    ids = {row["id"] for row in r.json()["data"]}
+    assert ids == {str(in_title), str(in_body)}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_analyst_id_in_returns_union(
+    substrate_app, client: AsyncClient,
+):
+    """`analyst_id_in` is a CSV of analyst ids; the result is the UNION across
+    them. A finding by an analyst NOT in the set is excluded."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("analyst-set")
+    a1 = f"a1_{uuid4().hex[:6]}"
+    a2 = f"a2_{uuid4().hex[:6]}"
+    a3 = f"a3_{uuid4().hex[:6]}"
+    f1 = await _insert_finding(pg_store, target_id=tid, analyst_id=a1)
+    f2 = await _insert_finding(pg_store, target_id=tid, analyst_id=a2)
+    # a3 is NOT in the set → excluded.
+    await _insert_finding(pg_store, target_id=tid, analyst_id=a3)
+
+    r = await client.get(
+        "/api/v1/findings",
+        params={"analyst_id_in": f"{a1},{a2}", "target_id": tid},
+    )
+    assert r.status_code == 200, r.text
+    ids = {row["id"] for row in r.json()["data"]}
+    assert ids == {str(f1), str(f2)}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_q_filter_composes_with_cursor_pagination(
+    substrate_app, client: AsyncClient,
+):
+    """An existing facet (here `q`) + cursor pagination still walk correctly:
+    5 matching rows over 2-row pages → (2, 2, 1), newest-first, no dupes."""
+    _, _, pg_store = substrate_app
+    analyst = f"page_{uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc)
+    inserted: list[str] = []
+    for i in range(5):
+        rid = await _insert_finding(
+            pg_store, title=f"drought update {i}", body="severe drought ongoing",
+            target_id=None, analyst_id=analyst,
+            produced_at=now - timedelta(seconds=i),
+        )
+        inserted.append(str(rid))
+    # A non-matching row by the same analyst must never appear.
+    await _insert_finding(
+        pg_store, title="unrelated", body="nothing here",
+        target_id=None, analyst_id=analyst, produced_at=now - timedelta(seconds=9),
+    )
+
+    seen: list[str] = []
+    cursor: str | None = None
+    page_count = 0
+    while True:
+        params: dict[str, Any] = {
+            "limit": 2, "q": "drought", "analyst_id": analyst,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        r = await client.get("/api/v1/findings", params=params)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        page_count += 1
+        seen.extend(row["id"] for row in body["data"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+        assert page_count < 10
+
+    assert page_count == 3
+    assert seen == inserted  # newest-first, no dupes, no skips
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_reachability_facets_preserve_verification_fold(
+    substrate_app, client: AsyncClient,
+):
+    """A NET-NEW facet (here the orphan filter) must NOT disturb the P0-T3
+    verification block + the critic effective_confidence fold: an orphan
+    finding with a faithfulness critique still surfaces the demoted confidence
+    and the named unsupported span."""
+    _, _, pg_store = substrate_app
+    analyst = f"orphverify_{uuid4().hex[:8]}"
+    fid = await _insert_finding(
+        pg_store, title="orphan partly fabricated", confidence=0.85,
+        target_id=None, analyst_id=analyst,
+    )
+    verification = {
+        "verification": {
+            "faithfulness_score": 0.4,
+            "checkable_claims": 3,
+            "supported_claims": 1,
+            "unsupported_spans": [
+                {"text": "Border clash overnight.", "reason": "no_citation", "markers": []},
+            ],
+            "judge_status": "deterministic",
+        }
+    }
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.4, data_extra=verification,
+    )
+
+    r = await client.get(
+        "/api/v1/findings",
+        params={"target_id_null": "true", "analyst_id": analyst},
+    )
+    assert r.status_code == 200, r.text
+    rows = r.json()["data"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == str(fid)
+    assert row["target_id"] is None
+    # Critic fold unchanged: min(0.85, 0.4) = 0.4.
+    assert row["critic_score"] == pytest.approx(0.4, abs=1e-4)
+    assert row["effective_confidence"] == pytest.approx(0.4, abs=1e-4)
+    # Verification block unchanged: names the unsupported span.
+    assert row["verification"] is not None
+    assert row["verification"]["faithfulness_score"] == pytest.approx(0.4, abs=1e-4)
+    assert row["verification"]["unsupported_spans"][0]["reason"] == "no_citation"
 
 
 # ---------------------------------------------------------------------------

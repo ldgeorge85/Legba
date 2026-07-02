@@ -4,11 +4,13 @@
 # Release-state matrix
 
 Release-readiness aid (REVIEW §3.4/§3.9, release-engineering). Classifies
-every operator-facing **route** and **UI panel** by its release state so a
-reviewer can tell at a glance what is product-grade vs preview vs pending —
-without reading every component. Owned by the release-engineering stream;
-regenerate the panel table from `legba-ui-v3/src/panel-registry/registry.ts`
-when panels are added or change tier.
+every operator-facing **route** and **UI panel** — plus the release-relevant
+**analyst-layer capabilities** that make up the analysis spine — by its release
+state so a reviewer can tell at a glance what is product-grade vs preview vs
+pending, and where a capability is honestly weak today, without reading every
+component. Owned by the release-engineering stream; regenerate the panel table
+from `legba-ui-v3/src/panel-registry/registry.ts` when panels are added or
+change tier.
 
 **States**
 
@@ -17,27 +19,32 @@ when panels are added or change tier.
 | **live** | Real backend wired end-to-end; product-grade. |
 | **preview** | Registered + renders, but reads no live backend yet OR renders an honest "not yet wired / pending" state. Never fabricates data. |
 | **hidden** | Built but intentionally not surfaced in default navigation (operator/diagnostic depth; reachable by id / record-jump, not promoted in the menu). |
+| **frozen** | Built + registered, but its autonomous cadence is intentionally NULLED (`cadence.fallback_schedule: null`) so it fires on no tick — a SEQUENCED freeze documented in `docs/SEAMS.md`, not a failure. Restorable by a one-line cadence change. |
+| **retired** | Live head lifecycle-state `retired` (+ removed from bringup) so the runtime wires no worker for it — a deliberate removal from the trusted spine, documented in `docs/SEAMS.md`. |
 | **stub** | **Disallowed in production** — see `docs/SEAMS.md`. No panel/route is in this state; listed here only to name the bar. |
 
-> The `def()` panel registration **now carries a machine-readable `tier`
-> flag** (`registry.ts` `def()` returns `tier: 'live'` by default; the
-> `PREVIEW_KINDS` set promotes guarded-preview surfaces to `tier: 'preview'`
-> in one place, and the `HIDDEN_KINDS` set flips `hidden = true` for the
-> not-promoted panels). So the live/preview/hidden classification below is
-> mirrored in code and no longer maintained purely by hand — regenerate this
-> table from the three sources (`def()` default + `PREVIEW_KINDS` +
-> `HIDDEN_KINDS`) when panels change tier. A `PanelChrome.tsx` badge that
-> renders the `tier` flag remains the one cosmetic follow-up.
+> The `def()` panel registration **carries a machine-readable `tier` flag**
+> (`registry.ts` `def()` returns `tier: 'live'` by default; the `PREVIEW_KINDS`
+> set promotes guarded-preview surfaces to `tier: 'preview'` in one place, and
+> the `HIDDEN_KINDS` set flips `hidden = true` for the not-promoted panels). So
+> the live/preview/hidden classification below is mirrored in code and no longer
+> maintained purely by hand — regenerate this table from the three sources
+> (`def()` default + `PREVIEW_KINDS` + `HIDDEN_KINDS`) when panels change tier. A
+> `PanelChrome.tsx` badge that renders the `tier` flag remains the one cosmetic
+> follow-up. (The `frozen` / `retired` states apply to analyst capabilities in
+> §1.1, not to UI panels — they live in descriptor cadence / lifecycle state, not
+> in `registry.ts`.)
 
 ---
 
 ## 1. Registry / runtime API routes
 
 > **Scope note.** This matrix classifies operator-facing **routes** and **UI
-> panels** only. The release state of individual analyst *kinds* (and their
-> data-quality maturity) is tracked elsewhere (`planning/` + `docs/SEAMS.md`);
-> a kind's omission here is NOT a claim that it ships or that its output is
-> product-grade — this doc is the routes+panels surface, nothing more.
+> panels** (§1, §2) plus the release-relevant **analyst-layer capabilities**
+> that constitute the analysis spine (§1.1). The authoritative per-kind
+> data-quality maturity tracking still lives in `planning/` + `docs/SEAMS.md`;
+> a capability's omission here is NOT a claim that it ships or that its output is
+> product-grade.
 
 The bearer-gated route surface is enumerated in `docs/RUNBOOK.md` §4.1. All
 of those are **live** (real substrate reads/writes, fail-closed auth) with
@@ -45,37 +52,73 @@ these exceptions:
 
 | Route | State | Note |
 |---|---|---|
-| `GET /api/v1/v3/optimizer/candidates/{id}/diff` | **live** | Wired (`v3_api.py:519`, snapshot-based, no dspy import) — returns the candidate prompt-module text + parent path as a `PromptModuleDiff`. The `OptimizerDiff` panel reads it and renders live data; the panel stays badged `preview` only because the human-gated promote flow around it is still maturing (see §2). |
+| `GET /api/v1/v3/optimizer/candidates/{id}/diff` | **live** | Wired (`v3_api.py:880`, snapshot-based, no dspy import) — returns the candidate prompt-module text + parent path as a `PromptModuleDiff` for the SCOPED `unit_optimizer` (§1.1), not the frozen monolith. The `OptimizerDiff` panel reads it and renders live data; the panel stays badged `preview` only because the human-gated promote flow around it is still maturing (see §2). |
 | `/a2a/skills/*` (runtime, not registry) | **live, gated** | Mounted only when `LEGBA_A2A_ENABLED` + a trusted-key list are set; UNMOUNTED otherwise (fail-loud, not stubbed). See RUNBOOK §4.3. |
 | `GET /api/v1/registry/healthz` | **live (readiness)** | Pings PG (`SELECT 1`) + NATS (client connected): 200 `{status:ok}` when both respond, 503 `{status:unavailable, checks:{…}}` naming the failing component otherwise — so the Docker HEALTHCHECK / Caddy upstream drops a half-dead process from rotation. Upgraded from the old liveness stub under resilience-observability (W-1b §4). |
 | `GET /metrics` (registry) | **live (unauthenticated by design)** | Prometheus text exposition (`metrics_api.py`, app-level no-prefix mount in `server.py`). Like `/healthz` it is intentionally NOT bearer-gated so a scraper can poll without a token; values are real registry counters/gauges. Companion alert rules ship in `deploy/prometheus/legba_alerts.yml`. Operator setup: RUNBOOK §4.7. |
-| `GET /api/v1/journal` | **live** | Serves journal entries + consolidations from the dedicated `journal_entries` table (`journal_api.py`, `build_journal_router`, mounted in `server.py` at `/api/v1`). Off-chain — reads `journal_entries` directly, never the lineage catalog. Renders the per-claim binding (`claims` / `cited_substrate_refs`) the `system.journal` panel deep-links from (see §2). |
-| `GET /api/v1/journal_proposals` | **live** | Lists/filters the human-gated review queue from `journal_proposals` (`journal_proposals_api.py`, `build_journal_proposals_router`, mounted at `/api/v1`). The journal SUGGESTS into this queue; a human DISPOSES. |
-| `POST /api/v1/journal_proposals/{proposal_id}/accept` · `…/reject` | **live** | Accept/reject a queued proposal. Accept runs an idempotent per-kind apply worker; reject requires a `decision_reason`. **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry. |
+| `GET /api/v1/lineage/{row_kind}/{row_id}` | **live** | Walks the receipt chain hop by hop (`lineage_api.py`, `build_lineage_router`, mounted at `/api/v1/lineage`) — e.g. `…/lineage/finding/{id}` resolves finding → unit → cited signal to the real source URL. Each node carries a SHA-256 `receipt_hash` + a `chain_consistent` boolean (surfaced as the badge "chain-consistent (single-node)" — NOT a cryptographic tamper-proof / signing claim for analyst outputs). A lineage-integrity sweep prunes dangling `derived_from` so the walk has zero dangling links. |
+| `GET /api/v1/v3/eval/country_scorecard` | **live** | The latest P4-T2 banded scorecard per active g20/watch desk (`v3_api.py:1200`, `kind='scorecard'` freshest live-head per desk — enumerates any active target tagged `g20`/`watch`, 24 today). PROJECTS the persisted `data.bands` — no re-banding, no fabricated band. An empty list means no scorecard has been computed yet (honest, not an error). Backs the eval scorecard panel (§2). |
+| `GET /api/v1/v3/eval/calibration` | **live (honest-null)** | The honest skill scoreboard (`v3_api.py:1132`, `CalibrationScoreboard`): the exogenous-calibration Brier + the acute-forecast BSS. A thin / degenerate pilot returns "skill claim withheld" (`forecast_unproven=True` / `calibration_thin=True`), NEVER a bare positive number — the forecasting pilot currently reports NO proven skill (see §1.1). |
 | `GET /api/v1/v3/system/analyst-cadence` | **live** | Per-analyst cadence health (`v3_api.py`, `build_v3_router`, mounted at `/api/v1/v3`): last run, age, runs 1h/24h, last outcome, and a healthy/stale/silent status — read from `analyst_traces` (the actual run record), NOT `actor_state.last_run_at`, which is NULL. Powers the System Status panel's Analysis layer (§2). |
 | `GET /api/v1/v3/system/source-firing` | **live** | Per-source firing matrix (`v3_api.py`, mounted at `/api/v1/v3`): signals 24h/7d, last-seen age, last poll outcome, recent error count, and a firing/silent/error/paused status per source. Powers the System Status panel's Acquisition layer (§2). |
+| `GET /api/v1/v3/eval/analyst_runtime` | **live** | Per-analyst run-timing observability (`v3_api.py:1267`, inline-SQL over `analyst_traces`, registry-slim): for each analyst over a `window_hours` (default 24, ≤720) it returns the run count, avg/max wall-clock seconds, last run, and non-success count. Read-only; surfaces the run-time telemetry (`run_started_at` / `run_ended_at` / `status`) that is written per run but not otherwise exposed on an API. |
+| `GET /api/v1/journal` · `GET /api/v1/journal_proposals` · `POST /api/v1/journal_proposals/{id}/accept` · `…/reject` | **live** | The journal read + human-gated review-queue routes (`journal_api.py` / `journal_proposals_api.py`, mounted at `/api/v1`). The `journal_assessor` (12h entry) + `journal_consolidator` (daily) run ON cadence (§1.1), so the read route serves the accruing entries and the proposals routes drive the accept/reject queue. Accept runs an idempotent per-kind apply worker; reject requires a `decision_reason`. **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry (SEAMS #25). Routing the journal's reflections back into the spine via this queue is still a FUTURE item, not done. |
 | `GET /api/v1/contention` | **live** | Read-only contested-claim groups + their per-value support clusters (Holes-B Wave 5, #101 — `substrate_reads_api.py`, `build_substrate_reads_router`, mounted in registry `server.py` at `/api/v1`). Plain SELECTs over the deployed `fact_contention` / `fact_contention_values` sidecar (migration 0055) — it NEVER mutates a fact, a group, or a marker. Filters `status` (defaults to LIVE disputes `contested`+`surfaced`), `subject` (lower-cased `subject_key`), `fact_id` (single group via `facts.contention_id`), `include_junk`, `since`. Backs the `ContestedBadge` UI surface (§2) and the consult read surface. The sidecar is populated by the `fact_contention_arbiter` analyst (§1.1); whether disputes ACCUMULATE depends on the write-path coexistence flag `LEGBA_FACT_CONTENTION` (default **OFF** in code + docker-compose), so on a default build this route serves an empty/legacy set. Proven live (returns real groups on this instance). |
 
 Everything else in RUNBOOK §4.1 (findings / situations / signals / lineage /
-targets / analysts / budget / source-credibility / events WS) is **live**.
+targets / analysts / budget / source-credibility / events WS / the cross-analyst
+critic rollup `GET /api/v1/v3/eval/scorecard`) is **live**.
 
-### 1.1 Analyst-layer capabilities (not a route/panel, tracked here for release)
+### 1.1 Analyst-layer capabilities — the analysis spine (release-relevant, not a route/panel)
 
 These are runtime analyst capabilities, not operator-facing routes/panels, but
-they are release-relevant enough to classify alongside the surface above. (The
-authoritative per-kind maturity tracking still lives in `planning/` +
-`docs/SEAMS.md` — this is a release-readiness summary, not the catalog.)
+they are the **product** and are release-relevant enough to classify here. The
+spine composes bottom-up: bounded reasoning UNITS → a mandatory faithfulness
+VERIFY pass → per-country and world COMPOSITIONS → a banded SCORECARD, with an
+honest SKILL scoreboard over all of it. (Authoritative per-kind maturity still
+lives in `planning/` + `docs/SEAMS.md` — this is a release-readiness summary.)
+
+**The core discipline, not the data, is the product:** every claim is cited to
+a source, checked by a mandatory faithfulness pass, and auditable through the
+receipt chain. The system MEASURES groundedness (does each claim follow from its
+cited evidence?), NOT truth — where a leg is honestly weak or degenerate today,
+that is published, not hidden.
 
 | Capability | State | Note |
 |---|---|---|
-| Analyst knowledge-grounding (Tier 1, structured) | **live, off-by-default** | The `grounding` descriptor block (`GroundingBlock`, `enabled: false` default) opts an analyst into a deps-builder step that, before the LLM call, reads CURRENT authoritative `facts`/`nexuses` (temporal-honesty gate, curated/seed-preferred) for the target geo + slice entities and PREPENDS a dated "AUTHORITATIVE CURRENT CONTEXT" preamble. Wired + opted IN on `analyst_world_assessor` + `analyst_country_assessor` (`grounding.enabled: true`); live-verified injecting the current US head of state into a US assessment. Token-capped (`max_facts`), degrade-not-drop (a read miss → no preamble, never fabricates). **Tier 2** (the `vector:world_context` collection) is a declared SEAM (#20, needs the L-114 embedder-through-port). |
+| Four bounded reasoning UNITS (`leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`) | **live** | `kind: inline_target` descriptors, each scoped `subscription.targets.predicate: has_tag("g20") or has_tag("watch")` → ONE run per active DESK (staggered cron pairs so the four spread across the clock). The roster is driven by a COVERAGE TAG: the 19 G20 country desks PLUS a 5-target high-consequence WATCH tier (Israel, Iran, Ukraine, Taiwan, North Korea — ids `country_watch_il/ir/ua/tw/kp`) = 24 desks today. (A "desk" is a scoped subject-frame that a set of analysts work, NOT a surveilled entity; adding one is register-a-target, no code.) Each ASSEMBLES a cited 72h signal slice (packed under the input-token budget; `inline_target._MAX_INPUT_SIGNALS = 200` is only a hard backstop, not a fixed-count trim) + a dated "AUTHORITATIVE CURRENT CONTEXT" grounding preamble of ACCUMULATED facts/nexuses/situations (`grounding.enabled: true`), answers ONE narrow question, and emits a strict-JSON cited `FindingPayload` whose prose carries `[N]` markers mapped to signal ids. The deterministic cite-the-prose `[N]` floor + the faithfulness verify gate (below) cover them for free. Skill is a PER-UNIT number (see the skill scoreboard), never a platform boast. |
+| Mandatory faithfulness VERIFY pass | **live** | Every cited unit/composition finding is scored for faithfulness in [0,1] by an LLM judge (`method.llm.verify`, declared on all four units + both compositions — CURRENTLY `raw: llm.primary.openai_compat`, the SAME core gpt-oss-120B model that generated the finding, NOT cross-family) PLUS a deterministic citation-presence floor. **Same-model judging is a deliberate, temporary choice** after the 8B cross-family judge (`llm.verify.slm_8b`, Llama-3.1-8B) proved too weak (harsh + mis-aimed); KNOWN LIMITATION — it shares the producer's blind spots, so the signal is weaker than an independent judge (the floor + the signed provenance chain still backstop it; a dedicated reasoning judge is planned). `effective_confidence = min(confidence, faithfulness_score)` is folded at read time and gates a visible low-confidence tier — it NEVER hard-deletes. It measures GROUNDEDNESS, not truth; a planted fabrication is flagged unsupported. **Honest note:** live faithfulness is genuinely low on some units — e.g. the US country reads all-insufficient on the scorecard because its unit faithfulness is genuinely low. That is surfaced, not suppressed. |
+| Per-country COMPOSITION (`country_composition`, kind `meta_findings_synthesizer`) | **live** | A `targets`-bearing descriptor → per-desk fan-out (`has_tag("g20") or has_tag("watch")`, the same 24 g20/watch desks). Reads the FOUR verified units for THAT desk and writes a hedged, cited synthesis; the READ_SLICE admits ONLY faithfulness-verify-PASSED sub-claims above the floor (unverified sub-claims never enter it). A country whose units produced no verify-passed sub-claim yields an EMPTY slice → a `confidence=0.0` "No source findings to synthesize" finding rather than an invented read. `derived_from` back-walks one hop to the four units, two hops to their cited signals. |
+| World COMPOSITION (`world_assessor`, repointed to `meta_findings_synthesizer`) | **live** | Composes over the per-country reads (NO `targets` block → ONE global meta run per tick) into a cited, hedged world view that drills country → units → source. It is NOT the old raw-signal executive one-pager — that verdict-from-nowhere framing was demoted (SEAMS #34) and the analyst graduated into the composition. Each clause is cited `[[ref:<uuid>]]` to a verified country-read; the same mandatory verify + `effective_confidence` fold apply. |
+| Banded SCORECARD (`scorecard_producer`, deterministic META; 12th OutputKind `scorecard`) | **live** | Each tick writes ONE banded row per active g20/watch desk (a global sweep enumerating any active target tagged `g20`/`watch` — 24 today) from high-precision RULES over already-verified claims banded across a rolling 14-day window (severity tag × `effective_confidence`, demote-never-promote), pure SQL / no LLM / $0. Every band NAMES the verified-claim id it rests on; a dimension with no qualifying verified claim reads "insufficient-evidence" with an explicit reason (never a fabricated band), and a per-claim faithfulness below the floor demotes to "low-faithfulness". A country with no qualifying claim STILL emits an all-insufficient row (never omit, never invent). Served on `GET /api/v1/v3/eval/country_scorecard`. **Honest note:** the live scorecard is a MIX — some countries band, others (e.g. the US) read all-insufficient. |
+| Skill SCOREBOARD (per-unit eval + calibration + acute-forecast pilot) | **live, honest-null / honestly weak** | `unit_correctness_scorer` (deterministic META, $0) folds per-unit faithfulness + a correctness-vs-reference source-recall against operator gold in `unit_reference_labels` (migration 0057); `calibration_tracking` folds the exogenous Brier; the acute-forecast BSS rides the same `GET /api/v1/v3/eval/calibration`. **Weak spots are PUBLISHED, not hidden:** the correctness gold set is tiny (reported insufficient-sample — with the table empty/near-empty a unit reports `correctness_vs_reference = None` + a status string, never a fabricated number); the exogenous Brier absent a real outcome is tagged a SELF-CONSISTENCY measure (`self_consistency_only=true`), NOT calibration against reality; and the forecasting pilot currently reports NO proven skill (skill WITHHELD until non-degenerate AND BSS>0). |
+| GEPA self-optimizer (`unit_optimizer`, kind `optimizer`, `dspy_compile`) | **live, human-gated (candidate arm)** | The optimizer RETURNS scoped to ONE measured unit (`leadership_transition`), NOT the frozen monolith. Every candidate carries a REAL paired before/after FAITHFULNESS delta on the same faithfulness judge (currently the core model, not cross-family; live: parent 0.34 → candidate 0.29, delta **−0.05**), stays `promotion_gate=human_gated`, and can NEVER auto-promote on a degenerate / absent / non-positive / non-finite delta (`optimizer.should_auto_promote`; honesty suite `pytest -k p4t8_honesty`). dspy/GEPA live ONLY in the opt-in worker image — never the runtime or analyst inference path. The training set is passed BY REFERENCE (`TrainingSetRef`) and one weekly reminder fires, so the >4 MB reminder-flood class cannot regress. |
+| Acute-forecast pilot driver (`forecast_scoreboard`, deterministic META) | **live (driver), reports no skill** | The weekly driver for the pre-registered acute-binary forecast pilot (#92): issues one binary forecast per G20 country, resolves closed windows EXOGENOUSLY by upstream event time, and its per-run finding is TRACE_ONLY — forecasting NEVER lands as a free-text claim/finding on a trust surface. A geography-dominated / degenerate probability vector ABSTAINS (zero rows). The numbers surface SOLELY on the calibration scoreboard, and the pilot currently reports NO proven skill (honest — `forecast_unproven=True`). |
+
+**Retirements / freezes (sequenced, documented in `docs/SEAMS.md`).** The
+ambitious legs return ONLY as measured experiments; the always-on unmeasured
+producers are frozen or retired first.
+
+| Capability | State | Note |
+|---|---|---|
+| `country_assessor` (monolithic per-country one-pager) | **retired (stopped)** | Live head `state='retired'` (`POST /retire`) + removed from `scripts/bringup_register_analysts.py` `ANALYST_FILES` (SEAMS #35, 2026-07-01) — it fires no more. NOTHING in the trusted spine reads it — `country_composition` reads the four UNITS — yet before retirement, as a still-firing REACTIVE feeder (`subscription.targets` `has_tag("g20")`), it was the single largest producer of UNVERIFIED monolithic output. Because it was reactive, nulling its cadence was insufficient (cf. seam #31); retirement at the lifecycle level (runtime NOOPs `already_retired_or_absent`) + bringup removal is what stops it. **Not a clean slate:** ~1.2k historical `finding` rows it produced REMAIN in the DB, unread by the spine. The descriptor YAML still reads `state: active` on disk — the LIVE head is authoritative. |
+| `country_predictor` (forecast-as-claim producer) | **retired (stopped)** | Nulling its cadence left it firing REACTIVELY (~1/hr `prediction` rows), so P3-T8 RETIRED the live head + removed it from `ANALYST_FILES` (SEAMS #31) — it fires no more. A numeric forecast is a CLAIM; forecasting returns ONLY as the acute-forecast Brier/BSS scoreboard (`forecast_scoreboard`, above), never a free-text claim. **Not a clean slate:** ~539 historical `prediction` rows from the two predictors REMAIN in the DB. |
+| `india_energy_predictor` (sibling forecast-as-claim producer) | **frozen (stopped)** | `cadence.fallback_schedule` NULLED (SEAMS #32) — the `if schedule:` reminder gate registers no `run_cadence` reminder, so it fires on no tick. Returns behind the same acute-forecast scoreboard (its share of the ~539 historical `prediction` rows remains). |
+| `country_optimizer` (the always-on unmeasured GEPA monolith) | **cadence-frozen** | `cadence.fallback_schedule` NULLED (SEAMS #30) — no `run_cadence` reminder, verifiably silent (the descriptor head still reads `state: active`; it is the CADENCE that is frozen, not a lifecycle retirement). It returns as the SCOPED, measured `unit_optimizer` above; the monolith stays byte-frozen (no reminder-flood regression). |
+
+**Other live runtime capabilities.** (Maintenance / substrate legs — accurate as
+of this revision.)
+
+| Capability | State | Note |
+|---|---|---|
+| Analyst knowledge-grounding (Tier 1, structured) | **live** | The `grounding` descriptor block (`GroundingBlock`, `enabled: false` default) opts an analyst into a deps-builder step that, before the LLM call, reads CURRENT authoritative `facts`/`nexuses`/situations (temporal-honesty gate `superseded_by IS NULL AND (valid_until IS NULL OR valid_until > now())`, curated/seed-preferred) for the target geo + slice entities and PREPENDS a dated "AUTHORITATIVE CURRENT CONTEXT" preamble that also SUPERSEDES stale model priors. Opted IN (`grounding.enabled: true`) on the four bounded units + the journal tiers; live-verified injecting the current US head of state. Token-capped (`max_facts`), degrade-not-drop (a read miss → no preamble, never fabricates). The retired `country_assessor`'s grounding retired with it; the compositions read already-verified sub-claims rather than raw signals, so they do not re-ground. **Tier 2** (the `vector:world_context` collection) is a declared SEAM (#20). |
+| `journal_assessor` + `journal_consolidator` (first-person reflective voice, one of the 12 OutputKinds) | **live (introspective instrument)** | Both run ON cadence — `journal_assessor` every 12h (`fallback_schedule: "0 0,12 * * *"`, entry tier) and `journal_consolidator` daily (`"0 2 * * *"`), descriptor heads `state: active`. This is an introspective instrument, NOT a producer in the cited-synthesis spine: it writes ONLY `journal_entries` off the fact/finding/nexus chain (empty `derived_from`, excluded from the lineage catalog), so it CANNOT pollute product output. Its voice runs on the Anthropic plane (Opus); the agentic GATHER loop runs on the core plane. Its read + human-gated propose/accept routes (§1) are live; routing its reflections back into the spine via that queue is a FUTURE item, not done. |
 | `proposed_edge_governance` analyst | **live** | Promotes pending `proposed_edges` into neutral `CoOccursWith` nexuses (`descriptors/analyst_proposed_edge_governance.yaml`). |
-| `fact_contention_arbiter` analyst | **live (detect-only)** | The contested-claims referee (Holes-B Wave 2, #101 — `descriptors/analyst_fact_contention_arbiter.yaml`, `deterministic`-kind GLOBAL META analyst, hourly at `:37`, `TRACE_ONLY` in `deterministic.py`). DETECT-ONLY invariant (B15): it NEVER mutates a fact value / `valid_until` / `superseded_by` / `confidence` — it scans OPEN facts, fuzzy-clusters competing values (`provenance/value_clustering.py`: canonicalize-entity + normalized-Levenshtein, threshold 0.12 — Russia/Russian and Kyiv/Kiev merge, North/South Korea stay split), junk-gates via the existing fact-extractor gates, scores each value cluster `Q·C·R·F` (quorum, credibility-share, recency half-life, confidence), and surfaces at most ONE winner per `(subject, predicate)` or ABSTAINS on a near-tie (`MIN_SURFACE_SCORE` 0.15, `DOMINANCE_RATIO` 1.25). Its ONLY writes are the `fact_contention` / `fact_contention_values` sidecar + the three thin `facts` markers (`contested`, `contention_id`, `surfaced_winner`), all recomputable from open facts (migration 0055). **Optional Wave-2b LLM tie-break** runs ONLY on a near-tie abstain, on the SELF-HOSTED vLLM plane (the deps-builder hard-refuses an Anthropic/Opus primary), bounded (256 tokens, 30s, ≤10 calls/pass), degrades to abstain on any failure — flag `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` (default **OFF** in code + docker-compose). Detect-only arbiter proven live; the vLLM tie-break is proven CONSULTED live (it abstained on symmetric evidence — correct, provenance-first), but a successful LLM PICK is unobserved-live so far. Whether disputes COEXIST for it to group depends on the write-path flag `LEGBA_FACT_CONTENTION` (default **OFF**); both flags are enabled (`=1`) only on this instance via the gitignored `.env`. |
-| Phase-D graph-metrics legs | **live** | `structural_balance` / `graph_mining` / `nexus_decay` now WRITE rows via `_graph_metrics_sink.py` (previously inert). |
+| `fact_contention_arbiter` analyst | **live (detect-only)** | The contested-claims referee (Holes-B Wave 2, #101 — `descriptors/analyst_fact_contention_arbiter.yaml`, `deterministic`-kind GLOBAL META analyst, hourly at `:37`, `TRACE_ONLY`). DETECT-ONLY invariant (B15): it NEVER mutates a fact value / `valid_until` / `superseded_by` / `confidence` — it scans OPEN facts, fuzzy-clusters competing values (`provenance/value_clustering.py`: canonicalize-entity + normalized-Levenshtein, threshold 0.12 — Russia/Russian and Kyiv/Kiev merge, North/South Korea stay split), junk-gates, scores each value cluster `Q·C·R·F` (quorum, credibility-share, recency half-life, confidence), and surfaces at most ONE winner per `(subject, predicate)` or ABSTAINS on a near-tie. Its ONLY writes are the `fact_contention` / `fact_contention_values` sidecar + three thin `facts` markers (`contested`, `contention_id`, `surfaced_winner`), all recomputable from open facts (migration 0055). **Optional Wave-2b LLM tie-break** runs ONLY on a near-tie abstain, on the SELF-HOSTED vLLM plane (hard-refuses an Anthropic/Opus primary), bounded (256 tokens, 30s, ≤10 calls/pass), degrades to abstain on any failure — flag `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` (default **OFF**). Detect-only arbiter proven live; the vLLM tie-break is proven CONSULTED live (it correctly abstained on symmetric evidence), but a successful LLM PICK is unobserved-live so far. Whether disputes COEXIST for it to group depends on the write-path flag `LEGBA_FACT_CONTENTION` (default **OFF**); both flags are enabled only on this instance via the gitignored `.env`. |
+| Phase-D graph-metrics legs | **live** | `structural_balance` / `graph_mining` / `nexus_decay` WRITE rows via `_graph_metrics_sink.py` (previously inert). |
 | ACH outcome-resolution + calibration | **live (self-consistency-flagged)** | `competing_hypotheses` status-transitions resolve to `resolved_outcome`; `calibration_tracking` computes a Brier. **Caveat:** absent an exogenous outcome the Brier is a SELF-CONSISTENCY measure, tagged `brier_self_consistency_only` / `self_consistency_only=true` — NOT calibration against reality. The exogenous-outcome seam is preserved. |
-| `signals.source_credibility` at ingest | **live (legacy backlog)** | Now populated at ingest by a host-lookup in `source_actor.lookup_source_credibility` (the column was 100% NULL because the pipeline FILTER only ran when a descriptor bound the `source_credibility` kind, which the live descriptors don't). **Caveat:** this fixes NEW signals; pre-fix rows stay NULL until an optional backfill runs. |
-| Journal assessor (first-person reflective voice) | **live** | The ONE analyst pointed at the whole organism (its own self / state / flow) — a perspective OVER the rest of the flow, not another slice of it. Emits the 11th OutputKind `journal` into the dedicated `journal_entries` table (migration 0048), fully OFF the fact/finding/nexus chain (always-empty `derived_from`, excluded from the lineage catalog — it NEVER writes a fact/finding/nexus). `journal_assessor` is an EXTENSION analyst kind (registered via the vocabulary family, not a member of the closed built-in `AnalystKind` enum). Two descriptors, one kind: an ENTRY tier (`analyst_journal_assessor`, every 12h) and a CONSOLIDATION tier (`analyst_journal_consolidator`, daily 02:00 UTC, which distils prior consolidation + recent entries into one forward-carried narrative and fires `supersede_prior_consolidation`). Runs as a single GLOBAL meta run per tick (`target_filter=None`). **Per-phase LLM split:** the agentic GATHER investigation loop runs on the core OpenAI-compatible plane (`llm.primary.openai_compat`); the VOICE (in-voice field-notes + NARRATE synthesis) runs on the Anthropic plane (Opus 4.8, `llm.anthropic.opus_4_7`) — so Anthropic spend is only the bounded final voice synthesis. Grant-locked to two non-write-fact packs (`journal_read` incl. 9 self-instruments, `journal_propose`). Live-validated (a real off-chain entry, honesty_flags forced from substrate metrics, receipt-chained, in-voice). **Future:** a critic + optimizer over the journal's own voice (Wave 5) is designed-not-built, gated on first building a critic actuator. |
-| Journal propose-and-gate queue | **live (human-gated)** | Everything the journal wants to affect outward — a `correction`, a `change`, or a `self_revision` (including edits to its OWN instructions via `propose_self_revision`; protected sections auto-reject) — goes to the human-gated `journal_proposals` queue, NEVER a live table. A human accepts/rejects (routes in §1); accept runs an idempotent per-kind apply worker. The journal's only un-gated effect is its OWN continuity (it reads its last entry + current consolidation into its next run). **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry. |
+| `signals.source_credibility` at ingest | **live (legacy backlog)** | Populated at ingest by a host-lookup in `source_actor.lookup_source_credibility`. **Caveat:** this fixes NEW signals; pre-fix rows stay NULL until an optional backfill runs. |
+| Journal propose-and-gate queue | **live (human-gated)** | Everything the journal wants to affect outward — a `correction`, a `change`, or a `self_revision` (including edits to its OWN instructions via `propose_self_revision`; protected sections auto-reject) — goes to the human-gated `journal_proposals` queue, NEVER a live table. A human accepts/rejects (routes in §1); accept runs an idempotent per-kind apply worker. **Caveat:** the `correction` + `self_revision` apply paths are tested end-to-end; the `change`-apply path is import-verified but NOT yet exercised against a live registry (SEAMS #25). (The journal's own entry/consolidator cadence RUNS — see the `journal_assessor` + `journal_consolidator` row above; only the routing of accepted proposals back into the spine is a future item.) |
 
 ---
 
@@ -103,21 +146,37 @@ authoritative per-kind maturity tracking still lives in `planning/` +
   `.journal` (`system.journal`, "Journal" — renders journal entries off
   `GET /api/v1/journal` with provenance chips that deep-link to the cited
   record and `[needs_citation]` / perspective spans in a distinct style;
-  `tier: 'live'`, not in `PREVIEW_KINDS`/`HIDDEN_KINDS`. **Note:** tsc-green +
-  fully wired but pending its first real in-browser render at the time of
-  writing.)
+  `tier: 'live'`. Entries accrue on the journal's own cadence — `journal_assessor`
+  every 12h + `journal_consolidator` daily, an introspective instrument off the
+  fact/finding/nexus chain — §1.1.)
+* **`system.eval_scorecard`** ("Eval Scorecard") now renders TWO honest surfaces:
+  the **skill scoreboard** (P4-T4, off `GET /v3/eval/calibration` — the exogenous
+  Brier + acute-forecast BSS; a thin/degenerate pilot shows "skill claim
+  withheld", NEVER a bare positive number) and the **banded per-country
+  scorecard** (off `GET /v3/eval/country_scorecard` — one honest card per active
+  g20/watch desk (24 today); a dimension with no qualifying verified claim shows
+  "insufficient-evidence", never a fabricated band). It also carries the
+  cross-analyst critic rollup (`/v3/eval/scorecard`).
 * **System Status** (`system.status`, "System Status" — the per-component /
-  per-layer health view that the operator repeatedly asked for: composes
-  **Acquisition** (per-source firing matrix off
+  per-layer health view: composes **Acquisition** (per-source firing matrix off
   `GET /api/v1/v3/system/source-firing`), **Analysis** (per-analyst cadence
   health off `GET /api/v1/v3/system/analyst-cadence`, read from `analyst_traces`
-  because `actor_state.last_run_at` is NULL — the gap the existing Actor Health
-  panel could not fill), **Queues** (consumer backpressure off the
-  orphan-filtered `GET /api/v1/v3/streams/consumer_lag`), and **Infra** into one
-  page; `tier: 'live'`, not in `PREVIEW_KINDS`/`HIDDEN_KINDS`. **Note:** tsc-green
-  with both new routes confirmed serving live data, but pending its first real
-  in-browser render at the time of writing.)
-* v4 rooms: `v4.map`, `v4.flow`, `v4.why`
+  because `actor_state.last_run_at` is NULL — the gap the Actor Health panel
+  could not fill), **Queues** (consumer backpressure off the orphan-filtered
+  `GET /api/v1/v3/streams/consumer_lag`), and **Infra** into one page;
+  `tier: 'live'`.)
+* v4 rooms: `v4.map`, `v4.flow`, `v4.why`. The **`v4.why`** room now LEADS with
+  the four bounded-unit reads (`CountryUnitsAssessment.tsx`, each carrying its
+  per-unit eval badge) as the headline per-country product surface; the old
+  `country_assessor` synthesis was demoted to a collapsible feeder (SEAMS #35)
+  and is now retired at the backend (§1.1). `ProvenanceTrail.tsx` drills a
+  selected node unit → cited source with the per-hop "chain-consistent
+  (single-node)" badge, and the `LineageGraph` / temporal-map lenses render the
+  progressive hash-chained lineage DAG over a read (per-hop "chain-consistent
+  (single-node)" badge, not a cryptographic signing claim). `WorldAssessment.tsx`
+  renders the
+  world composition (`world_assessor`), NOT a monolithic verdict banner (that
+  framing was demoted, SEAMS #34).
 * **`ContestedBadge`** (Holes-B Wave 5, #101 — `v4/components/ContestedBadge.tsx`):
   not a standalone registered panel but a self-contained **component** mounted
   into two existing live panels. It reads `GET /api/v1/contention` (§1) through
@@ -125,15 +184,15 @@ authoritative per-kind maturity tracking still lives in `planning/` +
   is not contested (the common case → zero visual noise), and is read-only (it
   never mutates a fact, group, or marker; a 5xx lookup failure shows a subtle
   affordance rather than masking as "uncontested"). Two mount points:
-  **(1) `v4.why` ProvenanceTrail** (`ProvenanceTrail.tsx`) — fact-keyed
-  (`<ContestedBadge factId={…} />`, precise `?fact_id=` lookup → 0/1 group) on a
-  lineage node whose `row_kind === 'fact'`; **(2) `target.claims`** (`Claims.tsx`)
-  — subject-keyed (`<ContestedBadge subject={claim.statement} />`, `?subject=`
-  → 0..N groups, surfaces the first LIVE one) since findings carry no real
-  `facts.id`. When contested it shows a "Contested" badge ("Contested — no
-  winner" on a near-tie abstain) plus a per-value support panel (distinct-source
-  count, credibility-share, arbiter score, surfaced-winner flag). **live** code,
-  but the underlying disputes only ACCUMULATE when the write-path flag
+  **(1) `v4.why` ProvenanceTrail** — fact-keyed (`<ContestedBadge factId={…} />`,
+  precise `?fact_id=` lookup → 0/1 group) on a lineage node whose
+  `row_kind === 'fact'`; **(2) `target.claims`** (`Claims.tsx`) — subject-keyed
+  (`<ContestedBadge subject={claim.statement} />`, `?subject=` → 0..N groups,
+  surfaces the first LIVE one) since findings carry no real `facts.id`. When
+  contested it shows a "Contested" badge ("Contested — no winner" on a near-tie
+  abstain) plus a per-value support panel (distinct-source count,
+  credibility-share, arbiter score, surfaced-winner flag). **live** code, but the
+  underlying disputes only ACCUMULATE when the write-path flag
   `LEGBA_FACT_CONTENTION` (default **OFF**) is set — so on a default build both
   mount points render no badge.
 
@@ -141,12 +200,12 @@ authoritative per-kind maturity tracking still lives in `planning/` +
 
 | Panel | Why preview |
 |---|---|
-| `system.optimizer.diff` (`OptimizerDiff`) | Backend `GET /v3/optimizer/candidates/{id}/diff` is **now wired** (`v3_api.py:519`, snapshot-based, no dspy import); kept badged `preview` only because the human-gated promote flow around it is still maturing. The diff itself renders live data. |
+| `system.optimizer.diff` (`OptimizerDiff`) | Backend `GET /v3/optimizer/candidates/{id}/diff` is **wired** (`v3_api.py:880`, snapshot-based, no dspy import) over the SCOPED `unit_optimizer` (§1.1); kept badged `preview` only because the human-gated promote flow around it is still maturing. The diff itself renders live data. |
 | `system.backfill` (`Backfill`) | Honest pending UI; the replay button is gated/disabled rather than wired to a destructive backfill. Should be **disabled-not-exposed** in a product build. |
 | `system.search` (`Search`) | Client-only today (no server-backed global search index wired). |
 | `system.alert_center` (`AlertCenter`) | Client-only alert view; `alert.emit` + `alert_sink_deliveries` are wired backend-side, but this panel does not yet read them. |
 | `system.report_export` (`ReportExport`) | Client-only export composer; no server report-render route. |
-| `system.tenant_view` (`TenantView`) | Client-only owner-grouping convenience; Legba ships single-tenant (`docs/DIRECTION.md` §0) — it surfaces the descriptor-`owner` rollup, it does NOT enforce any tenant isolation boundary. **Now also in `HIDDEN_KINDS`** (#90 Wave A) so it is not surfaced in default nav. |
+| `system.tenant_view` (`TenantView`) | Client-only owner-grouping convenience; Legba ships single-tenant (`docs/DIRECTION.md` §0) — it surfaces the descriptor-`owner` rollup, it does NOT enforce any tenant isolation boundary. **Also in `HIDDEN_KINDS`** (#90 Wave A) so it is not surfaced in default nav. |
 
 ### Hidden — built + registered, not surfaced in default nav
 
@@ -169,8 +228,8 @@ The set spans two waves:
   `PREVIEW_KINDS`), `system.targets.roster` (collapsed into the Target
   Registry), `v4.case` (Casework board shelved), `system.tenant_view`
   (single-tenant), `v4.assessment` (World Assessment is a FINDING, shown in the
-  Inspector), `system.runtime` (Runtime Actor Health deduped against
-  `system.actor_health`).
+  Inspector — consistent with the `world_assessor` composition of §1.1),
+  `system.runtime` (Runtime Actor Health deduped against `system.actor_health`).
 
 The deeper operator/diagnostic panels NOT in `HIDDEN_KINDS` (dead-letter,
 governor, audit-chain, stream-lag, etc.) remain registered and reachable by
@@ -182,8 +241,10 @@ kept them live.
 ## 3. Release-gate hook
 
 `scripts/release_gate.sh` stage 4 builds `legba-ui-build` (the tsc gate), so
-a panel that fails type-checking blocks the release. The `tier` flag now lives
-in `def()` (+ the `PREVIEW_KINDS` / `HIDDEN_KINDS` sets), so the classification
-is machine-readable in code — but there is still no automated check that THIS
-matrix stays in sync with `registry.ts`; keep it current by hand against those
-three sources when panels change tier.
+a panel that fails type-checking blocks the release. The `tier` flag lives in
+`def()` (+ the `PREVIEW_KINDS` / `HIDDEN_KINDS` sets), so the classification is
+machine-readable in code — but there is still no automated check that THIS
+matrix stays in sync with `registry.ts` (§2) or with the descriptor cadence /
+lifecycle state that drives the §1.1 `frozen` / `retired` rows; keep it current
+by hand against those sources when panels change tier or an analyst is
+frozen/retired.

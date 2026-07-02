@@ -1,52 +1,47 @@
-# world_assessor — the GLOBAL situational-awareness meta-analyst.
+# world_assessor — the GLOBAL COMPOSITION (P3-T5).
 #
-# A single world-picture LLM run every 6h: one executive one-pager Finding that
-# synthesizes the whole tenant-wide signal slice (NOT a per-country fan-out).
-# This is the global complement to country_assessor (which is scoped per-G20
-# country by `has_tag("g20")` and fans out one run per matched target).
+# The crown of the tower: ONE world-picture second-order Finding per cadence
+# tick that COMPOSES the per-country reads (country_composition) — NOT a raw
+# 24h signal one-pager. Every factual clause is cited [[ref:<uuid>]] to a
+# CITED country-read finding_id; the composition then gets the MANDATORY
+# faithfulness verify (the generalized pass recognizes the [[ref:uuid]]->
+# sub-claim bridge) and the T7 hedge/double-count cap folds
+# effective_confidence = min(confidence, overall_score).
 #
-# ── kind = inline_target (justified) ──────────────────────────────────────
-# `inline_target` is the canonical LLM-bearing finding kind whose
-# `method.kind` is `llm_planner` and whose builder branch
-# (analyst_deps_builder._build_inline_target) wraps the configured LLM into the
-# InlineTargetRunner and emits one FindingPayload per run. The OTHER LLM kinds
-# don't fit: `meta_findings_synthesizer` reads ONLY other analysts' findings
-# (analyst_outputs), not the raw global signal slice; `deterministic` carries
-# no LLM. So inline_target + a META (no-targets) subscription is the correct
-# archetype for "one global LLM run over the recent global signal pool".
+# ── why kind = meta_findings_synthesizer (repointed from inline_target) ──────
+# P0-T7 already DEMOTED this analyst's old role as a raw-signal executive
+# one-pager (SEAMS #34): the world read is no longer a first-order LLM pass
+# over the tenant-wide signal slice. It is now a COMPOSITION — an
+# analysis-of-analysis over the verified country reads — so the correct
+# archetype is `meta_findings_synthesizer` (reads OTHER analysts' findings via
+# `subscription.other_analysts`, not raw signals). The same kind runs
+# per-country under analyst_country_composition.yaml (a `targets` block ⇒
+# per-target fan-out) and GLOBALLY here (NO `targets` block ⇒ one global run
+# with target_filter=None). No code fork: the kind selects the WORLD
+# composition prompt in-kind off the `composition` option the actor stamps for
+# a verify-declaring global meta run, and READ_SLICE honors the global-
+# composition branch (include_meta=True + verify-floor) so it reads the
+# verified, meta-marked country_composition findings.
 #
-# ── single GLOBAL run (justified from _cadence_targets) ───────────────────
+# ── single GLOBAL run (justified from _cadence_targets) ─────────────────────
 # What makes a run global vs. per-target is the PRESENCE of a
-# `subscription.targets` selector — see dapr_actors.AnalystActor:
-#   * AnalystActor._cadence_targets() returns None when
-#     `subscription.targets is None` (the META case), and the cadence reminder
-#     then fires `self.run({"trigger_kind": "cadence"})` exactly ONCE — a
-#     single global run with target_filter=None.
-#   * A `targets` block — EVEN ONE WITH NO PREDICATE — is treated as a target
-#     selector: `_cadence_targets` returns "all active targets" and the actor
-#     FANS OUT one worker run per target. That is NOT what we want here.
-# Therefore this descriptor declares NO `targets` block (mirroring the META
-# integrity_sweep). With target_filter=None the default slice reader
-# (_read_substrate_slice) reads the recent tenant-wide signal pool over its
-# 24h default window — the global 24h signal slice the world assessment needs.
+# `subscription.targets` selector. This descriptor declares NONE — so
+# `AnalystActor._cadence_targets()` returns None (the META case) and the
+# cadence reminder fires exactly ONE global run with target_filter=None.
+# Mirrors analyst_meta_synthesizer.yaml's global shape.
 #
-# NOTE on data_types/time_window: the AnalystDescriptor schema's
-# SubscriptionBlock is `extra="forbid"` and exposes ONLY {targets,
-# other_analysts, substrate}; `data_types`/`time_window` exist solely INSIDE a
-# `targets`/`other_analysts` sub-block. Since adding a `targets` block would
-# turn this into a per-target fan-out (above), they cannot be declared at the
-# subscription top level without breaking either validation or the
-# single-global-run contract. The runtime's default reader already yields a
-# signals-only, 24h, global slice — exactly the intended window — so the
-# behavior the task asks for is achieved by the defaults rather than by
-# unsupported subscription keys.
+# ── verify OPT-IN ───────────────────────────────────────────────────────────
+# `method.llm.verify` is the discriminator the whole verify dispatch keys on:
+# the actor fires the faithfulness verify for a meta_findings_synthesizer
+# finding IFF the descriptor DECLARES method.llm.verify (both compositions do;
+# the old global analyst_meta_synthesizer.yaml does NOT → it stays excluded).
 
 identity:
   id: world_assessor
-  name: World Situational-Awareness Assessor
+  name: World Situational-Awareness Composition
   schema_uri: legba/analyst/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
-  kind: inline_target
+  kind: meta_findings_synthesizer
   type_signature:
     input_type: legba.runtime.SignalList
     output_type: legba.runtime.Finding
@@ -56,79 +51,81 @@ identity:
 
 subscription:
   # No `targets` block → META analyst: ONE global run per cadence tick over the
-  # tenant-wide signal pool (see _cadence_targets → None → single global run).
-  # Mirrors integrity_sweep's META subscription shape.
-  other_analysts: []
+  # per-country reads (see _cadence_targets → None → single global run). The
+  # composition reads the OUTPUTS of country_composition, not raw signals —
+  # resolved by the kind's READ_SLICE from other_analysts[].id. Because the run
+  # is a verify-declaring GLOBAL meta, READ_SLICE takes the global-composition
+  # branch: it INCLUDES meta-marked findings (country_composition outputs ARE
+  # meta=True) and applies the faithfulness verify-floor so only verify-passed
+  # country reads enter the world slice.
+  other_analysts:
+    - id: country_composition
+      data_types: [finding]
+      time_window: 24h
   substrate:
-    direct_queries: false
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 
 mapping:
   fields: []
   schema_drift_policy: warn_and_continue
 
 method:
+  # Runtime dispatch is on identity.kind (meta_findings_synthesizer); method.kind
+  # only needs to be a valid enum. llm_planner matches the single-turn
+  # chat_complete shape the kind uses (same as analyst_country_composition.yaml).
   kind: llm_planner
-  prompt_module: "legba.runtime.analyst_method:_WORLD_ASSESSOR_SYSTEM"
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
   llm:
+    # MODEL POLICY (operator): composition on the CORE plane via a stack_ref
+    # ($0). NEVER hardcode a model — a stack_ref keeps a later switch a one-line
+    # descriptor PUT.
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 2048
+    # P3-T5: faithfulness VERIFY judge over the WORLD composition itself.
+    # Currently the SAME core reasoning model (llm.primary.openai_compat,
+    # gpt-oss-120B) that writes the units + the per-country + world compositions —
+    # NOT a cross-family judge. Temporary: the 8B Llama-3.1-8B judge proved too
+    # weak (harsh + mis-aimed); a dedicated reasoning judge is planned. KNOWN
+    # LIMITATION: same-model judging shares blind spots, so the faithfulness signal
+    # is weaker than an independent cross-family judge. This verify block's
+    # PRESENCE (not target_id) is the OPT-IN the dispatch keys on — it makes the
+    # actor run the faithfulness pass for this global meta finding, while the old
+    # analyst_meta_synthesizer.yaml (no verify block) stays excluded. The
+    # generalized verify pass recognizes the composition's [[ref:<uuid>]] →
+    # country-read bridge and hands the judge each cited country read's text as
+    # the evidence for each composed clause. Gated by LEGBA_VERIFY_LLM_JUDGE;
+    # soft-fails to the deterministic floor (which still enforces the T7
+    # anti-double-counting + hedge-laundering cap). Model stays a switchable
+    # stack_ref.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
   budget_tokens_per_day: 1000000
-  # One global run per 6h tick (4 ticks/day). Per-run tokens for a global
-  # 50-signal slice ≈ input (~7.5k worst case) + 2048 output ≈ 9.6k tok/run;
-  # 4 × 9.6k ≈ 38k tok/day — well under the 120k/day cap (~3x headroom). The
+  # Composition budget: a global compose over ≤N country reads + 768 output. The
   # budget retry policy stays at the default `pause_until_next_window`: if the
-  # cap is ever projected to be crossed, the actor pauses THIS analyst until
-  # the next UTC bucket rather than demoting to a (non-wired) paid fallback.
+  # cap is ever projected to be crossed, the actor pauses THIS analyst until the
+  # next UTC bucket rather than demoting to a (non-wired) paid fallback.
   retry:
     budget:
       strategy: pause_until_next_window
 
 cadence:
-  # Every 6h, on the hour (00:00 / 06:00 / 12:00 / 18:00 UTC).
-  fallback_schedule: "0 */6 * * *"
-  # Cooldown MUST stay below the cadence interval (21600s): it is stamped at
-  # run-completion, so setting it == the interval pushes it past the next
-  # scheduled fire and silently halves the cadence (6h→12h). 5h50m leaves a
-  # 10-min margin (matching country_critic) while still blocking a coalesced
-  # trigger burst from spending a second global LLM call. (The runtime also
-  # applies a cadence-cooldown slack as a belt-and-braces guard.)
-  cooldown_seconds: 21000
+  # Run AFTER country_composition lands. country_composition composes at
+  # :30 past 11 / 23 UTC; the world composition runs at 00:00 / 12:00 UTC
+  # (~30m later) so the freshest full set of country reads is present.
+  fallback_schedule: "0 0,12 * * *"
+  # 11h — below the 12h interval, stamped at run-completion. A cooldown == the
+  # 12h interval would land past the next fire and silently HALVE the cadence
+  # (12h→24h; see cefd8ca). 11h keeps a 1h margin (matches country_composition).
+  cooldown_seconds: 39600
 
-# Tier-1 knowledge grounding (L-241). Stale-cutoff LLMs backfill current world
-# state (officeholders, alliances) from a training prior that predates the
-# present — observed: this assessor called the CURRENT US president a "former"
-# one. With grounding.enabled the deps-builder PREPENDS a dated "AUTHORITATIVE
-# CURRENT CONTEXT" preamble built from the CURRENT authoritative substrate
-# facts (seed/curated, temporal-honesty-gated) about the slice's entities/geo
-# before the LLM call. A global assessor has no single target geo, so its
-# grounding leans on slice_entities (the named figures the world slice talks
-# about); target_geo is harmless (the global run has no target_id, so it
-# contributes nothing). Token-capped at max_facts.
-grounding:
-  enabled: true
-  scope: [target_geo, slice_entities]
-  # substrate = the ground-truth facts/nexuses block; situations = the SEPARATE
-  # "ASSESSED SITUATIONS" block (ongoing clustered frames, analysis-derived).
-  # world_assessor has no country target, so it grounds against the top open
-  # frames across all topics (the global situational picture).
-  # graph_structure = the SEPARATE "ASSESSED STRUCTURE" block — the global
-  # knowledge-graph structure (most-tense actors / brokers / proxy chains) from
-  # the structural_balance + graph_mining metrics; analysis-derived, fenced off.
-  sources: [substrate, situations, graph_structure]
-  # FIX-2: always-on world-state. The global slice can be flooded by a
-  # high-volume source (e.g. NWS weather alerts = ~70% of 24h), starving the
-  # geopolitical signals — so without these the seeded active-conflict nexuses
-  # (US⇄Iran, Israel⇄Iran) never ground. These names match facts.subject /
-  # nexuses.subject and are queried regardless of slice content.
-  static_candidates: [Iran, United States, Israel, Russia, Ukraine, China, Gaza]
-  max_facts: 30
-
-# Surface the assessment as an A2A skill, mirroring country_assessor's output
-# binding (the FindingPayload still lands in analyst_outputs via the kind's
-# default OUTPUT_KIND.FINDING regardless).
+# Surface the composition as an A2A skill, mirroring the prior world_assessment
+# output binding (the FindingPayload still lands in analyst_outputs via the
+# kind's default OUTPUT_KIND.FINDING regardless).
 outputs:
   - kind: a2a_skill
     config:

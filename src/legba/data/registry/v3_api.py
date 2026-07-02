@@ -82,6 +82,69 @@ class ScorecardRow(BaseModel):
     produced_at: str
 
 
+class CalibrationScoreboard(BaseModel):
+    """The platform's HONEST skill scoreboard — the freshest ``kind='calibration'``
+    finding, reduced EXACTLY as :meth:`SubstrateQueryPort.get_calibration` (~2091).
+
+    Read INLINE registry-side (the ``journal_api._read_calibration`` slim precedent,
+    ~329) so the eval panel never pulls a runtime handler into the registry image.
+
+    HONESTY (the whole point of P4): ``brier`` / ``brier_exogenous`` is the
+    EXOGENOUS-only headline — the only number that measures calibration against
+    reality. The acute-forecast pilot lives in its OWN keys and is NEVER pooled into
+    the headline. ``forecast_unproven`` / ``calibration_thin`` are the deterministic
+    honesty verdict the UI gates on: a thin exogenous sample or a degenerate pilot
+    reads as a first-class honest state (``INSUFFICIENT`` / ``withheld``), never a
+    bare positive number. ``available`` is false before any calibration finding
+    exists — a distinct "no pilot yet" state, NOT a failed pilot.
+    """
+    available: bool
+    produced_at: str | None = None
+    # Headline calibration (exogenous-only).
+    brier: float | None = None
+    brier_exogenous: float | None = None
+    exogenous_sample_size: int | None = None
+    sample_size: int | None = None
+    insufficient_exogenous: bool | None = None
+    self_consistency_only: bool | None = None
+    # Segregated acute-forecast pilot (n<30, reported honestly — its own keys).
+    brier_forecast_acute: float | None = None
+    brier_skill_score: float | None = None
+    forecast_acute_sample_size: int | None = None
+    forecast_acute_ready: bool = False
+    forecast_acute_degenerate: bool = False
+    forecast_acute_status: str | None = None
+    # The deterministic honesty verdict (absence of proof is NOT proof of skill).
+    forecast_unproven: bool = True
+    calibration_thin: bool = True
+    refs: list[str] = Field(default_factory=list)
+
+
+class CountryScorecard(BaseModel):
+    """P4-T3 — the latest banded per-country scorecard (kind='scorecard').
+
+    DISTINCT from :class:`ScorecardRow` (the cross-analyst CRITIC rollup on
+    ``/eval/scorecard``): this is the P4-T2 producer's per-country banded verdict,
+    served on ``/eval/country_scorecard``. Read INLINE registry-side — it PROJECTS
+    the persisted ``data.bands`` (no re-banding, no scorecard_banding /
+    deterministic import), so the registry image stays slim (the
+    ``journal_api._read_calibration`` precedent).
+
+    HONESTY: one card per active G20 country; a dimension band NEVER exists
+    without a real basis id, and an insufficient-evidence dimension carries an
+    empty-but-explicit basis (the UI renders the honest not-enough-verified-claims
+    state, never a fabricated band). An empty list (no scorecard computed yet) is
+    a first-class honest state, NOT a 404.
+    """
+    target_id: str
+    id: str
+    produced_at: str
+    generated_at: str | None = None
+    floors: dict[str, float] = Field(default_factory=dict)
+    dimensions: dict[str, Any] = Field(default_factory=dict)
+    composition: dict[str, Any] = Field(default_factory=dict)
+
+
 class ConsumerLagRow(BaseModel):
     """One JetStream durable-consumer lag snapshot (StreamLag panel)."""
     stream: str
@@ -1064,6 +1127,185 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                     ),
                 )
             )
+        return out
+
+    @router.get("/eval/calibration", response_model=CalibrationScoreboard)
+    async def eval_calibration(
+        principal: str = Depends(require_bearer),
+    ) -> CalibrationScoreboard:
+        """The honest skill scoreboard — the exogenous Brier + the SEGREGATED
+        acute-forecast BSS, tagged ready / accumulating / degenerate.
+
+        Reduces the freshest ``kind='calibration'`` finding EXACTLY as
+        :meth:`SubstrateQueryPort.get_calibration` (~2091), but reads it INLINE
+        here so the registry image stays slim (no runtime / deterministic-handler
+        import — the ``journal_api._read_calibration`` precedent, ~329). The panel
+        keys every displayed string off the flags this returns, so a thin exogenous
+        sample OR a degenerate acute pilot reads as an honest withheld state, never
+        a bare positive number.
+        """
+        async with deps.descriptor_registry.pg.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, produced_at, data FROM public.analyst_outputs "
+                "WHERE kind = 'calibration' "
+                "ORDER BY produced_at DESC, id DESC LIMIT 1"
+            )
+        if row is None:
+            # No calibration finding computed yet — a DISTINCT honest state
+            # ("no pilot yet"), not a failed pilot. Both legs read unproven.
+            return CalibrationScoreboard(available=False)
+        raw = row["data"]
+        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        bss = data.get("brier_skill_score")
+        ready = bool(data.get("forecast_acute_ready"))
+        degenerate = bool(data.get("forecast_acute_degenerate"))
+        # The forecast leg counts as PROVEN only if it is ready, non-degenerate,
+        # and has earned positive skill (mirrors get_calibration ~2128).
+        forecast_proven = (
+            ready and not degenerate and isinstance(bss, (int, float)) and bss > 0.0
+        )
+        exo_n = data.get("exogenous_sample_size")
+        calibration_thin = not isinstance(exo_n, int) or exo_n < 5
+        produced = row["produced_at"]
+
+        def _int_or_none(v: Any) -> int | None:
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+        return CalibrationScoreboard(
+            available=True,
+            produced_at=(
+                produced.isoformat()
+                if hasattr(produced, "isoformat")
+                else str(produced)
+            ),
+            brier=data.get("brier"),
+            brier_exogenous=data.get("brier_exogenous"),
+            exogenous_sample_size=_int_or_none(exo_n),
+            sample_size=_int_or_none(data.get("sample_size")),
+            insufficient_exogenous=data.get("insufficient_exogenous"),
+            self_consistency_only=data.get("self_consistency_only"),
+            brier_forecast_acute=data.get("brier_forecast_acute"),
+            brier_skill_score=bss if isinstance(bss, (int, float)) else None,
+            forecast_acute_sample_size=_int_or_none(
+                data.get("forecast_acute_sample_size")
+            ),
+            forecast_acute_ready=ready,
+            forecast_acute_degenerate=degenerate,
+            forecast_acute_status=data.get("forecast_acute_status"),
+            forecast_unproven=not forecast_proven,
+            calibration_thin=calibration_thin,
+            refs=[str(row["id"])],
+        )
+
+    @router.get("/eval/country_scorecard", response_model=list[CountryScorecard])
+    async def eval_country_scorecard(
+        target_id: str | None = Query(default=None),
+        principal: str = Depends(require_bearer),
+    ) -> list[CountryScorecard]:
+        """The latest P4-T2 banded scorecard per active G20 country (or one, when
+        ``target_id`` is given).
+
+        Reads the freshest live-head ``kind='scorecard'`` row per country and
+        PROJECTS its persisted ``data.bands`` — no re-banding, no
+        scorecard_banding / deterministic import (the ``eval_calibration`` /
+        ``journal_api._read_calibration`` slim precedent), so the registry image
+        stays slim. The path is DELIBERATELY ``/eval/country_scorecard`` (NOT
+        ``/eval/scorecard``, which is the cross-analyst critic rollup).
+
+        Returns an empty list when no scorecard has been computed yet — a
+        first-class honest state, NOT a 404. Each row's per-dimension bands carry
+        the basis ids (empty-but-explicit for an insufficient dimension) the UI
+        drills into the P1 evidence + signed lineage.
+        """
+        async with deps.descriptor_registry.pg.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (target_id)
+                       target_id, id::text AS id, produced_at, data
+                  FROM public.analyst_outputs
+                 WHERE kind = 'scorecard'
+                   AND superseded_by IS NULL
+                   AND ($1::text IS NULL OR target_id = $1)
+                 ORDER BY target_id, produced_at DESC, id DESC
+                """,
+                target_id,
+            )
+        out: list[CountryScorecard] = []
+        for r in rows:
+            raw = r["data"]
+            data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            # The row's `data` column holds the WHOLE ScorecardPayload dump
+            # (title/body/.../data/kind_marker); the product bands live one level
+            # deeper under the payload's free-form `data` dict → data.data.bands.
+            bands = ((data.get("data") or {}).get("bands")) or {}
+            produced = r["produced_at"]
+            floors_raw = bands.get("floors") or {}
+            floors = {
+                str(k): float(v)
+                for k, v in floors_raw.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }
+            out.append(
+                CountryScorecard(
+                    target_id=r["target_id"],
+                    id=r["id"],
+                    produced_at=(
+                        produced.isoformat()
+                        if hasattr(produced, "isoformat")
+                        else str(produced)
+                    ),
+                    generated_at=bands.get("generated_at"),
+                    floors=floors,
+                    dimensions=bands.get("dimensions") or {},
+                    composition=(
+                        bands.get("composition") or {"present": False, "basis": []}
+                    ),
+                )
+            )
+        return out
+
+    @router.get("/eval/analyst_runtime")
+    async def eval_analyst_runtime(
+        window_hours: int = Query(default=24, ge=1, le=720),
+        principal: str = Depends(require_bearer),
+    ) -> list[dict[str, Any]]:
+        """Per-analyst run-timing from ``analyst_traces`` over a window.
+
+        Surfaces the run-time observability that is written per run (run_started_at
+        / run_ended_at / status) but not otherwise exposed on an API: per analyst,
+        the run count, avg/max wall-clock seconds, last run, and non-success count.
+        Read-only, inline-SQL, registry-slim (no runtime/deterministic import)."""
+        async with deps.descriptor_registry.pg.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT analyst_id,
+                       count(*) AS runs,
+                       round(avg(EXTRACT(EPOCH FROM (run_ended_at - run_started_at)))::numeric, 1) AS avg_seconds,
+                       round(max(EXTRACT(EPOCH FROM (run_ended_at - run_started_at)))::numeric, 1) AS max_seconds,
+                       max(run_started_at) AS last_run_at,
+                       count(*) FILTER (
+                           WHERE status NOT IN ('success', 'ok', 'completed')
+                       ) AS non_success
+                  FROM analyst_traces
+                 WHERE run_started_at > NOW() - make_interval(hours => $1)
+                   AND run_ended_at IS NOT NULL
+                 GROUP BY analyst_id
+                 ORDER BY runs DESC, analyst_id
+                """,
+                int(window_hours),
+            )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            lr = r["last_run_at"]
+            out.append({
+                "analyst_id": r["analyst_id"],
+                "runs": int(r["runs"]),
+                "avg_seconds": float(r["avg_seconds"]) if r["avg_seconds"] is not None else None,
+                "max_seconds": float(r["max_seconds"]) if r["max_seconds"] is not None else None,
+                "last_run_at": lr.isoformat() if hasattr(lr, "isoformat") else str(lr),
+                "non_success": int(r["non_success"]),
+                "window_hours": int(window_hours),
+            })
         return out
 
     return router

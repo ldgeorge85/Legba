@@ -26,6 +26,7 @@ try:
         ConsumerConfig,
         ConsumerInfo,
         DeliverPolicy,
+        DiscardPolicy,
         RetentionPolicy,
         StreamConfig,
     )
@@ -36,6 +37,7 @@ except Exception:  # pragma: no cover
     StreamConfig = None  # type: ignore[assignment]
     ConsumerConfig = None  # type: ignore[assignment]
     ConsumerInfo = None  # type: ignore[assignment]
+    DiscardPolicy = None  # type: ignore[assignment]
     RetentionPolicy = None  # type: ignore[assignment]
     AckPolicy = None  # type: ignore[assignment]
     DeliverPolicy = None  # type: ignore[assignment]
@@ -209,8 +211,17 @@ class NatsStore:
         retention: str = "limits",
         max_age_seconds: int = 0,
         max_msgs: int = -1,
+        discard: str = "old",
     ) -> bool:
-        """Idempotently create a JetStream stream. Returns True if created."""
+        """Idempotently create a JetStream stream. Returns True if created.
+
+        ``discard`` selects the full-stream policy (only bites once ``max_msgs``/
+        ``max_age`` is reached): ``"old"`` (JetStream default) evicts the OLDEST
+        message to accept a new publish; ``"new"`` REJECTS the new publish (the
+        publisher's ``js.publish`` raises) so an accept-and-enqueue front can turn
+        a full buffer into honest backpressure (503) rather than silently dropping
+        already-accepted work. Used ``discard="new"`` for ``legba_inbound`` (S1).
+        """
         try:
             await self.js.stream_info(name)
             return False
@@ -225,6 +236,10 @@ class NatsStore:
                     "interest": RetentionPolicy.INTEREST,
                     "workqueue": RetentionPolicy.WORK_QUEUE,
                 }.get(retention.lower(), RetentionPolicy.LIMITS),
+                discard={
+                    "old": DiscardPolicy.OLD,
+                    "new": DiscardPolicy.NEW,
+                }.get(discard.lower(), DiscardPolicy.OLD),
                 # nats-py StreamConfig.max_age is in seconds (float),
                 # not nanoseconds — earlier multiplication was a bug for
                 # any non-zero value. Surfaced by L-124 NATS handler.

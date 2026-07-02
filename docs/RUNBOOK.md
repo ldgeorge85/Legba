@@ -1491,7 +1491,7 @@ manifest is the required step.
 
 ## 19. Codename / prior-host scan findings (2026-06)
 
-A tree scan for `mnemosyne` and `skynet`:
+A tree scan for `mnemosyne` and `<prior-host>`:
 
 * **`mnemosyne` — INTENDED component name, not a codename.** It is the
   federation sibling service Legba does A2A trust-query calls to
@@ -1499,17 +1499,17 @@ A tree scan for `mnemosyne` and `skynet`:
   `mnemosyne_trust_query` analyst tool, the shared signed-envelope shape).
   Pervasive and legitimate across descriptors / clients / provenance.
   **Leave it.** The only edit made was neutralising one docstring's example
-  URL (`mnemosyne.civislux.us` → `mnemosyne.example.org`).
-* **`skynet` — STRAY prior-host codename in git author metadata.** Zero
+  URL (`mnemosyne.<operator-domain>` → `mnemosyne.example.org`).
+* **`<prior-host>` — STRAY prior-host codename in git author metadata.** Zero
   tracked **file-content** hits. But ~90 commits in `origin/main..HEAD`
-  carry the author/committer identity `root@skynet.civislux.us` (a
+  carry the author/committer identity `root@<prior-host>` (a
   prior-host hostname under the operator domain). This is NOT a component
   name; it leaked through git config on an earlier host. The fix is the
   neutral-identity squash recipe in §20 — **do NOT rewrite already-public
   history** (it breaks clones); mint the release commit with a neutral
   identity instead.
-* **Operator domain `civislux.us`.** Neutralised in the cosmetic tracked
-  references this stream owns — the dead `civislux_edge` compose network
+* **Operator domain `<operator-domain>`.** Neutralised in the cosmetic tracked
+  references this stream owns — the dead `<operator-domain>_edge` compose network
   (removed; it was `external: true`, referenced by no service), the compose
   comment, `mnemosyne_a2a.py` docstring, the UI `Dockerfile` comment, the
   a2a-test fallback URLs (now `$LEGBA_PUBLIC_DOMAIN`-driven), and this
@@ -1525,7 +1525,7 @@ bash scripts/prepush_scan.sh           # scans tracked content + origin/main..HE
 BASE=origin/main bash scripts/prepush_scan.sh
 ```
 
-It exits non-zero on: the `skynet` codename or `civislux` domain in tracked
+It exits non-zero on: the `<prior-host>` codename or `<operator-domain>` domain in tracked
 content; a tracked `.env`/secret/private-key file; a `PASS|SECRET|TOKEN|
 API_KEY` assigned a long literal; a high-entropy literal (heuristic); a
 **non-neutral commit author/committer identity** on the push range; or a
@@ -1533,7 +1533,7 @@ tracked `planning/` file. If `gitleaks` is on PATH it also runs (best-effort).
 `mnemosyne` is deliberately NOT scanned (it is a real component — §19).
 
 **Current tree state:** the file-content checks (1–6, 8) are CLEAN. Check 7
-(commit identity) still flags `root@skynet.civislux.us` (+ stray
+(commit identity) still flags `root@<prior-host>` (+ stray
 `wave@localhost` / `wave-agent@localhost` wave-agent identities) on
 `origin/main..HEAD` — resolved by the squash below, which is the intended
 remediation and is **operator-only**.

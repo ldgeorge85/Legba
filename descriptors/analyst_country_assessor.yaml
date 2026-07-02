@@ -44,6 +44,17 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
+    # RETIRED unit. Faithfulness VERIFY judge: production now runs the judge on
+    # the SAME core reasoning model (llm.primary.openai_compat, gpt-oss-120B) that
+    # writes the analysis, NOT a cross-family model — a deliberate, temporary
+    # choice (the 8B Llama-3.1-8B judge proved too weak). The stale raw ref below
+    # is left untouched because this descriptor no longer fires. Gated by
+    # LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic citation-presence
+    # floor if unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.verify.slm_8b
+      expected_family: llm_provider
     max_tokens: 1536
   budget_tokens_per_day: 3000000
   # A3 cadence-vs-budget tuning. The budget retry policy is left at the

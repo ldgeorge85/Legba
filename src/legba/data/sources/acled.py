@@ -10,8 +10,8 @@ pulls from the REST API at ``api.acleddata.com/acled/read`` and emits one
 Reference:
   * API docs:                https://acleddata.com/acled-api/
   * License (non-commercial): https://acleddata.com/terms-of-use/
-  * Pillar / phase context:  /usr/local/deployments/myshit/personal/plans/pillar_legba.md
-  * Source-kind contract:    /usr/local/deployments/myshit/personal/plans/design/legba_kind_contracts.md §2
+  * Pillar / phase context:  planning/pillar_legba.md
+  * Source-kind contract:    planning/design/legba_kind_contracts.md §2
   * Task row:                task_tracker.md §15.3 row L-132
 
 Key API details:

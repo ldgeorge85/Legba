@@ -52,10 +52,17 @@ method:
     ci_level: 90
 
 cadence:
-  # Twice daily — a 7-day forecast does not need frequent refresh.
-  fallback_schedule: "0 */12 * * *"
-  # Below the 12h interval (stamped at completion; see the dapr_actors cadence
-  # cooldown note) — 11h leaves a 1h margin so each country fires both ticks.
+  # ── P0-T6 SEQUENCED FREEZE (SUBTRACT) ──────────────────────────
+  # fallback_schedule is NULLED to freeze the forecast-as-claim predictor: the
+  # dapr_actors on-activate gate (`if schedule:`, ~L1198) registers NO reminder
+  # for a null schedule, so no G20 forecast tick fires. This is a FREEZE, NOT a
+  # deletion — a numeric forecast is a CLAIM that must be scored before it ships
+  # as a producer. The predictor RETURNS at P4 behind a Brier scoreboard
+  # (calibrated, measured) rather than emitting unscored predictions. Declared
+  # in docs/SEAMS.md as a sequenced freeze. To restore: set fallback_schedule
+  # back to "0 */12 * * *" (the prior twice-daily cadence).
+  fallback_schedule: null
+  # Inert without a schedule; retained for the P4 12h-interval floor.
   cooldown_seconds: 39600
 
 # Output sink — mirrors how the pre-pivot india_energy_predictor (and

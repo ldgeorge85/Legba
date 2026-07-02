@@ -1,8 +1,14 @@
 /**
  * AssessmentBanner — the compact, embeddable world_assessor strip (v4).
  *
- * A single-row banner meant to sit atop another room (World / Flow): a globe
- * icon, the label, the latest assessment title, a relative timestamp, and a
+ * FRAMING (P0-T7, glass-tower): this strip is DEMOTED — it surfaces ONE
+ * producer's finding (the `world_assessor` analyst), NOT a global "world
+ * verdict". The composed, verified world view (over per-country assessments)
+ * returns at P3. Keep the label honest: "world_assessor finding", never a
+ * headline verdict banner.
+ *
+ * A single-row strip meant to sit atop another room (World / Flow): a globe
+ * icon, the label, the latest finding's title, a relative timestamp, and a
  * right chevron. The whole row is a button that calls `onOpen` (default no-op)
  * to deep-link into The Why's full {@link WorldAssessment} reading column.
  *
@@ -80,12 +86,12 @@ export default function AssessmentBanner({ onOpen }: AssessmentBannerProps) {
     <button
       type="button"
       onClick={() => onOpen?.()}
-      title="Open the world assessment"
+      title="Open the verified world composition (world_assessor, P3 — over the per-country reads)"
       data-testid="assessment-banner"
       className="flex h-9 w-full items-center gap-2 border-b border-slate-800 bg-surface-200 px-3 text-left text-xs transition-colors hover:bg-surface-100"
     >
       <Globe className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
-      <span className="shrink-0 font-medium text-slate-300">World assessment</span>
+      <span className="shrink-0 font-medium text-slate-300">world_assessor finding</span>
       <span aria-hidden className="shrink-0 text-slate-700">·</span>
       <span className="min-w-0 flex-1 truncate text-slate-400">{title}</span>
       {hasTime && (

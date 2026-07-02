@@ -384,10 +384,20 @@ async def _build_inline_target(
         getattr(descriptor.method, "timeout_seconds", 180) or 180
     )
     # Honour the descriptor's declared system prompt (previously decorative for
-    # this kind). Unset/unresolvable → None → runner uses the kind default.
+    # this kind). P2-T1 (unit-factory): a bounded reasoning unit is JUST a
+    # descriptor — its OWN system prompt drives synthesis. Resolve a
+    # ``method.prompt_module`` ("module:attr") to its prompt constant; when that
+    # is unset/unresolvable, fall back to an INLINE ``method.system_prompt``
+    # string (the unit's prompt text carried verbatim in the descriptor — no
+    # Python module needed to author a new unit). Both unset → None → the runner
+    # uses the kind default _SYSTEM_PROMPT.
     system_prompt = _resolve_prompt_module(
         getattr(descriptor.method, "prompt_module", None)
     )
+    if system_prompt is None:
+        inline_prompt = getattr(descriptor.method, "system_prompt", None)
+        if isinstance(inline_prompt, str) and inline_prompt.strip():
+            system_prompt = inline_prompt
     # Close the optimizer loop (#37): if an operator has promoted a GEPA
     # candidate for this analyst (data->>'promotion_gate' = 'promoted'), its
     # evolved instruction text becomes the live system prompt. Best-effort —
@@ -1290,6 +1300,35 @@ def _narrate_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
         return raw
     if isinstance(narrate, str) and narrate:
         return narrate
+    return None
+
+
+def _verify_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
+    """Extract the StackRef ``raw`` from ``descriptor.method.llm.verify`` (or None).
+
+    The OPTIONAL judge LLM ref for the P0-T2 faithfulness verify pass: the
+    cross-family 8B judge plane (the live ``slm.internal`` Llama-3.1-8B at deploy).
+    ``method.llm`` is an open ``dict[str, Any]`` (schemas/analyst.py), so the
+    ``verify`` key needs NO schema change. Absent / malformed → None, and the
+    caller leaves ``verify_judge`` unset so the verify pass degrades to its
+    deterministic citation-presence floor (zero-regression). Handles the same
+    shape variants as :func:`_primary_llm_component_id` (registry model_dump vs
+    live StackRef).
+    """
+    llm = getattr(descriptor.method, "llm", None) or {}
+    if not isinstance(llm, Mapping):
+        return None
+    verify = llm.get("verify")
+    if verify is None:
+        return None
+    if isinstance(verify, Mapping):
+        raw = verify.get("raw")
+        return str(raw) if isinstance(raw, str) and raw else None
+    raw = getattr(verify, "raw", None)
+    if isinstance(raw, str) and raw:
+        return raw
+    if isinstance(verify, str) and verify:
+        return verify
     return None
 
 

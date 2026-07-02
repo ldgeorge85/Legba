@@ -127,6 +127,12 @@ class FindingRow(BaseModel):
         finding's own ``confidence``. This is the critic ACTUATION: a finding
         the critic graded poorly surfaces a lowered confidence, so the score
         DOES something instead of being a spectator.
+      * ``verification`` — P0-T3: the faithfulness verify pass's detail block
+        (``faithfulness_score`` + the named ``unsupported_spans`` + the
+        ``judge_status`` label) when a faithfulness critique exists, so the
+        operator sees WHY confidence was demoted. NULL for a legacy / unverified
+        finding — and then ``effective_confidence == confidence`` (no
+        regression, no fabricated block).
     """
     id: str
     kind: str
@@ -147,6 +153,9 @@ class FindingRow(BaseModel):
     # S3 critic-actuator (additive, nullable).
     critic_score: float | None = None
     effective_confidence: float | None = None
+    # P0-T3 faithfulness-verify detail (additive, nullable). Names the
+    # unsupported spans so the demotion is explained, never opaque.
+    verification: dict[str, Any] | None = None
 
 
 class SituationRow(BaseModel):
@@ -315,6 +324,9 @@ def _hydrate_finding(row: Any) -> FindingRow:
     effective_confidence = (
         min(confidence, critic_score) if critic_score is not None else confidence
     )
+    # P0-T3 — the faithfulness-verify detail (names the unsupported spans), only
+    # present when a faithfulness critique exists; NULL → no fabricated block.
+    verification = _load_jsonb_opt(row.get("verification"))
     return FindingRow(
         id=str(row["id"]),
         kind=row["kind"],
@@ -334,6 +346,7 @@ def _hydrate_finding(row: Any) -> FindingRow:
         created_at=row["created_at"],
         critic_score=critic_score,
         effective_confidence=effective_confidence,
+        verification=verification,
     )
 
 
@@ -473,8 +486,11 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
     async def list_findings(
         since: datetime | None = Query(default=None),
         target_id: str | None = Query(default=None),
+        target_id_null: bool = Query(default=False),
         analyst_id: str | None = Query(default=None),
+        analyst_id_in: str | None = Query(default=None),
         severity: Severity | None = Query(default=None),
+        q: str | None = Query(default=None),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
         principal: str = Depends(require_bearer),
@@ -493,15 +509,39 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         if since is not None:
             args.append(since)
             where.append(f"f.produced_at >= ${len(args)}")
-        if target_id is not None:
+        # P1-T1 reachability — the ~1100 NULL-target "orphan" findings are
+        # unreachable from any country view. `target_id_null=true` returns ONLY
+        # those orphans. It takes precedence over a (meaningless) co-passed
+        # `target_id` exact filter, since a NULL row can't also equal a value.
+        if target_id_null:
+            where.append("f.target_id IS NULL")
+        elif target_id is not None:
             args.append(target_id)
             where.append(f"f.target_id = ${len(args)}")
         if analyst_id is not None:
             args.append(analyst_id)
             where.append(f"f.analyst_id = ${len(args)}")
+        # P1-T1 reachability — analyst-set reach. `analyst_id_in` is a CSV of
+        # analyst ids; return the UNION (any finding whose analyst_id is in the
+        # set). Composes with a single `analyst_id` (AND) when both are passed.
+        if analyst_id_in is not None:
+            ids = [a.strip() for a in analyst_id_in.split(",") if a.strip()]
+            if ids:
+                args.append(ids)
+                where.append(f"f.analyst_id = ANY(${len(args)}::text[])")
         if severity is not None:
             args.append(severity)
             where.append(f"f.severity = ${len(args)}")
+        # P1-T1 reachability — keyword reach. Full-text match over the
+        # concatenated title+body. `to_tsvector(...) @@ plainto_tsquery(...)` is
+        # correct without a dedicated index (seq scan, scoped by the other
+        # predicates); COALESCE guards the (NOT NULL today, but defensive) text.
+        if q is not None and q.strip():
+            args.append(q)
+            where.append(
+                "to_tsvector('simple', coalesce(f.title, '') || ' ' || "
+                f"coalesce(f.body, '')) @@ plainto_tsquery('simple', ${len(args)})"
+            )
         if cursor is not None:
             cur_at, cur_id = _decode_cursor(cursor)
             args.append(cur_at)
@@ -511,15 +551,23 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             )
 
         args.append(limit + 1)
+        # The lateral picks the LATEST critique per finding and surfaces BOTH the
+        # gate input (overall_score) AND the P0-T3 faithfulness-verify detail
+        # block (cr.data->'data'->'verification' — written by the verify pass via
+        # CritiquePayload.data). The verification block is NULL for a finding with
+        # no faithfulness critique, so the API surfaces no fabricated block and
+        # effective_confidence stays == confidence (no regression).
         sql = f"""
             SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
                    f.data, f.target_id, f.target_version, f.analyst_id,
                    f.analyst_version, f.produced_at, f.derived_from,
                    f.schema_uri, f.run_id, f.created_at,
-                   c.critic_score AS critic_score
+                   c.critic_score AS critic_score,
+                   c.verification AS verification
               FROM analyst_outputs f
               LEFT JOIN LATERAL (
-                  SELECT (cr.data->>'overall_score')::real AS critic_score
+                  SELECT (cr.data->>'overall_score')::real AS critic_score,
+                         (cr.data->'data'->'verification') AS verification
                     FROM analyst_outputs cr
                    WHERE cr.kind = 'critique'
                      AND cr.data->>'analyzed_output_id' = f.id::text

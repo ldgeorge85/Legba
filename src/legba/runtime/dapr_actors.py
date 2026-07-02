@@ -300,6 +300,14 @@ class _AnalystDeps(BaseModel):
     # shared base, which is the documented per-run race risk). None = no
     # write/web GATHER capability (read-only GATHER, or single-shot).
     gather_write_bindings: dict[str, Any] | None = None
+    # P0-T2 faithfulness verify — the resolved judge LLM handler for the
+    # MANDATORY post-finding verify pass. Set by the host resolver iff the
+    # inline_target descriptor declares ``method.llm.verify`` AND the
+    # ``LEGBA_VERIFY_LLM_JUDGE`` flag gates the judge ON (the deterministic floor
+    # runs regardless of this field). ``None`` → the verify pass degrades to its
+    # deterministic citation-presence floor labelled 'judge-unavailable' (it
+    # NEVER fabricates a judge number). Scoped to the inline_target finding kind.
+    verify_judge: Any | None = None
 
 
 _TARGET_DEPS: dict[str, _TargetDeps] = {}
@@ -421,6 +429,29 @@ def _age_derived_from_enabled() -> bool:
     """
     raw = os.environ.get(_AGE_DERIVED_FROM_ENV, "0").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _descriptor_declares_verify(descriptor: Any) -> bool:
+    """True iff the descriptor declares ``method.llm.verify`` (the P0-T2 verify
+    OPT-IN).
+
+    The verify DISPATCH discriminator for the ``meta_findings_synthesizer`` kind:
+    both the per-country and the GLOBAL/world composition carry a
+    ``method.llm.verify`` block; the OLD global ``meta_synthesizer`` does NOT — so
+    keying on this predicate (rather than ``bool(target_id)``) fires the
+    faithfulness verify for the target-LESS world composition while keeping the
+    old global meta excluded. Lazily imports ``_verify_llm_component_id``
+    (runtime-side; the lazy import avoids any module load cycle). Any import/parse
+    error → ``False`` (verify degrades to not-firing, never crashes a run).
+    """
+    try:
+        from .analyst_deps_builder import _verify_llm_component_id
+    except Exception:  # pragma: no cover — defensive; keeps dispatch total
+        return False
+    try:
+        return _verify_llm_component_id(descriptor) is not None
+    except Exception:  # pragma: no cover
+        return False
 
 
 def register_target_deps(actor_id: str, deps: _TargetDeps) -> None:
@@ -1895,6 +1926,35 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 }
                 if target_filter:
                     options["target_id"] = target_filter
+                elif (
+                    deps_bundle.descriptor.identity.kind == "meta_findings_synthesizer"
+                    and _descriptor_declares_verify(deps_bundle.descriptor)
+                ):
+                    # P3-T5 GLOBAL/world composition: no target_id, so the kind
+                    # needs an explicit flag to turn on the WORLD composition
+                    # prompt + the [[ref:uuid]] CITE block (else it falls back to
+                    # the legacy un-cited _SYSTEM_PROMPT and can never cite →
+                    # honest-empty forever). T4: also read the open contested
+                    # groups and stamp them so the kind can append the CONTESTED
+                    # FACTS block + resolve [[contested:<id>]] markers. The read
+                    # is best-effort — an additive enrichment that must NEVER
+                    # block the compose (a contention-table error just omits the
+                    # block).
+                    options["composition"] = True
+                    try:
+                        from ..data.analysts.meta_findings_synthesizer import (
+                            read_open_contention,
+                        )
+
+                        options["contention_groups"] = await read_open_contention(
+                            conn
+                        )
+                    except Exception as exc:  # pragma: no cover — best-effort
+                        logger.warning(
+                            "dapr_actors.analyst.contention_read.failed "
+                            "actor_id=%s run_id=%s err=%s",
+                            actor_id, run_id, exc,
+                        )
                 # Per-run options pass-through — the consult_on_demand kind
                 # reads ``options["sub_handler"]`` (deterministic) and other
                 # caller-supplied parameters through this channel.
@@ -2379,6 +2439,55 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             actor_id, run_id, exc,
                         )
 
+                # P0-T2 — MANDATORY faithfulness verify pass. After an
+                # inline_target FINDING lands (with its P0-T1 ``data['citations']``
+                # bridge), run the deterministic citation-presence floor (+ the
+                # optional flag-gated LLM judge) and persist the verdict as a
+                # ``critique`` on THIS conn. The existing finding↔critique gate
+                # (substrate_reads_api / substrate_query_port) then folds
+                # ``effective_confidence = min(confidence, faithfulness_score)``.
+                # SCOPED to the inline_target finding kind (the helper guards);
+                # best-effort — a verify failure leaves the finding durable +
+                # un-demoted (no regression). TRACE_ONLY runs have no row to grade.
+                # P3-T3 widened the fire condition to the per-country COMPOSITION;
+                # P3-T5 widens it again to the GLOBAL/world composition. Both are
+                # meta_findings_synthesizer findings verified via the SAME
+                # generalized pass (their [[ref:uuid]] sub-claim/country-read
+                # bridge). The discriminator is now the descriptor DECLARING
+                # ``method.llm.verify`` (the opt-in both compositions carry) —
+                # NOT ``bool(target_id)``, which excluded the target-LESS world
+                # run. The old global ``meta_synthesizer`` (no verify block) stays
+                # excluded; the verify_inline_target_finding scope guard's
+                # "citations present" check is the belt to this suspenders (the
+                # honest-empty composition writes no citations key → no-op).
+                verification_block: dict[str, Any] | None = None
+                if (
+                    not trace_only
+                    and output_row is not None
+                    and output_kind == OutputKind.FINDING
+                    and (
+                        deps_bundle.descriptor.identity.kind == "inline_target"
+                        or (
+                            deps_bundle.descriptor.identity.kind
+                            == "meta_findings_synthesizer"
+                            and _descriptor_declares_verify(deps_bundle.descriptor)
+                        )
+                    )
+                ):
+                    try:
+                        verification_block = await verify_inline_target_finding(
+                            conn,
+                            deps=deps_bundle,
+                            finding_id=output_row.id,
+                            finding_payload=output_payload,
+                            run_id=run_id,
+                        )
+                    except Exception as exc:  # pragma: no cover — never break a run
+                        logger.warning(
+                            "dapr_actors.analyst.verify.failed actor_id=%s "
+                            "run_id=%s err=%s", actor_id, run_id, exc,
+                        )
+
                 # Publish analyst-output event per L-191:
                 # ``analyst.<analyst_id>.<channel>`` where ``channel`` is
                 # the plural lower-snake form of the output kind name
@@ -2705,6 +2814,7 @@ from .actor_critic import (  # noqa: F401  -- re-export: public API stability (#
     _extract_primary_model_ref,
     _resolve_critic_context,
     _critic_descriptor_pinned_analyst_id,
+    verify_inline_target_finding,
 )
 
 
@@ -2754,4 +2864,5 @@ __all__ = [
     "reminder_guard_decision",
     "register_target_deps",
     "register_target_deps_resolver",
+    "verify_inline_target_finding",
 ]

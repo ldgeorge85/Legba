@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -54,6 +55,7 @@ from ...runtime.dapr_workflow.gepa import (
     OptimizerWorkflowInput,
     OptimizerWorkflowResult,
     TrainingSetRef,
+    _delta_gates_ok,
     build_default_client,
 )
 
@@ -399,6 +401,25 @@ async def resolve_promoted_system_prompt(
     evolved instructions actually reach inference (the analyst still runs its
     own direct ``chat_complete`` — no dspy on the hot path).
 
+    P4-T6 — the DB-edit-proof measured-delta guard. A candidate that carries a
+    measured-faithfulness eval block (every unit_optimizer candidate does)
+    reaches inference ONLY when the eval's ``promotable`` flag is ``'true'`` — a
+    positive, non-degenerate, judge-scored, sufficiently-paired delta. So even a
+    hand-flipped ``promotion_gate='promoted'`` on a degenerate/absent-delta unit
+    candidate resolves to the baseline default, NOT the evolved text. Candidates
+    WITHOUT an eval block (the frozen critique_proxy monolith + any legacy
+    candidate) are UNAFFECTED — the eval is SQL-NULL there, so the guard is a
+    no-op and their existing human-promotion path is byte-unchanged.
+
+    JSONB PATH — the eval block persists ONE LEVEL DEEP, at
+    ``data->'data'->'eval'``, NOT ``data->'eval'``. The row's ``data`` column is
+    the serialized ``PromptModuleCandidatePayload``, whose OWN top-level field is
+    literally named ``data`` (holding ``{diagnostics, eval, ...}``). Reading the
+    wrong path (``data->'eval'``, always SQL-NULL) short-circuited the ``OR`` and
+    silently made this guard a NO-OP — a hand-promoted degenerate candidate DID
+    reach inference. Verified live: 0/15 candidate rows have ``data ? 'eval'``;
+    the eval is at ``data->'data'->'eval'`` (P4 pre-push review C3).
+
     Best-effort by design: any error (no pool, query failure, malformed row)
     returns ``default`` so a promotion-lookup hiccup can never break an
     analyst run.
@@ -414,6 +435,17 @@ async def resolve_promoted_system_prompt(
                 WHERE kind = 'prompt_module_candidate'
                   AND data->>'analyst_id' = $1
                   AND data->>'promotion_gate' = 'promoted'
+                  -- P4-T6 DB-edit-proof guard: a MEASURED candidate (carries an
+                  -- eval block) must additionally be promotable; a legacy /
+                  -- critique_proxy candidate (no eval block) is unaffected.
+                  -- The eval persists at data->'data'->'eval' (the row's data
+                  -- column IS the serialized payload, whose own 'data' field
+                  -- holds diagnostics/eval) — NOT data->'eval', which is always
+                  -- NULL and short-circuited this guard into a no-op.
+                  AND (
+                      data->'data'->'eval' IS NULL
+                      OR (data->'data'->'eval'->>'promotable') = 'true'
+                  )
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -438,14 +470,38 @@ async def should_auto_promote(
     conn: asyncpg.Connection,
     *,
     analyzed_analyst_id: str,
-    candidate_score: float,
-    parent_score: float,
+    candidate_score: float | None,
+    parent_score: float | None,
     promotion_policy: str,
+    eval_degenerate: bool = False,
+    judge_available: bool = True,
+    n_paired: int = 0,
+    min_paired: int = 0,
+    min_delta: float = 0.0,
     min_promotion_threshold: int = AUTO_PROMOTION_SUCCESS_THRESHOLD,
 ) -> tuple[bool, str]:
     """Decide whether a candidate should auto-promote.
 
     Returns ``(eligible, reason)``.
+
+    P4-T6 — the MEASUREMENT gates run FIRST, BEFORE any promotion-policy branch,
+    so a degenerate / absent / judge-unavailable / insufficiently-sampled /
+    sub-margin delta can never slip through on policy alone:
+
+      * ``candidate_score`` / ``parent_score`` is ``None`` OR ``eval_degenerate``
+        → ``(False, "degenerate_or_absent_delta")`` (an honest-null faithfulness
+        delta — never faked to 0.0 — cannot promote).
+      * ``judge_available`` is False → ``(False, "faithfulness_judge_unavailable")``
+        (the before/after must share the SAME llm.verify.slm_8b yardstick).
+      * ``min_paired > 0`` AND ``n_paired < min_paired`` →
+        ``(False, "insufficient_paired_sample:…")``.
+      * ``min_delta > 0`` AND the delta is below it → ``(False, "delta_below_margin")``.
+
+    The ``min_paired``/``min_delta`` gates are CONDITIONAL (>0) so an old-style
+    call with the legacy 3-arg convention (no measured-delta params) is
+    unchanged: it falls through to the score-monotonicity floor + policy branch
+    below (``score_did_not_improve`` / ``human_gated`` / the manual-promotion
+    threshold), exactly as before P4-T6.
 
     Policy resolution per L-176 §"Promotion gates":
 
@@ -458,14 +514,24 @@ async def should_auto_promote(
         reaches ``min_promotion_threshold`` (5 per the 2026-05-16
         decision), AND the candidate's score exceeds the parent's,
         return ``(True, "auto_promoted")``.
-
-    The "promoted" promotion_gate value is set externally by the
-    operator's promotion action (or by this function itself when it
-    returns ``(True, ...)``); the optimizer kind writes
-    ``human_gated`` / ``auto_with_threshold`` on the row at write
-    time.  An operator UI / CLI flips it to ``promoted`` after manual
-    review.
     """
+    # ── MEASUREMENT gates (P4-T6) — before ANY policy branch ─────────────────
+    if candidate_score is None or parent_score is None or eval_degenerate:
+        return False, "degenerate_or_absent_delta"
+    # Defense-in-depth: a non-finite (NaN/inf) score is NOT a measured delta —
+    # NaN comparisons are all False, so it would silently slip the monotonicity
+    # floor below. Treat it as absent (not producer-reachable — faithfulness is
+    # [0,1] — but the promotion gate must never rest on a comparison that lies).
+    if not (math.isfinite(candidate_score) and math.isfinite(parent_score)):
+        return False, "non_finite_score"
+    if not judge_available:
+        return False, "faithfulness_judge_unavailable"
+    if min_paired > 0 and n_paired < min_paired:
+        return False, f"insufficient_paired_sample:{n_paired}<{min_paired}"
+    if min_delta > 0.0 and (candidate_score - parent_score) < min_delta:
+        return False, "delta_below_margin"
+
+    # ── Score-monotonicity floor + policy branches (legacy behaviour) ────────
     if candidate_score <= parent_score:
         return False, "score_did_not_improve"
 
@@ -567,6 +633,14 @@ async def run_method(
         analyzed_analyst_id=str(analyzed_analyst_id),
         analyzed_analyst_version=str(analyzed_analyst_version or "") or None,
     )
+    # P4-T6 — carry the OPTIMIZER analyst's OWN id + any option-supplied
+    # fitness config into the workflow input. ``fitness_metric`` defaults to
+    # ``critique_proxy`` (country_optimizer untouched); the worker re-resolves
+    # it (+ the paired gates + parent_system_prompt_source) from THIS optimizer's
+    # descriptor eval.optimizer when left at the default (single source of truth
+    # on the descriptor, not re-plumbed through the actor's options). Options
+    # override is the test / on-demand injection path.
+    optimizer_own_id = str(options.get("analyst_id") or "")
     workflow_input = OptimizerWorkflowInput(
         analyst_id=str(analyzed_analyst_id),
         analyst_version=str(analyzed_analyst_version or ""),
@@ -580,6 +654,14 @@ async def run_method(
         promotion_policy=promotion_policy,
         min_traces_required=int(deps.min_traces_required),
         min_critiques_required=int(deps.min_critiques_required),
+        fitness_metric=str(options.get("fitness_metric") or "critique_proxy"),
+        min_paired=int(options.get("min_paired") or 8),
+        min_promote_delta=float(options.get("min_promote_delta") or 0.03),
+        faithfulness_valset_max=int(options.get("faithfulness_valset_max") or 12),
+        parent_system_prompt_source=str(
+            options.get("parent_system_prompt_source") or ""
+        ),
+        optimizer_analyst_id=optimizer_own_id,
     )
 
     # Dispatch the workflow.  In production this returns a real
@@ -620,6 +702,32 @@ async def run_method(
     diagnostics = dict(workflow_result.diagnostics or {})
     actual_method = str(diagnostics.get("method") or "unknown")
 
+    # P4-T6 — the measured-faithfulness eval record (the honest before/after
+    # delta). Present ONLY for a fitness_metric=faithfulness run; the
+    # critique_proxy monolith path carries no ``eval`` block, so its candidate
+    # data has no ``eval`` key and the resolve_promoted_system_prompt promotable
+    # guard is a no-op for it (backward compatible — the frozen monolith's
+    # promotion path is unchanged).
+    actual_fitness = str(diagnostics.get("fitness_metric") or "critique_proxy")
+    eval_block = diagnostics.get("eval")
+    if isinstance(eval_block, dict):
+        # RE-STAMP ``data.eval.promotable`` at WRITE time from the measured
+        # fields. This is the DB-edit-proof structural guard: even a hand-flipped
+        # ``promotion_gate='promoted'`` row cannot reach inference unless
+        # resolve_promoted_system_prompt sees ``data.eval.promotable='true'``, and
+        # that flag is TRUE only for a positive (>= min_promote_delta), non-
+        # degenerate, judge-scored, sufficiently-paired MEASURED delta.
+        promotable, _preason = _delta_gates_ok(
+            eval_block.get("candidate_faithfulness_mean"),
+            eval_block.get("parent_faithfulness_mean"),
+            eval_degenerate=bool(eval_block.get("degenerate", True)),
+            judge_available=bool(eval_block.get("judge_available", False)),
+            n_paired=int(eval_block.get("n_paired", 0) or 0),
+            min_paired=int(eval_block.get("min_paired", 8) or 8),
+            min_delta=float(eval_block.get("min_promote_delta", 0.03) or 0.03),
+        )
+        eval_block["promotable"] = bool(promotable)
+
     # Build the candidate payload.
     # D10: ``derived_from`` carries the substrate-row UUIDs the analyzed runs
     # PRODUCED (analyst_traces.output_row_refs) — real lineage-catalog rows.
@@ -651,6 +759,11 @@ async def run_method(
         data={
             "diagnostics": diagnostics,
             "method": actual_method,
+            "fitness_metric": actual_fitness,
+            # The honest measured record (means, delta, n_paired, judge status,
+            # correctness_vs_reference, promotable). Present only for the P4-T6
+            # faithfulness path; carries the DB-edit-proof ``promotable`` flag.
+            **({"eval": eval_block} if isinstance(eval_block, dict) else {}),
             "derived_trace_ids": [str(u) for u in derived_trace_ids],
             "optimizer_options": {
                 "max_generations": deps.max_generations,
@@ -696,6 +809,14 @@ async def run_method(
             f"analyzed:{analyzed_analyst_id}",
             f"generation:{workflow_result.gepa_generation}",
             promotion_policy,
+            # P4-T6 — mark the MEASURED bounded-unit experiment on the finding so
+            # it is unmistakable on the trust surface (never confused with the
+            # frozen critique_proxy monolith). Additive; absent for critique_proxy.
+            *(
+                ["unit_experiment", "fitness:faithfulness"]
+                if actual_fitness == "faithfulness"
+                else []
+            ),
         ],
         data={
             # Hold the candidate payload dump here so the actor + a

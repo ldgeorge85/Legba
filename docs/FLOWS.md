@@ -1,53 +1,68 @@
 # Legba — Life-of-a… End-to-End Flows
 
-> **Status anchor:** this document is grounded in
-> [`planning/ANALYSIS_LAYER_PLAN_2026-06-15.md`](../planning/ANALYSIS_LAYER_PLAN_2026-06-15.md)
-> (the analysis-layer build plan & architecture anchor). It honors that doc's
-> **altitude map** (§1) and **architecture-fit verdict** (§2). Every factual claim below
-> cites `file:line`. **The data-analysis arc that plan called PIECES A–D (+ seeding) is
-> now BUILT and LIVE** — what were the §5 PLANNED flows (deep consult, fact extraction)
-> are walked here as Flows 5–9, and the plan's §4 "no producer / no `write_fact`"
-> corrections are SUPERSEDED by the producing code each flow cites (refreshed against
-> code at commit `a95d360`, 2026-06-16).
+> **Status anchor:** this document is grounded in the current build plan
+> [`planning/PLATFORM_DIRECTION_PLAN_2026-06-30.md`](../planning/PLATFORM_DIRECTION_PLAN_2026-06-30.md)
+> and the architecture docs it produced (`docs/ARCHITECTURE.md`, `docs/ANALYSIS.md`,
+> `docs/SEAMS.md`). Every factual claim below cites `file:line`. **The full analysis
+> spine (phases P0–P4) is now BUILT and LIVE** — the four bounded reasoning UNITS, the
+> mandatory faithfulness verify pass, the per-country + world COMPOSITIONS, and the
+> banded SCORECARD are walked here as Flows 12–15. The earlier framing where the
+> monolithic `country_assessor` one-pager was the product, and where `world_assessor`
+> was a raw-signal "verdict-from-nowhere" pass, is SUPERSEDED: `country_assessor` is
+> RETIRED (Flow 2 note; nothing in the spine reads it) and `world_assessor` graduated
+> into the world composition (Flow 13). What this system publishes is *groundedness*,
+> not truth — it MEASURES whether each claim follows from its cited evidence
+> (faithfulness), and it says so plainly, including where a leg is honestly weak today
+> (the forecasting pilot reports NO proven skill; the correctness gold set is tiny).
 
 ## How to read this
 
 Walkthroughs, each a numbered step list with `file:line` citations:
 
-| # | Flow | Altitude (per anchor §1) | State |
+| # | Flow | Tier / role | State |
 |---|---|---|---|
-| 1 | **Life of a signal** — pull → baseline enrichment → fan-out → target | ingestion (feeds 0–3) | **LIVE** |
-| 2 | **An analyst cadence cycle** — reminder → fan-out → slice → run_method → write → emit | 1 (first-order / maintenance) | **LIVE** |
-| 3 | **A consult** — POST → actor ReAct loop → chat-SSE / deep-workflow | 3 (on-demand) | **LIVE** |
-| 4 | **The optimizer Dapr workflow** — schedule → stages → promotion | meta (self-improvement) | **LIVE** |
-| 5 | **A deep consult** — POST → 202 task → Dapr workflow (plan→acquire→analyze→synthesize) | 3 (on-demand, deep) | **LIVE** |
-| 6 | **Fact extraction + supersession** — signal → fact_extractor → write_fact → fact_decay | 0 (extraction) | **LIVE** |
-| 7 | **Nexus reification** — proposed_edges → relationship_reifier 8B typing → write_nexus → refine | 1 (meta) | **LIVE** |
-| 8 | **ACH competing-hypotheses** — read set → matrix/diagnosticity → ±2 → write_hypothesis | 1 (meta) | **LIVE** |
-| 9 | **Seeding import** — fetch → map → resolve → write_fact/write_nexus → seed_batches | 0 (curated import) | **LIVE** |
-| 10 | **A grounded assessment** — cadence fire → GROUND phase → current-facts resolve → dated preamble → LLM | 1 (injection) | **LIVE** |
-| 11 | **A journal entry** — META cadence → in-actor PLAN→GATHER→NARRATE → OFF-chain journal write → propose-and-gate | meta (reflective voice) | **LIVE** |
+| 1 | **Life of a signal** — pull → baseline enrichment → fan-out → target | ingestion (Tier-1 inline) | **LIVE** |
+| 2 | **An analyst cadence cycle** — reminder → fan-out → slice → run_method → write → emit | the shared Tier-2 rail | **LIVE** |
+| 3 | **A consult** — POST → actor ReAct loop → chat-SSE / deep-workflow | on-demand | **LIVE** |
+| 4 | **The optimizer Dapr workflow** — schedule → stages → measured, gated promotion | measured self-improvement | **LIVE** (scoped to one unit) |
+| 5 | **A deep consult** — POST → 202 task → Dapr workflow (plan→acquire→analyze→synthesize) | on-demand, deep | **LIVE** |
+| 6 | **Fact extraction + supersession** — signal → fact_extractor → write_fact → fact_decay | extraction (Tier-1 inline) | **LIVE** |
+| 7 | **Nexus reification** — proposed_edges → relationship_reifier 8B typing → write_nexus → refine | meta | **LIVE** |
+| 8 | **ACH competing-hypotheses** — read set → matrix/diagnosticity → ±2 → write_hypothesis | meta | **LIVE** |
+| 9 | **Seeding import** — fetch → map → resolve → write_fact/write_nexus → seed_batches | curated import | **LIVE** |
+| 10 | **A grounded assessment** — cadence fire → GROUND phase → current-facts resolve → dated preamble → LLM | injection (rides the units) | **LIVE** |
+| 11 | **A journal entry** — META cadence → in-actor PLAN→GATHER→NARRATE → OFF-chain journal write | introspective instrument (ON cadence: entry 12h + consolidator daily) | **LIVE** |
+| 12 | **A bounded reasoning unit + the verify pass** — assemble cited slice → cite-synthesize → faithfulness VERIFY → effective_confidence fold | the product loop | **LIVE** |
+| 13 | **Composition** — country_composition over the 4 verified units → world_assessor over the country reads | composition | **LIVE** |
+| 14 | **The banded scorecard** — deterministic rules over already-verified claims → one honest row per active desk (g20/watch) | honest top | **LIVE** |
+| 15 | **The skill scoreboard + measured forecast** — per-unit faithfulness/correctness, calibration Brier, acute-forecast BSS (honest-null / abstain) | measurement | **LIVE** (no proven skill yet) |
 
 > **Two analysis tiers (ARCHITECTURE §0).** Flow 1 is the **TIER-1 INLINE** tier —
 > the deterministic `data/filters/` baseline pipeline run *per-Signal at acquisition,
 > before fan-out, no LLM* (its writes: enriched signals + altitude-0 facts + entities).
 > Flow 6 (fact extraction) is the inline `fact_extractor` stage *inside* Tier 1. Every
-> other flow here (2-5, 7-10) is the **TIER-2 SLICE/CADENCE** tier — `data/analysts/`
+> other flow here (2-5, 7-15) is the **TIER-2 SLICE/CADENCE** tier — `data/analysts/`
 > reading accumulated slices/substrate on a Dapr reminder or reactive trigger and
-> *reasoning*. The two never collapse: Tier 1 is at-ingest and cheap, Tier 2 is
-> cadence-batched so LLM cost is decoupled from the ingest firehose.
+> *reasoning* (the analysis spine of Flows 12-15 is all Tier-2). The two never collapse:
+> Tier 1 is at-ingest and cheap, Tier 2 is cadence-batched so LLM cost is decoupled from
+> the ingest firehose.
 
-**Now-LIVE data-analysis arc** (the 2026-06-16 build closed the rigor gap — the
-prior PLANNED §5a/§5b and the §4-corrections that said "no producer" are now
-SUPERSEDED by working code; every claim below cites the producing `file:line`):
-- **`OutputKind.FACT` (`= "fact"`) and `OutputKind.NEXUS` (`= "nexus"`) now exist**
-  alongside the original eight — ten members at that point (JOURNAL later brings
-  the enum to eleven; see the next bullet)
-  (`src/legba/data/provenance/kinds.py:69-87`), with real `write_fact`
+**The LIVE analysis-spine arc** (every claim below cites the producing `file:line`;
+the `OutputKind` enum now has **twelve** members —
+`src/legba/data/provenance/kinds.py:77-109`):
+- **`OutputKind.FACT` (`= "fact"`) and `OutputKind.NEXUS` (`= "nexus"`)** sit
+  alongside the original findings/situations/hypotheses/predictions/alerts/
+  meta-findings/critiques/prompt-module-candidates
+  (`src/legba/data/provenance/kinds.py:77-92`), with real `write_fact`
   (`src/legba/data/provenance/writes.py:385`) and `write_nexus`
   (`writes.py:416`) routes into the dedicated `facts` / `nexuses` tables.
-- **`OutputKind.JOURNAL` (`= "journal"`) now exists too — the 11th kind**
-  (`src/legba/data/provenance/kinds.py:101`), Legba's first-person reflective
+- **`OutputKind.SCORECARD` (`= "scorecard"`) is the 12th kind**
+  (`src/legba/data/provenance/kinds.py:109`) — the deterministic banded
+  per-desk verdict the `scorecard_producer` writes (Flow 14), one row per
+  active desk (any target tagged g20/watch), every band naming the verified claim
+  it rests on.
+- **`OutputKind.JOURNAL` (`= "journal"`)** — the 11th kind
+  (`src/legba/data/provenance/kinds.py:102`), Legba's first-person reflective
   voice (the `journal_assessor` META analyst — Flow 11). It is the deliberate
   EXCEPTION to everything below: it lands in the dedicated `journal_entries`
   table (migration 0048), **OFF the fact/finding/nexus chain** — a journal row
@@ -61,16 +76,41 @@ SUPERSEDED by working code; every claim below cites the producing `file:line`):
   (`src/legba/data/migrations/0032_facts_decay_columns.sql:25-62`); migration 0033
   created the `nexuses` table (`0033_nexuses.sql:30-94`); migration 0034 added the
   `seed_batches` ledger + `seed_batch_id` FK on both tables (`0034_seed_batches.sql`).
-- `meta_findings_synthesizer` + `cross_analyst_correlator` (and the new
-  `relationship_reifier` / `competing_hypotheses` / `calibration_tracking` /
-  `deep_consult` / `structural_balance` / `graph_mining` / `nexus_decay` /
-  `fact_decay` / `fact_contention_arbiter`) are now **REGISTERED** by descriptor in
-  `scripts/bringup_register_analysts.py:58-75`, so they produce rows on cadence.
+- **The analysis-spine roster is registered by descriptor** in
+  `scripts/bringup_register_analysts.py` (the live set; `country_assessor` and
+  `country_predictor` are commented out — RETIRED, see below). The spine
+  producers: the four bounded UNITS `leadership_transition` / `energy_security` /
+  `escalation` / `narrative_coordination` (all `inline_target`, Flow 12), the
+  per-country `country_composition` and global `world_assessor` (both
+  `meta_findings_synthesizer`, Flow 13), the deterministic `scorecard_producer`
+  (Flow 14), the measurement analysts `unit_correctness_scorer` /
+  `calibration_tracking` / `forecast_scoreboard` (Flow 15), and the scoped
+  `unit_optimizer` (Flow 4). Around them the substrate maintainers
+  `relationship_reifier` / `competing_hypotheses` / `structural_balance` /
+  `graph_mining` / `nexus_decay` / `fact_decay` / `fact_contention_arbiter` /
+  `entity_gc` / `deep_consult` also produce rows on cadence.
   (`fact_contention_arbiter` is the detect-only contested-claims referee — a
   `deterministic`-kind META analyst, TRACE_ONLY, hourly at `:37`, default OFF behind
   `LEGBA_FACT_CONTENTION` — that surfaces a disputed fact's better-supported value in
   the `fact_contention` sidecar **without ever mutating a fact**; #101,
   ARCHITECTURE §5.9.)
+- **Retirements / freezes (documented in SEAMS).** `country_assessor` (the
+  monolithic per-country one-pager) is RETIRED and STOPPED — removed from bringup
+  (commented out), because the units + composition supersede it and nothing in
+  the spine reads it (SEAMS #35). Its **~1.2k historical findings REMAIN in the
+  DB** (unread, not deleted — this is not a clean slate). The forecast-as-claim
+  predictors `country_predictor` / `india_energy_predictor` are RETIRED/frozen and
+  STOPPED (removed from bringup); their **~539 historical `prediction` rows
+  REMAIN** in the DB. Forecasting returns ONLY as the measured `acute_forecasts`
+  Brier/BSS scoreboard of Flow 15, never a free-text claim, and currently reports
+  NO proven skill (SEAMS #31). The monolithic `country_optimizer` is
+  **cadence-frozen** — its descriptor is still `state: active` and registered, but
+  its cadence is null so it never fires; the measured `unit_optimizer` of Flow 4
+  is its scoped return (SEAMS #30). The `journal_assessor` is **NOT frozen** — it
+  runs ON cadence (entry tier every 12h, `journal_consolidator` daily) as a
+  first-person introspective instrument writing ONLY `journal_entries` off the
+  fact/finding/nexus chain (Flow 11); routing its reflections back outward via the
+  human-gated proposal queue is a FUTURE item, not yet a live beat.
 
 ---
 
@@ -223,7 +263,7 @@ emits output bindings, and may escalate.
 
 3. **Target matching.** `_cadence_targets()` evaluates the
    `subscription.targets` Starlark predicate (ANALYST_SUBSCRIPTION surface, e.g.
-   `has_tag('g20')`) against the active target descriptors
+   `has_tag('g20') or has_tag('watch')`) against the active target descriptors
    (`src/legba/runtime/dapr_actors.py:1320`, method at `:1464`). Three regimes:
    - **Target-bound analyst** → one run per matched target (`target_filter` set per
      target) (`:1342-1349`).
@@ -302,26 +342,32 @@ emits output bindings, and may escalate.
     failure routes to `output_dead_letter` and the run reports HARD_FAIL (`:1990-1999`).
 
 12. **Extend the receipt chain.** When a `receipt_chain` is wired, `record(...)` writes a
-    tamper-evident SHA-256 chain row into `analyst_traces` carrying `intermediate_steps`
-    + `tool_calls` and the output-row id, producing `(receipt_hash, prev_receipt_hash)`
-    (`src/legba/runtime/dapr_actors.py:2013-2034`; hashing
-    `src/legba/data/provenance/_core.py:352-383`).
+    chain-consistent (single-node) SHA-256 chain row into `analyst_traces` carrying
+    `intermediate_steps` + `tool_calls` and the output-row id, producing
+    `(receipt_hash, prev_receipt_hash)` (`src/legba/runtime/dapr_actors.py:2013-2034`;
+    hashing `src/legba/data/provenance/_core.py:352-383`). This is a re-computable
+    hash chain over analyst traces, NOT a cryptographic signature — read it as
+    chain-consistent, not tamper-proof.
 
 13. **NATS publish + emit bindings.** The write helper publishes the output envelope on
     `analyst.{analyst_id}.{channel}` (channel by kind: findings / situations /
     predictions / critiques / …, `src/legba/runtime/dapr_actors.py:2368-2379`). Then
     `_emit_output_bindings(...)` discovers the descriptor's output-kind handlers and
     dispatches `emit(payload, descriptor, deps, output_id, derived_from, target_id)`
-    best-effort. Two bindings are wired:
-    - **STIX 2.1 bundle** emitter (`src/legba/runtime/dapr_actors.py:2142`, func at
-      `:2419`; bindings `src/legba/data/outputs/stix_bundle.py:112`) — wired in commits
-      `cb621b8`/`a9744a0`.
-    - **alert.emit** — `country_assessor` binds the `alert` kind; the binding's
-      `emit(...)` coerces the live `FindingPayload` to an `AlertPayload` **gated by the
-      descriptor's `config.min_severity` / `config.min_confidence`** (sub-threshold
-      findings short-circuit to `[]`), routes severity-aware surfaces, and writes
-      per-attempt `alert_sink_deliveries` audit rows (`output_id` → `ctx.alert_row_id`)
-      (`src/legba/data/outputs/alert.py:588-628`).
+    best-effort. The wired binding kinds are the **STIX 2.1 bundle** emitter
+    (`src/legba/runtime/dapr_actors.py:2142`, func at `:2419`; bindings
+    `src/legba/data/outputs/stix_bundle.py:112`; commits `cb621b8`/`a9744a0`), the
+    **alert.emit** binding (`emit(...)` coerces a `FindingPayload` to an `AlertPayload`
+    gated by `config.min_severity` / `config.min_confidence`, routes severity-aware
+    surfaces, and writes per-attempt `alert_sink_deliveries` audit rows;
+    `src/legba/data/outputs/alert.py:588-628`), and the **a2a_skill** binding that
+    `world_assessor` declares (`analyst_world_assessor.yaml:125-128`). **Honest state:**
+    the STIX and alert bindings' only in-tree binders were `country_assessor` (retired)
+    and `country_predictor` (retired/frozen), so those two dispatch paths are **dormant
+    today** —
+    the code path is live and tested, but no *registered* analyst currently declares
+    them; the one live output binding on a registered analyst is `world_assessor`'s
+    `a2a_skill`.
 
 14. **Optional escalation (A-3c).** For findings, `_maybe_escalate_finding(...)` gates on
     severity/confidence vs the pack gates, resolves `target.allowed_action_packs` +
@@ -331,11 +377,17 @@ emits output bindings, and may escalate.
 15. **Outcome.** `run()` returns an `ActorRunOutcome`
     (SUCCESS / TRANSIENT_FAIL / BUDGET_THROTTLED / HARD_FAIL / NOOP).
 
-**Altitude note (anchor §1):** today's LIVE producers at altitude 1 are
-`inline_target` (country_assessor), `llm_planner` (world_assessor), and `predictor`;
-the maintenance kinds (situation_clustering, finding_supersession, critic, predictor,
-STIX emit) are LIVE. The **altitude-2 meta kinds ride this exact same cadence + fan-out
-rail unchanged** — they are built but await a descriptor (anchor §2.3, §4).
+**Producer note:** this ONE cadence + fan-out rail carries every LIVE analyst — the
+four bounded `inline_target` UNITS and both `meta_findings_synthesizer` compositions
+(target-bound → per-country fan-out; target-less → one global run), plus the
+`deterministic` META producers (`scorecard_producer`, `unit_correctness_scorer`,
+`calibration_tracking`, `forecast_scoreboard`, and the substrate maintainers) plus the
+off-chain `journal_assessor` / `journal_consolidator` introspective instrument (Flow 11)
+— all taking the single-global-run regime of §2b step 3. There is no per-analyst code; a
+new analyst is a new DESCRIPTOR on this same rail (Flows 12–15 are all configurations of
+it). The retired `country_assessor` / retired-frozen `country_predictor` used the
+identical rail — retiring them is a descriptor state flip (removed from bringup), not a
+code change.
 
 ---
 
@@ -440,18 +492,36 @@ endpoint prefers the payload.
 
 ---
 
-## 4. The optimizer Dapr workflow (LIVE)
+## 4. The optimizer Dapr workflow (LIVE — scoped to ONE measured unit)
 
 **One sentence:** the `optimizer` analyst kind (a meta-tier cadence run) schedules a
 durable Dapr **Workflow** from inside its actor run; the workflow validates the training
 set, then compiles a GEPA candidate prompt module (DSPy under a custom non-litellm LM
-adapter), writes the candidate as a `PROMPT_MODULE_CANDIDATE` row, and an
-**operator-gated** promotion flips a candidate into the analyst's live system prompt.
+adapter), writes the candidate as a `PROMPT_MODULE_CANDIDATE` row carrying a **real
+before/after faithfulness delta**, and an **operator-gated** promotion flips a candidate
+into the analyst's live system prompt.
+
+> **The LIVE registered optimizer is `unit_optimizer`, NOT the old monolith.** GEPA
+> returned as a BOUNDED experiment over ONE bounded unit (`leadership_transition`), with
+> `fitness_metric = faithfulness` measured by the SAME faithfulness judge
+> (currently the core `llm.primary.openai_compat` model, not cross-family) that gates the live unit findings (Flow 12). A candidate carries a
+> paired parent-vs-candidate faithfulness delta (live example: parent 0.34 → candidate
+> 0.29, delta **−0.05**), stays `promotion_gate=human_gated`, and can **NEVER** auto-promote
+> on a degenerate / insufficient-sample / judge-unavailable / non-positive delta — a
+> negative delta like the one above is simply not promoted. Being a META analyst (no
+> `subscription.targets`) it registers exactly ONE weekly `run_cadence` reminder
+> (`analyst_unit_optimizer.yaml`, cadence `"0 4 * * 1"`), and it passes the training set
+> BY REFERENCE (`TrainingSetRef`, SEAMS #23) so the serialized workflow input stays well
+> under the 4 MB gRPC cap — the reminder-flood incident class (a >4 MB payload orphaning
+> per-activity reminders) cannot regress here. The monolithic `country_optimizer` over the
+> retired `country_assessor` stays **cadence-frozen** (descriptor still `state: active`
+> and registered, but null cadence so it never fires; byte-unchanged; SEAMS #30).
 
 This is the durability substrate that replaced Temporal — one Dapr control plane (anchor
 §2.2). The optimizer kind calls through a stable `temporal_client` interface (the name is
 historical; it just means "workflow client",
-`src/legba/data/analysts/optimizer.py:303`).
+`src/legba/data/analysts/optimizer.py:303`). The workflow mechanics below are identical
+for either optimizer descriptor — only the `unit_optimizer` one is registered/live.
 
 1. **Cadence run.** The optimizer is a meta analyst (no target binding) — its cadence
    tick reaches `run()` as a single global run (Flow 2, step 3, third regime). Its
@@ -893,16 +963,18 @@ temporal-triple uniqueness as an upsert no-op).
 
 ## 10. A grounded assessment (LIVE)
 
-**One sentence:** a `world_assessor` / `country_assessor` run (Flow 2's `inline_target`
-rail) opted INTO grounding (`descriptor.grounding.enabled`) runs a **GROUND phase**
-before its LLM call — a `SubstrateGroundingResolver` reads the CURRENT authoritative
-substrate facts (head of state, bloc memberships) about the target geo + the slice's top
-entities, `build_grounding_preamble` renders them into a dated "AUTHORITATIVE CURRENT
-CONTEXT" block, and the runner PREPENDS it to the LLM user prompt — so a stale-cutoff
-model reasons over current ground truth (e.g. Trump = the CURRENT US president since
+**One sentence:** a bounded UNIT run (any of the four `inline_target` units of Flow 12)
+opted INTO grounding (`descriptor.grounding.enabled`) runs a **GROUND phase** before its
+LLM call — a `SubstrateGroundingResolver` reads the CURRENT authoritative substrate facts
+(head of state, bloc memberships) about the target geo + the slice's top entities,
+`build_grounding_preamble` renders them into a dated "AUTHORITATIVE CURRENT CONTEXT"
+block, and the runner PREPENDS it to the LLM user prompt — so a stale-cutoff model
+reasons over current ground truth (e.g. Trump = the CURRENT US president since
 2025-01-20) instead of its training prior (which called him "former"). The substrate
 that Flows 6/7/9 fill (temporal facts + reified nexuses + seed roots, esp.
-`wikidata_leaders`) IS the grounding store; this flow is the *injection* half.
+`wikidata_leaders`) IS the grounding store; this flow is the *injection* half. It is a
+distinct thing from the mandatory faithfulness VERIFY of Flow 12 — grounding SUPERSEDES a
+stale model prior on the way IN, verify checks the OUTPUT against its cites on the way OUT.
 
 **Why it exists:** the analyst LLM's training cutoff predates the 2024 US election, so
 left to its own prior it backfilled "former President Trump". The signal slice rarely
@@ -912,20 +984,25 @@ restates such background facts, so the model had no in-context correction
 
 1. **Opt-in at deps-build (once).** The descriptor's `grounding` block
    (`enabled` / `scope` / `sources` / `max_facts`, off by default —
-   `src/legba/data/schemas/analyst.py:522-575`) gates a deps-builder step. Only when
+   `src/legba/data/schemas/analyst.py:580-667`) gates a deps-builder step. Only when
    `grounding.enabled: true` AND a substrate `pg_pool` is wired does
    `_build_grounding_hook` construct a `SubstrateGroundingResolver` (closing over the
    pool) + a per-run `_hook` closure and install it on the `InlineTargetDeps.grounding_hook`
    field (`src/legba/runtime/analyst_deps_builder.py:367`, hook builder `:378-439`,
    `_build_inline_target` wiring `:368-374`). Off → `grounding_hook=None` → the run path
-   is byte-for-byte unchanged. **Opted in on `analyst_world_assessor.yaml:110-114` +
-   `analyst_country_assessor.yaml:117-121`** (`scope: [target_geo, slice_entities]`,
-   `sources: [substrate]`, `max_facts: 30`).
+   is byte-for-byte unchanged. **All four bounded units opt in** (identical block, e.g.
+   `analyst_leadership_transition.yaml:48-52`): `scope: [target_geo, slice_entities]`,
+   `sources: [substrate, situations, graph_structure]`, `max_facts: 30`. (The block was
+   ported verbatim from the retired `country_assessor` monolith when the units took over
+   its per-country fan-out.)
 
 2. **Cadence fire → ORIENT → PLAN.** The run reaches `inline_target.run_method` via
-   Flow 2 (cadence reminder → fan-out → `_invoke_run_method`); ORIENT trims the slice and
-   PLAN renders the base user prompt (`src/legba/data/analysts/inline_target.py:548-590`).
-   The GROUND phase sits AFTER PLAN, BEFORE REASON+ACT.
+   Flow 2 (cadence reminder → fan-out → `_invoke_run_method`); ORIENT (`_orient`) PACKS
+   the slice by admitting recency-ordered signals under the estimated INPUT-token budget
+   (`LEGBA_LLM_INPUT_TOKEN_BUDGET`, default 32000) — NOT a fixed "newest 20" trim; the
+   count cap `_MAX_INPUT_SIGNALS = 200` is only a hard backstop
+   (`src/legba/data/analysts/inline_target.py:237-247`,`:294-346`) — then PLAN renders
+   the base user prompt. The GROUND phase sits AFTER PLAN, BEFORE REASON+ACT.
 
 3. **GROUND phase fires (only when the hook is wired).** `run_method` calls
    `await deps.grounding_hook(sliced, options)` inside a try/except — **degrade-not-drop**:
@@ -937,9 +1014,9 @@ restates such background facts, so the model had no in-context correction
    length-capped (≤24) list of names in priority order: `target_geo` first (the
    `country_<name>` target-id token + the most-frequent `geo` codes across the slice),
    then `slice_entities` (the NER/analyst `tags` + structured `key_entities`), with junk
-   tags dropped (`src/legba/runtime/grounding.py:154-233`). A global `world_assessor` run
-   has no `target_id`, so its grounding leans on `slice_entities`; a per-country
-   `country_assessor` run gets the country itself first via `target_geo`.
+   tags dropped (`src/legba/runtime/grounding.py:154-233`). Because every unit fans out
+   per desk (`has_tag("g20") or has_tag("watch")`), each grounded run has a `target_id`,
+   so it gets the desk's country itself first via `target_geo`, then its slice entities.
 
 5. **Resolve CURRENT facts + signed nexuses.** `SubstrateGroundingResolver.resolve`
    queries the `facts` table for any candidate as the SUBJECT under the **current-facts
@@ -968,9 +1045,13 @@ restates such background facts, so the model had no in-context correction
    `chat_complete` call over the grounded prompt (`inline_target.py:604-626`). The rest of
    the run (REFLECT → NARRATE → PERSIST, Flow 2 steps 10-15) is unchanged.
 
-**Canary (live-verified):** a US assessment's prompt context now contains
-"United States — head of state: Donald Trump (since 2025-01-20)" — sourced from the
-`wikidata_leaders` seed fact (Flow 9 step 7), current under the supersession gate.
+**Canary (live-verified):** a US assessment's prompt context now contains ACCUMULATED
+current facts + signed nexuses stamped with their `since` date, e.g. "United States —
+head of government: Donald Trump (since 2025-01-20)", "United States — active conflict
+with Iran (since 2026-02-28)", "United States — NATO member (since 1949)" — sourced from
+the `wikidata_leaders` / seed facts + reified nexuses (Flows 7/9), current under the
+supersession gate. So the run integrates over accumulated substrate, not just today's
+72h signal slice.
 
 **Honest caveats:**
 - **Tier 2 is a declared FUTURE seam.** Only the structured-`substrate` source is wired.
@@ -981,9 +1062,12 @@ restates such background facts, so the model had no in-context correction
   `src/legba/runtime/analyst_deps_builder.py:419-431`). The vector collection needs the
   embedder-through-port (L-114).
 - **Grounding only fires for `inline_target` analysts.** The hook lives on
-  `InlineTargetDeps`; other LLM kinds (predictor narrative, consult, deep_consult) have
-  no grounding wiring. Both opted-in assessors ARE `kind: inline_target` (the
-  `world_assessor` descriptor justifies this at `analyst_world_assessor.yaml:8-16`).
+  `InlineTargetDeps`; other LLM kinds (the `meta_findings_synthesizer` compositions,
+  consult, deep_consult) have no grounding wiring. The four bounded units ARE
+  `kind: inline_target`, so they ground; `world_assessor` is now a
+  `meta_findings_synthesizer` composition (Flow 13) and does NOT — it composes over
+  already-grounded, already-verified country reads, so it inherits their ground truth
+  transitively rather than re-injecting it.
 - **It only corrects what the substrate actually holds.** A current fact absent from the
   seed/curated store can't be injected — grounding is as good as Flow 9's curation, and
   the resolver's exact-subject match means a name variant the slice uses but the facts
@@ -991,16 +1075,20 @@ restates such background facts, so the model had no in-context correction
 
 ---
 
-## 11. A journal entry (LIVE)
+## 11. A journal entry (LIVE — ON cadence: entry 12h + consolidator daily)
 
 **One sentence:** the `journal_assessor` META analyst — Legba's FIRST-PERSON
 reflective voice, the ONE analyst pointed at the whole organism (its own self /
-state / flow) rather than one slice — fires on cadence as a single GLOBAL run, runs
-an in-actor staged `PLAN → GATHER → field-notes → NARRATE` arc, and writes EXACTLY
+state / flow) rather than one slice — runs as a single GLOBAL run ON cadence (the
+entry tier every 12h, `journal_consolidator` daily), runs an in-actor staged
+`PLAN → GATHER → field-notes → NARRATE` arc, and writes EXACTLY
 ONE `JournalPayload` into the dedicated `journal_entries` table with an
 ALWAYS-EMPTY `derived_from` — a perspective OVER the provenance chain, never a
-member of it. Everything it wants to change OUTWARD goes through the human-gated
-`journal_proposals` queue, never a live table.
+member of it. It is an INTROSPECTIVE INSTRUMENT: it writes ONLY `journal_entries`
+off the fact/finding/nexus chain, so it cannot pollute product output. Routing any
+of its reflections back OUTWARD through the human-gated `journal_proposals` queue
+is a FUTURE item (the queue + apply worker exist in code, but it is not yet a live
+beat) — its only live effect today is its own next entry.
 
 > **OFF the fact/finding/nexus chain (the single most important framing).** A
 > journal row is the deliberate EXCEPTION to the lineage of Flows 6/7/9 (signals →
@@ -1022,9 +1110,11 @@ member of it. Everything it wants to change OUTWARD goes through the human-gated
    vocabulary, NOT a member of the closed built-in `AnalystKind` enum); the deps
    builder dispatches it at `src/legba/runtime/analyst_deps_builder.py:278`
    (`_build_journal_assessor` `:435`). Two descriptors share this ONE kind:
-   - **`journal_assessor`** — the ENTRY tier, every 12h (`"0 0,12 * * *"`,
-     cooldown 42000s), narrate `max_tokens 16384`
-     (`descriptors/analyst_journal_assessor.yaml`).
+   - **`journal_assessor`** — the ENTRY tier. It runs ON cadence every 12h
+     (`cadence.fallback_schedule: "0 0,12 * * *"`, cooldown 42000s ≈ 11h40m, below
+     the 12h interval per the §11 trap), narrate `max_tokens 16384`
+     (`descriptors/analyst_journal_assessor.yaml:89-99`). The earlier entry-tier
+     freeze is REVERSED — the 12h introspective beat fires again as a live cadence.
    - **`journal_consolidator`** — the CONSOLIDATION tier, SAME `identity.kind:
      journal_assessor`, distinct id, daily at 02:00 UTC (`"0 2 * * *"`, cooldown
      79200s), narrate `max_tokens 24576`. It DISTILLS its prior consolidation +
@@ -1117,12 +1207,255 @@ member of it. Everything it wants to change OUTWARD goes through the human-gated
    tsc-green + fully wired but pending its first real in-browser render at the time
    of writing.
 
-**Status (kept honest):** LIVE — deployed + live-validated (a real off-chain entry,
+**Status (kept honest):** LIVE and ON cadence (entry tier every 12h,
+`journal_consolidator` daily) — deployed + live-validated (a real off-chain entry,
 `honesty_flags` forced from substrate metrics, receipt-chained, in-voice). Prompts:
 `legba.prompts.journal_assessor:JOURNAL_SYSTEM` (entry persona) +
 `legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM` (consolidation persona).
-**Future (designed-not-built):** a critic + an optimizer OVER the journal's own
+**Future (designed-not-built):** routing the journal's reflections back outward via
+the human-gated `journal_proposals` queue is not yet a live beat (steps 5–7 describe
+built-but-unexercised code); and a critic + an optimizer OVER the journal's own
 voice (Wave 5), gated on first building a critic actuator.
+
+---
+
+## 12. A bounded reasoning unit + the mandatory verify pass (LIVE)
+
+**One sentence:** each of the four bounded UNITS — `leadership_transition`,
+`energy_security`, `escalation`, `narrative_coordination` — is an `inline_target`
+DESCRIPTOR (no new Python kind) scoped by a COVERAGE TAG to every desk via
+`has_tag("g20") or has_tag("watch")`, answering ONE narrow question per run by
+ASSEMBLING a cited 72h signal slice (+ the Flow 10 accumulated-facts grounding
+preamble), cite-SYNTHESIZING a strict-JSON `FindingPayload` whose prose carries `[N]`
+citation markers mapped to signal ids, then running the
+**mandatory faithfulness VERIFY pass** and folding
+`effective_confidence = min(confidence, faithfulness_score)` — the unit loop that IS
+the product. This is the loop the whole system composes bottom-up.
+
+> **A "desk" is a scoped subject-frame, not a surveilled entity.** A `target`
+> descriptor is really a named SCOPE-FRAME that a set of analysts work — a desk — not
+> a person or place under surveillance. The roster is now **24 desks**: the **19 G20
+> country desks** (`has_tag("g20")`) PLUS a high-consequence **`watch` tier** of 5
+> (`has_tag("watch")`) — Israel, Iran, Ukraine, Taiwan, North Korea (descriptor ids
+> `country_watch_il` / `_ir` / `_ua` / `_tw` / `_kp`,
+> `scripts/bringup_register_watch_country_targets.py`). Adding a country is
+> register-a-target, no code: the four units + `country_composition` subscribe on
+> `has_tag("g20") or has_tag("watch")`, and the scorecard enumerates any active target
+> tagged g20/watch, so a new desk lights up the whole spine.
+
+> **What faithfulness measures (and does not).** The verify pass scores whether each
+> cited claim FOLLOWS FROM its cited evidence — *groundedness*, not *truth*. A claim
+> can be faithful to a wrong source, or unfaithful to a right one; the number is about
+> the citation bridge, not the world. Skill is reported PER UNIT, never as a platform
+> boast (Flow 15).
+
+1. **A unit is just a descriptor on the Flow 2 rail.** Each unit carries its OWN
+   `method.system_prompt` (the bounded question, verbatim), `subscription.targets`
+   predicate `has_tag("g20") or has_tag("watch")`, a 72h `time_window`, an
+   `eval.rubric` (for the critic),
+   and a `method.llm.verify` ref to the faithfulness judge — e.g.
+   `analyst_leadership_transition.yaml`. There is NO per-unit Python kind:
+   `identity.kind: inline_target` is a built-in. A register-time **unit drift guard**
+   FAILS LOUD if a bounded unit is missing its `eval.rubric` or `method.llm.verify`
+   (`scripts/bringup_register_analysts.py`, `UnitDriftError`) so a coverage gap can't
+   degrade silently at first run.
+
+2. **Cadences are staggered (budget discipline).** 4 units × 24 desks (19 G20 + 5
+   watch) is a lot of LLM calls, so each unit fires 2×/day on a distinct hour pair —
+   `leadership_transition` 01:00/13:00, `energy_security` 04:00/16:00, `escalation`
+   07:00/19:00, `narrative_coordination` 10:00/22:00 UTC — with an 11h cooldown (39600s)
+   and a per-unit `budget_tokens_per_day` cap (e.g. 300000). The four spread across the
+   clock instead of stacking on one bucket.
+
+3. **ASSEMBLE + GROUND + cite-SYNTHESIZE.** The run reaches `inline_target.run_method`
+   via Flow 2, reads its per-country 72h signal slice, prepends the dated grounding
+   preamble (Flow 10), and makes ONE `chat_complete` call on the **core analyst plane**
+   (`llm.primary.openai_compat` → self-hosted gpt-oss-120B, $0). The strict-JSON
+   `FindingPayload` carries `data['citations']` (the `[N]` → signal-id bridge) that both
+   the drill-down (Flow 2 step 12 receipt chain) and the verify pass depend on.
+
+4. **The MANDATORY faithfulness VERIFY pass.** After the finding lands, the runtime runs
+   `verify_finding_faithfulness(...)` (`src/legba/data/provenance/verify.py:989`; fired
+   at `src/legba/runtime/dapr_actors.py:2442`). It has two layers:
+   - a **deterministic citation-presence FLOOR (always on)** — every fact-asserting
+     claim in the prose is checked against the resolved `data['citations']` bridge; a
+     claim with no `[N]` marker, or whose marker resolves to no real signal id, is an
+     UNSUPPORTED span, and the score is the fraction of checkable claims that are
+     supported (a planted fabrication with no citation is flagged unsupported);
+   - an **optional LLM judge** (flag-gated by `LEGBA_VERIFY_LLM_JUDGE`, soft-fail) —
+     **currently the SAME core reasoning model** (`llm.primary.openai_compat`,
+     gpt-oss-120B) that wrote the finding, **NOT** cross-family — refines the per-claim
+     verdicts. This is a deliberate, temporary choice: the earlier cross-family 8B judge
+     ("legba-slm", `llm.verify.slm_8b`, Llama-3.1-8B) proved too weak (harsh + mis-aimed);
+     a dedicated reasoning judge is planned. KNOWN LIMITATION: same-model judging shares
+     blind spots, so the signal is weaker than an independent judge (the deterministic
+     floor + signed provenance chain still backstop it). When the flag is off or the judge
+     is unreachable the result degrades to the floor and is LABELLED `judge-unavailable` —
+     it NEVER fabricates a number (`verify.py:319-320`).
+
+5. **Persist as a critique + fold effective_confidence.** The verdict is written as a
+   `critique` row (`overall_score = min(faithfulness_score, confidence_ceiling)`,
+   `verify.py:382`). The existing finding↔critique gate then folds
+   `effective_confidence = min(confidence, faithfulness_score)` at READ time
+   (`substrate_query_port` / `substrate_reads_api`). This gates a visible low-confidence
+   tier — a low-faithfulness finding is DEMOTED and surfaced as such, **never
+   hard-deleted**. Everything downstream (composition, scorecard) reads only the folded,
+   verified value.
+
+6. **Drill-to-source.** The finding's receipt chain (Flow 2 step 12) plus its
+   `data['citations']` resolve hop-by-hop back to the real signal URL:
+   `GET /api/v1/lineage/finding/{id}` walks it (`src/legba/data/registry/lineage_api.py`),
+   each node carrying a SHA-256 `receipt_hash` + a re-computed `chain_consistent` boolean
+   (badge `"chain-consistent (single-node)"`, `lineage_api.py:110`) with zero dangling
+   links. Note this is chain-CONSISTENCY over analyst traces, not a cryptographic
+   signature — do not read it as tamper-proof.
+
+---
+
+## 13. Composition — per-country then world (LIVE)
+
+**One sentence:** `country_composition` (kind `meta_findings_synthesizer`, per-country)
+reads the FOUR verified units for a country and writes ONE hedged, cited synthesis over
+**only the faithfulness-verify-PASSED sub-claims**; `world_assessor` (the SAME kind,
+repointed from its old raw-signal role, global) then composes over the
+`country_composition` reads into a cited, hedged world picture — a composition of
+already-verified analysis, NOT a verdict from nowhere.
+
+1. **Per-country composition.** `analyst_country_composition.yaml` carries a
+   `subscription.targets: has_tag("g20") or has_tag("watch")` block, so `_cadence_targets`
+   fans out ONE worker per desk (all 24 — 19 G20 + 5 watch;
+   `target_filter=<country target id>`). Its `other_analysts` set is
+   the four units; the kind's READ_SLICE resolves that set AND — because the run is
+   target-scoped — restricts to the RUNNING desk's findings and admits ONLY
+   verify-passed sub-claims above the floor (the INNER JOIN on the faithfulness
+   critique). Unverified sub-claims never enter the composition. Cadence `"30 11,23"`,
+   cooldown 39600s.
+
+2. **Honest empty-slice path.** A country whose four units produced no verify-passed
+   sub-claim yields an EMPTY slice, and the kind emits a `confidence=0.0` "No source
+   findings to synthesize" finding rather than inventing a read
+   (`analyst_country_composition.yaml:20-21`). `derived_from` is stamped from the
+   contributing unit finding ids, so the per-country read back-walks one hop to the four
+   units and two hops to their cited signals.
+
+3. **World composition.** `analyst_world_assessor.yaml` declares NO `targets` block, so
+   it runs as ONE global run (`target_filter=None`). The runtime selects the WORLD
+   composition branch (READ_SLICE `include_meta=True` + verify-floor) so it reads the
+   verified, meta-marked `country_composition` findings and composes them. Every factual
+   clause is cited `[[ref:<uuid>]]` to a country-read `finding_id`. Cadence `"0 0,12"`,
+   cooldown 39600s. It declares an `a2a_skill` output binding
+   (`intelligence.world_assessment`).
+
+4. **The compositions ALSO get the mandatory verify.** The faithfulness pass was
+   generalized to recognize the composition's `[[ref:<uuid>]]` → sub-claim / country-read
+   bridge; the fire condition is the descriptor DECLARING `method.llm.verify` (both
+   compositions carry it; the old target-less `analyst_meta_synthesizer.yaml`, which has
+   no verify block, stays excluded) — `dapr_actors.py:2455-2460`. So a composition's
+   `effective_confidence = min(confidence, overall_score)` is folded the same way a
+   unit's is, and a world read drills country → units → source with no dangling link.
+
+> **`world_assessor` was NOT retired — it graduated.** Its old role as a first-order LLM
+> pass over the tenant-wide raw signal slice was DEMOTED (SEAMS #34); it is now this
+> composition. The retired thing is the monolithic per-country `country_assessor`, which
+> nothing in the spine reads (Flow 2 note).
+
+---
+
+## 14. The banded scorecard (LIVE)
+
+**One sentence:** `scorecard_producer` — a `deterministic`-kind META analyst
+(`sub_handler=scorecard_producer`), the 12th OutputKind `scorecard` — writes ONE banded
+row per active desk (any target tagged g20/watch — all 24 today) by running
+high-precision RULES over the ALREADY-verified claims (no LLM, pure SQL, $0), so every
+band is a legible, demote-never-promote function of a `severity:<level>` tag and the
+folded `effective_confidence`, and every band NAMES the verified-claim id it rests on.
+
+1. **One global sweep, deterministic.** No `subscription.targets` → one global run per
+   tick that ENUMERATES every active target tagged g20/watch (all 24 desks), reading
+   directly via `deps.pg_pool`
+   (`analyst_scorecard_producer.yaml`, cadence `"40 4"`, cooldown 79200s). It runs
+   `scorecard_banding.gather_and_band` over a 14-day verified-claim window
+   (`DEFAULT_LOOKBACK_HOURS = 24*14`, `scorecard_banding.py:379`), staggered AFTER the
+   units + composition + verify + calibration so fresh verified claims exist in-window.
+
+2. **The banding rules (high-precision, demote-only).** For each of four fixed
+   dimensions the engine bands from the finding's `severity:<level>` tag (mapped via
+   `SEVERITY_TO_BAND` onto the ladder `low → watch → elevated → high → critical`) and
+   its folded `effective_confidence = min(confidence, faithfulness_score)`. A claim below
+   the confidence floor does NOT band; between the floor and a higher threshold the band
+   is DEMOTED one rung; a per-claim faithfulness below a dedicated floor demotes to
+   `low-faithfulness` (a distinct, legible reason). The rules never PROMOTE and never
+   hand-weight a number into a fabricated overall band.
+
+3. **Insufficient-evidence is a first-class outcome (honesty).** A dimension with no
+   qualifying verified claim reads `band = "insufficient-evidence"` with an
+   EMPTY-but-explicit basis and a machine `reason` (`below-floor` / `verify-failed` /
+   no severity tag) — NEVER a fabricated band (`scorecard_banding.py:15-17`,
+   `INSUFFICIENT` at `:113`). A country with NO qualifying claim still emits an
+   all-insufficient row (never omitted), so the read route returns exactly one honest
+   card per active desk (g20/watch). The row's `derived_from` NAMES the verified basis
+   findings, and a lineage walk resolves them with zero dangling.
+
+4. **Read it.** `GET /api/v1/v3/eval/scorecard` returns the per-country banded verdict
+   (`src/legba/data/registry/v3_api.py:1073`).
+
+> **The live scorecard is a MIX, and that is the point.** Some countries band; others
+> read all-insufficient. For example the US currently reads all-insufficient because its
+> unit faithfulness is genuinely low — the scorecard reports that honestly rather than
+> inventing a confident band over ungrounded prose.
+
+---
+
+## 15. The skill scoreboard + measured forecast (LIVE — no proven skill yet)
+
+**One sentence:** three deterministic META analysts publish the system's own honesty
+metrics — `unit_correctness_scorer` (per-unit faithfulness + correctness-vs-reference),
+`calibration_tracking` (the exogenous vs self-consistency Brier), and
+`forecast_scoreboard` (the acute-forecast Brier/BSS pilot) — each reporting a
+no-skill / insufficient-sample / abstain result HONESTLY rather than hiding it.
+
+1. **Per-unit correctness (honest-null today).** `unit_correctness_scorer`
+   (`sub_handler=unit_correctness_scorer`, cadence `"30 3"`) compares each unit's latest
+   head finding against operator-authored gold rows in `unit_reference_labels`
+   (migration 0057). The headline metric is Source-ID Overlap — canonical-source RECALL,
+   deterministic + LLM-free + $0 (Jaccard + citations-only recall ride along as
+   diagnostics). **The gold table is tiny (n=1, reported insufficient-sample);** with a
+   unit's labels empty it reports `correctness_vs_reference = None` with a status string,
+   never a fabricated or default number. It folds per-unit faithfulness alongside.
+
+2. **Calibration (segregated Brier).** `calibration_tracking` reads resolved hypotheses
+   and SEGREGATES the sample into a `brier_exogenous` (graded against facts that arrived
+   AFTER the claim) vs a `brier_self_consistency` (a status-transition stamp), flagging
+   `insufficient_exogenous` when too few world-graded rows exist — so a self-consistency
+   Brier can never masquerade as calibration against reality (Flow 8 step 7).
+
+3. **The acute-forecast scoreboard.** `forecast_scoreboard`
+   (`sub_handler=forecast_scoreboard`, cadence `"50 2"`) is the weekly DRIVER of the
+   pre-registered binary-forecast pilot. It calls the existing `forecast_acute` writers
+   (it reimplements no math): `issue_weekly_forecasts` (one binary forecast per active
+   desk for the next weekly window, idempotent), `resolve_open_acute_forecasts`
+   (grades a closed window EXOGENOUSLY by upstream event time), and a read-only resolved
+   count. A **degenerate / geography-dominated probability vector ABSTAINS** → zero rows;
+   the producer never bypasses that guard.
+
+4. **Forecasting surfaces as a MEASURED number, never a claim.** The only persisted
+   product is `acute_forecasts` rows + the `analyst_traces` receipt; the returned
+   `FindingPayload` is a per-run RECEIPT (counts only), marked TRACE_ONLY, so it NEVER
+   lands a finding / prediction on any trust surface. The numbers surface ONLY on the
+   calibration scoreboard `GET /api/v1/v3/eval/calibration`
+   (`src/legba/data/registry/v3_api.py:1132`), fed by the segregated pilot Brier / BSS.
+   **It currently reports NO proven skill** — the project earns the word "forecast" only
+   when the BSS is positive on a non-degenerate, at-sample pilot, and not before. The
+   forecast-as-claim predictors (`country_predictor`, `india_energy_predictor`) are
+   RETIRED/frozen and STOPPED (removed from bringup) precisely so a NEW free-text forecast
+   can never leak onto a trust surface (SEAMS #31); their **~539 historical `prediction`
+   rows REMAIN** in the DB (unread, off every current read route — not deleted).
+
+5. **Per-analyst runtime observability.** `GET /api/v1/v3/eval/analyst_runtime`
+   (`src/legba/data/registry/v3_api.py:1267`) reports per-analyst RUN TIMING computed
+   from `analyst_traces` — run count, avg/max wall-clock seconds, last run, and a
+   non-success count — so a slow or silently-failing analyst is legible operationally
+   (distinct from the skill/faithfulness metrics above).
 
 ---
 
@@ -1143,7 +1476,7 @@ voice (Wave 5), gated on first building a critic actuator.
 | Substrate slice read | `src/legba/runtime/dapr_actors.py:2989` (`_read_substrate_slice`) |
 | Kind dispatch | `src/legba/runtime/analyst_deps_builder.py:99` (`build_analyst_run_method`) |
 | Typed output write | `src/legba/data/provenance/writes.py:117` (`write_analyst_output`) |
-| OutputKind enum (11) | `src/legba/data/provenance/kinds.py:64` (`FACT`:86 / `NEXUS`:91 / `JOURNAL`:101) |
+| OutputKind enum (12) | `src/legba/data/provenance/kinds.py:77-109` (`FACT`:87 / `NEXUS`:92 / `JOURNAL`:102 / `SCORECARD`:109) |
 | Emit bindings | `src/legba/runtime/dapr_actors.py:2419` (`_emit_output_bindings`) |
 | STIX emit | `src/legba/data/outputs/stix_bundle.py:112` |
 | alert.emit binding | `src/legba/data/outputs/alert.py:588` (`emit`) |
@@ -1153,7 +1486,17 @@ voice (Wave 5), gated on first building a critic actuator.
 | Deep-consult endpoint | `src/legba/data/registry/deep_consult_api.py:132` (`POST` → 202) |
 | Deep-consult kind (schedule) | `src/legba/data/analysts/deep_consult.py:111` (`run_method`) |
 | Deep-consult workflow | `src/legba/runtime/dapr_workflow/deep_consult_workflow.py:248` |
-| Optimizer kind | `src/legba/data/analysts/optimizer.py:444` (`run_method`) |
+| Bounded units (descriptors) | `descriptors/analyst_leadership_transition.yaml` (+ `energy_security` / `escalation` / `narrative_coordination`) |
+| Faithfulness verify pass | `src/legba/data/provenance/verify.py:989` (`verify_finding_faithfulness`); fired `src/legba/runtime/dapr_actors.py:2442` |
+| effective_confidence fold | `overall_score = min(faithfulness_score, confidence)` (`verify.py:382`; read-time fold in `substrate_query_port`) |
+| Per-country composition | `descriptors/analyst_country_composition.yaml` (`meta_findings_synthesizer`, per-target) |
+| World composition | `descriptors/analyst_world_assessor.yaml` (`meta_findings_synthesizer`, global) |
+| Banded scorecard | `src/legba/data/analysts/deterministic_handlers/scorecard_banding.py:379` (`gather_and_band`, 14d) ; read `v3_api.py:1073` |
+| Per-unit correctness scorer | `src/legba/data/analysts/deterministic_handlers/unit_correctness_scorer.py` (`unit_reference_labels`, mig 0057) |
+| Acute-forecast scoreboard | `descriptors/analyst_forecast_scoreboard.yaml` ; read `v3_api.py:1132` (`/eval/calibration`) |
+| Per-analyst runtime timing | `src/legba/data/registry/v3_api.py:1267` (`GET /eval/analyst_runtime`) |
+| Watch-tier desk targets | `scripts/bringup_register_watch_country_targets.py` (`country_watch_il/ir/ua/tw/kp`; tag `watch`) |
+| Optimizer kind (scoped) | `src/legba/data/analysts/optimizer.py:444` (`run_method`); live descriptor `descriptors/analyst_unit_optimizer.yaml` |
 | Workflow client | `src/legba/runtime/dapr_workflow/client.py:221` |
 | Workflow orchestrator | `src/legba/runtime/dapr_workflow/workflow.py:134` |
 | Workflow worker (2 workflows) | `src/legba/runtime/dapr_workflow/worker.py:58` (`build_workflow_runtime`) |
@@ -1168,7 +1511,7 @@ voice (Wave 5), gated on first building a critic actuator.
 | Calibration (Brier) | `src/legba/data/analysts/deterministic_handlers/calibration_tracking.py:424` |
 | Seed driver | `src/legba/data/seed/_driver.py:144` (`run_seed_source`) |
 | Wikidata leaders adapter | `src/legba/data/seed/adapters/wikidata_leaders.py:147` (`fetch`/`map`) |
-| Grounding block (schema) | `src/legba/data/schemas/analyst.py:522` (`GroundingBlock`) |
+| Grounding block (schema) | `src/legba/data/schemas/analyst.py:580` (`GroundingBlock`) |
 | Grounding hook builder | `src/legba/runtime/analyst_deps_builder.py:378` (`_build_grounding_hook`) |
 | Grounding resolver | `src/legba/runtime/grounding.py:260` (`SubstrateGroundingResolver`) |
 | Grounding preamble | `src/legba/runtime/grounding.py:399` (`build_grounding_preamble`) |

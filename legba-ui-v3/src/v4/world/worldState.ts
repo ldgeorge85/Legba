@@ -39,6 +39,24 @@ export interface FilterOptions {
   countries: string[]
 }
 
+/**
+ * The read currently being LENSED (P1-T7). The temporal / geo / node-graph
+ * lenses publish the selected country-or-finding read + its directly-cited
+ * evidence signal ids here so the World map can brush the SAME read's evidence
+ * (a subtle emphasis) without importing the lens. `null` = no active read.
+ */
+export interface ReadScope {
+  /** The anchoring selection kind — 'target' (country) or 'finding'. */
+  kind: string
+  /** The read's substrate id (target descriptor id / finding id). */
+  id: string
+  /** The country the read assesses (signals/findings are fetched by it). */
+  targetId: string | null
+  label?: string
+  /** Cited signal ids — the read's directly-cited evidence (emphasis set). */
+  signalIds: string[]
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000
 
 interface WorldState {
@@ -79,6 +97,11 @@ interface WorldState {
   drawer: DrawerState
   openDrawer: (d: Omit<DrawerState, 'open'>) => void
   closeDrawer: () => void
+
+  /** The read currently being lensed (P1-T7) — set by the lenses, read by the
+   *  World map so it brushes the same read's evidence. */
+  readScope: ReadScope | null
+  setReadScope: (s: ReadScope | null) => void
 }
 
 export const useWorldState = create<WorldState>((set) => ({
@@ -111,4 +134,7 @@ export const useWorldState = create<WorldState>((set) => ({
   drawer: { open: false, title: '', signals: [], findings: [] },
   openDrawer: (d) => set({ drawer: { ...d, open: true } }),
   closeDrawer: () => set((s) => ({ drawer: { ...s.drawer, open: false } })),
+
+  readScope: null,
+  setReadScope: (readScope) => set({ readScope }),
 }))

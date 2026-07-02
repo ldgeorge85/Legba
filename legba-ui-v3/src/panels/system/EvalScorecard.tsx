@@ -33,9 +33,20 @@ import {
 import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet, ApiError } from '@/lib/api'
 import {
+  bandTone,
   buildScorecards,
+  calibrationBanner,
   critScoreTrend,
+  evalBadge,
+  insufficientLabel,
+  isInsufficient,
+  relTime,
   scoreBand,
+  type AcuteTag,
+  type BandTone,
+  type CalibrationScoreboard,
+  type CountryScorecard,
+  type DimensionBand,
   type ScorecardRow,
   type ScoreBand,
 } from '@/lib/evalOps'
@@ -52,10 +63,50 @@ const BAND_BAR: Record<ScoreBand, string> = {
   warn: 'bg-amber-500',
   bad: 'bg-rose-500',
 }
+const ACUTE_PILL: Record<AcuteTag, string> = {
+  ready: 'bg-emerald-900 text-emerald-200',
+  accumulating: 'bg-amber-900 text-amber-200',
+  degenerate: 'bg-rose-900 text-rose-200',
+}
+
+// Coarse band-tone → pill color. `insufficient` is a MUTED honest tone, never a
+// severity color — an insufficient band renders no colored pill at all.
+const TONE_PILL: Record<BandTone, string> = {
+  good: 'bg-emerald-900 text-emerald-200',
+  watch: 'bg-amber-900 text-amber-200',
+  elevated: 'bg-orange-900 text-orange-200',
+  high: 'bg-rose-900 text-rose-200',
+  critical: 'bg-red-900 text-red-200',
+  insufficient: 'bg-slate-800 text-slate-400',
+}
+
+// The 4 unit dimensions (analyst_ids) a scorecard always cards, in display order.
+const DIMENSION_ORDER = [
+  'leadership_transition',
+  'energy_security',
+  'escalation',
+  'narrative_coordination',
+] as const
+
+/** Order a scorecard's dimensions: the 4 known units first, then any extras. */
+function orderedDimensions(
+  dims: Record<string, DimensionBand>,
+): Array<[string, DimensionBand]> {
+  const known = DIMENSION_ORDER.filter((u) => u in dims).map(
+    (u) => [u, dims[u]] as [string, DimensionBand],
+  )
+  const extras = Object.keys(dims)
+    .filter((u) => !(DIMENSION_ORDER as readonly string[]).includes(u))
+    .sort()
+    .map((u) => [u, dims[u]] as [string, DimensionBand])
+  return [...known, ...extras]
+}
 
 export default function EvalScorecardPanel({ registration }: PanelProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [endpointPending, setEndpointPending] = useState(false)
+  // Which (target:unit) band is expanded to its basis sub-claims.
+  const [openBand, setOpenBand] = useState<string | null>(null)
 
   const { data, isLoading, error, refetch } = useQuery<ScorecardRow[]>({
     queryKey: ['eval-scorecard'],
@@ -76,7 +127,43 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
     refetchInterval: 60_000,
   })
 
+  // The honest skill scoreboard (P4-T4). Its own endpoint — a 404 while the
+  // registry route is unwired reads as "no calibration yet", never an error.
+  const { data: cal } = useQuery<CalibrationScoreboard | null>({
+    queryKey: ['eval-calibration'],
+    queryFn: async () => {
+      try {
+        return await apiGet<CalibrationScoreboard>('/v3/eval/calibration')
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null
+        throw e
+      }
+    },
+    refetchInterval: 60_000,
+  })
+
+  // The banded per-country scorecard (P4-T3/T5). Its own registry route — a 404
+  // while unwired reads as "no scorecard computed yet", never an error. Empty
+  // list is a first-class honest state (no country carded yet).
+  const { data: scorecards } = useQuery<CountryScorecard[]>({
+    queryKey: ['eval-country-scorecard'],
+    queryFn: async () => {
+      try {
+        return await apiGet<CountryScorecard[]>('/v3/eval/country_scorecard')
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return []
+        throw e
+      }
+    },
+    refetchInterval: 60_000,
+  })
+
   const cards = useMemo(() => buildScorecards(data ?? []), [data])
+  const banner = useMemo(() => calibrationBanner(cal), [cal])
+  const countryCards = useMemo(
+    () => [...(scorecards ?? [])].sort((a, b) => a.target_id.localeCompare(b.target_id)),
+    [scorecards],
+  )
 
   return (
     <PanelChrome
@@ -88,6 +175,210 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
       {error instanceof Error && (
         <div className="text-rose-400 text-sm">error: {error.message}</div>
       )}
+
+      {/* Honest skill scoreboard — exogenous Brier + acute-forecast BSS. A thin
+          sample shows the verbatim INSUFFICIENT message; a degenerate pilot shows
+          "skill claim withheld"; never a bare positive number. */}
+      <div
+        className="bg-surface-100 border border-slate-800 rounded p-2 mb-2 space-y-1.5 text-xs"
+        data-testid="eval-calibration-scoreboard"
+      >
+        <div className="text-slate-500 text-[10px] uppercase tracking-wide">
+          skill scoreboard
+        </div>
+        <div className="flex items-baseline gap-2">
+          <span className="w-32 shrink-0 text-slate-400">exogenous Brier</span>
+          <span
+            className={
+              banner.exogenous.insufficient
+                ? 'text-amber-300'
+                : banner.absent
+                  ? 'text-slate-500'
+                  : 'text-slate-200 font-mono'
+            }
+            data-testid="eval-calibration-exogenous"
+          >
+            {banner.exogenous.label}
+          </span>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <span className="w-32 shrink-0 text-slate-400">acute-forecast BSS</span>
+          <span
+            className={`shrink-0 rounded px-1 text-[10px] font-mono ${ACUTE_PILL[banner.acute.tag]}`}
+            data-testid="eval-calibration-acute-tag"
+          >
+            {banner.acute.tag}
+          </span>
+          <span
+            className={banner.acute.bss !== null ? 'text-slate-200 font-mono' : 'text-slate-400'}
+            data-testid="eval-calibration-acute-label"
+          >
+            {banner.acute.label}
+          </span>
+        </div>
+        {banner.absent && (
+          <div className="text-slate-600 text-[10px]">
+            no forecast / calibration pilot has been computed yet
+          </div>
+        )}
+        {!banner.absent && cal?.produced_at && (
+          <div className="text-slate-600 text-[10px]">
+            computed {relTime(cal.produced_at)}
+          </div>
+        )}
+      </div>
+
+      {/* Banded per-country scorecard (P4-T3/T5). One honest card per active G20
+          country: a band per dimension, click a band → its verified sub-claims
+          (basis findings, each a P1 evidence + signed-lineage drill), a per-dim
+          faithfulness+correctness badge, and an explicit not-enough-verified
+          state for an insufficient-evidence band — never a fabricated band. */}
+      <div className="mb-2 space-y-2" data-testid="scorecard-country-list">
+        <div className="text-slate-500 text-[10px] uppercase tracking-wide">
+          banded verdicts (per country)
+        </div>
+        {countryCards.length === 0 && (
+          <div
+            className="text-slate-500 text-center py-3 text-xs"
+            data-testid="scorecard-empty"
+          >
+            no scorecard computed yet
+          </div>
+        )}
+        {countryCards.map((sc) => {
+          const dims = orderedDimensions(sc.dimensions)
+          const bandedN = dims.filter(([, d]) => !isInsufficient(d)).length
+          return (
+            <div
+              key={sc.target_id}
+              className="bg-surface-100 border border-slate-800 rounded p-2 space-y-1.5"
+              data-testid={`scorecard-card-${sc.target_id}`}
+            >
+              <div className="flex items-baseline gap-2">
+                <RecordLink
+                  kind="target"
+                  id={sc.target_id}
+                  label={sc.target_id}
+                  origin="scorecard"
+                  className="truncate text-slate-200"
+                />
+                <span className="text-slate-600 text-[10px] shrink-0">
+                  {bandedN}/{dims.length} banded
+                </span>
+                {sc.generated_at && (
+                  <span className="text-slate-600 text-[10px] shrink-0 ml-auto">
+                    {relTime(sc.generated_at)}
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                {dims.map(([unit, dim]) => {
+                  const insufficient = isInsufficient(dim)
+                  const bandKey = `${sc.target_id}:${unit}`
+                  const open = openBand === bandKey
+                  const flagged = dim.eval?.faithfulness_flagged === true
+                  return (
+                    <div
+                      key={unit}
+                      className="text-[11px]"
+                      data-testid={`scorecard-dim-${sc.target_id}-${unit}`}
+                    >
+                      <div className="flex items-baseline gap-2">
+                        <span className="w-40 shrink-0 truncate text-slate-400">{unit}</span>
+                        {insufficient ? (
+                          // Honest not-enough-verified state — no colored pill, no
+                          // number, no drill target (basis is empty).
+                          <span
+                            className="rounded bg-slate-800 px-1 text-[10px] text-slate-400"
+                            data-testid={`scorecard-insufficient-${sc.target_id}-${unit}`}
+                          >
+                            insufficient — {insufficientLabel(dim.reason)}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className={`shrink-0 rounded px-1 text-[10px] font-mono ${TONE_PILL[bandTone(dim.band)]}`}
+                            onClick={() => setOpenBand(open ? null : bandKey)}
+                            data-testid={`scorecard-band-${sc.target_id}-${unit}`}
+                            title={`${dim.basis.length} verified sub-claim${dim.basis.length === 1 ? '' : 's'}`}
+                          >
+                            {dim.band}
+                          </button>
+                        )}
+                        {!insufficient && dim.effective_confidence !== null && (
+                          <span className="text-slate-500 font-mono text-[10px]">
+                            eff {dim.effective_confidence.toFixed(2)}
+                          </span>
+                        )}
+                        {flagged && (
+                          <span
+                            className="text-rose-400 text-[10px] shrink-0"
+                            title="aggregate faithfulness below floor"
+                          >
+                            ⚑ low faithfulness
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Expanded basis — the verified sub-claims this band rests
+                          on. Each basis id is a P1 evidence + signed-lineage drill.
+                          basis.length===0 never renders a drill target. */}
+                      {open && !insufficient && (
+                        <div className="mt-1 ml-40 pl-2 border-l border-slate-800 space-y-1">
+                          {dim.basis.length === 0 ? (
+                            <div className="text-slate-600 text-[10px]">
+                              no basis sub-claim
+                            </div>
+                          ) : (
+                            dim.basis.map((basisId) => (
+                              <div
+                                key={basisId}
+                                data-testid={`scorecard-basis-${basisId}`}
+                              >
+                                <RecordLink
+                                  kind="finding"
+                                  id={basisId}
+                                  label="sub-claim"
+                                  origin="scorecard"
+                                  className="text-[10px]"
+                                />
+                              </div>
+                            ))
+                          )}
+                          <div
+                            className={
+                              flagged ? 'text-rose-300 text-[10px]' : 'text-slate-500 text-[10px]'
+                            }
+                          >
+                            {evalBadge(dim.eval)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* The P3 composition aggregate node. */}
+              <div className="flex items-baseline gap-2 text-[10px] border-t border-slate-800 pt-1">
+                <span className="w-40 shrink-0 text-slate-500">composition</span>
+                {sc.composition.present && sc.composition.basis[0] ? (
+                  <RecordLink
+                    kind="finding"
+                    id={sc.composition.basis[0]}
+                    label="composition"
+                    origin="scorecard"
+                    className="text-[10px]"
+                  />
+                ) : (
+                  <span className="text-slate-600">no verified composition</span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
 
       <div className="flex-1 overflow-auto space-y-2 text-xs" data-testid="eval-scorecard-list">
         {!isLoading && cards.length === 0 && !endpointPending && (

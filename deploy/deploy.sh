@@ -330,13 +330,14 @@ wait_for "registry-healthz" 120 \
 
 # Ordered registrar sequence — VERBATIM from the audit (§1.3):
 #   1 vault → 2 stack → 3 packs(HTTP) → 4 sources → 4b catalog →
-#   5 G20 targets → 6 analyst set → 7 deterministic-6 → 8 budget.
+#   5 G20 targets → 5b watch tier → 6 analyst set → 7 deterministic-6 → 8 budget.
 info "[1] vault secrets (HTTP)";            run_registrar scripts/bringup_vault_load.py
 info "[2] stack components (HTTP)";          run_registrar scripts/bringup_register_stack.py
 info "[3] action packs (HTTP, 8 packs)";     run_registrar scripts/bringup_register_action_packs.py
 info "[4] shared RSS sources (3, direct)";   run_registrar scripts/bringup_register_sources.py
 info "[4b] full no-auth catalog (~46)";      run_registrar scripts/bringup_register_source_catalog.py
 info "[5] G20 country targets (x19)";        run_registrar scripts/bringup_register_g20_country_targets.py
+info "[5b] watch tier (x5 il/ir/ua/tw/kp)";  run_registrar scripts/bringup_register_watch_country_targets.py
 info "[6] analyst working set (~21-23)";     run_registrar scripts/bringup_register_analysts.py
 info "[7] deterministic analysts (x6, HTTP)"
 for det in cross_source_dedup cross_source_coalesce entity_resolution \

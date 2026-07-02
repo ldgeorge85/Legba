@@ -29,7 +29,8 @@ import {
   useWorldSituations,
 } from './mapData'
 import { useWorldState } from './worldState'
-import { useSelection } from '@/state/selection'
+import { useSelection, selectRow } from '@/state/selection'
+import type { GeoPoint } from '@/lib/geoPoints'
 import { cn } from '@/lib/cn'
 import {
   SEVERITY_COLOR,
@@ -153,7 +154,16 @@ export default function LeafletWorldMap() {
   const setCount = useWorldState((s) => s.setCount)
   const setFilterOptions = useWorldState((s) => s.setFilterOptions)
   const openDrawer = useWorldState((s) => s.openDrawer)
+  const readScope = useWorldState((s) => s.readScope)
   const select = useSelection((s) => s.select)
+
+  // P1-T7 — brush the SAME read: when a country/finding read is being lensed
+  // elsewhere, ring the clusters that hold one of its cited-evidence signals.
+  // Purely additive — with no active readScope the markers render unchanged.
+  const evidenceIds = useMemo(
+    () => new Set(readScope?.signalIds ?? []),
+    [readScope],
+  )
 
   const base = useQuery({
     queryKey: ['world-geojson'],
@@ -286,17 +296,22 @@ export default function LeafletWorldMap() {
         {layers.signals &&
           clusters.map((c) => {
             const d = decayFactor(c.freshestTs, windowStartMs, windowEndMs, decay)
+            // P1-T7 — does this cluster carry one of the active read's cited
+            // signals? If so, ring it white so the World map shows the lensed
+            // read's evidence in place (no effect when no read is being lensed).
+            const isEvidence =
+              evidenceIds.size > 0 && c.signals.some((s) => evidenceIds.has(s.id))
             return (
             <CircleMarker
               key={`s-${c.key}`}
               center={[c.lat, c.lon]}
               radius={Math.min(6 + Math.sqrt(c.count) * 2.5, 28) * (0.5 + 0.5 * d)}
               pathOptions={{
-                color: SEVERITY_COLOR[c.maxSeverity],
+                color: isEvidence ? '#ffffff' : SEVERITY_COLOR[c.maxSeverity],
                 fillColor: SEVERITY_COLOR[c.maxSeverity],
                 fillOpacity: 0.45 * d,
-                opacity: d,
-                weight: 1,
+                opacity: isEvidence ? 1 : d,
+                weight: isEvidence ? 2.5 : 1,
               }}
               eventHandlers={{
                 click: () => {
@@ -370,6 +385,106 @@ export default function LeafletWorldMap() {
           })}
       </MapContainer>
       <SeverityLegend />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ReadGeoLens (P1-T7) — the GEO half of the read's temporal lens.
+//
+// A compact, SELF-CONTAINED Leaflet map of one country/finding read's evidence
+// geo points (resolved by the lens via `signalGeoPoints`, ISO-2 fallback). It
+// does NOT read the World room's time window/filters — the read defines its own
+// scope. The directly-cited evidence points are emphasised; the rest of the
+// country's activity is faded context. Clicking a point `selectRow`s the
+// underlying row, brushing every room (and re-opening it in the Inspector).
+// ---------------------------------------------------------------------------
+
+/** Per-kind marker fill for the lens (kept local — the world severity ramp
+ *  keys on Severity, but lens points carry a free-form string). */
+function lensPointColor(p: GeoPoint): string {
+  if (p.kind === 'finding') return '#fbbf24' // amber-400 — analyst output
+  if (p.kind === 'entity') return '#34d399' // emerald-400
+  return '#60a5fa' // blue-400 — signal
+}
+
+export function ReadGeoLens({
+  points,
+  evidenceIds,
+  selectedId,
+}: {
+  points: GeoPoint[]
+  evidenceIds: Set<string>
+  selectedId?: string | null
+}) {
+  const base = useQuery({
+    queryKey: ['world-geojson'],
+    queryFn: () => fetch('/world.geojson').then((r) => r.json()),
+    staleTime: Infinity,
+  })
+
+  // Centre on the mean of the evidence points so the read's locus is framed.
+  const center = useMemo<[number, number]>(() => {
+    if (points.length === 0) return [20, 0]
+    let lat = 0
+    let lon = 0
+    for (const p of points) {
+      lat += p.lat
+      lon += p.lon
+    }
+    return [lat / points.length, lon / points.length]
+  }, [points])
+
+  if (points.length === 0) {
+    return (
+      <div
+        className="flex h-full w-full items-center justify-center bg-surface-200 px-4 text-center text-sm text-slate-500"
+        data-testid="read-geo-lens-empty"
+      >
+        No geo-placeable evidence for this read.
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-full w-full" style={{ background: '#0a0c10' }} data-testid="read-geo-lens">
+      <MapContainer
+        center={center}
+        zoom={3}
+        minZoom={1}
+        maxZoom={8}
+        worldCopyJump
+        preferCanvas
+        attributionControl={false}
+        style={{ height: '100%', width: '100%', background: '#0a0c10' }}
+      >
+        <ResizeFix />
+        {base.data ? <GeoJSON data={base.data} style={() => LAND_STYLE} /> : null}
+        {points.map((p) => {
+          const isEvidence = evidenceIds.has(p.id)
+          const isSelected = selectedId != null && p.id === selectedId
+          const color = lensPointColor(p)
+          return (
+            <CircleMarker
+              key={`${p.kind}-${p.id}`}
+              center={[p.lat, p.lon]}
+              radius={isEvidence ? 8 : 5}
+              pathOptions={{
+                color: isSelected ? '#ffffff' : color,
+                fillColor: color,
+                fillOpacity: isEvidence ? 0.85 : 0.3,
+                opacity: isEvidence ? 1 : 0.45,
+                weight: isSelected ? 3 : isEvidence ? 1.5 : 1,
+              }}
+              eventHandlers={{
+                click: () => selectRow(p.kind, p.id, p.title, { origin: 'read-geo-lens' }),
+              }}
+            >
+              <Tooltip>{p.title}</Tooltip>
+            </CircleMarker>
+          )
+        })}
+      </MapContainer>
     </div>
   )
 }
