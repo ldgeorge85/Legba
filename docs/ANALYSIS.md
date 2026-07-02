@@ -1013,8 +1013,8 @@ verify judge (currently the core model, not cross-family — §6.2) that gates t
 live findings: the parent arm is the unit's existing
 faithfulness `overall_score`; the candidate arm generates under the candidate
 prompt and re-verifies. A degenerate, insufficiently-paired, or non-positive delta
-is **honest-null and can never promote** — the measurement gates run *before* any
-policy branch (`should_auto_promote`). The delta is the deliverable: promotion stays
+is **honest-null and can never promote** — the measurement gate (`_delta_gates_ok`)
+stamps `data.eval.promotable=false`. The delta is the deliverable: promotion stays
 `human_gated`, and even a hand-flipped `promoted` cannot reach inference without a
 positive, non-degenerate, sufficiently-sampled measured delta. The old always-on
 monolithic `country_optimizer` (over the retired `country_assessor`) is
@@ -1053,13 +1053,14 @@ in-process GEPA loop when `dapr.ext.workflow` is unavailable (minimal envs / tes
 
 ### 6.4 Human-gated promotion
 
-A candidate's promotion to live is gated by the descriptor's `eval.promotion`
-policy (`should_auto_promote`):
-
-- `human_gated` (the default) — never auto-promotes. An operator promotes manually.
-- `auto_with_threshold` — becomes eligible only after **5** successful manual
-  promotions for that analyst (counted from prior promoted candidate rows) **and**
-  when the candidate's eval score exceeds the parent's.
+Promotion to live is **human-gated end to end** — there is no auto-promotion path.
+An operator flips a candidate's `data->>'promotion_gate'` to `'promoted'`, and
+`resolve_promoted_system_prompt` (the live inference path) admits the evolved prompt
+ONLY when the MEASURED delta is promotable. The single measurement gate is
+`gepa._delta_gates_ok`, which stamps `data.eval.promotable` at candidate write time
+(`optimizer.run_method`) and rejects an absent / degenerate / non-finite /
+judge-unavailable / under-paired / sub-margin delta. So even a hand-flipped
+`promotion_gate='promoted'` on a degenerate candidate resolves to the baseline.
 
 The candidate lands in `analyst_outputs` as a `PROMPT_MODULE_CANDIDATE` row; no
 prompt goes live without clearing this gate.

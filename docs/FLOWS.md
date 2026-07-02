@@ -581,15 +581,17 @@ for either optimizer descriptor — only the `unit_optimizer` one is registered/
    `OUTPUT_KIND = OutputKind.PROMPT_MODULE_CANDIDATE` at `:71`).
 
 8. **Promotion (operator-gated).** A candidate becomes the analyst's live system prompt
-   only when its `data->>'promotion_gate'` is flipped to `'promoted'`:
-   - `should_auto_promote(...)` defaults to `human_gated` → never auto-promotes
-     (`src/legba/data/analysts/optimizer.py:376-414`). The only auto path is
-     `auto_with_threshold`, still keyed on a `promoted` gate set externally by the
-     operator's promotion action (`:401-419`).
+   only when its `data->>'promotion_gate'` is flipped to `'promoted'` by the operator —
+   there is **no auto-promotion path**:
+   - the measurement gate `gepa._delta_gates_ok` stamps `data.eval.promotable` at
+     candidate write time (`optimizer.run_method`); it rejects an absent / degenerate /
+     non-finite / judge-unavailable / under-paired / sub-margin delta.
    - `resolve_promoted_system_prompt(analyst_id)` returns the live prompt by selecting
-     the candidate whose `promotion_gate='promoted'` — this is the closed loop from
-     champion instruction → live system prompt
-     (`src/legba/data/analysts/optimizer.py:326-369`).
+     the candidate whose `promotion_gate='promoted'` **and** `data.eval.promotable` is
+     `true` (or a legacy candidate with no eval block) — this is the closed loop from
+     champion instruction → live system prompt, so even a hand-flipped gate on a
+     degenerate candidate resolves to the baseline
+     (`src/legba/data/analysts/optimizer.py`).
 
 **Bootstrap wiring:** the Dapr host builds the `DaprOptimizerWorkflowClient` and (when
 `LEGBA_EMBED_WORKFLOW_WORKER=1`, the default) embeds the `WorkflowRuntime` worker

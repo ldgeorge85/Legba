@@ -20,9 +20,13 @@ Method:  ``dspy_compile`` — GEPA reflective Pareto-frontier prompt
          (see :mod:`legba.runtime.dapr_workflow`).
 Write:   :class:`PromptModuleCandidatePayload` to ``analyst_outputs``
          with ``kind = OutputKind.PROMPT_MODULE_CANDIDATE``.
-Promote: gated by ``descriptor.eval.promotion`` — default
-         ``human_gated``; ``auto_with_threshold`` becomes eligible
-         after 5 successful manual promotions (per 2026-05-16 decision).
+Promote: HUMAN-GATED — an operator flips ``promotion_gate`` to
+         ``'promoted'`` and ``resolve_promoted_system_prompt`` admits the
+         prompt ONLY when the MEASURED delta is promotable
+         (``gepa._delta_gates_ok``). There is no auto-promotion path;
+         the ``auto_with_threshold`` policy LABEL is retained on the
+         candidate row but nothing auto-acts on it (it too requires the
+         operator flip).
 
 Wave B prereqs (commit ``8a1fd5c``):
   * ``MethodBlock.kind`` has the ``dspy_compile`` literal.
@@ -38,7 +42,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -102,10 +105,6 @@ def build_prompt_module() -> Any:
 # default.  Descriptors override via ``eval.optimizer.min_traces_required``.
 DEFAULT_MIN_TRACES_REQUIRED: int = 50
 DEFAULT_MIN_CRITIQUES_REQUIRED: int = 0
-
-# Per L-176 §"Promotion gates": 5 successful manual promotions before an
-# analyst becomes eligible for `auto_with_threshold` promotion.
-AUTO_PROMOTION_SUCCESS_THRESHOLD: int = 5
 
 # GEPA hyperparameters — descriptors override via ``eval.optimizer.*``.
 DEFAULT_MAX_GENERATIONS: int = 5
@@ -466,101 +465,19 @@ async def resolve_promoted_system_prompt(
     return default
 
 
-async def should_auto_promote(
-    conn: asyncpg.Connection,
-    *,
-    analyzed_analyst_id: str,
-    candidate_score: float | None,
-    parent_score: float | None,
-    promotion_policy: str,
-    eval_degenerate: bool = False,
-    judge_available: bool = True,
-    n_paired: int = 0,
-    min_paired: int = 0,
-    min_delta: float = 0.0,
-    min_promotion_threshold: int = AUTO_PROMOTION_SUCCESS_THRESHOLD,
-) -> tuple[bool, str]:
-    """Decide whether a candidate should auto-promote.
-
-    Returns ``(eligible, reason)``.
-
-    P4-T6 — the MEASUREMENT gates run FIRST, BEFORE any promotion-policy branch,
-    so a degenerate / absent / judge-unavailable / insufficiently-sampled /
-    sub-margin delta can never slip through on policy alone:
-
-      * ``candidate_score`` / ``parent_score`` is ``None`` OR ``eval_degenerate``
-        → ``(False, "degenerate_or_absent_delta")`` (an honest-null faithfulness
-        delta — never faked to 0.0 — cannot promote).
-      * ``judge_available`` is False → ``(False, "faithfulness_judge_unavailable")``
-        (the before/after must share the SAME llm.verify.slm_8b yardstick).
-      * ``min_paired > 0`` AND ``n_paired < min_paired`` →
-        ``(False, "insufficient_paired_sample:…")``.
-      * ``min_delta > 0`` AND the delta is below it → ``(False, "delta_below_margin")``.
-
-    The ``min_paired``/``min_delta`` gates are CONDITIONAL (>0) so an old-style
-    call with the legacy 3-arg convention (no measured-delta params) is
-    unchanged: it falls through to the score-monotonicity floor + policy branch
-    below (``score_did_not_improve`` / ``human_gated`` / the manual-promotion
-    threshold), exactly as before P4-T6.
-
-    Policy resolution per L-176 §"Promotion gates":
-
-      * ``human_gated`` (default) → never auto-promotes; returns
-        ``(False, "human_gated")``.
-      * ``auto_with_threshold`` → counts historic manual promotions
-        for this analyst's prior candidates (rows in ``analyst_outputs``
-        with ``kind='prompt_module_candidate'`` AND
-        ``data ->> 'promotion_gate' = 'promoted'``).  When that count
-        reaches ``min_promotion_threshold`` (5 per the 2026-05-16
-        decision), AND the candidate's score exceeds the parent's,
-        return ``(True, "auto_promoted")``.
-    """
-    # ── MEASUREMENT gates (P4-T6) — before ANY policy branch ─────────────────
-    if candidate_score is None or parent_score is None or eval_degenerate:
-        return False, "degenerate_or_absent_delta"
-    # Defense-in-depth: a non-finite (NaN/inf) score is NOT a measured delta —
-    # NaN comparisons are all False, so it would silently slip the monotonicity
-    # floor below. Treat it as absent (not producer-reachable — faithfulness is
-    # [0,1] — but the promotion gate must never rest on a comparison that lies).
-    if not (math.isfinite(candidate_score) and math.isfinite(parent_score)):
-        return False, "non_finite_score"
-    if not judge_available:
-        return False, "faithfulness_judge_unavailable"
-    if min_paired > 0 and n_paired < min_paired:
-        return False, f"insufficient_paired_sample:{n_paired}<{min_paired}"
-    if min_delta > 0.0 and (candidate_score - parent_score) < min_delta:
-        return False, "delta_below_margin"
-
-    # ── Score-monotonicity floor + policy branches (legacy behaviour) ────────
-    if candidate_score <= parent_score:
-        return False, "score_did_not_improve"
-
-    if promotion_policy == "human_gated":
-        return False, "human_gated"
-
-    if promotion_policy != "auto_with_threshold":
-        return False, f"unknown_policy:{promotion_policy}"
-
-    # Count historic "promoted" rows for this analyst's candidates.
-    # The audit semantics are: a row's data->promotion_gate is updated
-    # to 'promoted' when the operator promotes it; we count those.
-    row = await conn.fetchrow(
-        """
-        SELECT COUNT(*) AS n
-        FROM analyst_outputs
-        WHERE kind = 'prompt_module_candidate'
-          AND (data ->> 'analyst_id') = $1
-          AND (data ->> 'promotion_gate') = 'promoted'
-        """,
-        analyzed_analyst_id,
-    )
-    n_prior_promotions = int(row["n"]) if row else 0
-    if n_prior_promotions < min_promotion_threshold:
-        return False, (
-            f"insufficient_history: {n_prior_promotions} prior promotions, "
-            f"need {min_promotion_threshold}"
-        )
-    return True, f"auto_promoted_after_{n_prior_promotions}_priors"
+# NOTE — there is NO auto-promotion path. Promotion is human-gated end to end:
+# an operator flips a candidate's ``data->>'promotion_gate'`` to ``'promoted'``,
+# and :func:`resolve_promoted_system_prompt` (wired at
+# ``analyst_deps_builder`` — the LIVE inference path) admits that evolved prompt
+# ONLY when the MEASURED delta is promotable. The single measurement gate is
+# :func:`legba.runtime.dapr_workflow.gepa._delta_gates_ok` — it stamps
+# ``data.eval.promotable`` at candidate write time (see ``run_method`` below)
+# and rejects an absent / degenerate / NON-FINITE / judge-unavailable /
+# under-sampled / sub-margin delta. An earlier ``should_auto_promote`` policy
+# helper (``auto_with_threshold``) was removed (P4 pre-push review): it had ZERO
+# production call sites (no descriptor declares that policy; ``run_method`` +
+# ``OptimizerDeps`` carry no DB connection to reach it), so the honesty suite
+# was testing dead code. The honesty contracts now pin the LIVE gate directly.
 
 
 # ---------------------------------------------------------------------------
@@ -1163,7 +1080,6 @@ def _no_op_result(
 
 
 __all__ = [
-    "AUTO_PROMOTION_SUCCESS_THRESHOLD",
     "DEFAULT_MAX_GENERATIONS",
     "DEFAULT_MIN_CRITIQUES_REQUIRED",
     "DEFAULT_MIN_TRACES_REQUIRED",
@@ -1180,7 +1096,6 @@ __all__ = [
     "build_prompt_module",
     "read_traces_and_critiques",
     "run_method",
-    "should_auto_promote",
     "_collect_derived_from",
     "_collect_derived_trace_ids",
 ]

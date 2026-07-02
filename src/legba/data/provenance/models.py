@@ -187,9 +187,12 @@ class PromptModuleCandidatePayload(BaseModel):
     analyst's joined ``analyst_traces`` + ``analyst_critiques`` rows, then
     writes one of these payloads to ``analyst_outputs`` with
     ``kind = 'prompt_module_candidate'`` (per L-176 §Output payload).
-    Promotion to the parent analyst's live prompt_module is gated
-    downstream by :func:`legba.data.analysts.optimizer.should_auto_promote`
-    against the descriptor's ``eval.promotion`` policy.
+    Promotion to the parent analyst's live prompt_module is human-gated: an
+    operator flips ``promotion_gate='promoted'`` and
+    :func:`legba.data.analysts.optimizer.resolve_promoted_system_prompt` admits
+    the evolved prompt into inference ONLY when the MEASURED delta passes
+    :func:`legba.runtime.dapr_workflow.gepa._delta_gates_ok` (stamped into
+    ``data.eval.promotable`` at write time).
 
     Lands in the generic ``analyst_outputs`` table — no new migration
     required; the runtime's existing dispatch path persists the row
@@ -238,11 +241,15 @@ class PromptModuleCandidatePayload(BaseModel):
     # GEPA generation counter (0 = the parent itself, >=1 = evolved).
     gepa_generation: int = Field(ge=0, default=0)
 
-    # Promotion gating per the 2026-05-16 ratified decision:
+    # Promotion gating (the descriptor policy LABEL carried on the candidate).
+    # Promotion is HUMAN-GATED: an operator flips this to ``'promoted'`` (a
+    # separate live value) and ``resolve_promoted_system_prompt`` admits the
+    # prompt only when the measured delta is promotable. There is NO
+    # auto-promotion path (the ``should_auto_promote`` helper was removed —
+    # zero production call sites), so ``auto_with_threshold`` behaves like
+    # ``human_gated`` here (retained as a valid policy label for audit):
     #   * ``human_gated``        — operator review required (default).
-    #   * ``auto_with_threshold``— eligible for auto-promotion after the
-    #                              5-successful-manual-promotions threshold
-    #                              has been met for this analyst_id.
+    #   * ``auto_with_threshold``— retained label; NOT auto-promoted (inert).
     #   * ``rejected``           — post-hoc operator rejection (kept for
     #                              audit; the optimizer won't re-evolve from
     #                              a rejected candidate).

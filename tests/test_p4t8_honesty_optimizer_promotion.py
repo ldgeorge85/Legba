@@ -1,127 +1,75 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""P4-T8 honesty contract #3 — auto-promote requires a positive, non-degenerate
-eval delta.
+"""P4-T8 honesty contract #3 — a candidate promotes ONLY on a positive,
+non-degenerate, judge-scored, sufficiently-paired MEASURED delta.
 
-``optimizer.should_auto_promote`` (L455-543) must return ``(False, ...)`` whenever
+This suite pins the LIVE promotion gate, ``gepa._delta_gates_ok`` — the function
+that stamps ``data.eval.promotable`` at candidate write time
+(``optimizer.run_method``) and that ``optimizer.resolve_promoted_system_prompt``
+(the wired inference path) consults before admitting an operator-promoted prompt.
+Promotion is human-gated end to end; there is NO auto-promotion path (the former
+``should_auto_promote`` ``auto_with_threshold`` helper had ZERO production call
+sites and was removed — so the honesty suite tests the gate that ACTUALLY runs,
+not dead code).
+
+``_delta_gates_ok`` must return ``(False, ...)`` — i.e. NOT promotable — whenever
 the eval delta is:
 
   * ABSENT — a ``None`` faithfulness mean (honest-null, never faked to 0.0), OR
-  * DEGENERATE — ``eval_degenerate=True`` (an under-sampled / judge-unavailable
-    measured eval), OR
-  * NON-POSITIVE — ``candidate_score <= parent_score``,
+  * DEGENERATE — ``eval_degenerate=True`` (under-sampled / judge-unavailable), OR
+  * NON-FINITE — a raw NaN/inf score (a comparison that lies), OR
+  * JUDGE-UNAVAILABLE — the before/after didn't share the LLM-judge yardstick, OR
+  * UNDER-PAIRED — ``n_paired < min_paired``, OR
+  * SUB-MARGIN — the delta is below ``min_delta``.
 
-even with a FULLY-eligible promotion history. Only a positive, finite,
-strictly-improving, non-degenerate delta on the ``auto_with_threshold`` policy
-with enough prior manual promotions may promote. The tests FAIL if an
-auto-promote fires without that.
-
-These pin the P4-T6-hardened gate (the measurement gates run BEFORE any policy
-branch). Pure unit tests (no live DB — a fake conn stands in for the
-prior-promotions count).
+Only a positive, finite, judge-scored, sufficiently-paired, non-degenerate delta
+is promotable. Pure unit tests (no DB, no LLM — the gate is pure arithmetic).
 
 Selectable via ``pytest -k p4t8_honesty``.
 """
 from __future__ import annotations
 
-import asyncio
 import math
 
-import pytest
+from legba.runtime.dapr_workflow.gepa import _delta_gates_ok
 
-from legba.data.analysts.optimizer import should_auto_promote
-
-
-class _FakeConn:
-    """Stands in for the prior-promotions COUNT query — ``fetchrow`` returns
-    ``{"n": <priors>}``."""
-
-    def __init__(self, row):
-        self._row = row
-
-    async def fetchrow(self, query, *args):  # noqa: ANN001
-        return self._row
+# The production defaults the unit_optimizer eval carries.
+_MIN_PAIRED = 8
+_MIN_DELTA = 0.03
 
 
-def _run(coro):
-    # Fresh loop per call — robust when prior tests created/closed loops.
-    return asyncio.run(coro)
+def _gate(cand, parent, **kw):
+    """Call the LIVE gate with the promotable-stamp defaults, overridable."""
+    return _delta_gates_ok(
+        cand,
+        parent,
+        eval_degenerate=kw.get("eval_degenerate", False),
+        judge_available=kw.get("judge_available", True),
+        n_paired=kw.get("n_paired", 12),
+        min_paired=kw.get("min_paired", _MIN_PAIRED),
+        min_delta=kw.get("min_delta", _MIN_DELTA),
+    )
 
 
 # ---------------------------------------------------------------------------
-# NON-POSITIVE delta — cannot promote even with a full history
+# NON-POSITIVE / SUB-MARGIN delta — cannot promote
 # ---------------------------------------------------------------------------
 
 
-def test_no_auto_promote_on_nonpositive_delta_even_with_full_history():
-    """candidate == parent (the zero-delta / no-training-data path) and
-    candidate < parent both reject with ``score_did_not_improve`` — a fully
-    eligible 99-prior history cannot promote a non-improving candidate."""
+def test_no_promote_on_nonpositive_delta():
+    """candidate == parent and candidate < parent both fail the margin gate — a
+    non-improving candidate is never promotable."""
     for cand, parent in ((0.5, 0.5), (0.4, 0.5)):
-        ok, reason = _run(should_auto_promote(
-            _FakeConn({"n": 99}),
-            analyzed_analyst_id="leadership_transition",
-            candidate_score=cand,
-            parent_score=parent,
-            promotion_policy="auto_with_threshold",
-        ))
+        ok, reason = _gate(cand, parent)
         assert ok is False
-        assert reason == "score_did_not_improve"
+        assert reason == "delta_below_margin"
 
 
-# ---------------------------------------------------------------------------
-# POLICY gates — a positive delta is necessary but not sufficient
-# ---------------------------------------------------------------------------
-
-
-def test_no_auto_promote_when_human_gated():
-    ok, reason = _run(should_auto_promote(
-        _FakeConn({"n": 99}),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=0.7,
-        parent_score=0.5,
-        promotion_policy="human_gated",
-    ))
+def test_no_promote_on_sub_margin_positive_delta():
+    """A POSITIVE but tiny delta (+0.01 < the 0.03 margin) is not promotable."""
+    ok, reason = _gate(0.51, 0.50)
     assert ok is False
-    assert reason == "human_gated"
-
-
-def test_no_auto_promote_on_unknown_policy():
-    ok, reason = _run(should_auto_promote(
-        _FakeConn({"n": 99}),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=0.7,
-        parent_score=0.5,
-        promotion_policy="whatever",
-    ))
-    assert ok is False
-    assert reason == "unknown_policy:whatever"
-
-
-def test_no_auto_promote_without_sufficient_history():
-    ok, reason = _run(should_auto_promote(
-        _FakeConn({"n": 4}),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=0.7,
-        parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-    ))
-    assert ok is False
-    assert reason.startswith("insufficient_history")
-
-
-def test_auto_promote_only_on_positive_delta_and_history():
-    """The SINGLE positive path: a strictly-improving finite delta, the
-    ``auto_with_threshold`` policy, and >= 5 prior manual promotions."""
-    ok, reason = _run(should_auto_promote(
-        _FakeConn({"n": 5}),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=0.7,
-        parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-    ))
-    assert ok is True
-    assert reason == "auto_promoted_after_5_priors"
+    assert reason == "delta_below_margin"
 
 
 # ---------------------------------------------------------------------------
@@ -129,57 +77,73 @@ def test_auto_promote_only_on_positive_delta_and_history():
 # ---------------------------------------------------------------------------
 
 
-def test_no_auto_promote_on_absent_score():
+def test_no_promote_on_absent_score():
     """An honest-null measured delta (a ``None`` faithfulness mean, never faked
-    to 0.0) is rejected BEFORE the policy branch — for candidate None AND parent
-    None — even with a full history."""
+    to 0.0) is rejected — for candidate None AND parent None."""
     for cand, parent in ((None, 0.5), (0.5, None), (None, None)):
-        ok, reason = _run(should_auto_promote(
-            _FakeConn({"n": 99}),
-            analyzed_analyst_id="leadership_transition",
-            candidate_score=cand,
-            parent_score=parent,
-            promotion_policy="auto_with_threshold",
-        ))
+        ok, reason = _gate(cand, parent)
         assert ok is False
         assert reason == "degenerate_or_absent_delta"
 
 
-def test_no_auto_promote_on_degenerate_eval_even_with_scores():
-    """The real degeneracy signal — ``eval_degenerate=True`` (an under-sampled /
-    judge-unavailable measured eval) — rejects regardless of any score value
-    that happens to be carried, even a large positive one or a NaN."""
+def test_no_promote_on_degenerate_eval_even_with_scores():
+    """``eval_degenerate=True`` rejects regardless of any score carried — even a
+    large positive one, or a NaN."""
     for cand in (0.9, float("nan")):
-        ok, reason = _run(should_auto_promote(
-            _FakeConn({"n": 99}),
-            analyzed_analyst_id="leadership_transition",
-            candidate_score=cand,
-            parent_score=0.5,
-            promotion_policy="auto_with_threshold",
-            eval_degenerate=True,
-        ))
+        ok, reason = _gate(cand, 0.5, eval_degenerate=True)
         assert ok is False
         assert reason == "degenerate_or_absent_delta"
 
 
-def test_no_auto_promote_on_raw_nonfinite_score_defense_in_depth():
-    """A NaN/inf score must NEVER auto-promote (adversarial-verify contract 4).
+# ---------------------------------------------------------------------------
+# NON-FINITE score — the isfinite guard on the LIVE gate (review H2/C3)
+# ---------------------------------------------------------------------------
 
-    Closed by the ``math.isfinite`` measurement gate in ``should_auto_promote``
-    (a NaN comparison is always False, so without the guard a NaN candidate would
-    slip the monotonicity floor and promote on a full history). Not
-    producer-reachable — faithfulness is [0,1] — but the promotion gate must
-    never rest on a comparison that lies."""
+
+def test_no_promote_on_raw_nonfinite_score():
+    """A NaN/inf score must NEVER stamp promotable. NaN comparisons are all
+    False, so WITHOUT the ``math.isfinite`` guard a NaN candidate would slip the
+    margin check and read as promotable. The guard lives on the LIVE gate
+    ``_delta_gates_ok`` (the C3 fix had landed only on the dead
+    ``should_auto_promote``)."""
     for cand in (float("nan"), float("inf")):
-        ok, reason = _run(should_auto_promote(
-            _FakeConn({"n": 99}),
-            analyzed_analyst_id="leadership_transition",
-            candidate_score=cand,
-            parent_score=0.5,
-            promotion_policy="auto_with_threshold",
-            eval_degenerate=False,
-        ))
-        assert ok is False, "a non-finite score auto-promoted"
+        ok, reason = _gate(cand, 0.5, eval_degenerate=False)
+        assert ok is False, "a non-finite score was stamped promotable"
         assert reason == "non_finite_score"
-    # Sanity: prove NaN is genuinely non-finite here (guard against a false pass).
+    ok, reason = _gate(0.9, float("-inf"), eval_degenerate=False)
+    assert ok is False
+    assert reason == "non_finite_score"
+    # Sanity: prove NaN is genuinely non-finite (guard against a false pass).
     assert not math.isfinite(float("nan"))
+
+
+# ---------------------------------------------------------------------------
+# JUDGE-UNAVAILABLE / UNDER-PAIRED — necessary conditions
+# ---------------------------------------------------------------------------
+
+
+def test_no_promote_when_judge_unavailable():
+    """A POSITIVE delta but ``judge_available=False`` → not promotable (the
+    before/after must share the SAME LLM-judge yardstick)."""
+    ok, reason = _gate(0.9, 0.5, judge_available=False)
+    assert ok is False
+    assert reason == "faithfulness_judge_unavailable"
+
+
+def test_no_promote_on_insufficient_paired_sample():
+    ok, reason = _gate(0.9, 0.5, n_paired=3, min_paired=8)
+    assert ok is False
+    assert reason == "insufficient_paired_sample:3<8"
+
+
+# ---------------------------------------------------------------------------
+# The SINGLE positive path
+# ---------------------------------------------------------------------------
+
+
+def test_promote_only_on_positive_finite_judged_paired_delta():
+    """A strictly-improving, finite, judge-scored, sufficiently-paired delta is
+    the ONLY promotable case."""
+    ok, reason = _gate(0.70, 0.50)
+    assert ok is True
+    assert reason == "delta_ok"

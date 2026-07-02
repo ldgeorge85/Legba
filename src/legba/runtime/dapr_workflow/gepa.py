@@ -43,6 +43,7 @@ high-scoring trajectories and proposing instruction edits.
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -136,9 +137,11 @@ class OptimizerWorkflowInput:
     max_metric_calls: int = 30
 
     # Promotion gate to stamp on the resulting candidate.  The workflow
-    # doesn't decide promotion — that's done back in the kind module via
-    # :func:`legba.data.analysts.optimizer.should_auto_promote`.  But the
-    # workflow surfaces the policy declared on the descriptor so the
+    # doesn't decide promotion — the LIVE gate is :func:`_delta_gates_ok`
+    # (stamps ``data.eval.promotable`` at candidate write time) +
+    # :func:`legba.data.analysts.optimizer.resolve_promoted_system_prompt`
+    # (admits an operator-promoted prompt into inference ONLY when promotable).
+    # The workflow just surfaces the policy declared on the descriptor so the
     # eventual row can carry it forward.
     promotion_policy: str = "human_gated"
 
@@ -159,9 +162,9 @@ class OptimizerWorkflowInput:
     #     ``faithfulness`` (P4-T6: the paired before/after faithfulness MEASURE
     #     stage). Only ``unit_optimizer`` opts into ``faithfulness``.
     #   * ``min_paired`` / ``min_promote_delta`` / ``faithfulness_valset_max`` —
-    #     the paired-eval + promotion gates (mirrored onto data.eval so
-    #     should_auto_promote can re-check them). Below ``min_paired`` the delta
-    #     is HONEST-NULL (degenerate, never promotable).
+    #     the paired-eval + promotion gates (mirrored onto data.eval so the LIVE
+    #     ``_delta_gates_ok`` write-time stamp can re-check them). Below
+    #     ``min_paired`` the delta is HONEST-NULL (degenerate, never promotable).
     #   * ``parent_system_prompt_source`` — ``""`` (import the Python prompt
     #     module, the country/india path) or ``"descriptor"`` (load the ANALYZED
     #     analyst's ``method.system_prompt`` — the inline_target UNIT path, whose
@@ -494,17 +497,31 @@ def _delta_gates_ok(
     min_paired: int,
     min_delta: float,
 ) -> tuple[bool, str]:
-    """The MEASUREMENT gate — shared by the candidate ``promotable`` stamp AND
-    :func:`legba.data.analysts.optimizer.should_auto_promote`.
+    """The MEASUREMENT gate — the candidate ``promotable`` stamp AND the LIVE
+    write-time re-stamp in :func:`legba.data.analysts.optimizer.run_method`.
 
-    Returns ``(ok, reason)``. The degeneracy / judge / sample / margin checks run
-    in THIS order and BEFORE any promotion-policy branch, so a degenerate or
-    absent delta can never slip through on policy alone. ``ok`` is exactly the
-    ``data.eval.promotable`` truth value: a positive (>= ``min_delta``),
-    non-degenerate, judge-scored, sufficiently-paired measured improvement.
+    Returns ``(ok, reason)``. The degeneracy / finiteness / judge / sample /
+    margin checks run in THIS order and BEFORE any promotion-policy branch, so a
+    degenerate or absent delta can never slip through on policy alone. ``ok`` is
+    exactly the ``data.eval.promotable`` truth value: a positive (>=
+    ``min_delta``), non-degenerate, judge-scored, sufficiently-paired measured
+    improvement.
+
+    This is the LIVE promotion gate: :func:`_pair_faithfulness` stamps its
+    result into ``data.eval.promotable`` and
+    :func:`legba.data.analysts.optimizer.run_method` RE-STAMPS it at candidate
+    write time, so ``resolve_promoted_system_prompt`` admits an operator-promoted
+    prompt into inference ONLY when this returns ``True``.
     """
     if candidate_score is None or parent_score is None or eval_degenerate:
         return False, "degenerate_or_absent_delta"
+    # Defense-in-depth: a non-finite (NaN/inf) score is NOT a measured delta —
+    # NaN comparisons are all False, so a NaN would silently pass the margin
+    # check below. Not producer-reachable (faithfulness is [0,1]) but the LIVE
+    # promotion gate must never rest on a comparison that lies. (The isfinite
+    # guard lives HERE — the wired gate — not only on a helper.)
+    if not (math.isfinite(candidate_score) and math.isfinite(parent_score)):
+        return False, "non_finite_score"
     if not judge_available:
         return False, "faithfulness_judge_unavailable"
     if n_paired < min_paired:
@@ -545,11 +562,17 @@ def _honest_null_eval(
     n_paired: int = 0,
     n_labels: int = 0,
     parent_mean: float | None = None,
+    parent_judge_regime: str | None = None,
+    candidate_judge_regime: str | None = None,
+    n_mixed_regime_excluded: int = 0,
 ) -> dict[str, Any]:
     """Build the HONEST-NULL eval record: means + delta = None, degenerate=True,
     promotable=False. ``parent_mean`` may still be reported (it is real even when
     the candidate arm couldn't be scored) but the DELTA is null — you cannot
-    subtract an absent candidate mean."""
+    subtract an absent candidate mean.
+
+    The ``*_judge_regime`` stamps default ``None`` (no valid measured pair): the
+    honest-null record has no before/after on a shared yardstick to name."""
     return {
         "fitness_metric": _FAITHFULNESS_FITNESS,
         "parent_faithfulness_mean": parent_mean,
@@ -560,6 +583,12 @@ def _honest_null_eval(
         "min_promote_delta": float(min_delta),
         "judge_model": judge_model,
         "judge_available": bool(judge_available),
+        # BOTH arms' judge regime — 'llm' (judge ran) vs 'deterministic' (floor).
+        # A pair is measured on a SHARED yardstick or not at all; mixed-regime
+        # rows are excluded (see _pair_faithfulness), never silently subtracted.
+        "parent_judge_regime": parent_judge_regime,
+        "candidate_judge_regime": candidate_judge_regime,
+        "n_mixed_regime_excluded": int(n_mixed_regime_excluded),
         "degenerate": True,
         "degenerate_reason": degenerate_reason,
         "promotable": False,
@@ -575,14 +604,35 @@ def _pair_faithfulness(
     min_delta: float,
     judge_model: str,
     n_labels: int,
+    parent_regimes: Mapping[str, str] | None = None,
+    candidate_regime: str = "llm",
 ) -> dict[str, Any]:
     """PURE pairing math: pair over the IDENTICAL finding ids scored in BOTH arms,
     then compute means + delta + promotability. HONEST-NULL when < ``min_paired``.
 
     Split out (no I/O) so the before/after arithmetic + the honest-null / promote
     boundary are unit-testable without a DB or an LLM.
+
+    SAME-REGIME pairing (review H2 + the mixed-judge-regime medium): a pair is
+    admitted ONLY when BOTH arms carry the SAME judge regime. The candidate arm
+    already drops any floor-fallback row upstream (a judge error →
+    ``_candidate_faithfulness_for_finding`` returns ``None`` → the fid is absent
+    from ``candidate_scores``), so a judge-error candidate can never inflate the
+    delta. Here we ALSO exclude a parent row whose LIVE verify FLOORED
+    (``parent_regimes[fid] != candidate_regime``, e.g. the parent's judge errored
+    and fell back to the 1.0 citation floor) — a judge-scored candidate must never
+    pair against a floor-scored parent, which the 2026-07-01 recalibration would
+    read as a spurious delta. ``parent_regimes=None`` (the pure-math test path)
+    treats every parent row as the candidate regime.
     """
-    common = [fid for fid in parent_scores if fid in candidate_scores]
+    def _parent_regime(fid: str) -> str:
+        if parent_regimes is None:
+            return candidate_regime
+        return parent_regimes.get(fid, "deterministic")
+
+    both = [fid for fid in parent_scores if fid in candidate_scores]
+    common = [fid for fid in both if _parent_regime(fid) == candidate_regime]
+    n_mixed_regime_excluded = len(both) - len(common)
     n_paired = len(common)
     parent_mean_all = _mean(parent_scores.values())
     if n_paired < min_paired:
@@ -590,6 +640,8 @@ def _pair_faithfulness(
             min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
             judge_available=True, n_paired=n_paired, n_labels=n_labels,
             parent_mean=parent_mean_all,
+            candidate_judge_regime=candidate_regime,
+            n_mixed_regime_excluded=n_mixed_regime_excluded,
             degenerate_reason=f"insufficient_paired_sample:{n_paired}<{min_paired}",
         )
     parent_mean = _mean(parent_scores[fid] for fid in common)
@@ -610,6 +662,10 @@ def _pair_faithfulness(
         "min_promote_delta": float(min_delta),
         "judge_model": judge_model,
         "judge_available": True,
+        # Every ADMITTED pair shares this regime on BOTH arms (mixed excluded).
+        "parent_judge_regime": candidate_regime,
+        "candidate_judge_regime": candidate_regime,
+        "n_mixed_regime_excluded": n_mixed_regime_excluded,
         "degenerate": False,
         "degenerate_reason": None,
         "promotable": bool(promotable),
@@ -712,6 +768,36 @@ async def _load_parent_text_from_descriptor(analyzed_analyst_id: str) -> str | N
     return None
 
 
+def _component_id(ref: Any) -> str | None:
+    """The stack-component id a descriptor ``method.llm.*`` ref points at.
+
+    A ref is either a ``{factory_kind, raw, ...}`` dict (the descriptor's typed
+    stack_ref shape) or a bare string; ``None`` for anything else.
+    """
+    if isinstance(ref, dict):
+        return ref.get("raw")
+    if isinstance(ref, str):
+        return ref
+    return None
+
+
+async def _resolve_verify_component_id(analyzed_analyst_id: str) -> str | None:
+    """The ACTUAL judge component id the analyzed unit verifies with —
+    ``method.llm.verify`` off its live descriptor.
+
+    Since 1ed2187 the active units + compositions verify on the SAME core
+    reasoning model (``llm.primary.openai_compat``), NOT the retired cross-family
+    ``llm.verify.slm_8b``; stamping this resolved id (not a hardcode) keeps every
+    eval record naming the judge that actually scored the candidate arm. ``None``
+    on any failure → the caller records an honest ``unresolved`` marker.
+    """
+    typed = await _get_descriptor_typed(analyzed_analyst_id)
+    if not typed:
+        return None
+    llm_block = ((typed.get("method") or {}).get("llm")) or {}
+    return _component_id(llm_block.get("verify"))
+
+
 # --- the paired MEASURE stage (parent arm real; candidate arm best-effort) ---
 
 # Parent arm: the analyzed unit's freshest active findings + their LATEST folded
@@ -723,10 +809,17 @@ _PARENT_FAITHFULNESS_SQL = """
            f.body            AS body,
            f.data            AS data,
            f.derived_from    AS derived_from,
-           v.faithfulness_score AS faithfulness_score
+           v.faithfulness_score AS faithfulness_score,
+           v.judge_status    AS judge_status
       FROM analyst_outputs f
       LEFT JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
+          SELECT (cr.data->>'overall_score')::real AS faithfulness_score,
+                 -- The regime the LIVE verify pass scored this parent row under:
+                 -- 'llm' (judge ran) vs 'deterministic' (floor / judge errored).
+                 -- Lets the pair exclude a floor-scored parent from a judge-scored
+                 -- candidate (mixed-regime → spurious delta). NULL on legacy rows
+                 -- written before the verification block carried judge_status.
+                 cr.data->'data'->'verification'->>'judge_status' AS judge_status
             FROM analyst_outputs cr
            WHERE cr.kind = 'critique'
              AND cr.data->>'analyzed_output_id' = f.id::text
@@ -768,7 +861,11 @@ async def _paired_faithfulness_eval(
     min_delta = float(workflow_input.min_promote_delta)
     valset_max = int(workflow_input.faithfulness_valset_max)
     analyzed = str(workflow_input.analyst_id)
-    judge_model = "llm.verify.slm_8b"
+    # Stamp the ACTUAL judge — the analyzed unit's method.llm.verify component —
+    # never a hardcode (wrong since 1ed2187 repointed verify off llm.verify.slm_8b
+    # onto the core reasoning model). Resolved up front so EVERY eval record below
+    # (incl. the early honest-null returns) names the true judge.
+    judge_model = (await _resolve_verify_component_id(analyzed)) or "unresolved_verify_component"
 
     pg_store = None
     try:
@@ -786,6 +883,7 @@ async def _paired_faithfulness_eval(
                 n_labels = 0
 
         parent_scores: dict[str, float] = {}
+        parent_regimes: dict[str, str] = {}
         finding_rows: dict[str, Mapping[str, Any]] = {}
         for r in rows:
             fid = str(r["finding_id"])
@@ -793,6 +891,10 @@ async def _paired_faithfulness_eval(
             if fs is None:
                 continue  # no folded verify score → not a usable parent-arm row
             parent_scores[fid] = float(fs)
+            # The regime the parent row was scored under. Legacy rows (NULL
+            # judge_status) are treated 'deterministic' → excluded from a
+            # judge-scored candidate pair (conservative, never inflates).
+            parent_regimes[fid] = str(r["judge_status"] or "deterministic")
             finding_rows[fid] = r
 
         if not parent_scores:
@@ -846,6 +948,10 @@ async def _paired_faithfulness_eval(
             parent_scores, candidate_scores,
             min_paired=min_paired, min_delta=min_delta,
             judge_model=judge_model, n_labels=n_labels,
+            # Candidate rows here are all judge-scored ('llm') — a floor-fallback
+            # row was already dropped in _candidate_faithfulness_for_finding — so
+            # pair ONLY against 'llm'-regime parents (mixed excluded).
+            parent_regimes=parent_regimes, candidate_regime="llm",
         )
     except Exception as exc:  # noqa: BLE001 — the MEASURE stage must never wedge
         logger.warning(
@@ -876,9 +982,14 @@ async def _resolve_candidate_arm(
     descriptor / components can't be resolved, or the build fails — so the
     candidate arm is scored on the SAME judge as the live findings or not at all.
     """
-    import os
+    # Single source of truth for "is the LLM judge on" — verify._llm_judge_enabled
+    # accepts ONLY {1,true,yes,on} (case-insensitive), so an explicit
+    # LEGBA_VERIFY_LLM_JUDGE=0/false correctly reads OFF here too (a bare
+    # os.environ.get truthiness would have treated "0"/"false" as ON, mis-scoring
+    # the candidate against a floored/absent parent yardstick).
+    from ...data.provenance.verify import _llm_judge_enabled
 
-    if not os.environ.get("LEGBA_VERIFY_LLM_JUDGE"):
+    if not _llm_judge_enabled():
         # Parent-arm stored scores were judged (or floored) by the live pass; we
         # only measure the candidate on the LLM judge when it is actually on, so
         # before/after share a yardstick. Flag off → honest-null.
@@ -888,13 +999,6 @@ async def _resolve_candidate_arm(
     if not typed:
         return None
     llm_block = ((typed.get("method") or {}).get("llm")) or {}
-
-    def _component_id(ref: Any) -> str | None:
-        if isinstance(ref, dict):
-            return ref.get("raw")
-        if isinstance(ref, str):
-            return ref
-        return None
 
     primary_id = _component_id(llm_block.get("primary"))
     verify_id = _component_id(llm_block.get("verify"))
@@ -1062,6 +1166,22 @@ async def _candidate_faithfulness_for_finding(
     report = await verify_finding_faithfulness(
         body=body, citations=cand_citations, judge_llm=judge,
     )
+    # H2: DROP a floor-fallback row. The candidate arm only runs when the LLM
+    # judge is on (_resolve_candidate_arm), so a report whose ``judge_status`` is
+    # NOT 'llm' means the judge errored/emptied on THIS row and verify soft-failed
+    # to the deterministic citation floor (1.0 for a fully-cited body). Pairing
+    # that inflated floor against a judge-scored parent would bias the delta UP.
+    # Return None → the row is UNPAIRED (excluded from n_paired), never scored —
+    # so a judge error can never inflate a computed delta.
+    if getattr(report, "judge_status", None) != "llm":
+        logger.info(
+            "optimizer.faithfulness.candidate_row_floor_fallback finding=%s "
+            "judge_status=%r reason=%r — dropped from pair",
+            row.get("finding_id"),
+            getattr(report, "judge_status", None),
+            getattr(report, "judge_unavailable_reason", None),
+        )
+        return None
     return float(report.faithfulness_score)
 
 

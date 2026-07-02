@@ -14,8 +14,9 @@ Covers:
     derived_from with trace + critique UUIDs.
   * eval_score_delta correctness — candidate − parent on the same
     holdout.
-  * Promotion gate logic — ``human_gated`` default never auto-promotes;
-    ``auto_with_threshold`` requires 5 prior promotions.
+  * Promotion policy LABEL round-trips onto the candidate row (the LIVE
+    promotion gate ``_delta_gates_ok`` is covered by
+    ``tests/test_optimizer_promotion.py`` + the ``p4t8_honesty`` suite).
   * ``min_traces_required`` enforcement — under-trained analyst yields
     a "skipped_validation" candidate with zero delta.
   * Self-improvement loop boundedness — naive fallback respects
@@ -39,7 +40,6 @@ from uuid import UUID, uuid4
 import pytest
 
 from legba.data.analysts.optimizer import (
-    AUTO_PROMOTION_SUCCESS_THRESHOLD,
     DEFAULT_MAX_GENERATIONS,
     DEFAULT_MIN_TRACES_REQUIRED,
     HANDLER_VERSION,
@@ -54,7 +54,6 @@ from legba.data.analysts.optimizer import (
     _shape_training_set,
     build_prompt_module,
     run_method,
-    should_auto_promote,
 )
 from legba.data.provenance.kinds import OutputKind, spec_for_kind
 from legba.data.provenance.models import PromptModuleCandidatePayload
@@ -708,102 +707,13 @@ async def test_naive_fallback_respects_max_generations_bound() -> None:
         assert len(scores) == 2
 
 
-# ---------------------------------------------------------------------------
-# Promotion gate logic
-# ---------------------------------------------------------------------------
-
-
-class _StubPgConnection:
-    """Minimal asyncpg.Connection stand-in for promotion gate tests.
-
-    Captures the SQL + params via ``fetchrow``; returns a canned ``n``
-    so :func:`should_auto_promote` exercises the threshold logic
-    without a live Postgres.
-    """
-
-    def __init__(self, n_prior_promotions: int) -> None:
-        self._n = n_prior_promotions
-        self.calls: list[tuple[str, tuple[Any, ...]]] = []
-
-    async def fetchrow(self, query: str, *params: Any) -> dict[str, Any]:
-        self.calls.append((query, params))
-        return {"n": self._n}
-
-
-@pytest.mark.asyncio
-async def test_should_auto_promote_human_gated_never_auto() -> None:
-    """The default human_gated policy never auto-promotes, even with
-    a higher candidate score."""
-    conn = _StubPgConnection(n_prior_promotions=100)
-    ok, reason = await should_auto_promote(
-        conn,                                                    # type: ignore[arg-type]
-        analyzed_analyst_id="inline_target.x",
-        candidate_score=0.9,
-        parent_score=0.5,
-        promotion_policy="human_gated",
-    )
-    assert ok is False
-    assert reason == "human_gated"
-    # Didn't even consult the DB — human_gated short-circuits.
-    assert conn.calls == []
-
-
-@pytest.mark.asyncio
-async def test_should_auto_promote_blocks_if_score_did_not_improve() -> None:
-    conn = _StubPgConnection(n_prior_promotions=10)
-    ok, reason = await should_auto_promote(
-        conn,                                                    # type: ignore[arg-type]
-        analyzed_analyst_id="inline_target.x",
-        candidate_score=0.4,
-        parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-    )
-    assert ok is False
-    assert reason == "score_did_not_improve"
-
-
-@pytest.mark.asyncio
-async def test_should_auto_promote_blocks_below_threshold() -> None:
-    """Less than 5 prior promotions → not eligible for auto path."""
-    conn = _StubPgConnection(n_prior_promotions=AUTO_PROMOTION_SUCCESS_THRESHOLD - 1)
-    ok, reason = await should_auto_promote(
-        conn,                                                    # type: ignore[arg-type]
-        analyzed_analyst_id="inline_target.x",
-        candidate_score=0.7,
-        parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-    )
-    assert ok is False
-    assert "insufficient_history" in reason
-
-
-@pytest.mark.asyncio
-async def test_should_auto_promote_passes_at_threshold() -> None:
-    """Exactly 5 prior promotions + improved score → auto-promote eligible."""
-    conn = _StubPgConnection(n_prior_promotions=AUTO_PROMOTION_SUCCESS_THRESHOLD)
-    ok, reason = await should_auto_promote(
-        conn,                                                    # type: ignore[arg-type]
-        analyzed_analyst_id="inline_target.x",
-        candidate_score=0.7,
-        parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-    )
-    assert ok is True
-    assert reason.startswith("auto_promoted_after_")
-
-
-@pytest.mark.asyncio
-async def test_should_auto_promote_rejects_unknown_policy() -> None:
-    conn = _StubPgConnection(n_prior_promotions=100)
-    ok, reason = await should_auto_promote(
-        conn,                                                    # type: ignore[arg-type]
-        analyzed_analyst_id="inline_target.x",
-        candidate_score=0.7,
-        parent_score=0.5,
-        promotion_policy="some_made_up_policy",
-    )
-    assert ok is False
-    assert "unknown_policy" in reason
+# NOTE — promotion-gate coverage moved to the LIVE gate. The former
+# ``should_auto_promote`` auto-promotion policy was removed (it had ZERO
+# production call sites); the human-gated promotion path now runs through
+# ``gepa._delta_gates_ok`` (the write-time promotable stamp) +
+# ``resolve_promoted_system_prompt``. Those contracts are pinned by
+# ``tests/test_p4t8_honesty_optimizer_promotion.py`` and
+# ``tests/test_optimizer_promotion.py``.
 
 
 # ---------------------------------------------------------------------------

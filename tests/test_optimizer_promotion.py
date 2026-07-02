@@ -13,15 +13,15 @@ import dataclasses
 
 import pytest
 
-from legba.data.analysts.optimizer import (
-    resolve_promoted_system_prompt,
-    should_auto_promote,
-)
+from legba.data.analysts.optimizer import resolve_promoted_system_prompt
+import legba.runtime.dapr_workflow.gepa as gepa_mod
 from legba.runtime.dapr_workflow.gepa import (
     OptimizerWorkflowInput,
+    _candidate_faithfulness_for_finding,
     _delta_gates_ok,
     _honest_null_eval,
     _pair_faithfulness,
+    _resolve_verify_component_id,
 )
 
 
@@ -98,93 +98,25 @@ def test_db_error_returns_default_never_raises():
 
 # ===========================================================================
 # P4-T6 — the MEASURED bounded-unit GEPA return. A candidate can NEVER promote
-# (auto OR via a hand-edited promotion_gate='promoted') without a positive,
+# (via a hand-edited promotion_gate='promoted') without a positive,
 # non-degenerate, judge-scored, sufficiently-paired MEASURED faithfulness delta.
-# These tests falsify a violation of that contract.
+# These tests falsify a violation of that contract. The LIVE gate is
+# ``_delta_gates_ok`` (there is no auto-promotion path); the honesty suite
+# ``tests/test_p4t8_honesty_optimizer_promotion.py`` pins its full contract.
 # ===========================================================================
 
 
-class _RaisingConn:
-    """A conn whose DB is never meant to be reached — asserts that a
-    ``should_auto_promote`` MEASUREMENT gate short-circuits BEFORE any policy /
-    history query (the degeneracy checks must precede the DB)."""
-
-    async def fetchrow(self, query, *args):  # noqa: ANN001
-        raise AssertionError(
-            "should_auto_promote consulted the DB past a measurement gate"
+def test_delta_gates_ok_rejects_nonfinite_score():
+    """The LIVE gate rejects a raw NaN/inf so it can never stamp promotable — the
+    ``math.isfinite`` guard the C3 fix had landed only on the dead
+    ``should_auto_promote`` now lives on the gate that ACTUALLY runs."""
+    for cand in (float("nan"), float("inf")):
+        ok, reason = _delta_gates_ok(
+            cand, 0.5, eval_degenerate=False, judge_available=True,
+            n_paired=12, min_paired=8, min_delta=0.03,
         )
-
-
-def test_should_auto_promote_absent_delta_never_promotes():
-    """faithfulness_delta=None (candidate_score None / degenerate) → rejected
-    BEFORE the policy branch and WITHOUT touching the DB."""
-    ok, reason = _run(should_auto_promote(
-        _RaisingConn(),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=None,
-        parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-        eval_degenerate=True,
-        judge_available=True,
-        n_paired=12, min_paired=8, min_delta=0.03,
-    ))
-    assert ok is False
-    assert reason == "degenerate_or_absent_delta"
-
-
-def test_should_auto_promote_insufficient_paired_sample_never_promotes():
-    ok, reason = _run(should_auto_promote(
-        _RaisingConn(),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=0.7, parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-        eval_degenerate=False, judge_available=True,
-        n_paired=3, min_paired=8, min_delta=0.03,
-    ))
-    assert ok is False
-    assert reason == "insufficient_paired_sample:3<8"
-
-
-def test_should_auto_promote_judge_unavailable_never_promotes():
-    """A POSITIVE delta but judge_available=false → rejected (the before/after
-    must share the SAME llm.verify.slm_8b yardstick)."""
-    ok, reason = _run(should_auto_promote(
-        _RaisingConn(),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=0.9, parent_score=0.5,
-        promotion_policy="auto_with_threshold",
-        eval_degenerate=False, judge_available=False,
-        n_paired=12, min_paired=8, min_delta=0.03,
-    ))
-    assert ok is False
-    assert reason == "faithfulness_judge_unavailable"
-
-
-def test_should_auto_promote_delta_below_margin_never_promotes():
-    ok, reason = _run(should_auto_promote(
-        _RaisingConn(),
-        analyzed_analyst_id="leadership_transition",
-        candidate_score=0.51, parent_score=0.50,  # +0.01 < the 0.03 margin
-        promotion_policy="auto_with_threshold",
-        eval_degenerate=False, judge_available=True,
-        n_paired=12, min_paired=8, min_delta=0.03,
-    ))
-    assert ok is False
-    assert reason == "delta_below_margin"
-
-
-def test_should_auto_promote_legacy_call_preserves_score_floor():
-    """The legacy 3-arg convention (no measured-delta params) is unchanged: the
-    conditional min_paired/min_delta gates skip and the score-monotonicity floor
-    still fires — country_optimizer's promotion semantics are byte-preserved."""
-    ok, reason = _run(should_auto_promote(
-        _RaisingConn(),
-        analyzed_analyst_id="country_assessor",
-        candidate_score=0.4, parent_score=0.5,   # candidate did NOT improve
-        promotion_policy="auto_with_threshold",
-    ))
-    assert ok is False
-    assert reason == "score_did_not_improve"
+        assert ok is False
+        assert reason == "non_finite_score"
 
 
 # --- the DB-edit-proof resolve_promoted_system_prompt promotable guard ----------
@@ -331,6 +263,182 @@ def test_honest_null_eval_shape():
     assert rec["degenerate"] is True
     assert rec["promotable"] is False
     assert rec["fitness_metric"] == "faithfulness"
+
+
+# --- H2: a judge-error (floor-fallback) candidate row cannot inflate the delta --
+
+
+class _FakeResp:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeSynth:
+    """A candidate synthesizer whose generation is fixed — the guard under test
+    is downstream (verify's judge_status), not generation quality."""
+
+    async def chat_complete(self, messages, *, system=None, max_tokens=None,
+                            temperature=None):
+        return _FakeResp('{"title": "Cand", "body": "Iran raised output [1]."}')
+
+
+class _FakeReport:
+    """Minimal stand-in for verify.FaithfulnessReport."""
+
+    def __init__(self, judge_status, score, reason=None):
+        self.judge_status = judge_status
+        self.faithfulness_score = score
+        self.judge_unavailable_reason = reason
+
+
+def _patch_candidate_arm(monkeypatch, report):
+    """Wire the fakes _candidate_faithfulness_for_finding needs to reach (and
+    return the result of) the verify judge — a fixed slice fetch + a fixed
+    verify report — so the ONLY variable is the report's judge_status."""
+    async def _fake_fetch(pool, signal_ids):
+        return {
+            sid: {
+                "id": sid, "title": f"Sig {sid}", "source_url": "http://x",
+                "produced_at": None, "data": {"summary": "raised output"},
+            }
+            for sid in signal_ids
+        }
+
+    async def _fake_verify(*, body, citations, judge_llm=None,
+                           finding_confidence=None):
+        return report
+
+    monkeypatch.setattr(gepa_mod, "_fetch_signal_render_rows", _fake_fetch)
+    monkeypatch.setattr(
+        "legba.data.provenance.verify.verify_finding_faithfulness", _fake_verify
+    )
+
+
+def test_candidate_floor_fallback_row_is_dropped(monkeypatch):
+    """H2 — when the candidate arm's judge ERRORED and verify soft-failed to the
+    citation floor (``judge_status != 'llm'``, e.g. a 1.0 floor for a fully-cited
+    body), the row is DROPPED (returns None → UNPAIRED). A judge error therefore
+    cannot enter — let alone inflate — the paired delta."""
+    _patch_candidate_arm(
+        monkeypatch, _FakeReport("deterministic", 1.0, reason="judge_error")
+    )
+    row = {"finding_id": "f1", "data": None, "derived_from": ["sig-1"]}
+    out = _run(_candidate_faithfulness_for_finding(
+        row=row, candidate_text="SYS", synth=_FakeSynth(), judge=object(),
+        pool=object(),
+    ))
+    assert out is None, "a floor-fallback (judge_error) row was NOT dropped"
+
+
+def test_candidate_llm_judged_row_is_scored(monkeypatch):
+    """The companion: a genuinely LLM-judged row (``judge_status == 'llm'``) IS
+    scored and paired — the guard drops ONLY floor fallbacks."""
+    _patch_candidate_arm(monkeypatch, _FakeReport("llm", 0.8))
+    row = {"finding_id": "f1", "data": None, "derived_from": ["sig-1"]}
+    out = _run(_candidate_faithfulness_for_finding(
+        row=row, candidate_text="SYS", synth=_FakeSynth(), judge=object(),
+        pool=object(),
+    ))
+    assert out == pytest.approx(0.8)
+
+
+def test_judge_error_row_cannot_inflate_computed_delta(monkeypatch):
+    """End-to-end proof: with a judge-error row DROPPED (returns None), the fid is
+    absent from ``candidate_scores`` and the pairing math computes the delta over
+    ONLY the real judge-scored pairs — the inflated 1.0 floor never enters. We
+    contrast against the counterfactual where the same 1.0 HAD leaked in."""
+    # Parent: 10 real judge-scored rows at 0.5.
+    parent = {f"f{i}": 0.50 for i in range(10)}
+    parent_reg = {f"f{i}": "llm" for i in range(10)}
+    # Candidate arm: rows f0..f8 judged at 0.50 (no improvement); f9's judge
+    # ERRORED → dropped (absent), NOT carried as a 1.0 floor.
+    candidate_dropped = {f"f{i}": 0.50 for i in range(9)}
+    rec = _pair_faithfulness(
+        parent, candidate_dropped, min_paired=8, min_delta=0.03,
+        judge_model="j", n_labels=1, parent_regimes=parent_reg,
+        candidate_regime="llm",
+    )
+    assert rec["degenerate"] is False
+    assert rec["n_paired"] == 9
+    assert rec["faithfulness_delta"] == pytest.approx(0.0)
+    assert rec["promotable"] is False
+
+    # Counterfactual (the OLD bug): the floored 1.0 leaks into f9 → a spurious
+    # positive delta that WOULD have stamped promotable. This proves the drop is
+    # what prevents the inflation.
+    leaked = {**candidate_dropped, "f9": 1.0}
+    rec_bug = _pair_faithfulness(
+        parent, leaked, min_paired=8, min_delta=0.03, judge_model="j",
+        n_labels=1, parent_regimes=parent_reg, candidate_regime="llm",
+    )
+    assert rec_bug["faithfulness_delta"] > 0.03
+    assert rec_bug["promotable"] is True  # the defect the drop prevents
+
+
+def test_pair_excludes_mixed_regime_parent(monkeypatch):
+    """A parent row whose LIVE verify FLOORED (regime 'deterministic', e.g. a 1.0
+    floor from a judge error) is EXCLUDED from a judge-scored candidate pair — a
+    judge-scored candidate must never pair against a floor-scored parent (the
+    mixed-judge-regime spurious-delta class)."""
+    parent = {f"f{i}": 0.50 for i in range(9)}
+    parent["fp"] = 1.0  # a FLOORED parent (judge errored on the live pass)
+    parent_reg = {f"f{i}": "llm" for i in range(9)}
+    parent_reg["fp"] = "deterministic"
+    candidate = {f"f{i}": 0.60 for i in range(9)}
+    candidate["fp"] = 0.60  # candidate judged fp fine, but parent fp is floored
+    rec = _pair_faithfulness(
+        parent, candidate, min_paired=8, min_delta=0.03, judge_model="j",
+        n_labels=1, parent_regimes=parent_reg, candidate_regime="llm",
+    )
+    assert rec["n_paired"] == 9, "the floored parent row was NOT excluded"
+    assert rec["n_mixed_regime_excluded"] == 1
+    # The pair is measured over the 9 same-regime rows only: 0.60 vs 0.50.
+    assert rec["parent_faithfulness_mean"] == pytest.approx(0.50)
+    assert rec["candidate_faithfulness_mean"] == pytest.approx(0.60)
+
+
+def test_pair_faithfulness_stamps_judge_regime_on_both_arms():
+    """Every admitted pair names the judge regime on BOTH arms (all 'llm' after
+    mixed-regime exclusion) — the eval record is honest about the yardstick."""
+    parent = {f"f{i}": 0.40 for i in range(10)}
+    cand = {f"f{i}": 0.60 for i in range(10)}
+    reg = {f"f{i}": "llm" for i in range(10)}
+    rec = _pair_faithfulness(
+        parent, cand, min_paired=8, min_delta=0.03, judge_model="j", n_labels=1,
+        parent_regimes=reg, candidate_regime="llm",
+    )
+    assert rec["parent_judge_regime"] == "llm"
+    assert rec["candidate_judge_regime"] == "llm"
+    assert rec["n_mixed_regime_excluded"] == 0
+
+
+# --- eval records name the TRUE judge (not the retired hardcode) -----------------
+
+
+def test_resolve_verify_component_id_names_true_judge(monkeypatch):
+    """The eval record's ``judge_model`` is the analyzed unit's ACTUAL
+    ``method.llm.verify`` component — since 1ed2187 the core reasoning model
+    (``llm.primary.openai_compat``), NOT the retired hardcoded
+    ``llm.verify.slm_8b``."""
+    async def _fake_typed(aid):
+        return {"method": {"llm": {"verify": {
+            "factory_kind": "stack_ref", "raw": "llm.primary.openai_compat",
+        }}}}
+
+    monkeypatch.setattr(gepa_mod, "_get_descriptor_typed", _fake_typed)
+    out = _run(_resolve_verify_component_id("leadership_transition"))
+    assert out == "llm.primary.openai_compat"
+    assert out != "llm.verify.slm_8b"
+
+
+def test_resolve_verify_component_id_none_on_unresolved(monkeypatch):
+    """Descriptor fetch failure → None (the caller records an honest
+    ``unresolved_verify_component`` marker, never a wrong hardcode)."""
+    async def _fake_typed(aid):
+        return None
+
+    monkeypatch.setattr(gepa_mod, "_get_descriptor_typed", _fake_typed)
+    assert _run(_resolve_verify_component_id("x")) is None
 
 
 def test_optimizer_workflow_input_roundtrips_without_new_fields():

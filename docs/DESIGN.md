@@ -447,9 +447,10 @@ ambitious legs return *only* as measured, gated experiments:
   carries a **real before/after paired faithfulness delta** measured on the same
   faithfulness judge (currently the core model, not cross-family; a live run read
   parent 0.34 → candidate 0.29, delta −0.05). It stays
-  `promotion_gate=human_gated` and can **never** auto-promote on a
-  degenerate / absent / non-positive delta (`optimizer.should_auto_promote` runs
-  its measurement gates first; guarded by the P4-T8 honesty suite).
+  `promotion_gate=human_gated` and can **never** promote on a
+  degenerate / absent / non-finite / non-positive delta (`gepa._delta_gates_ok`
+  stamps `data.eval.promotable` at write time — no auto-promotion path; guarded by
+  the P4-T8 honesty suite).
 - **Forecasting → an acute-forecast scoreboard.** The forecast-as-claim
   predictors (`country_predictor`, `india_energy_predictor`) are **retired /
   frozen and stopped** (SEAMS #31–#32; ~539 historical prediction rows remain).

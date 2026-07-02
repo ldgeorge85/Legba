@@ -296,9 +296,10 @@ measured, honest experiments** — a no-skill or insufficient-sample result is
   carries a REAL before/after **paired faithfulness delta** measured on the same
   faithfulness judge (currently the core `llm.primary.openai_compat` model, not
   cross-family) that gates the live findings (live: parent 0.34 → candidate 0.29, **delta
-  −0.05**). It stays `promotion_gate=human_gated` and can **never** auto-promote on a
-  degenerate, absent, or non-positive delta (`optimizer.should_auto_promote` runs the
-  measurement gates first; `tests/test_p4t8_honesty_optimizer_promotion.py`). The old
+  −0.05**). It stays `promotion_gate=human_gated` and can **never** promote on a
+  degenerate, absent, non-finite, or non-positive delta (`gepa._delta_gates_ok` stamps
+  `data.eval.promotable` at write time — there is no auto-promotion path;
+  `tests/test_p4t8_honesty_optimizer_promotion.py`). The old
   monolithic `country_optimizer` stays **cadence-frozen** (descriptor still
   `state=active`, `fallback_schedule: null`, `SEAMS.md` #30) — no reminder-flood
   regression.
