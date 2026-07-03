@@ -719,14 +719,44 @@ def credibility_rows() -> list[tuple[str, float, str, str, str, bool]]:
 # ---------------------------------------------------------------------------
 
 
+# Operator OFF-states that a re-run of this registrar must NEVER override back to
+# active. Every catalog entry declares `state=active`; without this guard a
+# `clean` re-run (e.g. deploy/deploy.sh, which is idempotent) would drive a source
+# the operator PAUSED (a bad/blocked feed held for a token/recheck) or RETIRED (a
+# dead feed) straight back to active — silently reviving daily 401s / errors. When
+# the live head is in one of these states we leave it ALONE (never force active).
+_STICKY_OFF_STATES: frozenset[str] = frozenset({"paused", "retired"})
+
+
 async def register_catalog(
     pg: PostgresStore, reg: DescriptorRegistry
 ) -> list[RegisterResult]:
     """Idempotently register every catalog descriptor. Pure function of the
     injected store/registry — the test suite drives it against the per-session
-    test DB; the operator's `main()` wires the env-selected DB."""
+    test DB; the operator's `main()` wires the env-selected DB.
+
+    Fresh-deploy source guard: a source whose LIVE head is paused/retired is
+    PRESERVED (skipped), never forced back to the catalog's declared `active`
+    state. A fresh instance (no live head) registers the full active catalog as
+    before, so this only ever suppresses re-activation of an operator OFF-state.
+    """
+    async with pg.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT descriptor_id, state FROM source_descriptors WHERE is_head"
+        )
+    live_state = {r["descriptor_id"]: r["state"] for r in rows}
+
     results: list[RegisterResult] = []
     for entry in CATALOG:
+        cur = live_state.get(entry.id)
+        if cur in _STICKY_OFF_STATES:
+            results.append(
+                RegisterResult(
+                    Family.SOURCE.value, entry.id, "unchanged", "-",
+                    detail=f"preserved live {cur} state (not forced active)",
+                )
+            )
+            continue
         desc = build_descriptor(entry)
         results.append(
             await register_descriptor(pg, reg, family=Family.SOURCE, descriptor=desc)

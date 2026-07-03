@@ -61,7 +61,14 @@ ANALYST_FILES = [
     # the feeder: un-retire + re-add this line + re-register.
     # "analyst_country_assessor.yaml",
     "analyst_world_assessor.yaml",
-    "analyst_country_critic.yaml",
+    # OPERATOR DECISION 2026-07-02: country_critic is RETIRED live. It pins the
+    # retired country_assessor (it grades that analyst's findings), so with the
+    # monolith gone it grades nothing — and re-registering it here would RESURRECT
+    # a dead analyst (a fresh deploy would land it active again). Like
+    # country_assessor above, nulling cadence is insufficient (it is REACTIVE), so
+    # the live head is `retired` AND it is removed from bringup. To restore: un-retire
+    # + re-add this line + re-register.
+    # "analyst_country_critic.yaml",
     "analyst_country_optimizer.yaml",
     "analyst_consult_default.yaml",
     # P3-T8 FREEZE COMPLETION: country_predictor (forecast-as-claim) is NOT
@@ -72,7 +79,17 @@ ANALYST_FILES = [
     # scoreboard (a different design, not this reactive predictor). To restore the
     # OLD leg: re-add this line + re-register.
     # "analyst_country_predictor.yaml",
-    "analyst_meta_synthesizer.yaml",          # NEW — Piece 3 (Task B)
+    # OPERATOR DECISION 2026-07-02: meta_synthesizer (the LEGACY standalone
+    # cross-analyst synthesizer, Piece 3 Task B) is RETIRED live. It is superseded
+    # by the composition spine (country_composition -> region_composition ->
+    # escalation_composition -> world_assessor), and it reads the now-retired
+    # country_assessor + world_assessor FINDINGS as its inputs — so with the
+    # monolith gone it went silent (31 legacy heads, no new output for >30h).
+    # Removed from bringup so a fresh deploy cannot re-create it active over a
+    # dead input. cross_correlator (Task C) stays — it is a live producer. To
+    # restore meta_synthesizer: re-point its other_analysts at the compositions,
+    # un-retire, re-add this line, re-register.
+    # "analyst_meta_synthesizer.yaml",        # RETIRED — Piece 3 (Task B) legacy synthesizer
     "analyst_cross_correlator.yaml",          # NEW — Piece 3 (Task C, sibling meta producer)
     # PIECE C SUPERSEDED Piece 3 Task D: the situation-gated hypothesis_lifecycle
     # emitted 0 rows (gated on `active` situations that go dormant — see

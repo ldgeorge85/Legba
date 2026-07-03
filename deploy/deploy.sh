@@ -13,8 +13,9 @@
 #   sources+catalog → targets → analysts → budget → [seeds] → runtime up → verify.
 #
 # It applies the single proven baseline (deploy/baseline/0001_baseline.sql), NOT
-# the 23-file migration history, then runs `python -m legba.data.migrate` for any
-# FUTURE (0054+) migrations (currently a no-op — the ledger is pre-seeded to 0053).
+# the full migration history, then runs `python -m legba.data.migrate` for any
+# FUTURE (0054+) migrations. The baseline pre-seeds the ledger through 0053, so
+# migrate applies 0054..0060 to bring a fresh instance to the live head (0060).
 #
 # ----------------------------------------------------------------------------
 # USAGE
@@ -314,9 +315,9 @@ else
   ok "baseline applied"
 fi
 
-info "running future migrations (legba.data.migrate) — no-op while ledger head = 0053..."
+info "running future migrations (legba.data.migrate) — applies 0054..0060 over the 0053 baseline ledger..."
 run_registrar -m legba.data.migrate || die "migrate failed"
-ok "schema at head (no pending future migrations)"
+ok "schema at head 0060 (no pending future migrations)"
 
 # =============================================================================
 # PHASE 5 — REGISTRARS (audit's ordered sequence)
@@ -328,17 +329,23 @@ wait_for "registry-healthz" 120 \
   dc exec -T legba-registry curl -fsS "http://localhost:8090${REGISTRY_HEALTH_PATH}" \
   || warn "registry healthz not confirmed via exec (continuing; registrars will surface errors)"
 
-# Ordered registrar sequence — VERBATIM from the audit (§1.3):
-#   1 vault → 2 stack → 3 packs(HTTP) → 4 sources → 4b catalog →
-#   5 G20 targets → 5b watch tier → 6 analyst set → 7 deterministic-6 → 8 budget.
+# Ordered registrar sequence — the audit's ordering (§1.3), extended with the
+# S2 region-composition topology (5c region frames + 5d desk region/applicability
+# tags — both idempotent, both required or region_composition's has_tag("region")
+# predicate matches ZERO targets and the S2 region floor silently vanishes):
+#   1 vault → 2 stack → 3 packs(HTTP) → 4 sources → 4b catalog → 5 G20 targets →
+#   5b watch tier → 5c region frames → 5d region/applicability tags →
+#   6 analyst set → 7 deterministic-6 → 8 budget.
 info "[1] vault secrets (HTTP)";            run_registrar scripts/bringup_vault_load.py
 info "[2] stack components (HTTP)";          run_registrar scripts/bringup_register_stack.py
 info "[3] action packs (HTTP, 8 packs)";     run_registrar scripts/bringup_register_action_packs.py
 info "[4] shared RSS sources (3, direct)";   run_registrar scripts/bringup_register_sources.py
 info "[4b] full no-auth catalog (~46)";      run_registrar scripts/bringup_register_source_catalog.py
 info "[5] G20 country targets (x19)";        run_registrar scripts/bringup_register_g20_country_targets.py
-info "[5b] watch tier (x5 il/ir/ua/tw/kp)";  run_registrar scripts/bringup_register_watch_country_targets.py
-info "[6] analyst working set (~21-23)";     run_registrar scripts/bringup_register_analysts.py
+info "[5b] watch tier (x6 il/ir/ua/tw/kp/pk)"; run_registrar scripts/bringup_register_watch_country_targets.py
+info "[5c] region frames (x5, HTTP)";        run_registrar scripts/bringup_register_region_targets.py
+info "[5d] region/applicability tags (25 desks, HTTP)"; run_registrar scripts/bringup_tag_targets.py
+info "[6] analyst working set (~36)";        run_registrar scripts/bringup_register_analysts.py
 info "[7] deterministic analysts (x6, HTTP)"
 for det in cross_source_dedup cross_source_coalesce entity_resolution \
            finding_supersession integrity_sweep situation_clustering; do

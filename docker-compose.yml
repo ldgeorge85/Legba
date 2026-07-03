@@ -117,7 +117,10 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    # Pinned to the running version (was :latest — a floating tag risks a silent
+    # storage-format bump on the next pull). Matches the live container's
+    # org.opencontainers.image.version label.
+    image: qdrant/qdrant:v1.16.3
     # Infra tuning: container backstop (no in-process cap knob touched).
     mem_limit: 2g
     ports:

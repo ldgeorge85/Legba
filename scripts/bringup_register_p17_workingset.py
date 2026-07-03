@@ -2,6 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """P-17 — one-shot bring-up of the fresh source-first working set.
 
+RETIRED (2026-07-02): DO NOT RUN. This LEGACY combined registrar registers
+``country_assessor`` + ``country_critic`` (step 4 below) — both RETIRED live —
+so executing it would RESURRECT dead analysts on the instance it targets. The
+canonical, current bring-up is the phased ``deploy/deploy.sh`` (which uses
+``bringup_register_g20_country_targets.py`` for targets and
+``bringup_register_analysts.py`` for the live analyst set). This file is kept
+only because ``tests/data_pkg/test_consult_target_seed_crosscheck.py`` AST-reads
+its ``ANALYST_FILES`` literal (it never imports or runs it); the ``__main__``
+entrypoint below hard-refuses to execute.
+
 Populates a fresh instance (default DB ``legba_pivot_test``) in dependency
 order, all in ONE process / ONE registry session:
 
@@ -110,4 +120,14 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    # RETIRED — hard refuse. This legacy registrar would re-create the retired
+    # country_assessor + country_critic. Use deploy/deploy.sh (which drives
+    # bringup_register_g20_country_targets.py + bringup_register_analysts.py).
+    print(
+        "REFUSED: bringup_register_p17_workingset.py is RETIRED — it registers the "
+        "retired country_assessor + country_critic and would resurrect dead "
+        "analysts. Use deploy/deploy.sh (bringup_register_g20_country_targets.py + "
+        "bringup_register_analysts.py) instead.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
