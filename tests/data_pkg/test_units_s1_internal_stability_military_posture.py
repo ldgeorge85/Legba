@@ -151,7 +151,12 @@ def test_grounding_block_on_and_scoped(name: str):
     g = _raw_body(name)["grounding"]
     assert g["enabled"] is True
     assert g["scope"] == ["target_geo", "slice_entities"]
-    assert set(g["sources"]) == {"substrate", "situations", "graph_structure"}
+    # The three substrate sources are ALWAYS present. internal_stability
+    # additionally carries `vector:world_context` — the opportunistic-RAG flip that
+    # was KEPT (it passed the rag_watch rule where leadership_transition was rolled
+    # back, 2026-07-03). So assert the base three are a SUBSET, not an exact match,
+    # and never forbid a kept vector source.
+    assert {"substrate", "situations", "graph_structure"} <= set(g["sources"])
 
 
 @pytest.mark.parametrize("name", sorted(_NEW_UNITS))
