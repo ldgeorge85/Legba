@@ -285,14 +285,36 @@ def _project_consult_response(
     )
 
 
+def _steps_from_payload(consult_payload: dict[str, Any]) -> list[Any]:
+    """Lift the FULL ReAct step trace off a ConsultResponsePayload dict.
+
+    The ``consult_on_demand`` kind stashes its per-round trace under
+    ``data["steps"]`` (see ``run_method``); this is the per-turn tool-call trace
+    the audit row records in ``consult_turns.steps``. Defensive: a missing /
+    malformed ``data`` yields an empty list, never a 500.
+    """
+    data = consult_payload.get("data") if isinstance(consult_payload, dict) else None
+    if isinstance(data, dict):
+        steps = data.get("steps")
+        if isinstance(steps, list):
+            return steps
+    return []
+
+
 async def _persist_assistant_turn(
-    pg: Any, session_id: str | None, response: ConsultResponse,
+    pg: Any,
+    session_id: str | None,
+    response: ConsultResponse,
+    *,
+    steps: Any = None,
 ) -> None:
     """Append the assistant turn to the audit trail (0038), best-effort.
 
     Projects the response's typed tool_calls / cited_refs back to plain dicts
-    for the jsonb columns. A no-op when there's no session (the open failed) —
-    the consult answer is unaffected either way.
+    for the jsonb columns and threads the FULL ReAct ``steps`` trace into the
+    ``consult_turns.steps`` column so a turn is inspectable after the fact
+    (previously that column was never populated). A no-op when there's no
+    session (the open failed) — the consult answer is unaffected either way.
     """
     if not session_id:
         return
@@ -301,6 +323,7 @@ async def _persist_assistant_turn(
         session_id=session_id,
         role="assistant",
         content=response.answer,
+        steps=steps if steps is not None else [],
         tool_calls=[tc.model_dump() for tc in response.tool_calls],
         cited_refs=[cr.model_dump() for cr in response.cited_refs],
         finding_id=response.finding_id,
@@ -502,7 +525,10 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 derived_from=derived_from,
                 session_id=session_id,
             )
-            await _persist_assistant_turn(pg, session_id, projected)
+            await _persist_assistant_turn(
+                pg, session_id, projected,
+                steps=_steps_from_payload(consult_payload),
+            )
             return projected
 
         # 3b. Deep-mode (or absent mode) — the existing persist + read-back path.
@@ -576,7 +602,10 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
             receipt_hash=receipt_hash,
             session_id=session_id,
         )
-        await _persist_assistant_turn(pg, session_id, projected)
+        await _persist_assistant_turn(
+            pg, session_id, projected,
+            steps=_steps_from_payload(consult_payload),
+        )
         return projected
 
     return router

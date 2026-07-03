@@ -1621,7 +1621,22 @@ async def _gather(
             aggregate_usage[k] += usage.get(k, 0)
 
         parsed = _extract_json(content)
-        if not parsed or parsed.get("done") is True:
+        if not parsed:
+            # Unparseable GATHER turn — the loop still degrades-not-drops (break to
+            # synthesis, as before), but persist the RAW reply on the trace step so
+            # a malformed gather leaves a debuggable trail in
+            # ``intermediate_steps`` (→ analyst_traces) instead of being silently
+            # conflated with a clean "done". Shared by journal_assessor's GATHER.
+            step = {
+                "phase": "gather",
+                "kind": "unparseable",
+                "round": rounds_used,
+                "raw": (content or "")[:4000],
+            }
+            steps.append(step)
+            gather_steps.append(step)
+            break
+        if parsed.get("done") is True:
             step = {"phase": "gather", "kind": "done", "round": rounds_used}
             steps.append(step)
             gather_steps.append(step)

@@ -1020,6 +1020,41 @@ def test_extract_json_returns_none_on_garbage():
     assert _extract_json("[1, 2, 3]") is None  # not an object
 
 
+def test_extract_json_string_aware_brace_inside_string_value():
+    """REGRESSION: a naive depth-counter closes on the first ``}`` even when it
+    is INSIDE a quoted string value, truncating the object into invalid JSON.
+    The string-aware matcher must treat in-string braces as literal and parse
+    the whole object."""
+    raw = '{"final": true, "answer": "the balanced set is {a} but not }b{"}'
+    parsed = _extract_json(raw)
+    assert parsed is not None
+    assert parsed["final"] is True
+    assert parsed["answer"] == "the balanced set is {a} but not }b{"
+
+
+def test_extract_json_string_aware_honors_escaped_quote():
+    """An escaped quote (\\") inside a string value must NOT be read as the
+    string terminator, so a brace after it stays in-string and doesn't shift
+    the structural depth."""
+    raw = r'{"answer": "he said \"done}\" and left", "uncertainty": 0.3}'
+    parsed = _extract_json(raw)
+    assert parsed is not None
+    assert parsed["answer"] == 'he said "done}" and left'
+    assert parsed["uncertainty"] == 0.3
+
+
+def test_extract_json_string_aware_with_trailing_prose():
+    """Brace-in-string plus trailing prose past the real close still parses."""
+    raw = (
+        '{"tool": "search_signals", "args": {"query": "set {x,y} and }z{"}} '
+        "then the model rambled on"
+    )
+    parsed = _extract_json(raw)
+    assert parsed is not None
+    assert parsed["tool"] == "search_signals"
+    assert parsed["args"]["query"] == "set {x,y} and }z{"
+
+
 def test_consult_response_payload_schema_invariants():
     """ConsultResponsePayload enforces the shape L-178 specifies."""
     p = ConsultResponsePayload(
@@ -1315,6 +1350,77 @@ async def test_step_publish_failure_never_breaks_run():
     )
     # Run still completed.
     assert result.consult_response.answer == "ok"
+
+
+# ---------------------------------------------------------------------------
+# S8-T6 — consult observability: durable step trace + raw-unparseable salvage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_carries_full_step_trace_in_payload_data():
+    """The FULL per-round ReAct step trace rides on
+    ``consult_response.data['steps']`` so the consult front door can persist it
+    into ``consult_turns.steps`` (previously never populated). The projected
+    ``tool_calls`` summary lives alongside it, unchanged."""
+    sig_id = uuid4()
+    substrate = _SubstrateStub(
+        signal_rows=[{"id": str(sig_id), "title": "x"}],
+        signal_refs=[sig_id],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "x"}}),
+        json.dumps({
+            "final": True, "answer": "done", "uncertainty": 0.3,
+            "cited_refs": [str(sig_id)], "unanswered_aspects": [],
+        }),
+    ])
+    result = await run_method(
+        [{"question": "q"}],
+        {"analyst_id": "consult.x"},
+        ConsultOnDemandDeps(llm=llm, substrate=substrate),
+    )
+    steps = result.consult_response.data.get("steps")
+    assert isinstance(steps, list) and steps, "steps trace must be persisted"
+    phases = [s.get("phase") for s in steps]
+    assert "plan" in phases and "reason" in phases and "act" in phases
+    # The persisted steps mirror the returned intermediate_steps (source of truth).
+    assert steps == result.intermediate_steps[: len(steps)]
+    # The projected tool_calls summary is still there for the SPA.
+    assert result.consult_response.data.get("tool_calls")
+
+
+@pytest.mark.asyncio
+async def test_unparseable_midloop_persists_raw_in_step_trace():
+    """A round whose JSON fails to parse records the RAW reply on the
+    ``unparseable`` step so it leaves a debuggable trail instead of vanishing;
+    the loop still recovers to a final answer."""
+    substrate = _SubstrateStub()
+    garbage = "this is not json — the model rambled {unterminated"
+    llm = _ScriptedLLMHandler([
+        garbage,
+        json.dumps({
+            "final": True, "answer": "Recovered.", "uncertainty": 0.5,
+            "cited_refs": [], "unanswered_aspects": [],
+        }),
+    ])
+    result = await run_method(
+        [{"question": "q"}],
+        {"analyst_id": "consult.x"},
+        ConsultOnDemandDeps(llm=llm, substrate=substrate),
+    )
+    assert result.consult_response.answer == "Recovered."
+    unparse = [
+        s for s in result.intermediate_steps if s.get("kind") == "unparseable"
+    ]
+    assert unparse, "expected an unparseable step"
+    assert unparse[0]["raw"] == garbage
+    # And it rode into the durable payload trace, not just the in-memory list.
+    persisted = result.consult_response.data.get("steps") or []
+    assert any(
+        s.get("kind") == "unparseable" and s.get("raw") == garbage
+        for s in persisted
+    )
 
 
 # ---------------------------------------------------------------------------

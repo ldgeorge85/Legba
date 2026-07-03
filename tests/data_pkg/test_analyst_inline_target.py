@@ -990,6 +990,37 @@ async def test_gather_blocked_tool_degrades_not_drops():
 
 
 @pytest.mark.asyncio
+async def test_gather_unparseable_persists_raw():
+    """An unparseable GATHER turn still degrades-not-drops (breaks to synthesis)
+    but records a distinct ``unparseable`` step carrying the RAW reply, so a
+    malformed gather leaves a debuggable trail instead of being silently
+    conflated with a clean ``done``. Shared by journal_assessor's GATHER."""
+    inputs = [_signal_row(id_=uuid4())]
+    final_json = (
+        '{"title": "Landed", "body": "b", "confidence": 0.6, '
+        '"evidence": [], "tags": []}'
+    )
+    garbage = "the model rambled instead of emitting a tool call"
+    llm = _ScriptedGatherLLM([garbage, final_json])
+    binding = _FakeBinding()
+    deps = InlineTargetDeps(llm=llm)  # default max_rounds=1 → one gather round
+
+    result = await run_method(
+        inputs,
+        {"target_id": "t", "agency_binding": binding},
+        deps,
+    )
+
+    assert result.finding.title == "Landed"
+    # No tool dispatched — garbage is not a tool call.
+    assert binding.calls == []
+    gather_steps = [s for s in result.intermediate_steps if s["phase"] == "gather"]
+    unparse = [s for s in gather_steps if s.get("kind") == "unparseable"]
+    assert unparse, "expected an unparseable gather step"
+    assert unparse[0]["raw"] == garbage
+
+
+@pytest.mark.asyncio
 async def test_gather_budget_precheck_skips_rounds():
     """When the budget precheck reports no headroom, GATHER is SKIPPED (not the
     finding) — the run is single-shot and records a skipped_budget step."""
