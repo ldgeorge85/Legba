@@ -757,7 +757,13 @@ def _build_grounding_hook(
         # into the caller's trace sink (when supplied) for auditable retrieval.
         if want_world_context:
             query = _world_context_query(question_hint, candidates())
-            chunks = await resolver.resolve_world_context(query, limit=max_facts)
+            # Thread the run's target_id so the resolver can apply the per-desk
+            # country filter (a single-country desk retrieves only its own
+            # country's chunks; a meta / no-target / non-single-country run applies
+            # NO filter). The relevance floor is applied resolver-side regardless.
+            chunks = await resolver.resolve_world_context(
+                query, limit=max_facts, target_id=target_id,
+            )
             block = build_world_context_block(chunks)
             if block:
                 parts.append(block)

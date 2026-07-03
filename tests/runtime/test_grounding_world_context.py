@@ -40,6 +40,8 @@ from legba.runtime.grounding import (
     GroundingWorldContextChunk,
     SubstrateGroundingResolver,
     build_world_context_block,
+    world_context_country_filter_values,
+    world_context_min_score,
 )
 
 
@@ -333,6 +335,174 @@ async def test_resolve_world_context_clamps_to_chunk_ceiling():
     await resolver.resolve_world_context("q", limit=30)
     # The requested limit (30) is clamped to the RAG ceiling (6) at the search.
     assert qdrant.last_call["limit"] == 6
+
+
+# ---------------------------------------------------------------------------
+# RELEVANCE FLOOR + COUNTRY FILTER — the two cheap retrieval guards (S5-T3)
+# ---------------------------------------------------------------------------
+
+
+class _FilteringQdrant:
+    """Async Qdrant stand-in that HONORS ``score_threshold`` and a ``countries``
+    MatchAny ``query_filter`` (like the real server), so a test can assert BOTH
+    the filter that was passed AND that only matching chunks come back."""
+
+    def __init__(self, points: list[_FakePoint]) -> None:
+        self._points = points
+        self.last_call: dict[str, Any] | None = None
+
+    async def query_points(self, **kwargs: Any) -> _FakeQueryResponse:
+        self.last_call = kwargs
+        pts = list(self._points)
+        thr = kwargs.get("score_threshold")
+        if thr is not None:
+            # Real Qdrant excludes hits scoring BELOW the threshold (>= kept).
+            pts = [p for p in pts if p.score is None or p.score >= thr]
+        qf = kwargs.get("query_filter")
+        if qf is not None:
+            wanted = set(qf.must[0].match.any)
+            pts = [
+                p for p in pts
+                if wanted & set(p.payload.get("countries") or [])
+            ]
+        return _FakeQueryResponse(pts)
+
+
+def _country_point(
+    *, id: str, countries: list[str], score: float, text: str = "a prior",
+) -> _FakePoint:
+    return _FakePoint(
+        id=id,
+        payload={"corpus": "world_context", "title": id, "text": text,
+                 "countries": countries},
+        score=score,
+    )
+
+
+@pytest.mark.asyncio
+async def test_relevance_floor_drops_below_score_chunk_client_side():
+    """A below-floor chunk is dropped even when the client IGNORES the server-side
+    score_threshold (the plain fake returns everything) — the client-side backstop
+    in _map_world_context_hits enforces the floor. The above-floor chunk survives."""
+    below = _FakePoint(id="lo", payload={"title": "lo", "text": "weak"}, score=0.3)
+    above = _FakePoint(id="hi", payload={"title": "hi", "text": "strong"}, score=0.6)
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(),
+        qdrant=_FakeQdrant([below, above]),  # ignores score_threshold
+    )
+    chunks = await resolver.resolve_world_context("q", limit=30)
+    assert [c.chunk_id for c in chunks] == ["hi"]
+    # The server-side floor was still requested (default 0.5).
+    assert resolver._qdrant.last_call["score_threshold"] == 0.5  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_relevance_floor_all_below_yields_no_block():
+    """When ALL retrieved chunks fall below the floor → no chunks → NO block."""
+    pts = [
+        _FakePoint(id=f"c{i}", payload={"title": f"c{i}", "text": "weak"}, score=0.2)
+        for i in range(4)
+    ]
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=_FakeQdrant(pts),
+    )
+    chunks = await resolver.resolve_world_context("q", limit=30)
+    assert chunks == []
+    assert build_world_context_block(chunks) is None
+
+
+@pytest.mark.asyncio
+async def test_country_desk_filters_to_target_country_and_returns_only_its_chunks():
+    """A single-country desk passes a ``countries`` MatchAny for its ISO-2 and
+    (server honoring the filter) retrieves ONLY that country's chunks."""
+    us = _country_point(id="us-1", countries=["us", "US"], score=0.7)
+    ir = _country_point(id="ir-1", countries=["ir", "IR"], score=0.7)
+    qdrant = _FilteringQdrant([us, ir])
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=qdrant,
+    )
+    chunks = await resolver.resolve_world_context(
+        "q", limit=30, target_id="country_g20_us",
+    )
+    # Only the US chunk comes back — the Iran chunk is filtered out server-side.
+    assert [c.chunk_id for c in chunks] == ["us-1"]
+    # The query carried a MatchAny country filter over the ``countries`` field for
+    # the desk's ISO-2 (both cases the Lane-4 loader may have stored).
+    qf = qdrant.last_call["query_filter"]
+    assert qf is not None
+    cond = qf.must[0]
+    assert cond.key == "countries"
+    assert list(cond.match.any) == ["us", "US"]
+
+
+@pytest.mark.asyncio
+async def test_watch_desk_derives_iso2_from_last_slug_segment():
+    """A watch-tier desk (country_watch_ir) scopes to its trailing ISO-2 'ir'."""
+    ir = _country_point(id="ir-1", countries=["ir", "IR"], score=0.7)
+    us = _country_point(id="us-1", countries=["us", "US"], score=0.7)
+    qdrant = _FilteringQdrant([ir, us])
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=qdrant,
+    )
+    chunks = await resolver.resolve_world_context(
+        "q", limit=30, target_id="country_watch_ir",
+    )
+    assert [c.chunk_id for c in chunks] == ["ir-1"]
+    assert list(qdrant.last_call["query_filter"].must[0].match.any) == ["ir", "IR"]
+
+
+@pytest.mark.asyncio
+async def test_meta_no_target_run_applies_no_country_filter():
+    """A meta / no-target run (world_assessor) applies NO country filter — the
+    global picture is legitimate — but the relevance floor still rides."""
+    a = _country_point(id="a", countries=["us", "US"], score=0.7)
+    b = _country_point(id="b", countries=["ir", "IR"], score=0.7)
+    qdrant = _FilteringQdrant([a, b])
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=qdrant,
+    )
+    chunks = await resolver.resolve_world_context("q", limit=30, target_id=None)
+    # No country filter → BOTH countries' chunks are eligible.
+    assert {c.chunk_id for c in chunks} == {"a", "b"}
+    assert qdrant.last_call["query_filter"] is None
+    assert qdrant.last_call["score_threshold"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_region_target_applies_no_country_filter():
+    """A non-single-country target (region composer) resolves to no ISO-2 → NO
+    filter (degrade to the global view rather than an empty match)."""
+    a = _country_point(id="a", countries=["fr", "FR"], score=0.7)
+    qdrant = _FilteringQdrant([a])
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=qdrant,
+    )
+    chunks = await resolver.resolve_world_context(
+        "q", limit=30, target_id="region_europe",
+    )
+    assert [c.chunk_id for c in chunks] == ["a"]
+    assert qdrant.last_call["query_filter"] is None
+
+
+def test_world_context_country_filter_values_helper():
+    """The ISO-2 derivation: single-country desks → [iso2, ISO2]; meta / region /
+    malformed → None (no filter, never an empty match)."""
+    assert world_context_country_filter_values("country_g20_us") == ["us", "US"]
+    assert world_context_country_filter_values("country_watch_ir") == ["ir", "IR"]
+    # Meta / no-target and non-single-country targets → no filter.
+    assert world_context_country_filter_values(None) is None
+    assert world_context_country_filter_values("region_europe") is None
+    assert world_context_country_filter_values("thematic_energy") is None
+
+
+def test_world_context_min_score_env_override(monkeypatch):
+    """The floor is env-overridable; a blank / malformed value falls back."""
+    monkeypatch.delenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", raising=False)
+    assert world_context_min_score() == 0.5
+    monkeypatch.setenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", "0.62")
+    assert world_context_min_score() == 0.62
+    monkeypatch.setenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", "not-a-float")
+    assert world_context_min_score() == 0.5
 
 
 # ---------------------------------------------------------------------------

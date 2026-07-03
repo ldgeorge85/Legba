@@ -94,6 +94,8 @@ __all__ = [
     "situation_scope_for_target",
     "target_scope_names",
     "trusted_source_types",
+    "world_context_country_filter_values",
+    "world_context_min_score",
 ]
 
 
@@ -182,6 +184,33 @@ _WORLD_CONTEXT_CHUNK_CHAR_CAP = 700
 # once the accumulated block would exceed this, so the priors can never crowd out
 # the authoritative context + the signal slice.
 _WORLD_CONTEXT_BLOCK_CHAR_CAP = 3000
+# Relevance floor for the opportunistic ``world_context`` RAG (S5-T3). A retrieved
+# chunk must clear this cosine-similarity score to be injected as a prior; a chunk
+# below it is DROPPED and, when ALL retrieved chunks fall below, NO block is built
+# (degrade-not-drop — ``build_world_context_block([])`` returns ``None``). Observed
+# on-target Factbook retrieval scores are ~0.53-0.66; weak / off-topic matches fall
+# below, so 0.5 is a conservative floor that admits genuine hits and rejects noise.
+# Applied server-side via Qdrant's ``score_threshold`` AND re-checked client-side
+# in :meth:`SubstrateGroundingResolver._map_world_context_hits` (a client / stub
+# that ignores the threshold still can't leak a below-floor chunk). Env-overridable
+# via ``LEGBA_WORLD_CONTEXT_MIN_SCORE``; a bad / blank value falls back to default.
+_WORLD_CONTEXT_MIN_SCORE = 0.5
+
+
+def world_context_min_score() -> float:
+    """The minimum cosine similarity a ``world_context`` chunk needs to ground.
+
+    Reads ``LEGBA_WORLD_CONTEXT_MIN_SCORE`` (a float); falls back to
+    :data:`_WORLD_CONTEXT_MIN_SCORE` when unset, blank, or malformed. Never
+    raises — grounding is an enrichment, so a bad env value degrades to default.
+    """
+    raw = os.getenv("LEGBA_WORLD_CONTEXT_MIN_SCORE")
+    if not raw or not raw.strip():
+        return _WORLD_CONTEXT_MIN_SCORE
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        return _WORLD_CONTEXT_MIN_SCORE
 
 
 # Quality guard for the situations grounding block (review M2). Clustered
@@ -753,6 +782,43 @@ def is_per_country_target(target_id: str | None) -> bool:
     by :func:`situation_scope_for_target` so the two scope decisions never
     diverge."""
     return situation_scope_for_target(target_id) is not None
+
+
+def world_context_country_filter_values(target_id: str | None) -> list[str] | None:
+    """The Qdrant ``MatchAny`` payload-filter values for the ``world_context``
+    ``countries`` field, or ``None`` for NO country filter (S5-T3 country guard).
+
+    A single-country desk (``country_<tier>_<iso2>`` — e.g. ``country_g20_us`` /
+    ``country_watch_ir``) restricts retrieval to chunks tagged for its OWN
+    country: the desk's ISO-2 in the lowercase + UPPER forms the Lane-4 payload
+    tags (``payload.countries`` = ``[lower-iso2, UPPER-iso2, CountryName]``), so a
+    ``MatchAny`` matches whichever case the loader stored. This is what stops a
+    France run from retrieving Iran chunks.
+
+    Returns ``None`` (→ NO filter; the whole collection is eligible) — NEVER an
+    empty filter that would match nothing — for the legitimate global cases:
+
+      * a meta / no-target run (``world_assessor`` — ``target_id`` None): the
+        global picture is legitimate;
+      * a target that doesn't resolve to a single ISO-2 (``region_*`` composers,
+        thematic dyads): there is no single country to scope to.
+
+    Never raises — any resolution failure degrades to ``None`` (no filter),
+    consistent with the module's degrade-not-drop contract.
+    """
+    if not is_per_country_target(target_id):
+        return None
+    tokens = list(_target_id_geo_names(target_id))
+    if not tokens:
+        return None
+    iso2 = tokens[0].strip().lower()
+    # Only a bare 2-letter ISO-2 code is a single-country scope; a longer trailing
+    # token (or a non-alphabetic one) is not a country desk → no filter (degrade).
+    if len(iso2) != 2 or not iso2.isalpha():
+        return None
+    # Both cases: the Lane-4 payload tags a chunk with BOTH the lower- and
+    # UPPER-case ISO-2, so match either (MatchAny is an OR over the array).
+    return [iso2, iso2.upper()]
 
 
 # ISO-2 (and a couple of common slug tokens) → casefolded country name(s) so a
@@ -1402,7 +1468,7 @@ class SubstrateGroundingResolver:
         return None if structure.is_empty() else structure
 
     async def resolve_world_context(
-        self, query: str, *, limit: int,
+        self, query: str, *, limit: int, target_id: str | None = None,
     ) -> list[GroundingWorldContextChunk]:
         """Opportunistic RAG (S5-T3) — semantic hits from the ``world_context``
         Qdrant collection for the BACKGROUND PRIORS block.
@@ -1410,6 +1476,21 @@ class SubstrateGroundingResolver:
         ``query`` is the ASSEMBLE-time RAG query (the unit's bounded question +
         target country + top slice entities). Returns up to
         :data:`_MAX_WORLD_CONTEXT_CHUNKS` retrieved chunks, most-similar first.
+
+        TWO cheap retrieval guards (the prerequisite for safe RAG expansion):
+
+          * RELEVANCE FLOOR — a retrieved chunk must clear
+            :func:`world_context_min_score` (default 0.5) to ground. Applied
+            server-side via Qdrant's ``score_threshold`` AND re-checked
+            client-side (a stub / client that ignores the threshold still can't
+            leak a below-floor chunk). If ALL hits fall below → no chunks → no
+            block (degrade-not-drop).
+          * COUNTRY FILTER — for a single-country desk (``target_id`` resolves to
+            one ISO-2 via :func:`world_context_country_filter_values`), a Qdrant
+            ``MatchAny`` payload filter over the chunk ``countries`` array
+            restricts retrieval to THAT country's chunks (a France desk can't pull
+            an Iran chunk). A meta / no-target / non-single-country target applies
+            NO filter — the global picture is legitimate.
 
         HONESTY + degrade-not-drop, all yielding ``[]`` (→ no BACKGROUND PRIORS
         block, so no fabricated header):
@@ -1433,6 +1514,11 @@ class SubstrateGroundingResolver:
         limit = min(int(limit), _MAX_WORLD_CONTEXT_CHUNKS)
         if limit <= 0:
             return []
+        # The two guards, both derived WITHOUT raising: the relevance floor (a
+        # cosine-similarity minimum) and the per-desk country filter (None for a
+        # legitimate global / non-single-country run).
+        min_score = world_context_min_score()
+        country_values = world_context_country_filter_values(target_id)
         # Embed the RAG query. An embed-backend failure degrades to no block
         # (never a fabricated vector) — the same contract vector_search honors.
         try:
@@ -1441,29 +1527,70 @@ class SubstrateGroundingResolver:
             logger.warning("grounding.resolve_world_context.embed_failed err=%s", exc)
             return []
         try:
-            hits = await self._search_world_context(vec, limit=limit)
+            hits = await self._search_world_context(
+                vec, limit=limit, min_score=min_score, country_values=country_values,
+            )
         except Exception as exc:  # degrade-not-drop — RAG is enrichment
             logger.warning("grounding.resolve_world_context.search_failed err=%s", exc)
             return []
-        return self._map_world_context_hits(hits)
+        return self._map_world_context_hits(hits, min_score=min_score)
+
+    @staticmethod
+    def _world_context_country_filter(country_values: Sequence[str] | None) -> Any | None:
+        """A Qdrant ``MatchAny`` payload filter over ``countries`` for the given
+        ISO-2 values, or ``None`` when there is nothing to filter on.
+
+        The qdrant models import is LOCAL (mirrors ``substrate_query_port``) so
+        the grounding module never hard-depends on the client at import time; a
+        filter-build failure degrades to ``None`` (no filter) rather than raising
+        on the grounding path.
+        """
+        if not country_values:
+            return None
+        try:
+            from qdrant_client.http import models as qmodels
+
+            return qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="countries",
+                        match=qmodels.MatchAny(any=list(country_values)),
+                    )
+                ]
+            )
+        except Exception as exc:  # degrade-not-drop — no filter beats a raise
+            logger.warning("grounding.world_context.filter_build_failed err=%s", exc)
+            return None
 
     async def _search_world_context(
-        self, query_embedding: Sequence[float], *, limit: int,
+        self,
+        query_embedding: Sequence[float],
+        *,
+        limit: int,
+        min_score: float | None = None,
+        country_values: Sequence[str] | None = None,
     ) -> list[Any]:
         """Cosine-search the ``world_context`` collection by raw vector.
 
-        Supports both the modern ``query_points`` (qdrant-client >= 1.10, returns
-        a response with ``.points``) and the legacy ``search`` surface, mirroring
-        :meth:`legba.data.qdrant.QdrantStore.search` /
-        ``substrate_query_port.vector_search_by_embedding`` so this isn't pinned
+        Applies the relevance floor server-side (``score_threshold``) and the
+        optional per-desk country filter (``query_filter`` — MatchAny over the
+        chunk ``countries`` array) so a real Qdrant never even returns a
+        below-floor or off-country chunk. Supports both the modern ``query_points``
+        (qdrant-client >= 1.10, returns a response with ``.points``) and the legacy
+        ``search`` surface, mirroring :meth:`legba.data.qdrant.QdrantStore.search`
+        / ``substrate_query_port.vector_search_by_embedding`` so this isn't pinned
         to one client version.
         """
         vec = list(query_embedding)
+        query_filter = self._world_context_country_filter(country_values)
+        threshold = float(min_score) if min_score is not None else None
         if hasattr(self._qdrant, "query_points"):
             resp = await self._qdrant.query_points(
                 collection_name=self._world_context_collection,
                 query=vec,
                 limit=int(limit),
+                query_filter=query_filter,
+                score_threshold=threshold,
                 with_payload=True,
             )
             return list(getattr(resp, "points", None) or [])
@@ -1471,17 +1598,27 @@ class SubstrateGroundingResolver:
             collection_name=self._world_context_collection,
             query_vector=vec,
             limit=int(limit),
+            query_filter=query_filter,
+            score_threshold=threshold,
             with_payload=True,
         )
         return list(hits or [])
 
-    def _map_world_context_hits(self, hits: Sequence[Any]) -> list[GroundingWorldContextChunk]:
+    def _map_world_context_hits(
+        self, hits: Sequence[Any], *, min_score: float | None = None,
+    ) -> list[GroundingWorldContextChunk]:
         """Map raw Qdrant hits onto :class:`GroundingWorldContextChunk`.
 
         Reads the Lane-4 payload shape (``text`` / ``title`` / ``section`` /
         ``source_url`` — see :func:`legba.data.rag.lane4_loader._build_payload`).
         A hit with no readable ``text`` is dropped (an empty chunk contributes no
         prior); the Qdrant point id becomes the auditable ``chunk_id``.
+
+        RELEVANCE FLOOR backstop: when ``min_score`` is set, a hit whose (readable)
+        cosine ``score`` is below the floor is dropped even if the client / stub
+        ignored the server-side ``score_threshold``. A hit with no readable score
+        is trusted (it came back from an already-thresholded query) rather than
+        dropped — degrade-not-drop, never over-suppress.
         """
         out: list[GroundingWorldContextChunk] = []
         for hit in hits or []:
@@ -1495,6 +1632,13 @@ class SubstrateGroundingResolver:
             if not isinstance(text, str) or not text.strip():
                 continue
             score = getattr(hit, "score", None)
+            score_f = float(score) if isinstance(score, (int, float)) else None
+            if (
+                min_score is not None
+                and score_f is not None
+                and score_f < float(min_score)
+            ):
+                continue
             out.append(
                 GroundingWorldContextChunk(
                     chunk_id=str(hid),
@@ -1506,7 +1650,7 @@ class SubstrateGroundingResolver:
                         else None
                     ),
                     text=text,
-                    score=float(score) if isinstance(score, (int, float)) else None,
+                    score=score_f,
                 )
             )
         return out
