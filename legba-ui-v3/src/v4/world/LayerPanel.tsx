@@ -41,7 +41,9 @@ const SELECT_CLASS = cn(
 )
 
 export default function LayerPanel() {
-  const [collapsed, setCollapsed] = useState(false)
+  // Collapsed by default (UI direction §"map panel" — LAYERS collapsed) so the
+  // map surface leads; the operator expands the switcher when they need it.
+  const [collapsed, setCollapsed] = useState(true)
   const layers = useWorldState((s) => s.layers)
   const counts = useWorldState((s) => s.counts)
   const toggleLayer = useWorldState((s) => s.toggleLayer)
