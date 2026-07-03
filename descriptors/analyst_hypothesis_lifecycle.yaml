@@ -29,7 +29,10 @@ identity:
     input_type: legba.runtime.SignalList
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
-  state: active
+  # RETIRED live via POST /retire (superseded by the bounded-unit + composition
+  # architecture) and excluded from bringup_register_analysts.py. Kept as draft
+  # (not active) so a stray re-register stays inert — repo now matches live (#174).
+  state: draft
   owner: hypothesis_activation
 
 subscription:

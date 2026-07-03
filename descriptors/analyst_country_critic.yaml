@@ -22,7 +22,10 @@ identity:
   type_signature:
     input_type: legba.runtime.AnalystOutputRow
     output_type: legba.runtime.Critique
-  state: active
+  # RETIRED live via POST /retire (superseded by the bounded-unit + composition
+  # architecture) and excluded from bringup_register_analysts.py. Kept as draft
+  # (not active) so a stray re-register stays inert — repo now matches live (#174).
+  state: draft
   owner: p17_reregister
 
 subscription:
