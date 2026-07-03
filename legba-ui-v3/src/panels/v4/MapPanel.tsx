@@ -1,22 +1,24 @@
 /**
  * v4 panel — The World map (geotemporal).
  *
- * S7-T5: the map now ships on maplibre-gl (WebGL), rendered through the
- * TileWebGLOverlay harness — a `position: fixed` canvas portalled to
- * document.body and position-synced to this tile's rect. That routes the GPU
- * canvas OUT of the Dockview tile transform, which is what made a plain in-tile
- * maplibre/sigma canvas paint BLACK (S7-T2 spike, reproduced on dockview v4+v7).
- * maplibre adds the banded-verdict choropleth (default) + a signal-density
- * heatmap over the prior signal/finding/situation layers.
+ * S7-T5 ships TWO renderers behind `@/lib/mapEngine` (both wired to the shared
+ * world store; LayerPanel / Drawer / TimeScrubber chrome is shared):
  *
- * Leaflet (DOM/SVG, always composites) is retained as an instant fallback —
- * `?map=leaflet` or `localStorage.legba_map_engine='leaflet'` — because the
- * overlay's not-black rendering needs an in-browser screenshot to confirm, and
- * a black panel must never ship. See `@/lib/mapEngine`.
+ *  - LEAFLET (default) — DOM/SVG, always composites in a Dockview tile.
+ *  - MAPLIBRE (opt-in, `?map=maplibre`) — WebGL, rendered through the
+ *    TileWebGLOverlay harness: a `position: fixed` canvas portalled to
+ *    document.body and position-synced to this tile's rect, which routes the GPU
+ *    canvas OUT of the Dockview tile transform — the thing that made a plain
+ *    in-tile maplibre/sigma canvas paint BLACK (S7-T2 spike, dockview v4+v7).
+ *    maplibre adds the banded-verdict choropleth + a signal-density heatmap over
+ *    the signal/finding/situation layers.
+ *
+ * Leaflet is the DEFAULT because the overlay's not-black rendering needs an
+ * in-browser screenshot to confirm and a black panel must never ship; maplibre
+ * is one flag away for that verification, then promotion. See mapEngine.ts.
  *
  * The KPI stat tiles were already lifted OUT of the map into the standalone
- * `v4.kpi` strip (UI direction §"map panel"); the LayerPanel / Drawer /
- * TimeScrubber chrome is shared by both engines via the world store.
+ * `v4.kpi` strip (UI direction §"map panel").
  */
 import type { ReactNode } from 'react'
 import { PanelBoundary } from './PanelBoundary'
