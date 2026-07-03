@@ -683,7 +683,14 @@ async def bring_up_source_first_planes(
     # richer sinks (webhook POST, a2a invoke) are emitter subclasses.
     tool_context = ToolContext(
         queue=job_queue,
-        emit=ChannelEmitter(nats_publish=_governor_publish),
+        # pg_pool makes the emit DURABLY auditable (migration 0061): every
+        # escalate/incident emit writes one alert_sink_deliveries row recording
+        # what was delivered + whether the publish confirmed — the durable answer
+        # to "who got alerted", beyond the process-local emitted[] list and the
+        # NATS edge (which retains nothing queryable per finding).
+        emit=ChannelEmitter(
+            nats_publish=_governor_publish, pg_pool=pg_store.pool,
+        ),
     )
     AGENCY_HOLDER["agency"] = agency
     AGENCY_HOLDER["tool_context"] = tool_context
