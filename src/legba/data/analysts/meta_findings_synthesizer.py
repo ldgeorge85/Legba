@@ -227,6 +227,50 @@ REGION_MODE_GAP: str = "gap"
 """No region read AND no country reads → an honest, NAMED gap."""
 
 
+# S2-T4 THEMATIC composition — fuse ONE unit dimension across ALL desks.
+#
+# A THEMATIC composition (escalation_composition) reads the latest verified head
+# of ONE UNIT analyst dimension (analyst_id='escalation') for EVERY g20+watch
+# desk and fuses them into ONE global read — the ANALYST axis, not the TARGET
+# axis the country/region/world compositions fuse along. It is the SAME
+# meta_findings_synthesizer kind; the thematic behavior is descriptor + this
+# READ_SLICE branch.
+THEMATIC_DIMENSION_KEY: str = "thematic_dimension"
+"""The ``subscription.substrate`` marker key naming the UNIT analyst_id dimension
+a THEMATIC composition fuses across ALL desks (e.g. ``'escalation'``). Its
+PRESENCE is the SOLE discriminator that routes a target-less, verify-declaring run
+to the thematic branch INSTEAD of the world-over-regions branch (both are
+target-less + verify-declaring). Lives in the open ``subscription.substrate`` dict
+(``dict[str, Any]``) so no schema change / registry rebuild is needed to add it."""
+
+# The g20+watch desk-coverage roster: one card per active ASSESSED desk (the
+# tags every unit fans out to — matches scorecard_producer's roster + the units'
+# ``has_tag('g20') or has_tag('watch')`` subscription). The thematic compose diffs
+# this roster against the desks with an escalation head to NAME any desk with no
+# head as an honest gap (degrade-not-drop). Literal tag list mirrors
+# scorecard_producer._G20_TARGETS_SQL (kept in sync).
+_DESK_ROSTER_SQL = """
+    SELECT descriptor_id, name
+      FROM target_descriptors
+     WHERE is_head = TRUE
+       AND COALESCE(state, 'active') <> 'retired'
+       AND (body -> 'scope' -> 'tags') ?| array['g20', 'watch']
+     ORDER BY descriptor_id
+"""
+
+# Per-desk coverage MODE tokens stamped into ``data.desk_coverage[].mode``.
+THEMATIC_MODE_PRESENT: str = "present"
+"""A verified escalation head grounded this desk this window."""
+
+THEMATIC_MODE_GAP: str = "gap"
+"""No escalation head for this desk this window → an honest, NAMED gap."""
+
+# T7 cross-desk correlation guard float-noise tolerance (mirrors verify's
+# ``_HEDGE_EPSILON``): a confidence is capped only when it exceeds the
+# de-duplicated ceiling by MORE than this.
+_GUARD_EPSILON: float = 1e-6
+
+
 # ---------------------------------------------------------------------------
 # Deps surface — LLM port only (no substrate side-deps; the runtime
 # materializes inputs before calling run_method, same as the other kinds).
@@ -308,6 +352,24 @@ _WORLD_COMPOSITION_SYSTEM = with_preamble(
 # (which composes COUNTRY reads and keeps that prompt) is untouched.
 _WORLD_OVER_REGIONS_SYSTEM = with_preamble(
     """TASK — GLOBAL world COMPOSITION over REGIONS. You are given the VERIFIED, faithfulness-checked per-REGION READS (second-order region_composition findings), one per region. For a region that had NO region read this cycle, one or more of its per-COUNTRY reads are shown IN ITS PLACE (a degrade — treat them as that region's available evidence). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block (open disputes over a single fact where the arbiter surfaced more than one value cluster) and a REGION COVERAGE block naming world regions that have NO read at all this cycle. Produce ONE second-order WORLD READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the read block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the region reads indicate / suggest / as of the latest composition' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-REGION DISAGREEMENT: when one region's read and another's point in different directions, NAME BOTH regions and cite BOTH diverging blocks via their two [[ref:N]] ordinals — do NOT average them into a false global consensus. (d) Lead body with a one-line BLUF; do not restate any read verbatim. (e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) REGION GAPS: if the REGION COVERAGE block lists a region as having NO read, NAME that region plainly as an unassessed gap with NO current read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap region. (g) HONEST EMPTY: if there are no reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown reads actually say. NEVER introduce a region, country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a read's severity or dominant driver; make any aggregation explicit. Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
+)
+
+
+# S2-T4 THEMATIC (escalation) composition system prompt.
+#
+# Selected in-kind by the runtime's ``options["thematic_dimension"]`` stamp on the
+# target-LESS thematic run. Mirrors ``_WORLD_OVER_REGIONS_SYSTEM`` but THEMATIC-
+# worded: the cited blocks are per-DESK escalation-unit reads (one per country
+# desk), so the load-bearing surface is CROSS-DESK convergence/divergence of
+# ESCALATION risk. It consumes a DESK COVERAGE block naming any desk with no
+# escalation head (absence-honest gaps). The CORRELATION rule is load-bearing: two
+# desks whose reads rest on the SAME underlying wire signal are NOT independent
+# corroboration — the kind's T7 guard de-duplicates the evidence numerically, and
+# the prompt tells the model not to treat shared-signal desks as independent.
+# Distinct constant from ``_WORLD_OVER_REGIONS_SYSTEM`` so the world/region
+# compositions are untouched.
+_THEMATIC_COMPOSITION_SYSTEM = with_preamble(
+    """TASK — GLOBAL THEMATIC COMPOSITION over ESCALATION. You are given the VERIFIED, faithfulness-checked per-DESK ESCALATION READS (first-order `escalation` unit findings), ONE per country desk, each for a DIFFERENT country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, its DESK (target_id — the country the read is for), effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a DESK COVERAGE block naming desks that have NO escalation read this cycle. Produce ONE second-order GLOBAL ESCALATION READ that surveys near-term escalation risk ACROSS the desks. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the desk read block it rests on, and NAME the desk (country) it is about; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no desk read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the desk reads indicate / suggest / as of the latest sweep' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-DESK STRUCTURE: name the desks with the HIGHEST assessed escalation risk and cite each; when desks point in different directions, NAME BOTH and cite BOTH diverging blocks via their two [[ref:N]] ordinals — do NOT average them into a false global consensus. (d) CORRELATION — two desks whose reads rest on the SAME underlying wire signal (a shared cross-border incident, one alliance move seen from both sides) are NOT independent corroboration; do NOT count them twice or let a single shared event inflate the global picture. When two cited desks clearly describe the SAME underlying event, SAY SO rather than presenting them as two independent data points. (e) DESK GAPS: if the DESK COVERAGE block lists a desk as having NO read, NAME that desk plainly as an unassessed gap with NO current escalation read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap desk. (f) Lead body with a one-line BLUF naming where global escalation risk is concentrated; do not restate any desk read verbatim. (g) HONEST EMPTY: if there are no desk reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that desk-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown desk reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a desk read's severity or dominant vector; make any aggregation explicit. Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] markers naming each desk...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
 )
 
 
@@ -400,6 +462,141 @@ def _extract_contested_markers(
         else:
             dropped += 1
     return resolved, dropped
+
+
+# ---------------------------------------------------------------------------
+# S2-T4 — cross-desk CORRELATION GUARD (the plan's T7 guard)
+# ---------------------------------------------------------------------------
+#
+# Sibling desk-units can rest on the SAME underlying wire signal (a shared hop
+# one level down the lineage), so fusing two desks' escalation heads that cite one
+# shared signal must NOT double-count that evidence. This mirrors the verify-time
+# T7 floor (``verify._deterministic_floor_subclaim`` / ``_correlated_components``)
+# but runs at SYNTH time over the composition's OWN ``data['citations']`` so the
+# de-duplication is stamped into the FINDING for auditability (not just the paired
+# critique). Both consume the same signal captured on each citation at synth time:
+# ``derived_from`` (the cited head's underlying lineage/signal ids) +
+# ``effective_confidence`` (its verify-floored ``min(conf, faithful)``).
+
+
+def _correlated_ordinal_components(
+    ordinals: Sequence[int],
+    derived_by_ordinal: Mapping[int, set[str]],
+) -> list[list[int]]:
+    """Connected components over cited-head ORDINALS, joined when their
+    ``derived_from`` sets intersect. Each component = ONE independent evidence
+    unit. Pure-stdlib union-find; O(n^2) pairwise, fine at composition scale.
+    """
+    ids = list(ordinals)
+    parent: dict[int, int] = {i: i for i in ids}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            da = derived_by_ordinal.get(ids[i]) or set()
+            db = derived_by_ordinal.get(ids[j]) or set()
+            if da and db and (da & db):
+                union(ids[i], ids[j])
+
+    comps: dict[int, list[int]] = {}
+    for i in ids:
+        comps.setdefault(find(i), []).append(i)
+    return [sorted(c) for c in comps.values()]
+
+
+def _correlation_guard(citations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Detect + de-duplicate shared-lineage evidence across the cited desk heads.
+
+    Two cited heads whose ``derived_from`` sets intersect are ONE independent
+    evidence unit, not two — counting both inflates the fused read. Returns an
+    audit dict (stamped into ``finding.data['correlation_guard']``):
+
+      * ``cited_heads``            — number of citations with a resolvable ordinal.
+      * ``independent_components`` — number of components after collapsing shared
+        lineage (``< cited_heads`` ⇒ at least one duplicate was folded).
+      * ``shared_lineage_detected`` — True iff any component has >1 member.
+      * ``correlated_groups``      — one entry per multi-member component naming its
+        ``ordinals``, ``desks`` (the target ids), and the ``shared_signals`` that
+        joined them — the audit of WHAT the guard folded.
+      * ``dedup_confidence_ceiling`` — the DE-DUPLICATED ceiling: the max, over
+        INDEPENDENT components, of each component's max ``effective_confidence``
+        (never a sum / noisy-OR that grows with correlated duplicates). ``None``
+        when NO citation carried an effective_confidence (never a fabricated cap).
+
+    HONEST: a citation missing ``derived_from`` forms its own singleton component
+    (never falsely correlated); a citation missing ``effective_confidence`` simply
+    doesn't contribute to the ceiling.
+    """
+    ordinals: list[int] = []
+    seen: set[int] = set()
+    derived_by_ord: dict[int, set[str]] = {}
+    eff_by_ord: dict[int, float] = {}
+    desk_by_ord: dict[int, str] = {}
+    for c in citations:
+        if not isinstance(c, Mapping):
+            continue
+        n = c.get("ordinal")
+        if not isinstance(n, int) or isinstance(n, bool) or n in seen:
+            continue
+        seen.add(n)
+        ordinals.append(n)
+        df = c.get("derived_from")
+        derived_by_ord[n] = (
+            {str(x) for x in df if x is not None and str(x)}
+            if isinstance(df, (list, tuple))
+            else set()
+        )
+        eff = c.get("effective_confidence")
+        if eff is not None:
+            try:
+                eff_by_ord[n] = float(eff)
+            except (TypeError, ValueError):
+                pass
+        desk = c.get("target_id") or c.get("source")
+        if desk:
+            desk_by_ord[n] = str(desk)
+
+    components = _correlated_ordinal_components(ordinals, derived_by_ord)
+
+    rep_effs: list[float] = []
+    correlated_groups: list[dict[str, Any]] = []
+    for comp in components:
+        comp_effs = [eff_by_ord[n] for n in comp if n in eff_by_ord]
+        if comp_effs:
+            rep_effs.append(max(comp_effs))
+        if len(comp) > 1:
+            shared: set[str] = set()
+            for a_i in range(len(comp)):
+                for b_i in range(a_i + 1, len(comp)):
+                    shared |= (
+                        derived_by_ord.get(comp[a_i], set())
+                        & derived_by_ord.get(comp[b_i], set())
+                    )
+            correlated_groups.append(
+                {
+                    "ordinals": comp,
+                    "desks": sorted({desk_by_ord[n] for n in comp if n in desk_by_ord}),
+                    "shared_signals": sorted(shared),
+                }
+            )
+
+    return {
+        "cited_heads": len(ordinals),
+        "independent_components": len(components),
+        "shared_lineage_detected": bool(correlated_groups),
+        "correlated_groups": correlated_groups,
+        "dedup_confidence_ceiling": max(rep_effs) if rep_effs else None,
+    }
 
 
 def build_prompt_module() -> Any:
@@ -741,6 +938,7 @@ async def read_other_analyst_findings(
     target_ids: Sequence[str] | None = None,
     verify_floor: float | None = None,
     include_meta: bool = False,
+    dedupe_heads: bool = False,
 ) -> list[dict[str, Any]]:
     """Fetch ``analyst_outputs`` rows where ``kind='finding'`` for a set
     of source analysts.
@@ -839,8 +1037,17 @@ async def read_other_analyst_findings(
     # DISTINCT ON below is the belt to this suspenders (covers the case where
     # supersession lagged and left >1 non-superseded row). The legacy
     # global-meta path (both filters off) is left BYTE-FOR-BYTE unchanged.
+    #
+    # S2-T4 THEMATIC composition: ``dedupe_heads`` forces this head-fold for a
+    # target-LESS, analyst-dimension read (one head per DESK of a UNIT across ALL
+    # desks) — none of the target/meta filters is set there, so it needs its own
+    # switch. DISTINCT ON (analyst_id, target_id) with a single constant analyst_id
+    # then yields exactly one head per target_id (one per desk).
     dedupe_composition = (
-        target_id is not None or target_ids is not None or include_meta
+        target_id is not None
+        or target_ids is not None
+        or include_meta
+        or dedupe_heads
     )
     if dedupe_composition:
         where.append("f.superseded_by IS NULL")
@@ -1081,6 +1288,30 @@ def _render_region_coverage_block(coverage: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _render_desk_coverage_block(coverage: Sequence[Mapping[str, Any]]) -> str:
+    """Render the appended DESK COVERAGE block for the THEMATIC compose (S2-T4).
+
+    ONLY the GAP desks (mode ``gap`` — no escalation head this window) are listed,
+    so the thematic model NAMES each as an unassessed desk (absence-honest) instead
+    of silently omitting it. Desks WITH a read need no prose nudge — their reads
+    appear as cited blocks. Empty / no-gap coverage → ``""`` (the block is absent;
+    the thematic prompt's desk-gap rule is then inert).
+    """
+    gaps = [c for c in coverage if str(c.get("mode")) == THEMATIC_MODE_GAP]
+    if not gaps:
+        return ""
+    lines = [
+        "",
+        "DESK COVERAGE (absence-honest — these desks have NO escalation read this "
+        "cycle. NAME each as an unassessed gap; do NOT infer or invent its state):",
+    ]
+    for g in gaps:
+        name = str(g.get("desk_name") or g.get("desk_id") or "(unknown desk)")
+        did = str(g.get("desk_id") or "")
+        lines.append(f"- {name} ({did}): no current escalation read.")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # REASON+ACT — direct LLM call (DSPy wrapping deferred to L-176)
 # ---------------------------------------------------------------------------
@@ -1248,16 +1479,26 @@ async def _run(
     deps-passing entry point share a single body.
     """
     # Composition MODE detection — drives the input cap, the system prompt, and
-    # the CITE block. Four flavors:
+    # the CITE block. Five flavors:
     #   * PER-COUNTRY  (``options["target_id"]`` = a country id)     → single-country
     #   * REGION       (``options["target_id"]`` = ``region_<slug>``) → multi-country
-    #   * WORLD        (``options["composition"]``, no target_id)     → multi-country
-    #   * legacy meta  (neither)                                     → global synth
+    #   * THEMATIC     (``options["thematic_dimension"]``, no target) → multi-desk
+    #   * WORLD        (``options["composition"]``, no target/theme)  → multi-region
+    #   * legacy meta  (none)                                        → global synth
+    # THEMATIC and WORLD are BOTH target-less + verify-declaring; the
+    # ``thematic_dimension`` stamp (the actor lifts it from the descriptor's
+    # ``subscription.substrate`` marker) is the discriminator between them.
     _target_opt = options.get("target_id")
     target_scoped = bool(_target_opt)
     region_scoped = target_scoped and str(_target_opt).startswith(REGION_TARGET_PREFIX)
-    world_composition = (not target_scoped) and bool(options.get("composition"))
-    is_composition = target_scoped or world_composition
+    thematic_dim = None if target_scoped else options.get("thematic_dimension")
+    thematic_composition = bool(thematic_dim)
+    world_composition = (
+        (not target_scoped)
+        and bool(options.get("composition"))
+        and not thematic_composition
+    )
+    is_composition = target_scoped or world_composition or thematic_composition
 
     # --- ORIENT --------------------------------------------------------
     # A per-COUNTRY read fuses only its own ~4 unit heads, so the narrow default
@@ -1298,12 +1539,20 @@ async def _run(
     # would still accumulate one live diagnostic head per cycle). Two flavors +
     # the legacy global meta:
     #   * TARGET-SCOPED (``options["target_id"]``) → the per-COUNTRY composition.
+    #   * THEMATIC (``options["thematic_dimension"]``, no target_id) → the thematic
+    #     dimension composition (escalation_composition).
     #   * GLOBAL verify-declaring meta (``options["composition"]``, no target_id)
     #     → the WORLD composition.
     #   * else → the legacy GLOBAL meta (byte-for-byte unchanged, no signature).
     target_scoped = bool(options.get("target_id"))
-    world_composition = (not target_scoped) and bool(options.get("composition"))
-    is_composition = target_scoped or world_composition
+    thematic_dim = None if target_scoped else options.get("thematic_dimension")
+    thematic_composition = bool(thematic_dim)
+    world_composition = (
+        (not target_scoped)
+        and bool(options.get("composition"))
+        and not thematic_composition
+    )
+    is_composition = target_scoped or world_composition or thematic_composition
     # S8-T3 per-head supersession signature (None for the legacy global meta so
     # its behavior is byte-for-byte unchanged). Encodes target_id — see
     # ``_composition_signature``.
@@ -1379,6 +1628,11 @@ async def _run(
         effective_system = _WORLD_COMPOSITION_SYSTEM
     elif target_scoped:
         effective_system = _COMPOSITION_SYSTEM
+    elif thematic_composition:
+        # THEMATIC (escalation) — one head per DESK of a UNIT dimension across ALL
+        # desks; the cross-DESK escalation-worded prompt (checked BEFORE the world
+        # branch so a thematic run never falls into the world-over-regions prompt).
+        effective_system = _THEMATIC_COMPOSITION_SYSTEM
     elif world_composition:
         effective_system = _WORLD_OVER_REGIONS_SYSTEM
     else:
@@ -1407,6 +1661,18 @@ async def _run(
                 region_coverage = [c for c in rc if isinstance(c, Mapping)]
                 break
 
+    # S2-T4 (thematic composition only): the per-desk COVERAGE list READ_SLICE
+    # denormalized onto every input row (``_thematic_coverage``) — which desks had
+    # an escalation head (present) vs none (gap). Read from the first row that
+    # carries it; harmlessly absent on a non-thematic run.
+    desk_coverage: list[Mapping[str, Any]] = []
+    if thematic_composition:
+        for row in sliced:
+            dc = row.get("_thematic_coverage")
+            if isinstance(dc, list):
+                desk_coverage = [c for c in dc if isinstance(c, Mapping)]
+                break
+
     # --- PLAN ----------------------------------------------------------
     user_prompt = _render_user_prompt(
         sliced, contributing_analysts, include_source_ids=is_composition
@@ -1417,6 +1683,10 @@ async def _run(
         _coverage_block = _render_region_coverage_block(region_coverage)
         if _coverage_block:
             user_prompt = user_prompt + "\n" + _coverage_block
+    if desk_coverage:
+        _desk_block = _render_desk_coverage_block(desk_coverage)
+        if _desk_block:
+            user_prompt = user_prompt + "\n" + _desk_block
     steps: list[dict[str, Any]] = [
         {
             "phase": "orient",
@@ -1522,6 +1792,12 @@ async def _run(
             src = src_row.get("analyst_id")
             if src:
                 citation["source"] = str(src)
+            # S2-T4: the cited head's DESK (target_id) — names which desk a clause
+            # rests on (the thematic prompt cites by desk) and keys the cross-desk
+            # correlation guard's audit. Additive; absent on a target-less block.
+            tgt = src_row.get("target_id")
+            if tgt is not None:
+                citation["target_id"] = str(tgt)
             title = src_row.get("title")
             if title is not None:
                 citation["title"] = str(title)
@@ -1554,6 +1830,35 @@ async def _run(
             "citations": len(citations),
             "refs_dropped": dropped_refs,
         })
+
+        # --- CORRELATION GUARD (S2-T4 T7) -----------------------------
+        # Detect cited heads that rest on the SAME underlying wire signal (shared
+        # ``derived_from``) and collapse each correlated cluster to ONE independent
+        # evidence unit, so a signal two sibling desk-units both cite is NOT
+        # double-counted. DE-WEIGHT: cap the fused confidence to the de-duplicated
+        # evidence ceiling (the max over INDEPENDENT components — never a sum). The
+        # whole audit is stamped into ``data.correlation_guard`` for traceability.
+        # Runs for EVERY composition (the machinery is shared with the region/world
+        # cross-target fusions), but the cross-DESK thematic fusion is its target
+        # case. The verify pass enforces the same anti-double-count at grade time.
+        if citations:
+            guard = _correlation_guard(citations)
+            ceiling = guard.get("dedup_confidence_ceiling")
+            capped = False
+            if ceiling is not None and finding.confidence > ceiling + _GUARD_EPSILON:
+                guard["confidence_before"] = finding.confidence
+                finding.confidence = float(ceiling)
+                capped = True
+            guard["confidence_capped"] = capped
+            finding.data["correlation_guard"] = guard
+            steps.append({
+                "phase": "correlation_guard",
+                "kind": "dedupe_shared_lineage",
+                "cited_heads": guard["cited_heads"],
+                "independent_components": guard["independent_components"],
+                "shared_lineage": guard["shared_lineage_detected"],
+                "confidence_capped": capped,
+            })
 
     # --- CONTESTED (world composition only) ---------------------------
     # Resolve the model's inline ``[[contested:<uuid>]]`` markers against the
@@ -1606,6 +1911,27 @@ async def _run(
             "kind": "stamp_coverage",
             "regions": len(region_coverage),
             "gaps": len(region_gaps),
+        })
+
+    # --- DESK COVERAGE (S2-T4, thematic composition only) -------------
+    # Stamp the per-desk MODE (present / gap) so the provenance is HONEST about
+    # which desks had an escalation read. ``desk_gaps`` is the convenience list of
+    # the NAMED absent desks (the ones the DESK COVERAGE prompt block asked the
+    # model to surface as unassessed). Absent on a non-thematic run.
+    if thematic_composition and desk_coverage:
+        finding.data["desk_coverage"] = [dict(c) for c in desk_coverage]
+        desk_gaps = [
+            str(c.get("desk_name") or c.get("desk_id"))
+            for c in desk_coverage
+            if str(c.get("mode")) == THEMATIC_MODE_GAP
+        ]
+        if desk_gaps:
+            finding.data["desk_gaps"] = desk_gaps
+        steps.append({
+            "phase": "desk_coverage",
+            "kind": "stamp_coverage",
+            "desks": len(desk_coverage),
+            "gaps": len(desk_gaps),
         })
 
     # --- NARRATE + PERSIST envelope ------------------------------------
@@ -1724,6 +2050,28 @@ def _declares_verify(descriptor: Any) -> bool:
     if not isinstance(llm, Mapping):
         return False
     return llm.get("verify") is not None
+
+
+def thematic_dimension(descriptor: Any) -> str | None:
+    """The THEMATIC composition UNIT dimension (S2-T4), or ``None``.
+
+    Reads ``subscription.substrate[THEMATIC_DIMENSION_KEY]`` (the open substrate
+    dict, no schema change). A non-empty string ⇒ this meta_findings_synthesizer is
+    a THEMATIC composition: fuse the LATEST verified head of that UNIT analyst_id
+    for EVERY desk into ONE global read (escalation_composition → ``'escalation'``).
+    Absent / empty ⇒ ``None`` → the per-country / region / world / legacy branches
+    are untouched. Presence is the discriminator between the (both target-less +
+    verify-declaring) thematic and world-over-regions branches; the world branch is
+    checked AFTER this one so a thematic marker wins.
+    """
+    sub = getattr(descriptor, "subscription", None)
+    substrate = getattr(sub, "substrate", None) if sub is not None else None
+    if not isinstance(substrate, Mapping):
+        return None
+    raw = substrate.get(THEMATIC_DIMENSION_KEY)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
 
 
 # S2-T2 REGION composition — resolve a region frame → its member country desks.
@@ -1922,6 +2270,114 @@ async def _assemble_world_region_slice(
     return combined
 
 
+# ---------------------------------------------------------------------------
+# S2-T4 THEMATIC composition — desk roster + slice assembly
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_desk_roster(conn) -> list[dict[str, str]]:
+    """Resolve the active g20+watch DESK roster (S2-T4).
+
+    Returns ``[{"desk_id", "desk_name"}, ...]`` for every active head target
+    tagged ``g20`` or ``watch`` (the desks the units fan out to). The thematic
+    compose diffs this authoritative desk set against the desks that actually have
+    an escalation head to decide which desks are HONEST gaps. Tag-based (matches
+    scorecard_producer + the units' subscription) so registering a new desk with
+    the g20/watch tag auto-joins the coverage with zero code change. An empty
+    roster (a pre-tag topology) tells the caller to skip the gap/coverage frame.
+    """
+    rows = await conn.fetch(_DESK_ROSTER_SQL)
+    roster: list[dict[str, str]] = []
+    for r in rows:
+        did = str(r["descriptor_id"])
+        name = r["name"]
+        roster.append({"desk_id": did, "desk_name": str(name) if name else did})
+    return roster
+
+
+async def _assemble_thematic_unit_slice(
+    conn,
+    *,
+    unit_analyst_ids: Sequence[str],
+    time_window_hours: int,
+    limit: int,
+    verify_floor: float | None,
+) -> list[dict[str, Any]]:
+    """S2-T4 — assemble the THEMATIC composition slice: ONE verified head per DESK
+    of a UNIT analyst dimension, across ALL desks, with desk-coverage gaps.
+
+    Reads the latest verify-floored head of the ``escalation`` unit for EVERY desk
+    (``dedupe_heads=True`` folds superseded prior-cycle rows + ``DISTINCT ON
+    (analyst_id, target_id)`` yields one head per desk; ``include_meta=False`` — the
+    unit is a FIRST-ORDER finding). Then diffs the g20+watch roster:
+
+      * a desk WITH a head feeds the compose (mode ``present``);
+      * a desk with NO head is a GAP (mode ``gap``, 0 inputs) — NAMED, not dropped.
+
+    Every returned row is stamped with ``_desk_id`` + ``_desk_mode`` and — so the
+    target-LESS thematic ``_run`` (which has NO DB access) can NAME any gap desk in
+    the prose — the full per-desk coverage list is denormalized onto EVERY returned
+    row as ``_thematic_coverage``. These synthetic ``_``-prefixed keys are ephemeral
+    input-row annotations (the orient/render/cite paths read only their own known
+    keys; the persisted finding is built fresh in ``_coerce_finding``).
+
+    A read that surfaces ZERO escalation heads returns ``[]``; the actor then NOOPs
+    the run (no finding written) — the standard empty-slice contract.
+    """
+    rows = await read_other_analyst_findings(
+        conn,
+        analyst_ids=list(unit_analyst_ids),
+        time_window_hours=time_window_hours,
+        limit=limit,
+        target_id=None,
+        target_ids=None,
+        verify_floor=verify_floor,
+        include_meta=False,     # the escalation UNIT is a FIRST-ORDER finding
+        dedupe_heads=True,      # one head per (analyst,target) desk, superseded folded
+    )
+    # Which desks actually have a head (one per desk after DISTINCT ON).
+    desks_with_head: set[str] = set()
+    for r in rows:
+        tid = str(r.get("target_id") or "")
+        r["_desk_id"] = tid
+        r["_desk_mode"] = THEMATIC_MODE_PRESENT
+        if tid:
+            desks_with_head.add(tid)
+
+    if not rows:
+        # No heads at all → empty slice → the actor NOOPs (no coverage to stamp).
+        return rows
+
+    roster = await _resolve_desk_roster(conn)
+    coverage: list[dict[str, Any]] = []
+    for desk in roster:
+        did = desk["desk_id"]
+        dname = desk["desk_name"]
+        if did in desks_with_head:
+            coverage.append(
+                {
+                    "desk_id": did,
+                    "desk_name": dname,
+                    "mode": THEMATIC_MODE_PRESENT,
+                    "input_count": 1,
+                }
+            )
+        else:
+            coverage.append(
+                {
+                    "desk_id": did,
+                    "desk_name": dname,
+                    "mode": THEMATIC_MODE_GAP,
+                    "input_count": 0,
+                }
+            )
+
+    # Denormalize coverage onto every row so the DB-less thematic ``_run`` reads it.
+    for row in rows:
+        row["_thematic_coverage"] = coverage
+    return rows
+
+
 async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     conn,  # type: ignore[no-untyped-def]
     *,
@@ -2011,6 +2467,22 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             include_meta=True,
         )
 
+    # THEMATIC branch (S2-T4) — a target-LESS run whose descriptor carries a
+    # ``subscription.substrate.thematic_dimension`` marker. Fuses ONE verified head
+    # per DESK of that UNIT analyst dimension across ALL desks (post-supersession,
+    # verify-floored), NAMING any desk with no head as a gap. Checked BEFORE the
+    # WORLD branch (both are target-less + verify-declaring) so the marker's
+    # presence is the discriminator; an early return leaves the world / per-country
+    # / legacy switch below byte-for-byte. ``ids`` = other_analysts (the unit).
+    if not target_filter and thematic_dimension(descriptor):
+        return await _assemble_thematic_unit_slice(
+            conn,
+            unit_analyst_ids=ids,
+            time_window_hours=time_window_hours,
+            limit=limit,
+            verify_floor=_resolve_verify_floor(descriptor),
+        )
+
     # WORLD branch (S2-T3) — the target-LESS verify-declaring global meta = the
     # world_assessor. It now composes the region_composition heads (degrading a
     # headless region to its country reads, naming a fully-absent region as a
@@ -2079,21 +2551,30 @@ __all__ = [
     "REGION_MODE_REGION",
     "REGION_TARGET_PREFIX",
     "SCHEMA_VERSION",
+    "THEMATIC_DIMENSION_KEY",
+    "THEMATIC_MODE_GAP",
+    "THEMATIC_MODE_PRESENT",
     "VERIFY_FLOOR_ENV",
     "WORLD_TARGET_TOKEN",
     "CONTENTION_GROUP_LIMIT",
     "CONTENTION_VALUES_PER_GROUP",
     "_COMPOSITION_SYSTEM",
+    "_THEMATIC_COMPOSITION_SYSTEM",
     "_WORLD_COMPOSITION_SYSTEM",
     "_WORLD_OVER_REGIONS_SYSTEM",
+    "_assemble_thematic_unit_slice",
     "_assemble_world_region_slice",
     "_composition_signature",
+    "_correlated_ordinal_components",
+    "_correlation_guard",
     "_declares_verify",
     "_extract_contested_markers",
     "_extract_ref_markers",
     "_is_region_target",
     "_render_contested_block",
+    "_render_desk_coverage_block",
     "_render_region_coverage_block",
+    "_resolve_desk_roster",
     "_resolve_other_analyst_ids",
     "_resolve_region_member_target_ids",
     "_resolve_region_roster",
@@ -2103,4 +2584,5 @@ __all__ = [
     "read_open_contention",
     "read_other_analyst_findings",
     "run_method",
+    "thematic_dimension",
 ]
