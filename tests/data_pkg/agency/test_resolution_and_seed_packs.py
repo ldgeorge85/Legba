@@ -31,6 +31,8 @@ _SEED_PACKS = [
     # registry history, no longer registered or asserted as a seed pack.)
     ("action_pack_substrate_read.yaml", "substrate_read",
      ["search_signals", "query_facts", "inspect_entity", "vector_search",
+      # S5-T4 — RAG over the curated Lane-4 reference corpora.
+      "search_context",
       "query_nexuses", "query_hypotheses", "get_timeline", "compare_targets",
       # #99 — graph query tools over the reified nexus property graph.
       "query_paths", "find_proxy_chains", "query_brokers",

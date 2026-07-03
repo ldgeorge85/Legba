@@ -99,6 +99,24 @@ class _RecorderPort:
         self.calls.append(("vector_search", {"query": query}))
         return {"rows": [], "refs": []}
 
+    async def search_context(self, *, query, corpus=None, country=None, k=6):
+        self.calls.append(("search_context", {
+            "query": query, "corpus": corpus, "country": country, "k": k,
+        }))
+        return {
+            "rows": [{
+                "chunk_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+                "corpus": corpus or "world_context",
+                "doc_id": "brief-1", "title": "Prior", "section": "S1",
+                "countries": [country] if country else [],
+                "source_url": "https://example.invalid/brief",
+                "effective_date": "2026-01-01", "text": "a curated prior",
+                "score": 0.88,
+            }],
+            "refs": ["3f2504e0-4f89-41d3-9a0c-0305e82c3301"],
+            "count": 1,
+        }
+
 
 def _binding(
     pool, pack: ActionPack, *, port=None, emit=None,
@@ -136,6 +154,52 @@ async def _events(conn, *, requested_by: str):
 # ---------------------------------------------------------------------------
 # A-3a — the substrate_read binding
 # ---------------------------------------------------------------------------
+
+
+async def test_search_context_handler_returns_chunks_no_db():
+    """S5-T4 handler surface: ``search_context_tool`` reads the port from the
+    ToolContext, forwards corpus/country/k, and returns the chunk envelope as a
+    completed ToolResult. Pure-unit (no governor / DB) — the handler dispatch,
+    not the gate."""
+    from legba.data.analysts.agency.substrate_read import search_context_tool
+    from legba.data.analysts.agency.tools import ToolCall
+
+    port = _RecorderPort()
+    pack = _load_pack("action_pack_substrate_read.yaml")
+    call = ToolCall(
+        pack_id=SUBSTRATE_READ_PACK_ID, tool_name="search_context",
+        args={"query": "iran succession", "corpus": "world_context",
+              "country": "ir", "k": 4},
+    )
+    result = await search_context_tool(
+        call, pack, ToolContext(substrate=port),
+    )
+    assert result.status == "completed"
+    assert result.output["count"] == 1
+    assert result.output["rows"][0]["corpus"] == "world_context"
+    assert result.output["refs"] == ["3f2504e0-4f89-41d3-9a0c-0305e82c3301"]
+    # The port received the coerced args.
+    assert port.calls[-1] == (
+        "search_context",
+        {"query": "iran succession", "corpus": "world_context",
+         "country": "ir", "k": 4},
+    )
+
+
+async def test_search_context_handler_no_port_fails_visibly():
+    """No SubstrateQueryPort wired → a failed ToolResult naming the gap, never a
+    silent empty result."""
+    from legba.data.analysts.agency.substrate_read import search_context_tool
+    from legba.data.analysts.agency.tools import ToolCall
+
+    pack = _load_pack("action_pack_substrate_read.yaml")
+    call = ToolCall(
+        pack_id=SUBSTRATE_READ_PACK_ID, tool_name="search_context",
+        args={"query": "q"},
+    )
+    result = await search_context_tool(call, pack, ToolContext(substrate=None))
+    assert result.status == "failed"
+    assert "search_context" in (result.error or "")
 
 
 async def test_binding_governed_read_tool_ledgers(pool):

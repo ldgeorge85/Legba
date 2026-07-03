@@ -255,6 +255,15 @@ class SubstrateQueryPort(Protocol):
         limit: int = 10,
     ) -> dict[str, Any]: ...
 
+    async def search_context(
+        self,
+        *,
+        query: str,
+        corpus: str | None = None,
+        country: str | None = None,
+        k: int = 6,
+    ) -> dict[str, Any]: ...
+
     async def query_nexuses(
         self,
         *,
@@ -453,6 +462,7 @@ Available tools:
   - query_facts([subject], [predicate], [value], [limit]) — fact store; at least one of subject/predicate/value is required.
   - inspect_entity(name) — canonical entity profile + recent facts.
   - vector_search(query, [limit]) — semantic similarity over signal embeddings.
+  - search_context(query, [corpus], [country], [k]) — semantic search over the CURATED reference corpora (world_context = country/topic priors + doctrine summaries; tradecraft = analytic standards / SAT handbooks). Returns cited chunks (corpus, doc_id, title, section, countries, source_url, effective_date). corpus narrows to one of world_context / tradecraft; country filters to chunks tagged for that country. This is BACKGROUND / method knowledge, NOT live substrate — use it to ground an assessment or recall a technique, not as current evidence.
   - query_nexuses([subject], [object], [rel_type], [polarity], [limit]) — open signed/typed relationships (A->[intermediary]->B; polarity +1 supportive / -1 antagonistic / 0 neutral/dual-use).
   - query_hypotheses([target_id], [status], [situation_id], [limit]) — competing-hypothesis (ACH) rows (thesis vs counter_thesis, evidence balance, status: active / confirmed / refuted).
   - get_timeline(subject, [limit]) — time-ordered merge of current facts and recent signals about one subject.
@@ -681,6 +691,7 @@ _KNOWN_TOOLS = {
     "query_facts",
     "inspect_entity",
     "vector_search",
+    "search_context",
     "query_nexuses",
     "query_hypotheses",
     "get_timeline",
@@ -771,6 +782,13 @@ async def _dispatch_tool(
             return await port.vector_search(
                 query=str(args.get("query", "")),
                 limit=int(args.get("limit", 10)),
+            )
+        if name == "search_context":
+            return await port.search_context(
+                query=str(args.get("query", "")),
+                corpus=args.get("corpus"),
+                country=args.get("country"),
+                k=int(args.get("k", 6)),
             )
         if name == "query_nexuses":
             polarity = args.get("polarity")

@@ -47,6 +47,10 @@ SUBSTRATE_READ_TOOLS = (
     "query_facts",
     "inspect_entity",
     "vector_search",
+    # S5-T4 — RAG over the curated Lane-4 reference corpora (world_context /
+    # tradecraft) via the port embedder (S5-T1) + S5-T2 collections. Read-only
+    # BACKGROUND/method knowledge, not live substrate.
+    "search_context",
     "query_nexuses",
     "query_hypotheses",
     "get_timeline",
@@ -104,6 +108,13 @@ async def _call_port(
             out = await port.vector_search(
                 query=str(args.get("query", "")),
                 limit=int(args.get("limit", 10)),
+            )
+        elif name == "search_context":
+            out = await port.search_context(
+                query=str(args.get("query", "")),
+                corpus=args.get("corpus"),
+                country=args.get("country"),
+                k=int(args.get("k", 6)),
             )
         elif name == "query_nexuses":
             out = await port.query_nexuses(
@@ -231,6 +242,12 @@ async def vector_search_tool(
     return await _call_port(call, ctx, "vector_search")
 
 
+async def search_context_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "search_context")
+
+
 async def query_nexuses_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
@@ -309,6 +326,8 @@ def register_substrate_read_tools(registry: ToolRegistry) -> None:
     registry.register("query_facts", query_facts_tool)
     registry.register("inspect_entity", inspect_entity_tool)
     registry.register("vector_search", vector_search_tool)
+    # S5-T4 — RAG over the curated reference corpora.
+    registry.register("search_context", search_context_tool)
     registry.register("query_nexuses", query_nexuses_tool)
     registry.register("query_hypotheses", query_hypotheses_tool)
     registry.register("get_timeline", get_timeline_tool)
@@ -334,6 +353,7 @@ __all__ = [
     "query_facts_tool",
     "inspect_entity_tool",
     "vector_search_tool",
+    "search_context_tool",
     "query_nexuses_tool",
     "query_hypotheses_tool",
     "get_timeline_tool",

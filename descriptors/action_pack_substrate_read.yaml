@@ -38,6 +38,13 @@ tools:
     config: {}
   - name: vector_search
     config: {}
+  # S5-T4 — RAG over the curated Lane-4 reference corpora (world_context =
+  # country/topic priors + doctrine summaries; tradecraft = analytic standards /
+  # SAT handbooks). Embeds the query through the port embedder (S5-T1) and
+  # cosine-searches the S5-T2 collections; returns cited chunks with payload
+  # metadata. Read-only; BACKGROUND/method knowledge, not live substrate.
+  - name: search_context
+    config: {}
   # S4 (Phase 1) richer readers — the agentic assessors investigate rather than
   # one-shot: open signed/typed nexuses, ACH hypothesis rows, a facts∪signals
   # timeline, and a per-target substrate rollup.
