@@ -1941,20 +1941,31 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # block the compose (a contention-table error just omits the
                     # block).
                     options["composition"] = True
-                    try:
-                        from ..data.analysts.meta_findings_synthesizer import (
-                            read_open_contention,
-                        )
+                    from ..data.analysts.meta_findings_synthesizer import (
+                        read_open_contention,
+                        thematic_dimension as _thematic_dimension,
+                    )
 
-                        options["contention_groups"] = await read_open_contention(
-                            conn
-                        )
-                    except Exception as exc:  # pragma: no cover — best-effort
-                        logger.warning(
-                            "dapr_actors.analyst.contention_read.failed "
-                            "actor_id=%s run_id=%s err=%s",
-                            actor_id, run_id, exc,
-                        )
+                    # S2-T4: a THEMATIC composition (escalation_composition) is ALSO
+                    # target-less + verify-declaring, so it reaches this branch. Its
+                    # ``subscription.substrate.thematic_dimension`` marker routes the
+                    # kind to the thematic prompt/READ_SLICE (one head per desk of a
+                    # UNIT dimension). Stamp it into options; the world-only CONTESTED
+                    # FACTS read (a global fact-dispute enrichment) does NOT apply.
+                    _theme = _thematic_dimension(deps_bundle.descriptor)
+                    if _theme:
+                        options["thematic_dimension"] = _theme
+                    else:
+                        try:
+                            options["contention_groups"] = (
+                                await read_open_contention(conn)
+                            )
+                        except Exception as exc:  # pragma: no cover — best-effort
+                            logger.warning(
+                                "dapr_actors.analyst.contention_read.failed "
+                                "actor_id=%s run_id=%s err=%s",
+                                actor_id, run_id, exc,
+                            )
                 # Per-run options pass-through — the consult_on_demand kind
                 # reads ``options["sub_handler"]`` (deterministic) and other
                 # caller-supplied parameters through this channel.

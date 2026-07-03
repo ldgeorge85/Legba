@@ -1,0 +1,146 @@
+# S2-T4 — THEMATIC composition pilot: escalation_composition.
+#
+# A composition that fuses ONE dimension — the `escalation` UNIT — ACROSS every
+# g20+watch desk into ONE global escalation read:
+#
+#     escalation unit head (per desk)  →  ONE global escalation read
+#
+# Unlike the country/region/world compositions (which fuse along the TARGET axis
+# — one country's units, one region's countries, the world's regions), this
+# composition fuses along the ANALYST DIMENSION: it reads the latest verified
+# `escalation`-unit HEAD for EVERY desk (analyst_id='escalation', one head per
+# desk, post-supersession) and synthesizes a cross-desk thematic escalation
+# picture. It is the SAME meta_findings_synthesizer kind (no new Python kind) —
+# the thematic behavior is descriptor + the S2-T4 READ_SLICE thematic branch.
+#
+# ── why this is a target-LESS (global) run ──────────────────────────────────
+# There is NO `subscription.targets` block, so `_cadence_targets` fires ONE
+# global worker with `target_filter=None` (like world_assessor + the legacy
+# meta_synthesizer). The read is keyed by the ANALYST dimension, not a target.
+#
+# ── the THEMATIC discriminator (subscription.substrate.thematic_dimension) ───
+# A target-less meta_findings_synthesizer that DECLARES `method.llm.verify` would
+# otherwise hit the WORLD-over-regions READ_SLICE branch (world_assessor is also
+# target-less + verify-declaring). The `subscription.substrate.thematic_dimension`
+# marker is the SOLE discriminator: its PRESENCE routes this run to the thematic
+# branch (one head per desk of the named UNIT dimension), checked BEFORE the world
+# branch. Its value names the UNIT analyst_id fused (`escalation`). The actor
+# stamps it into `options["thematic_dimension"]` so the kind selects the thematic
+# prompt; the per-country / world / legacy paths never see the marker.
+#
+# ── degrade-not-drop (honesty) ──────────────────────────────────────────────
+# READ_SLICE diffs the authoritative g20+watch desk roster against the desks that
+# actually have an escalation head this window; a desk with NO head is NAMED as a
+# gap in the appended DESK COVERAGE block (never silently missing). A run that
+# surfaces ZERO escalation heads returns [] → the actor NOOPs (the standard
+# empty-slice contract).
+#
+# ── the T7 CORRELATION GUARD (cross-desk double-count protection) ────────────
+# Sibling desk-units can rest on the SAME underlying wire signal (a shared hop
+# down the lineage), so fusing two desks' escalation heads that cite one shared
+# signal must NOT double-count that evidence. At synth time the kind detects cited
+# heads whose `derived_from` sets intersect (union-find over the shared lineage),
+# collapses each correlated cluster to ONE independent evidence unit, computes a
+# DE-DUPLICATED evidence ceiling (max over INDEPENDENT components — never a sum),
+# CAPS the fused confidence to it, and stamps the whole audit into
+# `data.correlation_guard`. The composition faithfulness verify (below) enforces
+# the same anti-double-counting at grade time via the shared T7 floor.
+#
+# ── supersession (per S8-T3) ────────────────────────────────────────────────
+# This run WRITES its finding target-less (target_id NULL), so the composition
+# supersession signature is `composition:escalation_composition:world` — a fresh
+# global escalation head supersedes the prior one, independent of every other
+# composition. The read-side head-fold is the belt.
+#
+# ── verify OPT-IN ───────────────────────────────────────────────────────────
+# `method.llm.verify` PRESENCE is the discriminator the verify dispatch keys on:
+# the actor fires the faithfulness verify for THIS composition (the generalized
+# pass recognizes the [[ref:N]] → desk-read bridge and hands the judge each cited
+# desk read's text as the evidence for each composed clause), including the shared
+# T7 anti-double-counting + hedge-laundering cap.
+
+identity:
+  id: escalation_composition
+  name: Global Escalation Composition (escalation-unit heads across all desks → one read)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: meta_findings_synthesizer
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: s2_t4
+
+subscription:
+  # NO `targets` block ⇒ ONE global run (`target_filter=None`). The read is keyed
+  # by the ANALYST dimension (`escalation`), not by any target.
+  #
+  # The synth reads the OUTPUTS of the `escalation` unit (its per-desk finding
+  # heads), not raw signals. READ_SLICE resolves this set from other_analysts[].id
+  # and — because the `thematic_dimension` marker is present — restricts to the
+  # LATEST (post-supersession, one-per-desk) verify-floored escalation head for
+  # EVERY desk. 24h window: the escalation unit fires 2x/day, so a 24h look-back
+  # holds the freshest head per desk.
+  other_analysts:
+    - id: escalation
+      data_types: [finding]
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+    # THEMATIC discriminator (S2-T4). PRESENCE routes this target-less, verify-
+    # declaring run to the thematic READ_SLICE branch (one head per desk of the
+    # named UNIT dimension across ALL desks) instead of the world-over-regions
+    # branch. Value = the UNIT analyst_id this composition fuses.
+    thematic_dimension: escalation
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # Runtime dispatch is on identity.kind (meta_findings_synthesizer); method.kind
+  # only needs to be a valid enum. llm_planner matches the single-turn
+  # chat_complete shape the kind uses (same as analyst_region_composition.yaml).
+  kind: llm_planner
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  llm:
+    # MODEL POLICY (operator): synthesis on the CORE plane via a stack_ref ($0).
+    # NEVER hardcode a model — keeping it a stack_ref makes switching later a
+    # one-line descriptor PUT.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # S2-T4: faithfulness VERIFY judge over the THEMATIC composition itself.
+    # Currently the SAME core reasoning model that writes the units + the other
+    # compositions — NOT a cross-family judge (the same TEMPORARY limitation the
+    # country/region/world compositions carry; a dedicated reasoning judge is
+    # planned). This verify block's PRESENCE (not target_id) is the OPT-IN the
+    # dispatch keys on. The generalized verify pass recognizes the composition's
+    # [[ref:N]] → desk-read bridge and hands the judge each cited desk read's text
+    # as the evidence for each composed clause; it also enforces the shared T7
+    # anti-double-counting + hedge-laundering cap. Gated by LEGBA_VERIFY_LLM_JUDGE;
+    # soft-fails to the deterministic floor. Model stays a switchable stack_ref.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # STAGGERED AFTER the escalation unit fan-out. The escalation unit fires 2x/day
+  # at 07:00 / 19:00 UTC; this thematic compose fires at :30 past 08 / 20 UTC —
+  # AFTER the freshest per-desk escalation heads have landed (a ~90m margin for
+  # the fan-out + verify to complete).
+  fallback_schedule: "30 8,20 * * *"
+  # 11h — below the 12h interval, stamped per-analyst at completion. A cooldown ==
+  # the 12h interval would land past the next fire and silently halve the cadence
+  # (12h→24h). 11h keeps a 1h margin (matches the units + the other compositions).
+  cooldown_seconds: 39600
+
+outputs: []
