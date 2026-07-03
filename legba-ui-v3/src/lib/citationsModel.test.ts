@@ -94,7 +94,16 @@ describe('extractCitations', () => {
       signalId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
       title: 'Gulf tension sub-claim',
       source: undefined,
+      // P4/S7-T3 hover-card fields — captured only when the payload carries them.
+      evidenceText: 'Naval movements observed near the strait.',
+      effectiveConfidence: 0.62,
+      derivedFrom: ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'],
     })
+    // The second composition citation carries none of the hover-card fields, so
+    // they stay ABSENT (never fabricated to 0 / '').
+    expect(cites[1].evidenceText).toBeUndefined()
+    expect(cites[1].effectiveConfidence).toBeUndefined()
+    expect(cites[1].derivedFrom).toBeUndefined()
     expect(cites[1].refKind).toBe('finding')
     expect(cites[1].refId).toBe('bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb')
   })

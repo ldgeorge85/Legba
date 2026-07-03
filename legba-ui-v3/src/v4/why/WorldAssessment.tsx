@@ -1,42 +1,46 @@
 /**
- * WorldAssessment — the world_assessor one-pager surface (v4 / The Why).
+ * WorldAssessment — the reading surface for a composition (v4 / The Why).
  *
- * The `world_assessor` analyst (registered separately, Wave-2 B1) emits Findings
- * with `analyst_id === 'world_assessor'`; every ~6h it synthesizes a single
- * narrative one-pager. We read the findings feed, filter client-side to that
- * analyst (the `analyst_id` query param may not be honoured everywhere), pick the
- * newest by `produced_at`, project it into the shared {@link WorldAssessment}
- * shape, and render it as a calm centered reading column with a dark-styled
- * markdown body.
+ * WORLD mode (no selection): the `world_assessor` one-pager — the composed,
+ * verified world view — as a calm centered reading column.
  *
- * Markdown: react-markdown + remark-gfm, themed via an explicit `components` map
- * (the project does NOT enable @tailwindcss/typography, so `prose` classes would
- * be inert — we style each element directly instead).
+ * DESK mode (a country selected): the desk INTELLIGENCE CARD (S7-T3) — reads
+ * top-to-bottom as a finished product: banded score + delta → BLUF → the
+ * verified composition (expanded) → the per-desk bounded UNIT cards → related →
+ * history (older/superseded runs collapsed).
+ *
+ * Both render markdown + citations through the shared reading kit (`CitedProse`
+ * inside `CitedAssessment`, one verification dialect via `VerdictBadge`), and
+ * both offer a client-side Download (.md / print→PDF).
  */
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import type { Components } from 'react-markdown'
 import { formatDistanceToNow } from 'date-fns'
-import { Globe } from 'lucide-react'
+import { Globe, Download, Printer } from 'lucide-react'
 import { apiGet } from '@/lib/api'
 import { selectRow, useSelection } from '@/state/selection'
 import type { WorldAssessment as WorldAssessmentT } from '@/v4/why/types'
 import { CountryUnitsAssessment } from '@/v4/why/CountryUnitsAssessment'
 import CitedAssessment from '@/components/inspector/CitedAssessment'
 import { extractCitations, type Citation } from '@/lib/citationsModel'
+import { stripCitationMarkers, stripMarkdown, unwrapEnvelope } from '@/lib/proseText'
+import { downloadReportMarkdown, printReportPdf, type ReportDoc } from '@/lib/reportDownload'
+
+// Re-export the shared markdown map from its own module so existing importers of
+// `MD_COMPONENTS` from this path keep working (it moved to break an import cycle).
+export { MD_COMPONENTS } from '@/lib/markdownComponents'
 
 const ASSESSOR_ID = 'world_assessor'
 // P3 — the per-country VERIFIED composition (the product for a selected country).
-// Replaces the RETIRED `country_assessor` monolith, whose output is stale/undated.
 const COUNTRY_COMPOSITION_ID = 'country_composition'
 
-/** Minimal view of a `/findings` row — only the fields we project from. The
- *  feed may also carry a `payload` alias for `data`, so we accept either. */
+/** Minimal view of a `/findings` row — only the fields we project from. */
 interface FindingRow {
   id: string
   title?: string | null
   body?: string | null
   severity?: string | null
+  confidence?: number | null
   analyst_id?: string | null
   produced_at: string
   data?: unknown
@@ -51,12 +55,13 @@ interface FindingsResponse {
 const SEVERITY_HEX: Record<string, string> = {
   critical: '#ff5555',
   high: '#ff9955',
+  elevated: '#ffbb55',
+  moderate: '#ffdd55',
   medium: '#ffdd55',
   low: '#55ff55',
 }
 
-/** Coerce the finding's payload into a plain object, whether it arrives as an
- *  already-parsed dict, a JSON string, or under `data` / `payload`. */
+/** Coerce the finding's payload into a plain object. */
 function asPayload(row: FindingRow): Record<string, unknown> {
   const raw = row.data ?? row.payload
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>
@@ -65,14 +70,12 @@ function asPayload(row: FindingRow): Record<string, unknown> {
       const parsed = JSON.parse(raw)
       if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>
     } catch {
-      // Not JSON — treat the string itself as the body below.
       return { body: raw }
     }
   }
   return {}
 }
 
-/** Pick the first non-empty string among the candidates. */
 function firstString(...vals: unknown[]): string {
   for (const v of vals) {
     if (typeof v === 'string' && v.trim() !== '') return v
@@ -80,110 +83,94 @@ function firstString(...vals: unknown[]): string {
   return ''
 }
 
-/** WorldAssessment + the composition's citation list (extracted from the
- *  finding's `data.citations` envelope so the one-pager can render CITED prose). */
-type ProjectedAssessment = WorldAssessmentT & { citations: Citation[] }
+function firstNumber(...vals: unknown[]): number | null {
+  for (const v of vals) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+  }
+  return null
+}
 
-/** Project the newest world_assessor finding into the WorldAssessment shape. */
+/** WorldAssessment + the composition's citations + its confidence. */
+type ProjectedAssessment = WorldAssessmentT & {
+  citations: Citation[]
+  confidence: number | null
+}
+
+/** Project a findings row into the WorldAssessment shape. */
 function projectAssessment(row: FindingRow): ProjectedAssessment {
   const payload = asPayload(row)
   return {
     id: row.id,
     title: firstString(payload.title, row.title) || 'World Assessment',
-    summary: firstString(
-      payload.summary,
-      payload.body,
-      payload.assessment,
-      payload.text,
-      row.body,
-    ),
+    summary: firstString(payload.summary, payload.body, payload.assessment, payload.text, row.body),
     severity: row.severity ?? undefined,
     producedAt: Date.parse(row.produced_at),
-    // P1-T3 — the composition cites sub-claim findings with `[[ref:N]]` ordinal
-    // markers; the list lives at `<envelope>.data.citations`. Empty for an
-    // uncited/legacy row (the card then renders prose plainly, no fabrication).
     citations: extractCitations(payload),
+    confidence: firstNumber(payload.confidence, row.confidence),
   }
 }
 
-/** Dark-theme element map for the markdown body (replaces the absent `prose`).
- *  Exported so the Inspector renders finding/assessment reports identically. */
-export const MD_COMPONENTS: Components = {
-  h1: ({ children }) => (
-    <h1 className="mb-3 mt-5 text-lg font-semibold text-slate-100 first:mt-0">{children}</h1>
-  ),
-  h2: ({ children }) => (
-    <h2 className="mb-2 mt-5 text-base font-semibold text-slate-100 first:mt-0">{children}</h2>
-  ),
-  h3: ({ children }) => (
-    <h3 className="mb-2 mt-4 text-sm font-semibold text-slate-200 first:mt-0">{children}</h3>
-  ),
-  p: ({ children }) => <p className="mb-3 leading-relaxed text-slate-300">{children}</p>,
-  ul: ({ children }) => (
-    <ul className="mb-3 list-disc space-y-1 pl-5 text-slate-300 marker:text-slate-600">
-      {children}
-    </ul>
-  ),
-  ol: ({ children }) => (
-    <ol className="mb-3 list-decimal space-y-1 pl-5 text-slate-300 marker:text-slate-600">
-      {children}
-    </ol>
-  ),
-  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-  a: ({ children, href }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="text-accent-info underline decoration-dotted hover:text-blue-300"
-    >
-      {children}
-    </a>
-  ),
-  strong: ({ children }) => <strong className="font-semibold text-slate-100">{children}</strong>,
-  em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
-  blockquote: ({ children }) => (
-    <blockquote className="mb-3 border-l-2 border-slate-700 pl-3 text-slate-400 italic">
-      {children}
-    </blockquote>
-  ),
-  code: ({ children }) => (
-    <code className="rounded bg-surface-50 px-1 py-0.5 font-mono text-[0.85em] text-slate-200">
-      {children}
-    </code>
-  ),
-  pre: ({ children }) => (
-    <pre className="mb-3 overflow-auto rounded border border-slate-800 bg-surface-300 p-3 text-xs text-slate-200">
-      {children}
-    </pre>
-  ),
-  hr: () => <hr className="my-4 border-slate-800" />,
-  table: ({ children }) => (
-    <div className="mb-3 overflow-auto">
-      <table className="w-full border-collapse text-sm text-slate-300">{children}</table>
-    </div>
-  ),
-  th: ({ children }) => (
-    <th className="border border-slate-800 bg-surface-100 px-2 py-1 text-left font-medium text-slate-200">
-      {children}
-    </th>
-  ),
-  td: ({ children }) => (
-    <td className="border border-slate-800 px-2 py-1 align-top">{children}</td>
-  ),
+/** The one-line BLUF: the first sentence of the body, markdown + citation
+ *  markers stripped. Honest empty when the body has none. */
+function extractBluf(md: string): string {
+  const plain = stripCitationMarkers(stripMarkdown(unwrapEnvelope(md ?? '')))
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!plain) return ''
+  const m = plain.match(/^.*?[.!?](\s|$)/)
+  const first = (m ? m[0] : plain).trim()
+  return first.length > 260 ? `${first.slice(0, 260)}…` : first
 }
 
-/** Small severity pill, colored from the v4 ramp. */
-function SeverityChip({ severity }: { severity: string }) {
-  const hex = SEVERITY_HEX[severity] ?? '#94a3b8' // slate-400 fallback
+/** Build the `.md` / print `.pdf` ReportDoc from an assessment. */
+function toReportDoc(a: ProjectedAssessment, scope: string): ReportDoc {
+  return {
+    title: a.title,
+    body: a.summary,
+    producedAt: Number.isFinite(a.producedAt) ? new Date(a.producedAt).toLocaleString() : null,
+    severity: a.severity ?? null,
+    scope,
+    citations: a.citations,
+  }
+}
+
+/** Severity → a muted banded headline (never the loud severity ramp itself). */
+const SEVERITY_BAND: Record<string, { label: string; tone: string }> = {
+  critical: { label: 'Critical', tone: 'border-red-800 bg-red-950/50 text-red-200' },
+  high: { label: 'High', tone: 'border-rose-800 bg-rose-950/40 text-rose-200' },
+  elevated: { label: 'Elevated', tone: 'border-orange-800 bg-orange-950/40 text-orange-200' },
+  moderate: { label: 'Moderate', tone: 'border-amber-800 bg-amber-950/40 text-amber-200' },
+  medium: { label: 'Moderate', tone: 'border-amber-800 bg-amber-950/40 text-amber-200' },
+  low: { label: 'Low', tone: 'border-emerald-800 bg-emerald-950/40 text-emerald-200' },
+}
+
+/** The Download .md / print→PDF affordance for the current report. */
+function DownloadControls({ doc }: { doc: ReportDoc }) {
   return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-surface-100 px-2 py-0.5 text-[11px] leading-none text-slate-300"
-      title={`severity: ${severity}`}
-    >
-      <span aria-hidden className="h-2 w-2 rounded-full" style={{ backgroundColor: hex }} />
-      {severity}
-    </span>
+    <div className="flex shrink-0 items-center gap-1" data-testid="report-download-controls">
+      <button
+        type="button"
+        onClick={() => downloadReportMarkdown(doc)}
+        className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
+        data-testid="report-download-md"
+        title="Download this report as Markdown (.md)"
+      >
+        <Download className="h-3.5 w-3.5" aria-hidden />
+        .md
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (!printReportPdf(doc)) downloadReportMarkdown(doc)
+        }}
+        className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
+        data-testid="report-download-pdf"
+        title="Print → Save as PDF (falls back to .md if pop-ups are blocked)"
+      >
+        <Printer className="h-3.5 w-3.5" aria-hidden />
+        PDF
+      </button>
+    </div>
   )
 }
 
@@ -197,9 +184,6 @@ function LoadingSkeleton() {
         <div className="h-3 w-11/12 rounded bg-surface-50" />
         <div className="h-3 w-full rounded bg-surface-50" />
         <div className="h-3 w-4/6 rounded bg-surface-50" />
-        <div className="mt-5 h-3 w-full rounded bg-surface-50" />
-        <div className="h-3 w-10/12 rounded bg-surface-50" />
-        <div className="h-3 w-3/4 rounded bg-surface-50" />
       </div>
     </div>
   )
@@ -225,12 +209,175 @@ function EmptyState({ targetId }: { targetId?: string | null }) {
   )
 }
 
+/**
+ * DESK INTELLIGENCE CARD — the product read for a selected country. Banded score
+ * + delta → BLUF → composition (expanded) → unit cards → related → history.
+ */
+function DeskIntelligenceCard({
+  targetId,
+  current,
+  history,
+  isLoading,
+}: {
+  targetId: string
+  current: ProjectedAssessment | null
+  history: ProjectedAssessment[]
+  isLoading: boolean
+}) {
+  const scope = `${targetId} · desk intelligence card`
+  const band = current?.severity ? SEVERITY_BAND[current.severity] : undefined
+  // Confidence delta vs the previous composition run (honest — omitted when
+  // there is no prior run or either run lacks a confidence).
+  const prev = history[0] ?? null
+  const delta =
+    current?.confidence != null && prev?.confidence != null
+      ? current.confidence - prev.confidence
+      : null
+  const bluf = current ? extractBluf(current.summary) : ''
+
+  return (
+    <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="desk-intelligence-card">
+      {/* 1 · Banded headline + score + delta */}
+      <header className="border-b border-slate-800 pb-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-label uppercase tracking-wider text-slate-500">{scope}</div>
+            <h1 className="mt-1 truncate text-xl font-semibold text-slate-100">
+              {current?.title ?? targetId}
+            </h1>
+          </div>
+          {current && <DownloadControls doc={toReportDoc(current, scope)} />}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="desk-band">
+          {band ? (
+            <span className={`rounded border px-2 py-0.5 font-medium ${band.tone}`}>{band.label}</span>
+          ) : (
+            <span className="rounded border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-slate-400">
+              unbanded
+            </span>
+          )}
+          {current?.confidence != null && (
+            <span className="font-mono text-slate-400" title="composition confidence">
+              conf {(current.confidence * 100).toFixed(0)}%
+            </span>
+          )}
+          {delta != null && Math.abs(delta) >= 0.005 && (
+            <span
+              className={`font-mono ${delta > 0 ? 'text-emerald-400' : 'text-rose-400'}`}
+              title="change vs the previous composition run"
+              data-testid="desk-delta"
+            >
+              {delta > 0 ? '▲' : '▼'} {Math.abs(delta * 100).toFixed(0)}%
+            </span>
+          )}
+          {current && Number.isFinite(current.producedAt) && (
+            <span className="text-slate-500">as of {formatDistanceToNow(current.producedAt)} ago</span>
+          )}
+          {current && (
+            <button
+              type="button"
+              onClick={() => selectRow('finding', current.id, current.title, { origin: 'desk-card' })}
+              className="ml-auto shrink-0 rounded border border-slate-700 px-2 py-0.5 text-slate-300 hover:border-slate-500 hover:text-slate-100"
+              data-testid="desk-trace"
+              title="Trace this composition's provenance / inputs in The Why"
+            >
+              Trace the flow →
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* 2 · BLUF */}
+      {bluf && (
+        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/40 p-3" data-testid="desk-bluf">
+          <div className="text-label uppercase tracking-wider text-slate-500">BLUF</div>
+          <p className="mt-1 text-sm leading-relaxed text-slate-200">{bluf}</p>
+        </div>
+      )}
+
+      {/* 3 · Composition (expanded) — the verified synthesis, the headline product. */}
+      <section className="mt-6" data-testid="desk-composition">
+        <div className="mb-2 text-label uppercase tracking-wider text-slate-500">
+          Verified composition · country_composition
+        </div>
+        {current ? (
+          current.summary.trim() !== '' ? (
+            <CitedAssessment
+              text={current.summary}
+              citations={current.citations}
+              confidence={current.confidence}
+              analystId={COUNTRY_COMPOSITION_ID}
+            />
+          ) : (
+            <p className="text-sm text-slate-500">This synthesis was published without a written summary.</p>
+          )
+        ) : (
+          <p className="text-sm text-slate-500" data-testid="desk-composition-pending">
+            {isLoading ? 'Loading the composition…' : `No verified composition for ${targetId} yet.`}
+          </p>
+        )}
+      </section>
+
+      {/* 4 · The per-desk bounded UNIT cards. */}
+      <section className="mt-8 border-t border-slate-800 pt-5" data-testid="desk-units">
+        <CountryUnitsAssessment targetId={targetId} />
+      </section>
+
+      {/* 5 · Related — the evidence breadth backing this composition. */}
+      {current && current.citations.length > 0 && (
+        <section className="mt-8 border-t border-slate-800 pt-5" data-testid="desk-related">
+          <div className="text-label uppercase tracking-wider text-slate-500">Related</div>
+          <div className="mt-1 text-xs text-slate-400">
+            This read rests on{' '}
+            <span className="text-slate-200">{current.citations.length}</span> verified sub-claim
+            {current.citations.length === 1 ? '' : 's'} — hover a{' '}
+            <span className="font-mono text-accent-info">[[ref:N]]</span> chip above to inspect each,
+            or trace the full flow.
+          </div>
+        </section>
+      )}
+
+      {/* 6 · History — older / superseded composition runs, collapsed. */}
+      {history.length > 0 && (
+        <section className="mt-8 border-t border-slate-800 pt-5" data-testid="desk-history">
+          <details>
+            <summary className="cursor-pointer text-label uppercase tracking-wider text-slate-500">
+              History · {history.length} superseded run{history.length === 1 ? '' : 's'}
+            </summary>
+            <ul className="mt-2 space-y-1">
+              {history.map((h) => (
+                <li key={h.id}>
+                  <button
+                    type="button"
+                    onClick={() => selectRow('finding', h.id, h.title, { origin: 'desk-history' })}
+                    className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-slate-400 hover:bg-slate-900/60 hover:text-slate-200"
+                    data-testid="desk-history-row"
+                  >
+                    {h.severity && (
+                      <span
+                        className="inline-block h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: SEVERITY_HEX[h.severity] ?? '#8892a0' }}
+                        aria-hidden
+                      />
+                    )}
+                    <span className="truncate">{h.title}</span>
+                    {Number.isFinite(h.producedAt) && (
+                      <span className="ml-auto shrink-0 text-slate-600">
+                        {formatDistanceToNow(h.producedAt)} ago
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </section>
+      )}
+    </div>
+  )
+}
+
 export default function WorldAssessment() {
-  // #89 polish — the reading column FOLLOWS the selection: a selected country
-  // (kind:'target') shows ITS country_composition (the P3 verified synthesis) in
-  // the same column; otherwise the world_assessor composition. World mode keeps
-  // the shared 'world-assessment-findings' query key (cache-shared with the
-  // banner + Inspector compact teaser); country mode gets a per-target key.
   const selection = useSelection((s) => s.selection)
   const targetId = selection?.kind === 'target' ? selection.id : null
   const assessorId = targetId ? COUNTRY_COMPOSITION_ID : ASSESSOR_ID
@@ -240,73 +387,30 @@ export default function WorldAssessment() {
 
   const { data, isLoading, error } = useQuery<FindingsResponse>({
     queryKey: targetId ? ['assessment-findings', 'country', targetId] : ['world-assessment-findings'],
-    refetchInterval: 5 * 60_000, // re-poll; the assessor runs every ~6h
-    // Filter SERVER-SIDE by analyst_id (+ target_id for a country). These
-    // assessors emit ~1 finding per 6h, never in the recent global window, so
-    // the targeted query is the only way the panel reliably finds the row.
+    refetchInterval: 5 * 60_000,
     queryFn: () => apiGet<FindingsResponse>(queryUrl),
   })
 
-  const assessment = useMemo<ProjectedAssessment | null>(() => {
-    const rows = data?.data ?? []
-    let newest: FindingRow | null = null
-    for (const row of rows) {
-      if (row.analyst_id !== assessorId) continue
-      if (!newest || Date.parse(row.produced_at) > Date.parse(newest.produced_at)) {
-        newest = row
-      }
-    }
-    return newest ? projectAssessment(newest) : null
+  // Newest-first list of this assessor's runs → current + collapsed history.
+  const runs = useMemo<ProjectedAssessment[]>(() => {
+    const rows = (data?.data ?? []).filter((r) => r.analyst_id === assessorId)
+    rows.sort((a, b) => Date.parse(b.produced_at) - Date.parse(a.produced_at))
+    return rows.map(projectAssessment)
   }, [data, assessorId])
 
-  // P2-T8 / P3 — for a selected COUNTRY the bounded UNITS are shown as the
-  // headline; the country_composition (the verified P3 synthesis OVER those
-  // units) renders in a collapsible below. Rendered independent of the
-  // composition query state so the units show immediately (they carry their own
-  // loading).
+  const assessment = runs[0] ?? null
+  const history = runs.slice(1)
+
+  // DESK mode — the Intelligence Card (units carry their own loading, so it
+  // renders independent of the composition query state).
   if (targetId) {
     return (
-      <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="country-read-column">
-        <CountryUnitsAssessment targetId={targetId} />
-        {/* Expanded by default (item 2) — the verified composition is the product,
-            not a click-to-reveal teaser. */}
-        <details
-          open
-          className="mt-8 border-t border-slate-800 pt-4"
-          data-testid="country-composition-synthesis"
-        >
-          <summary className="cursor-pointer text-label uppercase tracking-wider text-slate-500">
-            Country composition (verified) · country_composition (the P3 synthesis over the units above)
-          </summary>
-          {assessment ? (
-            <div className="mt-3">
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <h2 className="text-lg font-semibold text-slate-200">{assessment.title}</h2>
-                <button
-                  type="button"
-                  onClick={() => selectRow('finding', assessment.id, assessment.title, { origin: 'assessment' })}
-                  className="shrink-0 rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
-                  data-testid="composition-trace"
-                  title="Trace this composition's provenance / inputs in The Why"
-                >
-                  Trace the flow →
-                </button>
-              </div>
-              {assessment.summary.trim() !== '' ? (
-                <div className="text-sm text-slate-300">
-                  <CitedAssessment text={assessment.summary} citations={assessment.citations} />
-                </div>
-              ) : (
-                <p className="text-sm text-slate-500">This synthesis was published without a written summary.</p>
-              )}
-            </div>
-          ) : (
-            <p className="mt-3 text-sm text-slate-500" data-testid="composition-pending">
-              {isLoading ? 'Loading the composition…' : `No verified composition for ${targetId} yet.`}
-            </p>
-          )}
-        </details>
-      </div>
+      <DeskIntelligenceCard
+        targetId={targetId}
+        current={assessment}
+        history={history}
+        isLoading={isLoading}
+      />
     )
   }
 
@@ -325,37 +429,32 @@ export default function WorldAssessment() {
   if (!assessment) return <EmptyState targetId={targetId} />
 
   const hasTime = Number.isFinite(assessment.producedAt)
+  const scope = 'world_assessor · composed, verified world view'
 
   return (
-    <article
-      className="mx-auto w-full max-w-3xl px-6 py-8"
-      data-testid="world-assessment"
-    >
+    <article className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="world-assessment">
       <header className="mb-5 border-b border-slate-800 pb-4">
         <div className="text-label uppercase tracking-wider text-slate-500" data-testid="world-assessment-scope">
-          {targetId ? `${targetId} · country assessment` : 'world_assessor finding · one producer'}
+          world_assessor finding · one producer
         </div>
-        {!targetId && (
-          <div className="mt-1 text-xs leading-relaxed text-slate-500" data-testid="world-assessment-framing">
-            The composed, verified world view, synthesized over the per-country
-            compositions &mdash; live now.
-          </div>
-        )}
+        <div className="mt-1 text-xs leading-relaxed text-slate-500" data-testid="world-assessment-framing">
+          The composed, verified world view, synthesized over the per-country
+          compositions &mdash; live now.
+        </div>
         <div className="mt-1 flex items-start justify-between gap-3">
           <h1 className="text-xl font-semibold text-slate-100">{assessment.title}</h1>
-          {/* #89 — drop the operator into the lineage flow (ProvenanceTrail +
-              LineageGraph in The Why) for this assessment's derived_from DAG. */}
-          <button
-            type="button"
-            onClick={() =>
-              selectRow('finding', assessment.id, assessment.title, { origin: 'assessment' })
-            }
-            className="shrink-0 rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
-            data-testid="world-assessment-trace"
-            title="Trace this assessment's provenance / inputs in The Why"
-          >
-            Trace the flow →
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <DownloadControls doc={toReportDoc(assessment, scope)} />
+            <button
+              type="button"
+              onClick={() => selectRow('finding', assessment.id, assessment.title, { origin: 'assessment' })}
+              className="rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
+              data-testid="world-assessment-trace"
+              title="Trace this assessment's provenance / inputs in The Why"
+            >
+              Trace →
+            </button>
+          </div>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
           {hasTime && (
@@ -363,18 +462,17 @@ export default function WorldAssessment() {
               as of {formatDistanceToNow(assessment.producedAt)} ago
             </span>
           )}
-          {assessment.severity && (
-            <>
-              {hasTime && <span aria-hidden className="text-slate-700">·</span>}
-              <SeverityChip severity={assessment.severity} />
-            </>
-          )}
         </div>
       </header>
 
       {assessment.summary.trim() !== '' ? (
         <div className="text-sm text-slate-300" data-testid="world-assessment-body">
-          <CitedAssessment text={assessment.summary} citations={assessment.citations} />
+          <CitedAssessment
+            text={assessment.summary}
+            citations={assessment.citations}
+            confidence={assessment.confidence}
+            analystId={ASSESSOR_ID}
+          />
         </div>
       ) : (
         <p className="text-sm text-slate-500" data-testid="world-assessment-nobody">
@@ -387,9 +485,7 @@ export default function WorldAssessment() {
 
 /**
  * Compact teaser of the latest world assessment (#89 de-dup). Reuses the SAME
- * react-query key as the full one-pager, so it shares the cache (no extra
- * fetch). Used in the Inspector empty state so the full one-pager renders in
- * exactly ONE place (The Why) instead of twice; clicking opens it as a finding.
+ * react-query key as the full one-pager, so it shares the cache (no extra fetch).
  */
 export function CompactWorldAssessment() {
   const { data, isLoading } = useQuery<FindingsResponse>({
@@ -421,9 +517,7 @@ export function CompactWorldAssessment() {
   return (
     <button
       type="button"
-      onClick={() =>
-        selectRow('finding', assessment.id, assessment.title, { origin: 'inspector-assessment' })
-      }
+      onClick={() => selectRow('finding', assessment.id, assessment.title, { origin: 'inspector-assessment' })}
       className="w-full rounded-md border border-line bg-surf-1 px-3 py-2.5 text-left hover:border-slate-500"
       data-testid="inspector-compact-assessment"
       title="Open the latest world assessment"

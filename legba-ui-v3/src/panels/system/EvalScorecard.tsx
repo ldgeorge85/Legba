@@ -80,12 +80,15 @@ const TONE_PILL: Record<BandTone, string> = {
   insufficient: 'bg-slate-800 text-slate-400',
 }
 
-// The 4 unit dimensions (analyst_ids) a scorecard always cards, in display order.
+// The bounded unit dimensions (analyst_ids) a scorecard cards, in display order.
+// There are now SIX; any further extras still render after these (orderedDimensions).
 const DIMENSION_ORDER = [
   'leadership_transition',
   'energy_security',
   'escalation',
   'narrative_coordination',
+  'internal_stability',
+  'military_posture',
 ] as const
 
 /** Order a scorecard's dimensions: the 4 known units first, then any extras. */

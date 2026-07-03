@@ -48,6 +48,23 @@ export interface Citation {
   /** The cited source URL / origin, when present. */
   source?: string
   /**
+   * The cited PASSAGE — a composition sub-claim's `evidence_text` or a unit
+   * signal's `snippet`. The point-in-time text the citation rests on, surfaced
+   * in the hover-card so the reader can check the marker without a drill. Absent
+   * on a legacy/uncited citation (honest — the card shows no passage, never a
+   * fabricated one).
+   */
+  evidenceText?: string
+  /**
+   * The cited sub-claim's `effective_confidence` (already `min(confidence,
+   * faithfulness)` from its own verify pass) — the analytic credibility ceiling
+   * this citation carries. Composition-only; absent (undefined) for a unit/legacy
+   * citation, never coerced to 0.
+   */
+  effectiveConfidence?: number
+  /** The cited sub-claim's underlying lineage/signal ids (composition-only). */
+  derivedFrom?: string[]
+  /**
    * @deprecated Back-compat alias for `refId`, kept so existing signal-only
    * consumers (e.g. the evidence EntityGraph) compile unchanged. Prefer
    * `refId` + `refKind`; for a unit/signal citation this equals the signal id
@@ -99,14 +116,26 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
     const refId = str(o['ref_id']) ?? str(o['signal_id']) ?? str(o['signalId'])
     const refKind: CitationRefKind = str(o['ref_kind']) === 'finding' ? 'finding' : 'signal'
     if (!marker || !refId) continue
-    out.push({
+    const cite: Citation = {
       marker,
       refId,
       refKind,
       signalId: refId, // deprecated compat alias (see Citation.signalId)
       title: str(o['title']),
       source: str(o['source']),
-    })
+    }
+    // Hover-card fields — set ONLY when the payload carries them, so an
+    // uncited/legacy citation never gains a fabricated passage or credibility.
+    // Composition sub-claims carry `evidence_text`; unit signals carry `snippet`.
+    const passage = str(o['evidence_text']) ?? str(o['snippet'])
+    if (passage) cite.evidenceText = passage
+    const eff = o['effective_confidence']
+    if (typeof eff === 'number' && Number.isFinite(eff)) cite.effectiveConfidence = eff
+    const derived = o['derived_from']
+    if (Array.isArray(derived) && derived.length > 0) {
+      cite.derivedFrom = derived.filter((d): d is string => typeof d === 'string')
+    }
+    out.push(cite)
   }
   return out
 }
@@ -130,6 +159,16 @@ export function evidenceAnchorId(refId: string): string {
 export type ProseToken =
   | { kind: 'text'; text: string }
   | { kind: 'marker'; marker: string; citation: Citation }
+
+/** A prose token that ALSO distinguishes an UNRESOLVED marker (a `[N]` /
+ *  `[[ref:N]]` in the prose with no backing citation) from plain text — so a
+ *  surface can render it as an explicit "unresolved" chip rather than silently
+ *  leaving it as literal `[N]` text (the S7-T3 honesty contract: a dangling
+ *  marker is shown AS dangling, never fabricated into an anchor and never hidden). */
+export type ProseTokenEx =
+  | { kind: 'text'; text: string }
+  | { kind: 'marker'; marker: string; citation: Citation }
+  | { kind: 'unresolved'; marker: string }
 
 // Composition ordinal marker (`[[ref:N]]`) FIRST, then the unit marker (`[N]`).
 // The two are provably disjoint: in `[[ref:5]]` the digit is preceded by `:`,
@@ -169,6 +208,29 @@ export function splitProse(text: string, byMarker: Map<string, Citation>): Prose
     if (!citation) continue // leave unknown markers embedded in the text run
     if (start > last) tokens.push({ kind: 'text', text: text.slice(last, start) })
     tokens.push({ kind: 'marker', marker, citation })
+    last = start + marker.length
+  }
+  if (last < text.length) tokens.push({ kind: 'text', text: text.slice(last) })
+  return tokens
+}
+
+/**
+ * Like {@link splitProse}, but a marker with NO backing citation becomes an
+ * `unresolved` token instead of being folded back into the text run. This is the
+ * tokenizer the reading kit uses so a dangling `[N]` / `[[ref:N]]` can be shown
+ * as an explicit muted "unresolved" chip — visible, honest, never a fabricated
+ * anchor and never literal `[N]` noise.
+ */
+export function tokenizeProse(text: string, byMarker: Map<string, Citation>): ProseTokenEx[] {
+  const tokens: ProseTokenEx[] = []
+  let last = 0
+  for (const match of text.matchAll(MARKER_RE)) {
+    const marker = match[0]
+    const start = match.index ?? 0
+    if (start > last) tokens.push({ kind: 'text', text: text.slice(last, start) })
+    const citation = byMarker.get(marker)
+    if (citation) tokens.push({ kind: 'marker', marker, citation })
+    else tokens.push({ kind: 'unresolved', marker })
     last = start + marker.length
   }
   if (last < text.length) tokens.push({ kind: 'text', text: text.slice(last) })

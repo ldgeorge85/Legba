@@ -24,6 +24,8 @@ import { useLiveTail } from '@/lib/useLiveTail'
 import type { PanelProps } from '@/types'
 import { cn } from '@/lib/cn'
 import { selectRow } from '@/state/selection'
+import CitedProse from '@/components/CitedProse'
+import { extractCitations } from '@/lib/citationsModel'
 
 interface FindingRow {
   id: string
@@ -205,7 +207,11 @@ function FindingItem({
       </button>
       {expanded && (
         <div className="ml-4 mt-1 p-2 bg-surface-50/40 rounded text-xs space-y-2">
-          {f.body && <div className="text-slate-300 whitespace-pre-wrap">{f.body}</div>}
+          {f.body && (
+            <div className="text-slate-300">
+              <CitedProse text={f.body} citations={extractCitations(f.data ?? undefined)} />
+            </div>
+          )}
 
           {tags.length > 0 && (
             <div className="flex flex-wrap gap-1" data-testid={`target-finding-tags-${f.id}`}>

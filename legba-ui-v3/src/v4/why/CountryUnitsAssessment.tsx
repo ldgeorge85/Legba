@@ -1,16 +1,15 @@
 /**
  * CountryUnitsAssessment — the bounded-unit reads for a selected country (P2-T8).
  *
- * The glass tower's PRODUCT surface for a country: the four bounded reasoning
- * units (leadership-transition, energy-security, escalation, narrative /
- * coordination), each a single cited + faithfulness-verified + measured read.
- * This DEMOTES the monolithic `country_assessor` one-pager — which WorldAssessment
- * now renders below as a collapsible "feeder" — to make the small, individually
- * trustworthy units the headline.
+ * The PRODUCT surface for a country: the bounded reasoning units, each a single
+ * cited + faithfulness-verified + measured read answering ONE bounded question.
+ * There are now SIX (leadership transition, energy security, escalation,
+ * narrative / coordination, internal stability, military posture); the desk
+ * renders however many it actually has — a unit with no finding yet is shown
+ * HONESTLY ("no read yet") rather than hidden or hard-coded.
  *
  * Each unit card carries its honest eval badge (P2-T6) and links its latest
- * finding into the Inspector (the full cited card + evidence). A unit with no
- * finding yet is shown HONESTLY ("no read yet") rather than hidden.
+ * finding into the Inspector (the full cited card + evidence).
  */
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -19,12 +18,16 @@ import { apiGet } from '@/lib/api'
 import { selectRow } from '@/state/selection'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
 
-/** The bounded units + their display labels, in headline order. */
-const UNITS: { id: string; label: string }[] = [
+/** The bounded units + their display labels, in headline order. Kept in ONE place
+ *  (also mirrored by the eval scorecard's dimension order). Render is dynamic —
+ *  the desk shows each unit that applies, with an honest empty for one not run. */
+export const UNITS: { id: string; label: string }[] = [
   { id: 'leadership_transition', label: 'Leadership transition' },
   { id: 'energy_security', label: 'Energy security' },
   { id: 'escalation', label: 'Escalation' },
   { id: 'narrative_coordination', label: 'Narrative / coordination' },
+  { id: 'internal_stability', label: 'Internal stability' },
+  { id: 'military_posture', label: 'Military posture' },
 ]
 const UNIT_IDS = UNITS.map((u) => u.id).join(',')
 
@@ -79,8 +82,7 @@ export function CountryUnitsAssessment({ targetId }: { targetId: string }) {
       </div>
       <div className="mb-4 mt-1 text-xs leading-relaxed text-slate-500">
         Each read answers ONE bounded question — cited, faithfulness-verified, and
-        measured per unit. These are the product; the full synthesis below is a
-        feeder being decomposed into them.
+        measured per unit. The verified composition above is synthesized over these.
       </div>
 
       {error instanceof Error && (
