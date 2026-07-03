@@ -175,7 +175,7 @@ _MAX_GRAPH_STRUCTURE = 6
 # into the (separate, clearly-labelled) BACKGROUND PRIORS block. Small: this is a
 # few framing priors, NOT an evidence dump; it rides alongside the token-heavy
 # ground-truth + situations + structure blocks, so the ceiling is tight.
-_MAX_WORLD_CONTEXT_CHUNKS = 6
+_MAX_WORLD_CONTEXT_CHUNKS = 2  # DQ Phase-2 RAG tune (2026-07-03): 6->2 — fewer priors = less uncited-interpretation leak surface + lower token cost (C1/RAG mechanism finding).
 # Per-chunk character cap — a single retrieved chunk is trimmed to this before it
 # reaches the prompt (the Lane-4 chunker targets ~400-800 tokens, but a stray
 # long chunk must not blow the context). Token-cap via chars, degrade-not-drop.
@@ -189,12 +189,14 @@ _WORLD_CONTEXT_BLOCK_CHAR_CAP = 3000
 # below it is DROPPED and, when ALL retrieved chunks fall below, NO block is built
 # (degrade-not-drop — ``build_world_context_block([])`` returns ``None``). Observed
 # on-target Factbook retrieval scores are ~0.53-0.66; weak / off-topic matches fall
-# below, so 0.5 is a conservative floor that admits genuine hits and rejects noise.
+# below. DQ Phase-2 RAG tune (2026-07-03): raised 0.5 -> 0.65 so only the STRONGEST
+# on-target priors ground — the marginal 0.5-0.65 hits were the ones fuelling
+# uncited interpretation (the C1/RAG mechanism finding), at real token cost.
 # Applied server-side via Qdrant's ``score_threshold`` AND re-checked client-side
 # in :meth:`SubstrateGroundingResolver._map_world_context_hits` (a client / stub
 # that ignores the threshold still can't leak a below-floor chunk). Env-overridable
 # via ``LEGBA_WORLD_CONTEXT_MIN_SCORE``; a bad / blank value falls back to default.
-_WORLD_CONTEXT_MIN_SCORE = 0.5
+_WORLD_CONTEXT_MIN_SCORE = 0.65
 
 
 def world_context_min_score() -> float:
@@ -1817,14 +1819,30 @@ def build_graph_structure_block(structure: "GroundingGraphStructure | None") -> 
 # verify semantics are untouched by construction (the honesty rule, RAG plan §B).
 # The EXACT operator-facing header string is preserved verbatim as the leading
 # clause so a trace / prompt audit can grep for it.
+# DQ Phase-2 RAG tune (2026-07-03): the mechanism finding showed the faithfulness
+# cost was UNCITED INTERPRETATION, not fact-leak — the model used a prior to write
+# an inferred judgement ("the most plausible mechanism is …") with no [N]. The old
+# header forbade stating an uncited "fact"; it now forbids an uncited fact OR
+# INTERPRETATION, leads with the rule, and names the exact leak shape. The leading
+# "BACKGROUND PRIORS (context, not evidence — do not cite)" clause is preserved
+# verbatim for trace/prompt-audit grep-ability.
 _WORLD_CONTEXT_HEADER = (
-    "BACKGROUND PRIORS (context, not evidence — do not cite) — curated background "
-    "/ doctrine the platform retrieved for this question. Use it ONLY to INTERPRET "
-    "the numbered signals (method, what to look for), NOT as a source of fact. "
-    "It is NOT citable, and you must NEVER state any fact drawn from these priors "
-    "in your assessment unless a numbered signal supports it — an uncited "
-    "background assertion WILL be scored unfaithful by the verify pass. Cite only "
-    "the numbered signals for every claim, exactly as before:"
+    "BACKGROUND PRIORS (context, not evidence — do not cite) — READ THIS RULE "
+    "FIRST: never state any fact OR INTERPRETATION drawn from these priors in your "
+    "assessment unless a numbered signal [N] supports it. An uncited prior-derived "
+    "claim — a fact OR an inferred judgement (e.g. \"the most plausible mechanism "
+    "is …\", \"this typically leads to …\") — WILL be scored unfaithful by the "
+    "verify pass and demote the finding. The text below is curated background / "
+    "doctrine; use it ONLY to frame HOW you read the numbered signals (method, what "
+    "to look for), NOT as a source of fact. It is NOT citable. Cite ONLY the "
+    "numbered signals, for every claim, exactly as before:"
+)
+
+# Closing reminder rendered AFTER the priors, right before the signal slice — a
+# last cue at the point the model starts composing (DQ Phase-2 tune).
+_WORLD_CONTEXT_FOOTER = (
+    "(End of BACKGROUND PRIORS — reminder: nothing above is evidence or citable; "
+    "every claim in your assessment must rest on a numbered signal [N].)"
 )
 
 
@@ -1859,5 +1877,6 @@ def build_world_context_block(
         lines.append(line)
         total += len(line) + 1
         rendered_any = True
+    lines.append(_WORLD_CONTEXT_FOOTER)  # DQ Phase-2: closing cite-only reminder
     lines.append("")  # blank separator before the slice
     return "\n".join(lines)

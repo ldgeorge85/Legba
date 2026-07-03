@@ -333,8 +333,9 @@ async def test_resolve_world_context_clamps_to_chunk_ceiling():
         pg_pool=_StubPool(), embedder=_StubEmbedder(), qdrant=qdrant,
     )
     await resolver.resolve_world_context("q", limit=30)
-    # The requested limit (30) is clamped to the RAG ceiling (6) at the search.
-    assert qdrant.last_call["limit"] == 6
+    # The requested limit (30) is clamped to the RAG ceiling (2) at the search
+    # (DQ Phase-2 tune: 6 -> 2 to shrink the uncited-interpretation leak surface).
+    assert qdrant.last_call["limit"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -385,15 +386,15 @@ async def test_relevance_floor_drops_below_score_chunk_client_side():
     score_threshold (the plain fake returns everything) — the client-side backstop
     in _map_world_context_hits enforces the floor. The above-floor chunk survives."""
     below = _FakePoint(id="lo", payload={"title": "lo", "text": "weak"}, score=0.3)
-    above = _FakePoint(id="hi", payload={"title": "hi", "text": "strong"}, score=0.6)
+    above = _FakePoint(id="hi", payload={"title": "hi", "text": "strong"}, score=0.7)
     resolver = SubstrateGroundingResolver(
         pg_pool=_StubPool(), embedder=_StubEmbedder(),
         qdrant=_FakeQdrant([below, above]),  # ignores score_threshold
     )
     chunks = await resolver.resolve_world_context("q", limit=30)
     assert [c.chunk_id for c in chunks] == ["hi"]
-    # The server-side floor was still requested (default 0.5).
-    assert resolver._qdrant.last_call["score_threshold"] == 0.5  # type: ignore[union-attr]
+    # The server-side floor was still requested (default 0.65 post DQ Phase-2 tune).
+    assert resolver._qdrant.last_call["score_threshold"] == 0.65  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -465,7 +466,7 @@ async def test_meta_no_target_run_applies_no_country_filter():
     # No country filter → BOTH countries' chunks are eligible.
     assert {c.chunk_id for c in chunks} == {"a", "b"}
     assert qdrant.last_call["query_filter"] is None
-    assert qdrant.last_call["score_threshold"] == 0.5
+    assert qdrant.last_call["score_threshold"] == 0.65
 
 
 @pytest.mark.asyncio
@@ -498,11 +499,11 @@ def test_world_context_country_filter_values_helper():
 def test_world_context_min_score_env_override(monkeypatch):
     """The floor is env-overridable; a blank / malformed value falls back."""
     monkeypatch.delenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", raising=False)
-    assert world_context_min_score() == 0.5
+    assert world_context_min_score() == 0.65
     monkeypatch.setenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", "0.62")
     assert world_context_min_score() == 0.62
     monkeypatch.setenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", "not-a-float")
-    assert world_context_min_score() == 0.5
+    assert world_context_min_score() == 0.65
 
 
 # ---------------------------------------------------------------------------
