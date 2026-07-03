@@ -56,7 +56,14 @@ mapping:
 grounding:
   enabled: true
   scope: [target_geo, slice_entities]
-  sources: [substrate, situations, graph_structure, vector:world_context]
+  # 2026-07-03 — RAG ROLLBACK (operator decision). vector:world_context was
+  # flipped ON at 2026-07-03T03:31Z, then ROLLED BACK the same day: rag_watch
+  # (n=15) fired the pre-registered rule — trailing-mean faithfulness
+  # 0.713 -> 0.623 (-0.090, >= 0.08 trigger) at +42% tokens. Citation discipline
+  # degraded (uncited prior-leak suspected); RAG value (current grounding) is
+  # unmeasured. world_context RAG expansion is PAUSED pending a mechanism fix
+  # (task #176). internal_stability stays flipped (it passed: +0.035).
+  sources: [substrate, situations, graph_structure]
   max_facts: 30
 
 method:
