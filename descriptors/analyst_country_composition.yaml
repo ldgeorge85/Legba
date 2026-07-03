@@ -1,9 +1,10 @@
 # P3-T1 — per-COUNTRY composition over the P2 verified UNIT sub-claims.
 #
 # The COMPOSITION leg: a second-order finding per G20 country that
-# reads the SEVEN bounded P2 units for THAT country — leadership_transition,
+# reads the bounded units for THAT country — leadership_transition,
 # energy_security, escalation, narrative_coordination, internal_stability,
-# military_posture, economic_coercion — and synthesizes ONE per-country read. It reuses the EXISTING
+# military_posture, economic_coercion, and (on nuclear desks only)
+# proliferation_watch — and synthesizes ONE per-country read. It reuses the EXISTING
 # meta_findings_synthesizer kind
 # (Approach A: CONFIGURE, no new Python kind); the per-country behavior is all
 # descriptor + the P3-T2 READ_SLICE change (target-scope + verify-floor).
@@ -73,6 +74,15 @@ subscription:
       data_types: [finding]
       time_window: 24h
     - id: economic_coercion
+      data_types: [finding]
+      time_window: 24h
+    # S1-T6: proliferation_watch is a NARROW unit (has_tag("nuclear_watch") — 8
+    # desks). Safe to list here: the READ_SLICE is verify-floored via an INNER
+    # JOIN, so on the 17 non-nuclear desks it contributes ZERO rows (naturally
+    # absent), and on a nuclear desk it contributes its head. It is deliberately
+    # NOT a fixed scorecard dimension (that would mis-render insufficient-evidence
+    # on the non-nuclear desks + break the DIMENSIONS==_DEFAULT_UNITS invariant).
+    - id: proliferation_watch
       data_types: [finding]
       time_window: 24h
   substrate:

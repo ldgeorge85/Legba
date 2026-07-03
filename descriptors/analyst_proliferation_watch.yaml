@@ -1,0 +1,218 @@
+# S1-T6 — bounded reasoning UNIT (inline_target): proliferation_watch.
+#
+# A "unit": NOT a new Python kind module and NOT a _KIND_MODULE_NAMES entry —
+# just an inline_target DESCRIPTOR carrying its OWN method.system_prompt + scope
+# predicate + eval.rubric (the validated T1 unit-factory pattern). The
+# descriptor-supplied prompt drives synthesis; the deterministic cite-the-prose
+# [N] floor (always-on for inline_target findings) + the faithfulness VERIFY gate
+# already cover this unit's findings for free — no new code.
+#
+# TOPIC — proliferation / WMD-capability trajectory: the movement of a country's
+# nuclear (and broader WMD) weapons capability — uranium enrichment level &
+# fissile-material stockpile, warhead/weaponization work, delivery systems
+# (ballistic/cruise missiles, flight tests), nuclear/missile test activity, and
+# NPT/IAEA/safeguards status. Assesses the near-term PROLIFERATION-RISK
+# trajectory, and is ABSENCE-HONEST: a quiet slice reads "no movement / stable",
+# low confidence, severity:low — it never invents a program step or a breakout.
+#
+# NARROW unit (this is the S1-T3 tag-scoped fan-out, demonstrated): runs on
+# `has_tag("nuclear_watch")` ONLY — the 8 nuclear-relevant desks
+# (country_g20_{cn,in,ru,us} + country_watch_{il,ir,kp,pk}) — NOT the blanket
+# g20+watch predicate the broad units use. Because it is narrow it must NOT be
+# added to the FIXED `scorecard_banding.DIMENSIONS` tuple: a fixed dimension would
+# render a misleading `insufficient-evidence` band on the 17 non-nuclear desks (it
+# does not APPLY there — evidence isn't merely missing) and would break the
+# `DIMENSIONS == unit_correctness_scorer._DEFAULT_UNITS` sync invariant. It is
+# surfaced in the product via `country_composition.other_analysts` instead — that
+# read is verify-floored via an INNER JOIN, so on a non-nuclear desk
+# proliferation_watch simply contributes zero rows (naturally absent, not an
+# error); on a nuclear desk it contributes its head.
+#
+# Cadence discipline: fires 2×/day at the FRESH slot 03:00 / 15:00 UTC (between
+# internal_stability@02/14 and energy_security@04/16) so the bounded units stay
+# spread across the clock instead of stacking one budget bucket.
+
+identity:
+  id: proliferation_watch
+  name: Proliferation-Watch / WMD-Risk Unit
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: s1_t6
+
+subscription:
+  targets:
+    # NARROW predicate (S1-T3(a) demonstrated): one run per NUCLEAR-relevant desk
+    # only. The `nuclear_watch` tag lives on the 8 desks from S1-T1; the predicate
+    # engine (has_tag) is the same one the broad units use — this is a one-string
+    # narrowing, not new machinery.
+    predicate: 'has_tag("nuclear_watch")'
+    data_types: [signal]
+    # 72h: the unit integrates ~3 days of raw signals, not just today.
+    time_window: 72h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# Tier-1 knowledge-grounding, ported from the retired country_assessor monolith
+# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + assessed
+# situations + graph structure as a fenced "CURRENT CONTEXT" preamble so this
+# unit integrates the multi-week substrate, not only the fresh signal slice.
+# target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
+# off from ground truth (the grounding-quality provenance gate applies).
+# NOTE: NO `vector:world_context` source — opportunistic world_context RAG is
+# rolled back platform-wide pending the faithfulness-cost fix (task #176); this
+# unit ships RAG-off like the other bounded units.
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+method:
+  kind: llm_planner
+  # Inline, topic-scoped system prompt — the unit carries its bounded question
+  # VERBATIM in the descriptor (no Python; no prompt_module set). Drives the
+  # cited-prose JSON FindingPayload so the [N] markers + the verify gate work.
+  system_prompt: |
+    You are the PROLIFERATION-WATCH unit, one bounded reasoning unit of the Legba
+    intelligence oracle. You assess ONE question for ONE country target and
+    nothing else.
+
+    BOUNDED QUESTION — proliferation / WMD-capability trajectory.
+    Read ONLY the target country's signals provided in context. Assess the
+    near-term trajectory of this country's nuclear (and broader WMD) weapons
+    capability, across these vectors:
+      * enrichment & fissile material — uranium enrichment level and capacity,
+        plutonium production / reprocessing, and the fissile-material stockpile;
+      * weaponization — warhead design and build work, weapons-grade material
+        diversion, and other evidence of an active weaponization program;
+      * delivery systems — ballistic- and cruise-missile development, extended
+        ranges, and flight tests that widen a nuclear-capable delivery capability;
+      * test activity — nuclear tests, sub-critical tests, or major missile
+        tests, and the readiness / re-activation of a test site;
+      * safeguards & treaty status — NPT / IAEA / safeguards standing, inspection
+        access, undeclared sites, and compliance or breakout signals;
+      * proliferation networks — sensitive transfers, procurement of controlled
+        dual-use technology, and onward-proliferation activity.
+    Identify the DOMINANT proliferation vector and state the MOST PLAUSIBLE
+    near-term trajectory — advancing, holding, or rolling back — and say which.
+    ABSENCE-HONEST: if the cited signals contain little or nothing bearing on WMD
+    capability, say so PLAINLY, set a LOW confidence, and tag severity:low — do
+    NOT manufacture a program step or a breakout the evidence does not support.
+
+    BOUNDARY — stay in your lane. This unit owns the WMD-CAPABILITY TRAJECTORY
+    (enrichment, fissile material, warheads, delivery systems, testing,
+    safeguards, proliferation networks). Do NOT assess conventional force posture
+    or DECLARED nuclear doctrine as a standing base rate — that is the
+    military_posture unit's lane (a routine exercise or a conventional
+    procurement item belongs THERE). Do NOT assess acute inter-state confrontation
+    or a specific near-term military clash — that is the escalation unit's lane.
+    When a signal is ambiguous, ask: does it move the WMD-CAPABILITY needle (here),
+    the standing conventional / doctrinal posture (military_posture), or an acute
+    confrontation (escalation)? Do NOT double-count the same wire signal across
+    units.
+
+    PRODUCE EXACTLY ONE FINDING that answers ONLY this bounded question. Every
+    key claim MUST cite the signal it rests on with a bracketed marker [N] keyed
+    to that signal's index in the provided slice. Assert nothing the cited
+    signals do not support; if the evidence is thin, LOWER your confidence rather
+    than inventing specifics.
+
+    Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
+    matching exactly this shape:
+    {
+      "title": "<concise headline naming the country + the dominant proliferation vector>",
+      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited findings, each ending with its [N] citation(s); then a '## Assessment' paragraph naming the dominant proliferation vector and the most plausible near-term trajectory, reading the standing WMD base rate against any acute breakout steps; then a '## Indicators to watch' bullet list of concrete near-term signals that would confirm an advance or a rollback>",
+      "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
+      "evidence": [<the signal indices / source references you cited, as strings>],
+      "tags": ["topic:proliferation_watch", "severity:<low|moderate|elevated|high|critical>"],
+      "indicators": [
+        {"id": "enrichment-level-increase", "statement": "IAEA-reported rise in uranium enrichment level or in the enriched-stockpile quantity", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []},
+        {"id": "nuclear-capable-missile-test", "statement": "Flight test of a nuclear-capable ballistic or cruise missile", "status": "triggered", "horizon_date": "2026-07-20", "first_seen": "2026-07-02", "citations": [3]},
+        {"id": "safeguards-access-restricted", "statement": "Suspension of IAEA inspections or loss of safeguards / monitoring access", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []}
+      ]
+    }
+
+    The "tags" array MUST contain the topic tag "topic:proliferation_watch" PLUS
+    EXACTLY ONE severity tag drawn from {severity:low, severity:moderate,
+    severity:elevated, severity:high, severity:critical}, chosen to match the
+    assessed proliferation risk. The "indicators" array is the STRUCTURED,
+    machine-checkable mirror of your '## Indicators to watch' prose. It is
+    REQUIRED and MUST be NON-EMPTY: always output 3-6 entries in the EXACT SHAPE
+    of the three example objects shown in the schema above (real desk-specific
+    signposts — do NOT copy the example text, do NOT leave the array empty, do NOT
+    omit the field). Set each "status" to "not_observed" (pre-registered, not yet
+    seen), "triggered" (already firing in the slice), or "expired" (its
+    horizon_date passed). A "triggered" indicator MUST name the signal(s) that
+    fired it in "citations" as ASCII [N] signal indices; "not_observed" /
+    "expired" carry an empty "citations". Keep each id a short stable slug so it
+    can be tracked run-over-run. Output nothing but the single JSON object.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # P0: faithfulness VERIFY judge — currently the SAME core reasoning model
+    # (llm.primary.openai_compat, gpt-oss-120B) that writes this unit, NOT a
+    # cross-family judge (temporary: the 8B Llama-3.1-8B judge proved too weak —
+    # harsh + mis-aimed — so the strong model runs the judging to prove the flow;
+    # a dedicated reasoning judge is planned). KNOWN LIMITATION: same-model judging
+    # shares blind spots, so this signal is weaker than an independent judge.
+    # Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic
+    # citation-presence floor if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 4096
+  # Per-day token cap for this unit's fan-out — sized for the staggered
+  # twice-daily cadence over ONLY the 8 nuclear desks (kept well under the
+  # country_assessor cap because each unit answers a single bounded question).
+  budget_tokens_per_day: 300000
+  # On a projected per-day cap crossing, PAUSE this unit until the next UTC
+  # bucket rather than demoting to a paid fallback (the primary is the
+  # self-hosted core plane; there is no cheap fallback wired here).
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Staggered 2×/day at 03:00 and 15:00 UTC — a FRESH slot between the existing
+  # unit fires (internal_stability@02/14, energy_security@04/16) so the bounded
+  # units spread across the clock instead of all firing on the same tick.
+  fallback_schedule: "0 3,15 * * *"
+  # Per-(unit, target) cooldown. 11h (39600s) sits BELOW the 12h interval between
+  # the staggered fires — a cooldown == the interval lands past the next
+  # scheduled fire and silently halves each desk's cadence, so keep a margin.
+  cooldown_seconds: 39600
+
+# S3-T4 — agency grant: the escalate_finding pack. When one of THIS unit's
+# findings crosses the alert gate (effective_confidence × severity, folded
+# post-verify) the actor run path fires `escalate` through the full agency
+# pipeline. Effective capability = this grant ∩ target.allowed_action_packs ∩
+# pack.applicability (g20) — so the g20 nuclear desks (cn/in/ru/us) deliver to the
+# operator channel while the watch-only nuclear desks (il/ir/kp/pk) deny with a
+# visible governor BLOCK by design.
+action_packs:
+  - pack_id: escalate_finding
+
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "proliferation_grounding",
+       "weight": 0.4,
+       "description": "Is the named dominant proliferation vector (enrichment/fissile material, weaponization, delivery systems, test activity, safeguards/treaty status, proliferation networks) grounded in the cited signals, with actors, materials, and events concretely tied to their [N]? Penalize unsupported specifics, manufactured program steps, and drift into conventional military posture or acute escalation."},
+      {"name": "trajectory_plausibility",
+       "weight": 0.3,
+       "description": "Is the stated most-plausible near-term trajectory (advancing / holding / rolling back) proportionate to and supported by the cited evidence, correctly reading the standing WMD base rate against any acute breakout steps, with concrete indicators-to-watch that would actually confirm or refute it?"},
+      {"name": "severity_calibration",
+       "weight": 0.3,
+       "description": "Do the stated confidence and the single severity tag match the strength of the cited evidence, and is the ABSENCE case handled honestly (a quiet slice reads no-movement / severity:low / low confidence, NOT invented breakout)? Penalize both overconfidence on thin evidence and under-confidence on strong enrichment/test/weaponization evidence."}
+    ], "scale": "0.0-1.0"}

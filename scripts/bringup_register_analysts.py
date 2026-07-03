@@ -130,6 +130,7 @@ ANALYST_FILES = [
     "analyst_internal_stability.yaml",       # NEW — S1-T4 unit (internal-stability / coup-risk)
     "analyst_military_posture.yaml",         # NEW — S1-T5 unit (military-posture shift)
     "analyst_economic_coercion.yaml",        # NEW — S1-T7 unit (economic coercion: sanctions/trade/currency)
+    "analyst_proliferation_watch.yaml",      # NEW — S1-T6 unit (proliferation / WMD risk; NARROW: has_tag("nuclear_watch") — 8 nuclear desks, deliberately NOT a fixed scorecard dimension)
     # P3-T1/T2 — per-country COMPOSITION over the 4 verified units. Same
     # meta_findings_synthesizer kind (no new kind), but a PER-TARGET descriptor
     # (subscription.targets has_tag g20) reading the units as other_analysts, with

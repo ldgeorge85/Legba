@@ -204,7 +204,12 @@ def test_country_composition_fuses_the_seventh_unit():
     desc = _load("analyst_country_composition.yaml")
     ids = [a.id for a in desc.subscription.other_analysts]
     assert _UNIT_ID in ids
-    assert len(ids) == 7
+    # S1-T6 appended proliferation_watch (a NARROW nuclear-desk unit) as the 8th
+    # other_analysts source. It contributes only on the 8 nuclear desks (the
+    # READ_SLICE is verify-floored via an INNER JOIN → zero rows elsewhere), so the
+    # composition now declares 8 units while the FIXED scorecard tuple stays 7.
+    assert "proliferation_watch" in ids
+    assert len(ids) == 8
 
 
 def test_banding_reports_the_new_dimension_end_to_end():
