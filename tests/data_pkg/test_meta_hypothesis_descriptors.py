@@ -33,7 +33,6 @@ _DESCRIPTORS_DIR = pathlib.Path(__file__).resolve().parents[2] / "descriptors"
 
 # Descriptors that must validate AND be in the bringup ANALYST_FILES set.
 _NEW_FILES = {
-    "analyst_meta_synthesizer.yaml": ("meta_synthesizer", "meta_findings_synthesizer"),
     "analyst_cross_correlator.yaml": ("cross_correlator", "cross_analyst_correlator"),
     # The facts-table maintenance sweep — same deterministic-sub_handler pattern;
     # wires the built-but-uninvoked fact_decay handler.
@@ -44,14 +43,20 @@ _NEW_FILES = {
     "analyst_calibration_tracking.yaml": ("calibration_tracking", "deterministic"),
 }
 
-# RETIRED from bringup (PIECE C): the situation-gated hypothesis_lifecycle is
-# SUPERSEDED by the competing_hypotheses ACH kind as the real hypotheses
-# producer (it emitted 0 rows — gated on active situations that go dormant). The
-# descriptor file is KEPT on disk (it must still validate so the handler can be
-# re-enabled as a lifecycle-maintenance feeder), but it is intentionally NOT in
-# ANALYST_FILES so it isn't a duplicate forward-claim producer.
+# RETIRED from bringup: descriptor files KEPT on disk (they must still validate
+# so the handler/leg can be re-enabled) but intentionally NOT in ANALYST_FILES.
+#   * hypothesis_lifecycle (PIECE C): the situation-gated producer is SUPERSEDED
+#     by the competing_hypotheses ACH kind (it emitted 0 rows — gated on active
+#     situations that go dormant); left out so it isn't a duplicate forward-claim
+#     producer.
+#   * meta_synthesizer (2026-07-02): the LEGACY standalone cross-analyst
+#     synthesizer is SUPERSEDED by the composition spine (country -> region ->
+#     escalation -> world) and reads the now-retired country_assessor as input →
+#     retired live; left out so a fresh deploy cannot re-create it over a dead
+#     input. See test_meta_synthesizer_subscription_sources for the file contract.
 _RETIRED_BUT_VALIDATES = {
     "analyst_hypothesis_lifecycle.yaml": ("hypothesis_lifecycle", "deterministic"),
+    "analyst_meta_synthesizer.yaml": ("meta_synthesizer", "meta_findings_synthesizer"),
 }
 
 
@@ -100,9 +105,10 @@ def test_new_descriptors_in_bringup_set():
 
 
 def test_retired_hypothesis_lifecycle_not_in_bringup():
-    """PIECE C disposition: hypothesis_lifecycle is SUPERSEDED by competing_
-    hypotheses and RETIRED from bringup (kept on disk + dispatch for re-enable as
-    a feeder), so it must NOT be registered (no duplicate forward-claim producer).
+    """Retired-from-bringup disposition: hypothesis_lifecycle (SUPERSEDED by
+    competing_hypotheses) and meta_synthesizer (SUPERSEDED by the composition
+    spine; reads the retired country_assessor) are kept on disk for re-enable but
+    must NOT be registered — else a fresh deploy resurrects a dead producer.
     """
     mod = _bringup_module()
     for name in _RETIRED_BUT_VALIDATES:
