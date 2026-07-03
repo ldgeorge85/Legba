@@ -74,9 +74,9 @@ specs under `docs/` for context. New here? Start with the
 
 - **⚠️ The journal needs its OWN dead-analyst canaries — two of them.** The journal assessor (Legba's first-person reflective voice) runs as **two META single-global-run analysts** (`target_filter=None`, like `world_assessor`) that SHARE one extension analyst kind, `journal_assessor` (registered via `register_analyst_kind` + the vocabulary-entries family — NOT a built-in `AnalystKind`; the built-in-kind count is unchanged): the **entry tier** (`journal_assessor`, descriptor `descriptors/analyst_journal_assessor.yaml`, cadence `0 0,12 * * *` = every 12h) and the **consolidation tier** (`journal_consolidator`, `descriptors/analyst_journal_consolidator.yaml`, cadence `0 2 * * *` = daily 02:00 UTC). Each global-run analyst can go silently dead WITHOUT a target to flag it, so **each needs its OWN activation canary** — the entry-tier canary exercises a DIFFERENT actor id than the consolidator, so a green entry tier does NOT prove the consolidator is alive. **The daily consolidator hides death the LONGEST** (a 24h beat); watch its `produced_at` directly. Producer output lands in the dedicated `journal_entries` table (migration **0048**, which also adds `journal_proposals`) — NOT `analyst_outputs` — and is **OFF the fact/finding/nexus chain**: a journal row is a *perspective OVER* the provenance chain, carrying an always-empty `derived_from` and deliberately excluded from the lineage catalog, so a `GET /api/v1/lineage/...` walk can never surface it. The two analysts are granted ONLY the `journal_read` (14 read tools incl. 9 self-instruments) + `journal_propose` packs (both non-write-fact — the grant-layer backstop for the never-write-a-fact invariant). Register them with `scripts/bringup_register_action_packs.py` (packs) + `scripts/bringup_register_analysts.py` (descriptors + the `journal_assessor` kind). The journal writes ONLY its own entries/consolidations directly; every outward effect (a correction, a change, or a self-revision) goes to the **human-gated `journal_proposals` queue**, never a live table — operator review happens via the accept/reject routes (`GET /api/v1/journal_proposals?status=pending`, `POST /api/v1/journal_proposals/{id}/accept`, `POST /api/v1/journal_proposals/{id}/reject` — reject REQUIRES a `decision_reason`; a `self_revision` touching a protected section auto-rejects on accept). Entries themselves render via `GET /api/v1/journal` + the `system.journal` UI panel.
 
-- **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~49 live sources including seed/baseline). To stand a fresh instance up to current scope:
-  1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations.
-  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts (`deploy.sh` registers these via the split registrars; the combined `scripts/bringup_register_p17_workingset.py` covers the same set in one pass).
+- **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~57 registered source descriptors, ~50 live/active including seed/baseline plus the standalone state-media feeds IRNA / PressTV / Ukrinform and the UCDP GED adapter — the latter currently **paused pending an access token**). To stand a fresh instance up to current scope:
+  1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations — currently `0054`…`0060` (live head **0060**).
+  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the seven bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`); `bringup_register_watch_country_targets.py` adds the 6-desk watch tier; `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
   3. **Then the FULL source catalog** — run `scripts/bringup_register_source_catalog.py` to register the 46-source catalog (this is what takes the instance from the 3-feed cold-start to current scope), plus the deterministic cadence analysts + the budget envelope (§7).
   4. Seed the knowledge roots (§7.2) and verify ingestion (§9). A current-scope instance reaches order-of-magnitude tens-of-thousands of signals and tens-of-thousands of findings — the 3-feed set will not.
 
@@ -207,7 +207,9 @@ Idempotent. Re-runs skip already-applied migrations
 > A **fresh deploy** does not replay the 23-file migration history: it applies the
 > single round-trip-proven baseline `deploy/baseline/0001_baseline.sql` (which builds
 > the schema + AGE graph and pre-seeds the ledger to head **0053**), then `migrate`
-> only applies any **future** (`0054`+) migrations — currently a no-op. The
+> applies any **future** (`0054`+) migrations — currently `0054`…`0060` (the
+> contested-claims schema, the `unit_reference_labels` gold table, and the
+> composition-tower supersession fold; live head **0060**). The
 > `migrate`-only path above is for an instance whose schema already exists.
 > `deploy/deploy.sh` does both steps for you.
 
@@ -582,8 +584,11 @@ docker compose run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
   --entrypoint python legba-registry scripts/bringup_register_stack.py
 
 # The fresh source-first working set — action packs (incl. substrate_read +
-# escalate), the 3 shared sources, 19 G20 targets, and the 4 analysts — in one
-# dependency-ordered pass:
+# escalate), the 3 shared sources, 19 G20 targets, and the 4 LEGACY analysts
+# (country_assessor/critic/optimizer/consult_default). NOTE: p17_workingset is a
+# FROZEN legacy path that registers the RETIRED monolith set — it does NOT register
+# the live 7-unit spine + composition tower; use deploy.sh (bringup_register_analysts.py)
+# for the current spine. Kept here for reference on the one-pass dependency ordering:
 docker compose run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
   -e LEGBA_DATA_PG_DB=legba \
   -e LEGBA_REGISTRY_URL=http://legba-registry:8090/api/v1/registry \
@@ -598,8 +603,11 @@ docker compose run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
 **Full source-first working set (cold-start re-seed).** To populate a fresh DB
 with the canonical demo set — 3 shared world-news sources, 19 G20 country
 targets (geo-predicate `source_selector` + per-country subscription + inline
-analyst), the 4 source-first analysts, and the action packs — run the
-one-shot idempotent orchestrator, then the deterministic analysts + the daily
+analyst), the action packs, and the analysts — use `deploy.sh` (which registers
+the LIVE spine: the seven bounded units + the composition tower + the I&W pair via
+the split registrars). The frozen `p17_workingset` one-pass path below registers only
+the RETIRED `country_assessor` monolith set and is kept for dependency-ordering
+reference; run the deterministic analysts + the daily
 budget envelope. Pin `LEGBA_DATA_PG_DB=legba` (the working-set registrar
 defaults to the `legba_pivot_test` DB). Run AFTER §6 vault + the stack above, and (per §0)
 with the runtime already up or about to be `--force-recreate`d so it builds its
@@ -607,7 +615,7 @@ clients against the now-seeded stack:
 
 ```
 docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
-  python scripts/bringup_register_p17_workingset.py        # packs + sources + 19 G20 targets + 4 analysts
+  python scripts/bringup_register_p17_workingset.py        # LEGACY: packs + sources + 19 G20 targets + 4 RETIRED-monolith analysts (prefer deploy.sh for the live 7-unit spine)
 for s in finding_supersession cross_source_dedup entity_resolution; do
   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
     python scripts/bringup_register_$s.py                  # deterministic cadence analysts
@@ -793,7 +801,10 @@ fabricated header) and token-capped via `max_facts`.
 grounding:
   enabled: true
   scope: [target_geo, slice_entities]   # both is the default
-  sources: [substrate]                  # vector:world_context is a future seam (#20)
+  sources: [substrate, situations, graph_structure, vector:world_context]
+  # vector:world_context is LIVE opportunistic RAG (relevance-floored, country-filtered,
+  # degrade-not-drop) — currently flipped on for leadership_transition + internal_stability;
+  # omit it to ground on the structured substrate only.
   max_facts: 30                         # token cap, 1..200
 ```
 

@@ -252,7 +252,10 @@ tile that headlines the whole panel set.
 
   For a finding the Inspector renders the **cited read card**
   (`components/inspector/CitedAssessment.tsx`) at the top — this is the drillable
-  product read. The report prose renders with its inline `[N]` markers turned
+  product read. It is built from the shared **reading kit** — `CitedProse` (renders
+  prose with inline citation chips), `VerdictBadge` (the banded-verdict pill), and the
+  per-desk **Intelligence Card** framing. The report prose renders with its inline `[N]`
+  markers turned
   into clickable citation chips: a chip scrolls to and flashes the matching row
   in the **Evidence** panel below, whose title is itself a `RecordLink` into the
   cited signal (so a claim drills to its source). A header strip carries the
@@ -377,8 +380,11 @@ former `v4.feed` rail was **deleted** in the #90 feed merge and replaced by the
 unified `system.findings` Live Feed (see §3 *Daily driver*). World Map / Flow /
 Why ship in `personal` and `cis`.
 
-- **World Map** (`v4.map`) — a **Leaflet** world map (`v4/world/LeafletWorldMap`)
-  with a layer panel, time scrubber, KPI strip, and a selection drawer; demoted
+- **World Map** (`v4.map`) — the default is now a **maplibre-gl banded-verdict
+  choropleth** (`v4/world/MapLibreWorldMap` + `countryVerdicts`), which shades each
+  country desk by its scorecard/verdict band; the **Leaflet** map
+  (`v4/world/LeafletWorldMap`) is the fallback when `hasWebGL` is false. Both carry
+  a layer panel, time scrubber, KPI strip, and a selection drawer; demoted
   to the boot grid's bottom strip. A map click selects into the store.
 - **Flow Canvas** (`v4.flow`) — The Flow: the live registry canvas over
   sources → targets → analysts → packs (`v4/flow`), with NiFi-style live
@@ -676,12 +682,12 @@ The evaluation and operations surfaces (mostly `personal`-only).
     honest card per active desk tagged `g20` **or** `watch`, each written by the
     deterministic `scorecard_producer` (the 12th OutputKind, `scorecard`). The
     roster is the 19 G20 country desks plus a high-consequence **watch** tier
-    (Israel, Iran, Ukraine, Taiwan, North Korea — descriptor ids
-    `country_watch_{il,ir,ua,tw,kp}`), 24 desks in all; the bands span **14
+    (Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan — descriptor ids
+    `country_watch_{il,ir,ua,tw,kp,pk}`), 25 desks in all; the bands span **14
     days**, so a card integrates over that window rather than a single tick.
     Adding a country is register-a-target — the coverage tag alone cards it, no
     code. Each card shows a
-    **band per dimension** (the four bounded units) derived by high-precision
+    **band per dimension** (the seven bounded units) derived by high-precision
     rules over already-verified sub-claims; clicking a band expands its **basis**
     — the verified sub-claim finding ids the band rests on, each a `RecordLink`
     that drills into the Inspector's cited card + the lineage DAG. A dimension
