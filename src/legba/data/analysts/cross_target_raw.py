@@ -378,6 +378,11 @@ async def read_cross_target_slice(
     clauses = [
         f"fetched_at > NOW() - make_interval(hours => $1)",
         SIGNALS_EXCLUDE_BACKFILL_SQL,
+        # C2b: canonical-only — drop re-polled alias duplicates so the same
+        # event isn't counted N times as independent cross-target corroboration.
+        # Mirrors the subscription path (subscription/filter.py canonical_only)
+        # and the reads API (registry/substrate_reads_api.py).
+        "(canonical_signal_id IS NULL OR canonical_signal_id = id)",
     ]
     params: list[Any] = [int(time_window_hours)]
     scope_clauses: list[str] = []

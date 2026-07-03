@@ -254,6 +254,14 @@ async def _read_substrate_slice(
     clauses = [
         f"fetched_at > NOW() - INTERVAL '{window_hours} hours'",
         SIGNALS_EXCLUDE_BACKFILL_SQL,
+        # C2b: canonical-only. Snapshot feeds (NWS active-alerts, recent-quake
+        # endpoints) re-ingest the same item on every poll; dedup stamps each
+        # dup's ``canonical_signal_id`` to the kept row. Without this clause a
+        # UNIT slice fills with re-polled alias duplicates as separate numbered
+        # citations (one quake cited 251x — false corroboration + wasted
+        # context). Mirrors the subscription path (runtime/subscription/filter.py
+        # canonical_only) and the reads API (registry/substrate_reads_api.py).
+        "(canonical_signal_id IS NULL OR canonical_signal_id = id)",
     ]
     params: list[Any] = []
     if source_ids:
@@ -275,10 +283,15 @@ async def _read_substrate_slice(
     # carries the typed columns the residual ctx reads (entity_classes /
     # source_credibility / modality) so a predicate isn't fed nulls.
     is_broad_pool = not source_ids and not target_geo and not scope_predicate
+    # C2b: apply the per-source diversity cap to the broad global pool AND to
+    # geo-scoped country slices — a firehose source (live: NWS = 46/50 of a US
+    # slice) must not monopolise a desk's window. A source-id-narrowed slice is
+    # already scoped to the target's own chosen feeds, so it is left uncapped.
+    apply_diversity_cap = is_broad_pool or bool(target_geo)
     row_cap = _slice_row_cap()
-    # Over-fetch on the broad/predicate paths so the post-pass (per-source
+    # Over-fetch on the predicate/diversity paths so the post-pass (per-source
     # diversity / residual predicate filter) isn't starved before it fills row_cap.
-    fetch_limit = max(200, row_cap * 3) if (scope_predicate or is_broad_pool) else row_cap
+    fetch_limit = max(200, row_cap * 3) if (scope_predicate or apply_diversity_cap) else row_cap
     rows = await conn.fetch(
         f"""
         SELECT id, source_id, source_version, canonical_url,
@@ -300,10 +313,12 @@ async def _read_substrate_slice(
             filter_rows_by_residual, scope_predicate, [dict(r) for r in rows]
         )
         rows = kept[:row_cap]
-    elif is_broad_pool:
+    elif apply_diversity_cap:
         # Per-source diversity cap: walk recency-ordered, admit ≤ cap rows per
-        # source_id, until 50. A firehose source can't monopolise the slice;
-        # geopolitical/news sources reach the assessor. Env-tunable.
+        # source_id, until row_cap. A firehose source can't monopolise the slice
+        # (broad-pool OR geo-scoped); geopolitical/news sources reach the
+        # assessor. Back-fills if diversity is exhausted, so a thin single-source
+        # day is never smaller than the plain recency cut. Env-tunable.
         rows = _diversify_by_source(rows, per_source_cap=_global_slice_per_source_cap(), limit=row_cap)
 
     # Back-compat shaping: the analyst method + AnalystContext read the

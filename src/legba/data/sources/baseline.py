@@ -147,9 +147,19 @@ def _enrich_structured(signal: Signal, ctx: SourceContext) -> None:
         if isinstance(hint, str) and hint:
             signal.language = hint[:16]
 
-    # geo: carry the source scope geo hints when the signal has none.
-    if not signal.geo and ctx.scope_geo:
-        signal.geo = list(ctx.scope_geo)
+    # geo (C2): the source's ``scope_geo`` is the PUBLISHER'S origin, not the
+    # story's subject. Stamping it into the indexed ``geo`` column HERE — before
+    # the in-body geocoder in the enrichment chain runs — made every state-wire
+    # desk read that wire's whole world output as "its" country: the enrichment
+    # promote step only APPENDS the resolved in-body ISO to ``geo`` (it never
+    # demotes the origin hint), so a Cuba-war Anadolu story landed geo={TR,US}
+    # and Turkey's desk pulled all 900 Anadolu world stories. Keep the origin
+    # OUT of ``geo``. Park it in a payload key (mirrors telegram's
+    # ``publisher_origin_nongeo`` contract) so :func:`run_baseline` can apply it
+    # to ``geo`` ONLY as a post-enrichment fallback — when nothing in-body
+    # resolved (a genuinely-domestic story with no other country in its body).
+    if ctx.scope_geo and "publisher_origin" not in signal.payload:
+        signal.payload["publisher_origin"] = list(ctx.scope_geo)
 
     # tags: lift payload tags into the typed, indexed column.
     if not signal.tags:
@@ -292,6 +302,19 @@ async def run_baseline(
         if out is None:
             return None
         signal = out
+
+    # geo fallback (C2): the publisher-origin scope hint applies to the indexed
+    # ``geo`` column ONLY when nothing in-body resolved — i.e. AFTER the
+    # enrichment chain (geocode/ner) + its promote step have had their chance and
+    # left ``geo`` empty. This keeps a state wire's genuinely-domestic story
+    # tagged with its home country while a world story it published is not
+    # mis-tagged. The origin was parked in payload by :func:`_enrich_structured`.
+    if not signal.geo:
+        origin = signal.payload.get("publisher_origin")
+        if isinstance(origin, list):
+            hinted = [g for g in origin if isinstance(g, str) and g]
+            if hinted:
+                signal.geo = hinted
 
     return signal
 

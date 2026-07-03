@@ -83,6 +83,67 @@ class _FakeConn:
         return None
 
 
+class _CapturingConn:
+    """asyncpg-conn stand-in that RECORDS every SQL string passed to ``fetch``
+    (returning [] each time) so a unit test can assert on the BUILT slice query
+    without a live DB. ``fetchrow`` returns a canned target body so the
+    geo-scoped slice path builds too."""
+
+    def __init__(self, target_body: dict | None = None) -> None:
+        self.fetch_sqls: list[str] = []
+        self._target_body = target_body
+
+    async def fetch(self, sql, *a, **k):
+        self.fetch_sqls.append(sql)
+        return []
+
+    async def fetchrow(self, *a, **k):
+        if self._target_body is None:
+            return None
+        return {"body": self._target_body}
+
+    def signals_sql(self) -> str:
+        """The captured query that reads the signals table."""
+        for sql in self.fetch_sqls:
+            if "FROM signals" in sql:
+                return sql
+        raise AssertionError("no `FROM signals` fetch was captured")
+
+
+_CANONICAL_ONLY_CLAUSE = "(canonical_signal_id IS NULL OR canonical_signal_id = id)"
+
+
+@pytest.mark.asyncio
+async def test_slice_sql_filters_to_canonical_rows_meta():
+    """C2b: the cadence slice query must carry the canonical-only clause so
+    re-polled alias duplicates don't fill a UNIT slice as separate numbered
+    citations (one quake cited 251x). META (no-target) path."""
+    conn = _CapturingConn()
+    await _read_substrate_slice(
+        conn, descriptor=_minimal_inline_descriptor(), target_filter=None,
+    )
+    assert _CANONICAL_ONLY_CLAUSE in conn.signals_sql()
+
+
+@pytest.mark.asyncio
+async def test_slice_sql_filters_to_canonical_and_diversifies_geo_scope():
+    """C2b: a geo-scoped country slice ALSO carries the canonical-only clause and
+    over-fetches (LIMIT = row_cap*3) so the per-source diversity cap can thin a
+    firehose (live: NWS = 46/50 of a US slice) instead of it monopolising the
+    desk window."""
+    from legba.runtime.dapr_actors import _slice_row_cap
+
+    conn = _CapturingConn(target_body={"scope": {"geo": ["US"]}})
+    await _read_substrate_slice(
+        conn, descriptor=_minimal_inline_descriptor(), target_filter="country_g20_us",
+    )
+    sql = conn.signals_sql()
+    assert _CANONICAL_ONLY_CLAUSE in sql
+    assert "geo && " in sql                                   # geo-scoped
+    over_fetch = max(200, _slice_row_cap() * 3)
+    assert f"LIMIT {over_fetch}" in sql                       # diversity over-fetch
+
+
 @pytest.mark.asyncio
 async def test_read_substrate_slice_no_target_unit_no_unbind():
     """UNIT regression (no DB): target_filter=None must not UnboundLocalError on

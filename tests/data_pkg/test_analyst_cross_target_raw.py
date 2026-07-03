@@ -468,3 +468,34 @@ async def pg_conn(migrated_pg: PostgresConfig):
 async def test_read_cross_target_slice_empty_target_ids_returns_empty(pg_conn):
     rows = await read_cross_target_slice(pg_conn, target_ids=[])
     assert rows == []
+
+
+class _CapturingConn:
+    """asyncpg-conn stand-in recording the ``fetch`` SQL (no DB) so a unit test
+    can assert the built cross-target query. ``fetchrow`` returns a canned target
+    body with a geo scope so the query builds past the no-scope guard."""
+
+    def __init__(self, target_body: dict) -> None:
+        self.fetch_sqls: list[str] = []
+        self._target_body = target_body
+
+    async def fetchrow(self, *a, **k):
+        return {"body": self._target_body}
+
+    async def fetch(self, sql, *a, **k):
+        self.fetch_sqls.append(sql)
+        return []
+
+
+@pytest.mark.asyncio
+async def test_cross_target_slice_sql_filters_to_canonical_rows():
+    """C2b: the cross-target slice must carry the canonical-only clause so a
+    re-polled alias isn't counted N times as independent cross-target
+    corroboration. Asserts on the BUILT SQL (no DB)."""
+    conn = _CapturingConn(target_body={"scope": {"geo": ["US"]}})
+    await read_cross_target_slice(conn, target_ids=["t1"])
+    assert len(conn.fetch_sqls) == 1
+    assert (
+        "(canonical_signal_id IS NULL OR canonical_signal_id = id)"
+        in conn.fetch_sqls[0]
+    )
