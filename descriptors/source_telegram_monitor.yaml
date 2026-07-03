@@ -61,6 +61,10 @@ scope:
   geo: []
   languages: [en]
   tags: [social, messaging, official, humanitarian, health, global]
+  # S1-T8 — generic channel monitor; content depends on the operator-configured
+  # channel set, so classed reporting (the conservative default) even though the
+  # shipped EXAMPLE channels are official org channels.
+  source_class: reporting
 
 acquisition: poll
 

@@ -23,6 +23,9 @@ scope:
   geo: []
   languages: [en, de]
   tags: [news, world, geopolitical, global]
+  # S1-T8 — German PUBLIC international broadcaster (state-FUNDED, editorially
+  # independent) → reporting, NOT state_media.
+  source_class: reporting
 
 acquisition: poll
 

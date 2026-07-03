@@ -37,6 +37,7 @@ scope:
   geo: []
   languages: [en]
   tags: [gis, geospatial, structured, hazard, seismic, global]
+  source_class: official           # S1-T8 — USGS (US government scientific agency)
 
 acquisition: poll
 

@@ -42,6 +42,7 @@ scope:
   geo: []
   languages: [en]
   tags: [news, media, world, geopolitical, global]
+  source_class: reporting          # S1-T8 — open news-media corpus aggregator
 
 acquisition: poll
 

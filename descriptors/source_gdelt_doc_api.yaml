@@ -35,6 +35,7 @@ scope:
   geo: []
   languages: [en]
   tags: [news, world, geopolitical, global, conflict]
+  source_class: reporting          # S1-T8 — news-derived event/full-text aggregator
 
 acquisition: poll
 

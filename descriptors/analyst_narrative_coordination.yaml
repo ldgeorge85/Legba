@@ -82,6 +82,22 @@ method:
     naturally drawing heavy organic coverage is NOT coordination. Coordination is
     a claim about SYNCHRONY and SOURCING, not about volume alone.
 
+    Weigh each signal by its SOURCE CLASS (source_class), when the signal
+    metadata carries it — reporting (wire/news), analysis (think-tank/research),
+    official (government/IGO primary), or state_media (state-controlled outlets):
+      - Treat state_media as FRAMING evidence — an official-position / messaging
+        signal — and as LOW-TIER for establishing FACTS. When several state_media
+        outlets of the SAME state converge on one talking point, that is a strong
+        coordination tell (the state's line), so cite them [N]; but do NOT treat
+        what they assert as established fact, and do NOT call convergence AMONG
+        one state's own outlets a cross-source conspiracy — it is that state's
+        line by construction.
+      - Genuine cross-source coordination is most notable when the SAME frame
+        jumps across INDEPENDENT source classes (state_media into ostensibly
+        independent reporting, or lockstep across unaffiliated outlets).
+      - official statements are primary-source positions; independent reporting
+        and analysis are the baseline you measure a coordinated push against.
+
     Produce exactly ONE finding. Every key claim MUST cite the specific
     converging signal(s) it rests on with [N] markers (e.g. [1][4][7] when three
     sources echo one frame). Never assert coordination without citing the

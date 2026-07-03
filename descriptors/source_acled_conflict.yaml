@@ -57,6 +57,7 @@ scope:
   geo: []
   languages: [en]
   tags: [conflict, political_violence, protest, events, structured, global]
+  source_class: analysis           # S1-T8 — research/data project (coded conflict-event data)
 
 acquisition: poll
 

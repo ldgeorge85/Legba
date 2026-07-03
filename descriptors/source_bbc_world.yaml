@@ -33,6 +33,7 @@ scope:
   geo: []
   languages: [en]
   tags: [news, world, geopolitical, global]
+  source_class: reporting          # S1-T8 — international wire/news broadcaster
 
 acquisition: poll
 

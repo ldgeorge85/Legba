@@ -43,6 +43,7 @@ scope:
   geo: []
   languages: [en]
   tags: [humanitarian, crisis, disaster, global, news]
+  source_class: official           # S1-T8 — UN OCHA (IGO primary humanitarian source)
 
 acquisition: poll
 

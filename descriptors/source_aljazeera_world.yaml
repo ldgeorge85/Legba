@@ -26,6 +26,9 @@ scope:
   geo: []
   languages: [en]
   tags: [news, world, geopolitical, global]
+  # S1-T8 — the English international news arm; classed reporting (conservative).
+  # Note: the stronger-slant Arabic edition is separately catalogued.
+  source_class: reporting
 
 acquisition: poll
 

@@ -1,0 +1,70 @@
+# S1-T8 — WATCH-desk state-media SourceDescriptor: source.ukrinform.english
+# (Ukraine).
+#
+# Ukrinform — Ukraine's national (state-owned) news agency, English edition.
+# Gives the Ukraine watch desk (country_watch_ua) the HOME-SIDE official voice
+# (the catalog's TASS covers the adversary Russian framing). source_class ==
+# state_media because it is a state-owned outlet: the narrative_coordination
+# unit reads it as the official Ukrainian POSITION / framing, LOW-tier for
+# establishing independent facts. No fact_extractor stage (framing, not facts).
+#
+# Real RSS: https://www.ukrinform.net/rss/block-lastnews — probed live
+# 2026-07-02, HTTP 200, valid RSS 2.0 (channel "Latest news", 40 items).
+# Keyless, shared, open.
+
+identity:
+  id: source.ukrinform.english
+  name: Ukrinform — Ukrainian National News Agency (English)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active
+  owner: s1_t8_source_class
+  created: "2026-07-02T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [UA]
+  languages: [en]
+  tags: [news, state_media, europe, ukraine]
+  source_class: state_media
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "47 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.ukrinform.net/rss/block-lastnews"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    # No fact_extractor: state media is framing evidence, not a fact source.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

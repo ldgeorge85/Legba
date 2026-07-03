@@ -2,12 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """P-17 — register the shared global-news SourceDescriptors.
 
-Registers the three shared, open, poll RSS sources every G20 country target
+Registers the shared, open, poll RSS sources every G20/watch country target
 wires to by predicate (one poll/connection per source for the whole platform):
 
   * source.bbc.world        (https://feeds.bbci.co.uk/news/world/rss.xml)
   * source.aljazeera.world  (https://www.aljazeera.com/xml/rss/all.xml)
   * source.dw.world         (https://rss.dw.com/atom/rss-en-all)
+
+Plus (S1-T8) the WATCH-desk state-media voices — source_class: state_media,
+read as framing/official-position evidence, not as a fact source:
+
+  * source.irna.english     (https://en.irna.ir/rss)              — Iran
+  * source.presstv.english  (https://www.presstv.ir/rss.xml)      — Iran
+  * source.ukrinform.english(https://www.ukrinform.net/rss/block-lastnews) — Ukraine
 
 Direct-DB registration via DescriptorRegistry against the migrated Postgres
 (default ``legba_pivot_test`` — override with LEGBA_DATA_PG_DB).  Idempotent:
@@ -42,6 +49,12 @@ SOURCE_FILES = [
     "source_bbc_world.yaml",
     "source_aljazeera_world.yaml",
     "source_dw_world.yaml",
+    # S1-T8 — WATCH-desk state-media voices (source_class: state_media). Keyless,
+    # shared, open RSS — same contract as the three global feeds above. Feed URLs
+    # probed live 2026-07-02 (HTTP 200 + valid RSS 2.0).
+    "source_irna_english.yaml",         # Iran   — IRNA (state news agency)
+    "source_presstv_english.yaml",      # Iran   — Press TV (state broadcaster)
+    "source_ukrinform_english.yaml",    # Ukraine — Ukrinform (national agency)
 ]
 
 

@@ -45,6 +45,7 @@ scope:
   geo: []
   languages: [en]
   tags: [sanctions, pep, compliance, entities, structured, global, api]
+  source_class: official           # S1-T8 — consolidates primary government sanctions/PEP lists
 
 acquisition: poll
 

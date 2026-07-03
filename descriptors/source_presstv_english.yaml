@@ -1,0 +1,68 @@
+# S1-T8 — WATCH-desk state-media SourceDescriptor: source.presstv.english (Iran).
+#
+# Press TV — Iran's English-language state broadcaster (self-described as
+# "affiliated with Islamic Republic of Iran Broadcasting"). Second Iran-desk
+# state-media voice alongside source.irna.english; carries a stronger editorial
+# slant and is the clearest example of source_class == state_media FRAMING
+# material for the narrative_coordination unit. LOW-tier for facts; no
+# fact_extractor stage (framing, not a fact source).
+#
+# Real RSS: https://www.presstv.ir/rss.xml — probed live 2026-07-02, HTTP 200,
+# valid RSS 2.0 (channel "Presstv", 100+ items). Keyless, shared, open.
+
+identity:
+  id: source.presstv.english
+  name: Press TV — Iran State Broadcaster (English)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active
+  owner: s1_t8_source_class
+  created: "2026-07-02T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [IR]
+  languages: [en]
+  tags: [news, state_media, middle_east, iran]
+  source_class: state_media
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "29 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.presstv.ir/rss.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    # No fact_extractor: state media is framing evidence, not a fact source.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open
