@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """UCDP (Uppsala Conflict Data Program) source handler — S1-T9.
 
-UCDP is a free, no-auth, academically curated dataset of organized-violence
+UCDP is a free (token-gated), academically curated dataset of organized-violence
 events (state-based conflict, non-state conflict, and one-sided violence)
 covering the whole world back to 1989. The Georeferenced Event Dataset (GED)
 gives one row per lethal event with geo (lat/long + country + admin), the two
@@ -21,8 +21,15 @@ Reference:
 Key API details (documented shape — the live fetch is integrator-verified
 post-deploy per the task; this handler is written against the codebook):
 
-  * Auth: NONE. GED is a public, no-auth endpoint (unlike ACLED which needs an
-    OAuth2 account). No SecretRef in the config.
+  * Auth: TOKEN. UCDP now requires a free access token (introduced to protect
+    the service from bot traffic). The token is submitted on EVERY request as
+    the HTTP header ``x-ucdp-access-token`` (per the API docs). The descriptor
+    carries a SecretRef (``access_token_secret``) that the runtime resolves at
+    pull time via ``SourceContext.secrets_resolve``; an operator may instead
+    drop the token into the runtime env as ``LEGBA_UCDP_ACCESS_TOKEN``. With NO
+    token configured the handler degrades cleanly — it skips the pull (no HTTP,
+    no 401 spam) and reports the note ``ucdp: no token configured`` — so a
+    paused/unconfigured deploy stays quiet.
   * URL:  ``{api_base}/{resource}/{version}`` — e.g.
     ``https://ucdpapi.pcr.uu.se/api/gedevents/24.1``. The ``version`` selects
     the dataset release; a candidate (monthly-updated, most-current) release is
@@ -52,6 +59,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, AsyncIterator, ClassVar, Mapping
@@ -77,9 +85,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-#: Public GED API host + path prefix (no auth). Confirmed as the documented
-#: endpoint in scripts/seed_sources.py ("UCDP API").
+#: GED API host + path prefix (token-gated; see ``access_token_secret``).
+#: Confirmed as the documented endpoint in scripts/seed_sources.py ("UCDP API").
 UCDP_API_BASE: str = "https://ucdpapi.pcr.uu.se/api"
+
+#: HTTP header the UCDP API reads the access token from. UCDP introduced a
+#: free access token (registered with the API maintainer) to protect the
+#: service from bot traffic; the token rides EVERY request under this header.
+UCDP_ACCESS_TOKEN_HEADER: str = "x-ucdp-access-token"
+
+#: Env-var fallback for the access token, so an operator can bring the source
+#: live the moment the token arrives without wiring the vault first. The
+#: descriptor's ``access_token_secret`` (vault ref) takes precedence over it.
+UCDP_ACCESS_TOKEN_ENV: str = "LEGBA_UCDP_ACCESS_TOKEN"
 
 #: Default GED dataset version. The endpoint is ``{api_base}/{resource}/{version}``.
 #: Point ``version`` at a candidate release string for the most-current
@@ -116,14 +134,31 @@ UCDP_REGION_IDS: frozenset[int] = frozenset({1, 2, 3, 4, 5})
 class UCDPConfig(BaseModel):
     """UCDP GED source descriptor config.
 
-    No credentials — GED is a public, no-auth endpoint. A descriptor MAY leave
-    every filter unset (the full global feed; consuming targets narrow by their
-    Subscription.geo). ``type_of_violence`` filters client-side; ``country_ids``
-    / ``region_ids`` ride the query string.
+    UCDP now requires a free access token. ``access_token_secret`` is a
+    SecretRef (a vault credential_id, never the plaintext) that the runtime
+    resolves at pull time and sends as the ``x-ucdp-access-token`` header; when
+    unset the handler falls back to the ``LEGBA_UCDP_ACCESS_TOKEN`` env var, and
+    with neither it degrades cleanly (skip + a quiet note, no 401 spam).
+
+    A descriptor MAY leave every filter unset (the full global feed; consuming
+    targets narrow by their Subscription.geo). ``type_of_violence`` filters
+    client-side; ``country_ids`` / ``region_ids`` ride the query string.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    access_token_secret: str | None = Field(
+        default=None,
+        max_length=256,
+        description=(
+            "Vault reference (credential_id) for the UCDP access token — NOT "
+            "the token itself. Resolved at pull time via "
+            "SourceContext.secrets_resolve and sent as the "
+            "``x-ucdp-access-token`` header. When unset the handler falls back "
+            "to the LEGBA_UCDP_ACCESS_TOKEN env var; with neither, the pull "
+            "degrades cleanly (no HTTP, no 401 spam)."
+        ),
+    )
     api_base: str = Field(
         default=UCDP_API_BASE,
         description="GED API host + path prefix (override only if UCDP moves it).",
@@ -371,6 +406,15 @@ class UCDPSourceHandler:
         downstream dedupe (external_id + content_hash) handles that.
         """
         config = self._coerce_config(ctx)
+        access_token = await self._resolve_access_token(ctx, config)
+        if not access_token:
+            # No token → degrade cleanly: skip the pull entirely (no HTTP, no
+            # 401 spam) and record a quiet note. A paused/unconfigured deploy
+            # stays silent until the operator provides a token.
+            self._note_no_token(ctx)
+            return
+        auth_headers = {UCDP_ACCESS_TOKEN_HEADER: access_token}
+
         cursor = _Cursor.from_state(await ctx.state_store.get("ucdp_cursor"))
         floor_dt = self._effective_floor(since, cursor, config)
         violence_filter = set(config.type_of_violence or [])
@@ -401,7 +445,7 @@ class UCDPSourceHandler:
                 )
                 try:
                     records, next_url = await self._fetch_page(
-                        client, url, params, config
+                        client, url, params, config, auth_headers
                     )
                 except httpx.HTTPError as err:
                     self._health.record_error(repr(err))
@@ -461,12 +505,24 @@ class UCDPSourceHandler:
         """Issue a single-record probe; cheap call exercising reachability."""
         config = self._coerce_config(ctx)
         now = self._now(ctx)
+        access_token = await self._resolve_access_token(ctx, config)
+        if not access_token:
+            # Degrade cleanly instead of probing (an unauthenticated probe
+            # would just 401). Report the quiet note so the operator sees why.
+            self._note_no_token(ctx)
+            return SourceHealth(
+                state="degraded",
+                last_success_at=self._health.last_success_at,
+                last_error="ucdp: no token configured",
+                rows_pulled_24h=self._health.rows_24h(now),
+            )
+        auth_headers = {UCDP_ACCESS_TOKEN_HEADER: access_token}
         probe_params = {"pagesize": 1}
         url = self._first_page_url(config)
 
         try:
             async with self._open_client(config) as client:
-                resp = await client.get(url, params=probe_params)
+                resp = await client.get(url, params=probe_params, headers=auth_headers)
                 resp.raise_for_status()
                 body = resp.json()
                 ok = isinstance(body, dict) and isinstance(
@@ -528,6 +584,53 @@ class UCDPSourceHandler:
     def _now(ctx: SourceContext) -> datetime:
         return ctx.utcnow() if hasattr(ctx, "utcnow") else datetime.now(tz=timezone.utc)
 
+    async def _resolve_access_token(
+        self, ctx: SourceContext, config: UCDPConfig
+    ) -> str | None:
+        """Resolve the UCDP access token, or None when none is configured.
+
+        Precedence, mirroring how the ACLED / OpenSanctions handlers resolve
+        their credentials (L-102 §7):
+
+          1. the descriptor's ``access_token_secret`` vault ref, resolved via
+             ``ctx.secrets_resolve`` (the runtime binds a real resolver;
+             CredentialVault.resolve raises MissingSecretError on a miss); then
+          2. the ``LEGBA_UCDP_ACCESS_TOKEN`` env var — an operator convenience
+             for bringing the source live before the vault is wired.
+
+        Returns None when neither yields a token so the caller degrades cleanly
+        rather than firing an unauthenticated request that would just 401.
+        """
+        secret_ref = (config.access_token_secret or "").strip()
+        if secret_ref:
+            resolver = getattr(ctx, "secrets_resolve", None)
+            if resolver is not None:
+                token = _as_token_text(await resolver(secret_ref))
+                if token:
+                    return token
+        env_token = os.environ.get(UCDP_ACCESS_TOKEN_ENV)
+        if env_token and env_token.strip():
+            return env_token.strip()
+        return None
+
+    def _note_no_token(self, ctx: SourceContext) -> None:
+        """Record the clean-degrade state when no access token is configured.
+
+        UCDP requires an access token; with none present the handler must NOT
+        touch the network (every request would 401). We stamp a clear, quiet
+        note on the health counters and log ONE line — a paused/unconfigured
+        deploy stays silent instead of 401-spamming.
+        """
+        note = "ucdp: no token configured"
+        self._health.last_status = "degraded"
+        self._health.last_error = note
+        ctx.logger.warning(
+            "%s — skipping pull; provide a token via the access_token_secret "
+            "vault ref or the %s env var to bring the source live",
+            note,
+            UCDP_ACCESS_TOKEN_ENV,
+        )
+
     @staticmethod
     def _first_page_url(config: UCDPConfig) -> str:
         return f"{config.api_base.rstrip('/')}/{config.resource}/{config.version}"
@@ -582,9 +685,14 @@ class UCDPSourceHandler:
         url: str,
         params: dict[str, Any] | None,
         config: UCDPConfig,
+        headers: Mapping[str, str],
     ) -> tuple[list[dict[str, Any]], str | None]:
-        """One page of GED events + the NextPageUrl (or None at the end)."""
-        resp = await client.get(url, params=params)
+        """One page of GED events + the NextPageUrl (or None at the end).
+
+        ``headers`` carries the ``x-ucdp-access-token`` credential; it rides
+        every request including the followed ``NextPageUrl`` pages.
+        """
+        resp = await client.get(url, params=params, headers=dict(headers))
         resp.raise_for_status()
         body = resp.json()
         if not isinstance(body, dict):
@@ -700,6 +808,15 @@ class UCDPSourceHandler:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _as_token_text(value: Any) -> str:
+    """Normalize a resolved secret (str/bytes/None) to a stripped token string."""
+    if value is None:
+        return ""
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8").strip()
+    return str(value).strip()
 
 
 def _to_float(value: Any) -> float | None:
@@ -819,6 +936,8 @@ assert isinstance(UCDPSourceHandler(), SourceHandler)  # type: ignore[arg-type]
 
 
 __all__ = [
+    "UCDP_ACCESS_TOKEN_ENV",
+    "UCDP_ACCESS_TOKEN_HEADER",
     "UCDP_API_BASE",
     "UCDP_DEFAULT_VERSION",
     "UCDP_PAGE_SIZE_MAX",
