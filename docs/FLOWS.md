@@ -58,8 +58,8 @@ bulk) on cron. The three-feed set (BBC / Deutsche Welle / Al Jazeera) is the
 cold-start verification minimum, not the deployed scope; a fresh instance
 reaches current scope by running the full source catalog
 (`scripts/bringup_register_source_catalog.py`). The exemplar domain is
-geopolitics over 24 country desks — the 19 G20 countries plus a
-high-consequence watch tier; a "desk" is a scoped subject a set of analysts
+geopolitics over 25 country desks — the 19 G20 countries plus a
+6-country high-consequence watch tier; a "desk" is a scoped subject a set of analysts
 work, not a surveilled entity — but the domain is configured by YAML
 descriptors, not baked into code.
 

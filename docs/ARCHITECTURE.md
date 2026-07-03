@@ -773,11 +773,15 @@ new store — it is (Tier 0) curating *current* data **in**, and (Tier 1)
   - **Canary (live-verified).** A US assessment's context now contains
     "United States — head of state: Donald Trump (since 2025-01-20)".
 
-- **Tier 2 — vector `world_context` collection.** A curated unstructured-brief
-  collection is a **declared future seam** (it needs the embedder-through-port,
-  L-114). The schema already accepts `sources: [vector:world_context]` so
-  descriptors can pre-declare it, but the deps-builder logs and the resolver
-  no-ops on any non-`substrate` source until that wiring lands
+- **Tier 2 — vector `world_context` collection (LIVE).** A curated unstructured-brief
+  collection, now wired (the embedder-through-port L-114 landed; SEAM #11 resolved). The
+  resolver retrieves from the `world_context` Qdrant corpus (~293 chunks; a `tradecraft`
+  corpus of ~1716 chunks also exists) through the stack embedder port (bge-m3, 1024-dim)
+  as a separate, non-citable grounding preamble — opportunistic, relevance-floored,
+  country-filtered, degrade-not-drop when the corpus is empty. It is **staggered on**:
+  currently flipped ON for `leadership_transition` + `internal_stability` (their
+  `grounding.sources` include `vector:world_context`); the other units resolve only the
+  structured `substrate` source, pending review-gated expansion
   (`analyst_deps_builder.py:419-425`).
 
 Grounding is purely additive over the substrate: it is a couple of cheap
@@ -1662,7 +1666,8 @@ composition-supersession fold + critique index + null-target composition-head fo
   the same worker (plan→acquire→analyze→synthesize), submitted detached via
   `POST /api/v1/deep_consult` (202 + task_id), polled to a persisted finding.
 - An on-demand **consult** engine runs a ReAct analyst against the live substrate
-  (`POST /api/v1/consult`, `consult_on_demand` kind, 4 governed read tools) in
+  (`POST /api/v1/consult`, `consult_on_demand` kind, ~17 governed read tools incl. the
+  live semantic `search_context` corpus search) in
   two modes: **`chat`** (default — multi-turn via a client-held `messages[]`, no
   durable finding; each ReAct step streamed to a request-scoped NATS subject and
   relayed to the browser as SSE via `GET /api/v1/consult/stream/{request_id}`)

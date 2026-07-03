@@ -105,12 +105,16 @@ cold-start verification set** — the smallest loop that proves the path from
 empty volumes. It is *not* the deployed scope. A fresh instance reaches
 **current/full scope** by running `scripts/bringup_register_source_catalog.py`,
 which registers the **46-entry** source catalog (43 `rss` + 3 `geojson`
-handler integrations). A representative running deployment has **49 distinct
-sources actively producing signals** (the 46 catalog integrations plus seed /
-world-baseline curated sources) and has ingested **54,197 signals** →
-**19,629 findings** · **3,019 facts** · **3,822 nexuses** · **25 situations**
-· **398 hypotheses**. See `DATA_SOURCES.md` for the full catalog (the
-three-tier 3 / 46 / 49 scope model, the per-source table, and the
+handler integrations); the standalone state-media feeds (IRNA / PressTV /
+Ukrinform) and the UCDP GED adapter (currently **paused pending an access
+token**) are registered as separate descriptor files, and each source now
+carries a `source_class` taxonomy tag (`reporting` / `analysis` / `official` /
+`state_media`). A representative running deployment has **~53 distinct
+sources actively producing signals** (the 46 catalog integrations plus the
+state-media feeds and seed / world-baseline curated sources) over a substrate on
+the order of tens of thousands of signals → thousands of findings / facts /
+nexuses. See `DATA_SOURCES.md` for the full catalog (the
+three-tier 3 / 46 / ~53 scope model, the per-source table, and the
 handler-kind detail), and `SETUP.md` for the from-zero
 cold-start-to-current-scope deploy commands.
 

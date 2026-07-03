@@ -416,12 +416,15 @@ one forced final-synthesis turn:
    with the tools withheld so the operator always gets a structured answer.
 
 The tool whitelist is a set of **read-only substrate primitives** (`_KNOWN_TOOLS`,
-16 today: `search_signals`, `query_facts`, `inspect_entity`, `query_nexuses`,
+17 today: `search_signals`, `query_facts`, `inspect_entity`, `query_nexuses`,
 `query_hypotheses`, `get_timeline`, `compare_targets`, `query_paths`,
 `find_proxy_chains`, `query_brokers`, `list_findings`, `list_situations`,
-`query_predictions`, `list_targets`, `list_sources`, and `vector_search`).
-`vector_search` is the one **non-live entry** — a designed seam pending
-vector-store wiring (it dispatches only when a vector store is present). The kind
+`query_predictions`, `list_targets`, `list_sources`, `vector_search`, and
+`search_context`). Both vector tools are now **live**: `vector_search` is semantic
+similarity over the `legba_signals` signal-vector collection, and `search_context`
+is semantic search over the curated reference corpora (`world_context` /
+`tradecraft`) returning cited chunks — the embedder-through-port that backs them is
+wired (bge-m3, 1024-dim). The kind
 is a *read* over the substrate — write-back tools are deliberately excluded. In
 production, consult is governed through the `substrate_read` action pack, so every
 `_KNOWN_TOOLS` entry must also be present in that pack.

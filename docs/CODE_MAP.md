@@ -944,7 +944,9 @@ sources, analysts, action-packs, G20 country targets + the 6-desk `watch` tier
 (`bringup_register_watch_country_targets.py` — ids `country_watch_il/ir/ua/tw/kp/pk`)
 + discovery, entity resolution, …); `bringup_register_analysts.py` registers the
 live analyst set —
-the analysis-spine descriptors (the four units, both compositions,
+the analysis-spine descriptors (the seven units, the composition tower —
+`country_composition` / `region_composition` / `world_assessor` / thematic
+`escalation_composition` — the I&W pair `indicator_tracker` / `collection_gap`,
 `scorecard_producer`, `unit_correctness_scorer`, `forecast_scoreboard`,
 `unit_optimizer`) plus the data-analysis-arc handlers. Deliberately EXCLUDED from
 the live set (commented out, files kept): `country_assessor` (RETIRED/STOPPED —
