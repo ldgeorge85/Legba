@@ -29,6 +29,17 @@ SourceId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$", max
 GeoCode = Annotated[str, Field(pattern=r"^[A-Z]{2,3}$")]
 Tag = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
 
+# S1-T8 — editorial CLASS of a source, for analysis-side source tiering. A fixed,
+# auditable taxonomy (kept in lock-step with the collection-doctrine map in
+# ``legba.data.analysts.deterministic_handlers.collection_gap``):
+#   * ``reporting``    — wire services / news outlets (the conservative default);
+#   * ``analysis``     — think-tanks / research / OSINT collectives;
+#   * ``official``     — government / IGO / primary-source publishers;
+#   * ``state_media``  — state-controlled outlets (read as FRAMING evidence and
+#                        an official-position signal, LOW-tier for establishing
+#                        facts — see the narrative_coordination unit prompt).
+SourceClass = Literal["reporting", "analysis", "official", "state_media"]
+
 
 # ---------------------------------------------------------------------------
 # Identity + scope
@@ -60,6 +71,11 @@ class SourceScope(BaseModel):
     geo: list[GeoCode] = Field(default_factory=list)  # OPTIONAL now (pivot scope relax)
     languages: list[str] = Field(default_factory=list)
     tags: list[Tag] = Field(default_factory=list)
+    # S1-T8: editorial class of the source (see :data:`SourceClass`). OPTIONAL /
+    # defaulted to ``reporting`` (the conservative "when unsure" bucket) so every
+    # pre-S1-T8 descriptor still validates unchanged; the analysis side reads it
+    # (e.g. narrative_coordination weighs ``state_media`` as framing, not fact).
+    source_class: SourceClass = "reporting"
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +334,7 @@ class SourceRef(BaseModel):
 
 
 __all__ = [
+    "SourceClass",
     "SourceIdentity",
     "SourceScope",
     "CadenceBlock",

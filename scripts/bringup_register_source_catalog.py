@@ -84,6 +84,41 @@ SCORED_BY = "catalog.seed"
 
 VALID_TIERS = ("wire", "gov", "aggregator", "thinktank", "social")
 
+# S1-T8 — the STATE-CONTROLLED catalog feeds. A hand-curated set (NOT derived
+# from state_affiliation, which is also True for state-FUNDED-but-independent
+# public broadcasters like VOA / France 24 / Yonhap): only genuine
+# state-controlled outlets whose rationale marks them a conduit for official
+# positions belong here. These map to source_class == state_media (framing /
+# official-position evidence, LOW-tier for facts). Keep in sync with the
+# _REQUIRED_STATE_AFFILIATED set in tests/data_pkg/test_source_catalog_bringup.py
+# (minus voanews, which has a statutory editorial firewall → reporting).
+STATE_MEDIA_IDS: frozenset[str] = frozenset({
+    "source.tass.english",       # Russian state news agency
+    "source.xinhua.world",       # Chinese state news agency
+    "source.globaltimes.all",    # CCP-affiliated (People's Daily group)
+    "source.tehrantimes.all",    # Iranian state-aligned
+    "source.anadolu.english",    # Turkish state agency (documented editorial influence)
+})
+
+
+def catalog_source_class(entry: "CatalogEntry") -> str:
+    """S1-T8 — the source_class for a catalog entry (a fixed, auditable rule).
+
+    state_media is hand-curated (:data:`STATE_MEDIA_IDS`); the rest derive from
+    the existing credibility ``tier`` so every entry lands in the schema
+    vocabulary (reporting / analysis / official / state_media):
+      * ``thinktank`` -> ``analysis``  (research / advocacy / OSINT)
+      * ``gov``       -> ``official``  (government / IGO primary publishers)
+      * ``wire`` / ``aggregator`` / ``social`` -> ``reporting`` (the default)
+    """
+    if entry.id in STATE_MEDIA_IDS:
+        return "state_media"
+    if entry.tier == "thinktank":
+        return "analysis"
+    if entry.tier == "gov":
+        return "official"
+    return "reporting"
+
 
 # ---------------------------------------------------------------------------
 # Catalog model
@@ -636,6 +671,7 @@ def build_descriptor(entry: CatalogEntry) -> SourceDescriptor:
             geo=list(entry.geo),
             languages=[entry.language],
             tags=list(entry.tags),
+            source_class=catalog_source_class(entry),   # S1-T8
         ),
         acquisition="poll",
         config=config,

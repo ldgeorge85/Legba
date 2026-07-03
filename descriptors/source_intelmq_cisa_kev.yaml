@@ -43,6 +43,7 @@ scope:
   geo: []
   languages: [en]
   tags: [cyber, vulnerability, threat_intel, kev, structured, global]
+  source_class: official           # S1-T8 — US CISA primary government catalog
 
 acquisition: poll
 
