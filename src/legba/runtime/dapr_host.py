@@ -1168,7 +1168,9 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # the documented `unavailable` Protocol shape otherwise).
     substrate_query_port: Any | None
     if qdrant_client is not None:
+        from ..data.config import QdrantConfig
         from .substrate_query_port import PostgresQdrantSubstrateQueryPort
+        _qdrant_cfg = QdrantConfig.from_env()
         substrate_query_port = PostgresQdrantSubstrateQueryPort(
             pg_pool=pg_store.pool,
             qdrant_client=qdrant_client,
@@ -1176,6 +1178,9 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             # embeds-then-searches; None keeps the honest no_embedder_wired
             # fallback (seam #11).
             embedder=embedding_service,
+            # S5-T4 — the two Lane-4 RAG corpora search_context reads (S5-T2).
+            world_context_collection=_qdrant_cfg.world_context_collection,
+            tradecraft_collection=_qdrant_cfg.tradecraft_collection,
         )
         logger.info(
             "dapr_host.substrate_query_port.built embedder=%s",

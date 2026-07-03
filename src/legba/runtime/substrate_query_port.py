@@ -126,6 +126,12 @@ __all__ = ["PostgresQdrantSubstrateQueryPort"]
 # wedge a postgres connection.
 _MAX_ROW_LIMIT = 200
 
+# ``search_context`` (S5-T4) — RAG chunks are short; a handful of the most
+# similar priors answers "what does the corpus say about X". Default small,
+# hard-capped so a runaway planner can't pull the whole corpus.
+_SEARCH_CONTEXT_DEFAULT_K = 6
+_SEARCH_CONTEXT_MAX_K = 50
+
 # The LIVE assessment producers the journal + consult reflect OVER when
 # ``get_assessments`` is called with no explicit ``analyst_id``. Replaces the
 # retired ``country_assessor``/``world_assessor`` MONOLITH default: the old
@@ -213,6 +219,8 @@ class PostgresQdrantSubstrateQueryPort:
         qdrant_client: Any,
         embedder: Any | None = None,
         signals_collection: str = "legba_signals",
+        world_context_collection: str = "world_context",
+        tradecraft_collection: str = "tradecraft",
     ) -> None:
         self._pool = pg_pool
         self._qdrant = qdrant_client
@@ -226,6 +234,15 @@ class PostgresQdrantSubstrateQueryPort:
         # Protocol shape rather than fabricating a vector (seam #11).
         self._embedder = embedder
         self._signals_collection = signals_collection
+        # S5-T4 ``search_context`` — the two Lane-4 RAG corpora (S5-T2). A
+        # ``corpus`` filter narrows to one; with none the tool searches BOTH
+        # and merges by score. Keyed by the corpus token the loader stamps on
+        # every chunk payload (``payload['corpus']``) so a caller narrows with
+        # the same name the descriptor advertises.
+        self._context_collections: dict[str, str] = {
+            "world_context": world_context_collection,
+            "tradecraft": tradecraft_collection,
+        }
 
     # ------------------------------------------------------------------
     # search_signals
@@ -689,6 +706,243 @@ class PostgresQdrantSubstrateQueryPort:
         result["query"] = query
         result["backing"] = "qdrant_cosine"
         return result
+
+    # ------------------------------------------------------------------
+    # search_context (S5-T4) — RAG over the Lane-4 curated corpora
+    # ------------------------------------------------------------------
+
+    async def search_context(
+        self,
+        *,
+        query: str,
+        corpus: str | None = None,
+        country: str | None = None,
+        k: int = _SEARCH_CONTEXT_DEFAULT_K,
+    ) -> dict[str, Any]:
+        """Semantic search over the Lane-4 RAG corpora (S5-T4).
+
+        Embeds the free-text ``query`` through the same port-threaded embedder
+        as ``vector_search`` (S5-T1), then cosine-searches the S5-T2 corpus
+        collections — ``world_context`` (country/topic priors, doctrine
+        summaries) and ``tradecraft`` (analytic standards / SAT handbooks) —
+        and returns the top-``k`` chunks with their loader-stamped metadata
+        (``corpus`` / ``doc_id`` / ``title`` / ``section`` / ``countries`` /
+        ``source_url`` / ``effective_date``; see
+        :func:`legba.data.rag.lane4_loader._build_payload`).
+
+        Optional filters:
+
+          * ``corpus`` — narrow to one corpus (``world_context`` /
+            ``tradecraft``); with none we search BOTH and merge by score. An
+            unknown corpus token returns a structured error so the planner can
+            correct rather than silently searching nothing.
+          * ``country`` — a payload filter on the ``countries`` array (a chunk
+            tagged for that country); Qdrant ``MatchAny`` over the field.
+          * ``k`` — top-k, clamped to ``[1, _SEARCH_CONTEXT_MAX_K]``.
+
+        HONESTY / degrade-not-drop (mirrors ``vector_search``'s seam-#11
+        contract): no embedder wired → the honest ``no_embedder_wired``
+        ``unavailable`` shape (never a fabricated vector); an empty query
+        short-circuits (no embed round-trip); an embed failure degrades to
+        ``unavailable``; a per-collection Qdrant error is logged and that
+        collection is skipped (the other corpus still contributes) rather than
+        failing the whole call.
+        """
+        clamped_k = max(1, min(int(k), _SEARCH_CONTEXT_MAX_K))
+        corpus_norm = (corpus or "").strip().lower() or None
+        country_norm = (country or "").strip() or None
+
+        # Resolve which corpus collections to search. An unknown corpus is a
+        # structured error (the loader refuses arbitrary corpora too).
+        if corpus_norm is not None and corpus_norm not in self._context_collections:
+            return {
+                "rows": [],
+                "refs": [],
+                "count": 0,
+                "query": query,
+                "corpus": corpus,
+                "country": country,
+                "k": clamped_k,
+                "error": (
+                    f"unknown corpus {corpus!r} — known corpora: "
+                    f"{', '.join(sorted(self._context_collections))}"
+                ),
+            }
+        corpora = (
+            [corpus_norm] if corpus_norm else list(self._context_collections)
+        )
+
+        # No embedder threaded through the port — honest unavailable shape,
+        # never a fabricated vector (the same contract vector_search honors).
+        if self._embedder is None:
+            return {
+                "rows": [],
+                "refs": [],
+                "count": 0,
+                "query": query,
+                "corpus": corpus,
+                "country": country,
+                "k": clamped_k,
+                "unavailable": True,
+                "reason": (
+                    "no_embedder_wired — search_context requires an embedding "
+                    "model surfaced through this port; wire an embedding "
+                    "service at bring-up (embed.primary.openai_compat)"
+                ),
+            }
+
+        q = (query or "").strip()
+        if not q:
+            return {
+                "rows": [],
+                "refs": [],
+                "count": 0,
+                "query": query,
+                "corpus": corpus,
+                "country": country,
+                "k": clamped_k,
+                "backing": "qdrant_cosine",
+                "note": "empty_query",
+            }
+
+        try:
+            vec = await self._embedder.embed(q)
+        except Exception as exc:  # noqa: BLE001 — embed backend surface
+            logger.warning(
+                "substrate_query_port.search_context.embed_failed err=%s", exc,
+            )
+            return {
+                "rows": [],
+                "refs": [],
+                "count": 0,
+                "query": query,
+                "corpus": corpus,
+                "country": country,
+                "k": clamped_k,
+                "unavailable": True,
+                "reason": f"embed_failed: {exc!s}",
+            }
+
+        # Optional country filter over the ``countries`` payload array.
+        query_filter = None
+        if country_norm is not None:
+            from qdrant_client.http import models as qmodels
+            query_filter = qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="countries",
+                        match=qmodels.MatchAny(any=[country_norm]),
+                    )
+                ]
+            )
+
+        merged: list[dict[str, Any]] = []
+        searched: list[str] = []
+        for corpus_name in corpora:
+            collection = self._context_collections[corpus_name]
+            try:
+                hits = await self._search_context_collection(
+                    collection, vec, limit=clamped_k, query_filter=query_filter,
+                )
+            except Exception as exc:  # noqa: BLE001 — degrade, don't fail the call
+                logger.warning(
+                    "substrate_query_port.search_context.search_failed "
+                    "corpus=%s err=%s", corpus_name, exc,
+                )
+                continue
+            searched.append(corpus_name)
+            for hit in hits:
+                row = self._map_context_hit(hit, corpus_name)
+                if row is not None:
+                    merged.append(row)
+
+        # Merge across corpora by score (cosine — higher is closer), clamp to k.
+        merged.sort(
+            key=lambda r: r["score"] if r["score"] is not None else -1.0,
+            reverse=True,
+        )
+        merged = merged[:clamped_k]
+        refs = [r["chunk_id"] for r in merged]
+        return {
+            "rows": merged,
+            "refs": refs,
+            "count": len(merged),
+            "query": query,
+            "corpus": corpus,
+            "country": country,
+            "k": clamped_k,
+            "corpora_searched": searched,
+            "backing": "qdrant_cosine",
+        }
+
+    async def _search_context_collection(
+        self,
+        collection: str,
+        query_embedding: list[float],
+        *,
+        limit: int,
+        query_filter: Any | None = None,
+    ) -> list[Any]:
+        """Cosine-search one RAG corpus collection by raw vector.
+
+        Client-version tolerant (``query_points`` on qdrant-client >= 1.10 else
+        the legacy ``search``), mirroring ``vector_search_by_embedding`` and
+        ``grounding._search_world_context`` so this isn't pinned to one client.
+        """
+        vec = list(query_embedding)
+        if hasattr(self._qdrant, "query_points"):
+            resp = await self._qdrant.query_points(
+                collection_name=collection,
+                query=vec,
+                limit=int(limit),
+                query_filter=query_filter,
+                with_payload=True,
+            )
+            return list(getattr(resp, "points", None) or [])
+        hits = await self._qdrant.search(  # pragma: no cover — legacy client
+            collection_name=collection,
+            query_vector=vec,
+            limit=int(limit),
+            query_filter=query_filter,
+            with_payload=True,
+        )
+        return list(hits or [])
+
+    def _map_context_hit(
+        self, hit: Any, corpus_name: str,
+    ) -> dict[str, Any] | None:
+        """Map one Qdrant hit onto a ``search_context`` row.
+
+        Reads the Lane-4 payload shape (see
+        :func:`legba.data.rag.lane4_loader._build_payload`). A hit with no
+        readable ``text`` is dropped (an empty chunk answers nothing); the
+        Qdrant point id (a deterministic ``uuid5``) becomes the auditable
+        ``chunk_id``. ``corpus`` prefers the payload's own value, falling back
+        to the collection the hit came from.
+        """
+        hid = getattr(hit, "id", None)
+        if hid is None:
+            return None
+        payload = getattr(hit, "payload", None) or {}
+        if not isinstance(payload, dict):
+            return None
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+        score = getattr(hit, "score", None)
+        countries = payload.get("countries")
+        return {
+            "chunk_id": str(hid),
+            "corpus": payload.get("corpus") or corpus_name,
+            "doc_id": payload.get("doc_id"),
+            "title": payload.get("title"),
+            "section": payload.get("section"),
+            "countries": list(countries) if isinstance(countries, list) else [],
+            "source_url": payload.get("source_url"),
+            "effective_date": payload.get("effective_date"),
+            "text": text,
+            "score": float(score) if isinstance(score, (int, float)) else None,
+        }
 
     # ------------------------------------------------------------------
     # query_nexuses (S4-T6)

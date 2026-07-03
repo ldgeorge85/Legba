@@ -142,9 +142,11 @@ class _SubstrateStub:
     fact_rows: list[dict[str, Any]] = field(default_factory=list)
     entity_profile: dict[str, Any] | None = None
     vector_rows: list[dict[str, Any]] = field(default_factory=list)
+    context_rows: list[dict[str, Any]] = field(default_factory=list)
     signal_refs: list[UUID] = field(default_factory=list)
     fact_refs: list[UUID] = field(default_factory=list)
     vector_refs: list[UUID] = field(default_factory=list)
+    context_refs: list[UUID] = field(default_factory=list)
     nexus_rows: list[dict[str, Any]] = field(default_factory=list)
     nexus_refs: list[UUID] = field(default_factory=list)
     hypothesis_rows: list[dict[str, Any]] = field(default_factory=list)
@@ -223,6 +225,26 @@ class _SubstrateStub:
             "rows": self.vector_rows,
             "refs": [str(r) for r in self.vector_refs],
             "count": len(self.vector_rows),
+        }
+
+    async def search_context(
+        self,
+        *,
+        query: str,
+        corpus: str | None = None,
+        country: str | None = None,
+        k: int = 6,
+    ) -> dict[str, Any]:
+        self.calls.append((
+            "search_context",
+            {"query": query, "corpus": corpus, "country": country, "k": k},
+        ))
+        if self.raise_on == "search_context":
+            raise RuntimeError("substrate down")
+        return {
+            "rows": self.context_rows,
+            "refs": [str(r) for r in self.context_refs],
+            "count": len(self.context_rows),
         }
 
     async def query_nexuses(
@@ -1571,6 +1593,62 @@ async def test_finished_intelligence_tool_errors_are_structured():
     substrate = _SubstrateStub(raise_on="list_findings")
     out = await _dispatch_tool(
         substrate, name="list_findings", args={}, scope_predicate=None,
+    )
+    assert "error" in out
+
+
+@pytest.mark.asyncio
+async def test_search_context_is_known_and_dispatchable():
+    """S5-T4: search_context is in _KNOWN_TOOLS, dispatches to the port with
+    the corpus/country/k args coerced, and passes its {rows, refs, count}
+    envelope back unchanged (so the consult loop can collect the chunk refs)."""
+    from legba.data.analysts.consult_on_demand import _KNOWN_TOOLS, _dispatch_tool
+
+    assert "search_context" in _KNOWN_TOOLS
+
+    cid = uuid4()
+    substrate = _SubstrateStub(
+        context_rows=[{
+            "chunk_id": str(cid),
+            "corpus": "world_context",
+            "doc_id": "iran-brief",
+            "title": "Iran leadership brief",
+            "section": "Succession",
+            "countries": ["ir"],
+            "source_url": "https://example.invalid/iran",
+            "effective_date": "2026-01-01",
+            "text": "Background prior on Iran succession dynamics.",
+            "score": 0.91,
+        }],
+        context_refs=[cid],
+    )
+
+    out = await _dispatch_tool(
+        substrate, name="search_context",
+        args={"query": "iran succession", "corpus": "world_context",
+              "country": "ir", "k": "4"},
+        scope_predicate=None,
+    )
+    assert out["count"] == 1 and out["refs"] == [str(cid)]
+    assert out["rows"][0]["corpus"] == "world_context"
+    # Args are coerced (k -> int) and the non-substrate scope_predicate is NOT
+    # forwarded (search_context takes no scope_predicate).
+    assert substrate.calls[-1] == (
+        "search_context",
+        {"query": "iran succession", "corpus": "world_context",
+         "country": "ir", "k": 4},
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_context_error_is_structured():
+    """A port failure on search_context surfaces the structured error envelope
+    rather than an exception that aborts the loop."""
+    from legba.data.analysts.consult_on_demand import _dispatch_tool
+
+    substrate = _SubstrateStub(raise_on="search_context")
+    out = await _dispatch_tool(
+        substrate, name="search_context", args={"query": "x"}, scope_predicate=None,
     )
     assert "error" in out
 
