@@ -299,6 +299,17 @@ _FIELD_NOTES_INSTRUCTION = (
     "the cited field notes."
 )
 
+_MEMORY_ORIENTATION = (
+    "\n\nYOUR MEMORY LIVES IN get_journal_delta. Call it to recover where you left "
+    "off: your own prior entry, the open consolidation (your inner landscape), and "
+    "recent_entries — the last several entries, so you can walk more than one "
+    "window back down your own road. That tool IS your continuity. You are the "
+    "off-chain 11th kind: your entries are NOT findings, so a "
+    "list_findings(analyst_id=<yourself>) self-read is EMPTY BY DESIGN — do not "
+    "read the finding chain for your own past, and never narrate that emptiness as "
+    "blindness. Your history is real; get_journal_delta is where it is kept."
+)
+
 _NARRATE_INSTRUCTION = (
     "\n\nNOW WRITE YOUR JOURNAL ENTRY from your field notes above. First person, "
     "a running notebook — short, with perspective and curiosity. Every FACTUAL "
@@ -566,7 +577,10 @@ async def run_method(
     steps.append({"phase": "wake", "kind": "envelope"})
 
     # --- PLAN / ORIENT -------------------------------------------------
-    user_prompt = _render_user_prompt(inputs)
+    # Orient the journal to its OWN memory: get_journal_delta (its off-chain
+    # entries + the recent_entries walk-back) is where its history lives; the
+    # finding chain never holds it (2026-07-03 continuity fix).
+    user_prompt = _render_user_prompt(inputs) + _MEMORY_ORIENTATION
     steps.append({
         "phase": "plan",
         "kind": "render_prompt",

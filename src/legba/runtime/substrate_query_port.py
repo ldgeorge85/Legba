@@ -2740,7 +2740,12 @@ class PostgresQdrantSubstrateQueryPort:
         Returns the journal's own prior entry (the most recent ``entry``) + the
         current open consolidation (the "inner landscape") so the journal opens a
         run knowing where it left off (the surviving attentional-continuity thread,
-        §7.5), AND a lightweight delta of substrate activity since ``since`` (an
+        §7.5), PLUS ``recent_entries`` — the last few entries as short-excerpt
+        WALK-BACK so it sees its trajectory across windows, not just the single
+        prior step. This IS the journal's self-memory: its output is the off-chain
+        11th kind (journal_entries), so a substrate ``list_findings(analyst_id=
+        journal_*)`` self-read is empty by construction — this method is where its
+        own history actually lives. AND a lightweight delta of activity since ``since`` (an
         ISO8601 timestamp — defaults to the prior entry's ``period_end``): counts
         of new findings / situations / nexuses, so the journal sees at a glance
         what the platform metabolized this window. ``refs`` carries the prior
@@ -2791,6 +2796,19 @@ class PostgresQdrantSubstrateQueryPort:
                 "  AND produced_at >= $1",
                 since_dt,
             )
+            # Self-history WALK-BACK (§7.5 attentional-continuity fix, 2026-07-03).
+            # The journal is the 11th, OFF-CHAIN kind — it writes to journal_entries,
+            # NOT analyst_outputs — so a ``list_findings(analyst_id=journal_*)``
+            # self-read is empty BY CONSTRUCTION and the journal spent every window
+            # narrating its own blindness. This is its real memory across windows:
+            # the last few entries so it opens a run seeing the road it has actually
+            # walked, not just the single prior step. Short excerpts (token control).
+            history_rows = await conn.fetch(
+                "SELECT id, title, body, period_end, produced_at "
+                "FROM journal_entries WHERE entry_kind = 'entry' "
+                "ORDER BY period_end DESC, produced_at DESC LIMIT $1",
+                min(clamped_limit, 8),
+            )
 
         def _entry_dict(r: Any) -> dict[str, Any] | None:
             if r is None:
@@ -2807,15 +2825,31 @@ class PostgresQdrantSubstrateQueryPort:
                     if isinstance(r["produced_at"], datetime) else None,
             }
 
+        def _hist_dict(r: Any) -> dict[str, Any]:
+            return {
+                "id": str(r["id"]),
+                "title": r["title"],
+                "period_end": r["period_end"].isoformat()
+                    if isinstance(r["period_end"], datetime) else None,
+                "excerpt": (r["body"] or "")[:600],
+            }
+
+        recent_entries = [_hist_dict(r) for r in history_rows]
+
         refs: list[str] = []
         if prior_entry is not None:
             refs.append(str(prior_entry["id"]))
         if consolidation is not None:
             refs.append(str(consolidation["id"]))
-        _ = clamped_limit  # delta is a count rollup; limit reserved for future row lists
+        # The journal MAY cite its own prior entries (real off-chain ids).
+        for r in history_rows:
+            rid = str(r["id"])
+            if rid not in refs:
+                refs.append(rid)
         return {
             "prior_entry": _entry_dict(prior_entry),
             "current_consolidation": _entry_dict(consolidation),
+            "recent_entries": recent_entries,
             "since": since_dt.isoformat() if isinstance(since_dt, datetime) else None,
             "delta": {
                 "new_findings": int(new_findings or 0),
