@@ -30,10 +30,11 @@ The three roles are:
    fans out.
 2. **LLM providers + embeddings** — the analysis plane. A self-hosted vLLM LLM
    (gpt-oss-120b) is the **core analyst plane** ($0, self-hosted) that runs the
-   bounded reasoning units and both compositions; a hosted Anthropic model
+   seven bounded reasoning units and the composition tower; a hosted Anthropic model
    (Claude Opus 4.8) is reserved for the **consult / deep-consult** kinds only
-   (billed, used sparingly); an OpenAI-compatible embeddings model (`BAAI/bge-m3`)
-   shares the vLLM box. `AnalystActor`s and the consult engine reach these
+   (billed, used sparingly); an OpenAI-compatible embeddings model (`BAAI/bge-m3`,
+   1024-dim) shares the vLLM box — it is also the embedder-through-port that backs the
+   live `world_context` / `tradecraft` RAG corpora and ingest-dedupe vectors. `AnalystActor`s and the consult engine reach these
    through provider handlers bound to stack-component descriptors.
 3. **The faithfulness verify judge** — an LLM that scores each cited finding for
    *faithfulness*: does each claim actually follow from its cited evidence? It
@@ -264,8 +265,9 @@ no code change.
 
 **Plane split (live policy).** The hosted Anthropic plane (`claude-opus-4-8`) is
 reserved for the **consult / deep-consult** kinds only (billed — used sparingly).
-**Every scheduled analyst** — the four bounded reasoning units, the per-country
-and world compositions, the critic, and the deterministic maintenance analysts —
+**Every scheduled analyst** — the seven bounded reasoning units, the per-country /
+per-region / world composition tower (plus the thematic `escalation_composition`),
+the critic, and the deterministic maintenance analysts —
 runs on the core OpenAI-compatible plane (`llm.primary.openai_compat`,
 gpt-oss-120b). The critic runs there with `allow_self_correlated=true` (it is no
 longer a cross-provider check; the faithfulness verify pass in §3 is now the
@@ -299,8 +301,8 @@ The pass has two layers:
    UNSUPPORTED span. The floor score is the fraction of checkable claims that are
    supported. This layer needs no model and cannot be turned off.
 2. **An optional LLM judge — currently the core reasoning model.** When the
-   descriptor declares `method.llm.verify` (all four units + both compositions
-   do) **and** the `LEGBA_VERIFY_LLM_JUDGE` flag is on, the runtime wires an LLM
+   descriptor declares `method.llm.verify` (all seven units + every composition in
+   the tower do) **and** the `LEGBA_VERIFY_LLM_JUDGE` flag is on, the runtime wires an LLM
    judge to refine per-claim verdicts. **As of 2026-07-01 that judge is the SAME
    core model** (`llm.primary.openai_compat`, gpt-oss-120b) that wrote the finding
    — it is **NOT** cross-family. This is a deliberate, temporary choice: the
@@ -414,12 +416,15 @@ one forced final-synthesis turn:
    with the tools withheld so the operator always gets a structured answer.
 
 The tool whitelist is a set of **read-only substrate primitives** (`_KNOWN_TOOLS`,
-16 today: `search_signals`, `query_facts`, `inspect_entity`, `query_nexuses`,
+17 today: `search_signals`, `query_facts`, `inspect_entity`, `query_nexuses`,
 `query_hypotheses`, `get_timeline`, `compare_targets`, `query_paths`,
 `find_proxy_chains`, `query_brokers`, `list_findings`, `list_situations`,
-`query_predictions`, `list_targets`, `list_sources`, and `vector_search`).
-`vector_search` is the one **non-live entry** — a designed seam pending
-vector-store wiring (it dispatches only when a vector store is present). The kind
+`query_predictions`, `list_targets`, `list_sources`, `vector_search`, and
+`search_context`). Both vector tools are now **live**: `vector_search` is semantic
+similarity over the `legba_signals` signal-vector collection, and `search_context`
+is semantic search over the curated reference corpora (`world_context` /
+`tradecraft`) returning cited chunks — the embedder-through-port that backs them is
+wired (bge-m3, 1024-dim). The kind
 is a *read* over the substrate — write-back tools are deliberately excluded. In
 production, consult is governed through the `substrate_read` action pack, so every
 `_KNOWN_TOOLS` entry must also be present in that pack.
@@ -489,21 +494,23 @@ relevant current facts into the prompt before the LLM call, framed to the model 
 "AUTHORITATIVE CURRENT CONTEXT … treat as ground truth over any prior knowledge."
 That framing is the in-prompt instruction to the model, not a platform truth-claim:
 the substrate facts are only as current as the last seed run, and the vector-backed
-Tier-2 free-text background is a designed future seam, not yet wired (caveat 3
+Tier-2 free-text background — now LIVE — is a separate, non-citable preamble (caveat 3
 below).
 
-**Status.** Tier-1 structured grounding is live and opted-in on the **four bounded
+**Status.** Tier-1 structured grounding is live and opted-in on all **seven bounded
 reasoning units** (`leadership_transition`, `energy_security`, `escalation`,
-`narrative_coordination`) — each declares a `grounding:` block. The injected
+`narrative_coordination`, `internal_stability`, `military_posture`,
+`economic_coercion`) — each declares a `grounding:` block. The injected
 preamble folds in **accumulated** `facts`, polarity-signed `nexuses`, and a separate
 clearly-labelled block of ongoing `situation` frames (e.g. "US head of government
 Trump since 2025-01-20; US–Iran active conflict since 2026-02-28; NATO member
 since 1949"), and each unit reads a **72h** raw-signal window — so a unit
-integrates substrate state over time, not just today's headline slice. The per-country and
-world compositions do **not** ground directly; they compose over the units'
+integrates substrate state over time, not just today's headline slice. The per-country,
+per-region, and world compositions do **not** ground directly; they compose over the units'
 already-verified, already-grounded sub-claims. The retired `country_assessor`
 monolith carried grounding too, but it is out of the active set (nothing in the
-trusted product reads it). Tier-2 vector `world_context` is designed-not-built.
+trusted product reads it). Tier-2 vector `world_context` is now **live** and staggered on
+for `leadership_transition` + `internal_stability`.
 
 Why this is the right place to explain it relative to the model:
 
@@ -527,11 +534,16 @@ as current as the last seed run. (2) **Bare-QID skip** — when Wikidata's label
 service can't resolve an entity (the live case is Q22686 / Donald Trump, which has no
 English label), the seed adapter resolves it via a `wbgetentities` label lookup with
 an enwiki-sitelink fallback, and the resolver *skips any value that is still a bare
-`Qxxxx`* so the model is never handed an unreadable id. (3) **Tier 2 is a future
-seam** — a vector `world_context` collection for free-text background the structured
-facts can't carry is designed and pre-declarable on the descriptor
-(`sources: [..., vector:world_context]`) but **not wired**; it needs the
-embedder-through-port (L-114), so today only the structured `substrate` source acts.
+`Qxxxx`* so the model is never handed an unreadable id. (3) **Tier 2 is now LIVE** —
+the vector `world_context` collection for free-text background the structured facts
+can't carry is wired (the embedder-through-port L-114 landed) and pre-declarable on the
+descriptor (`sources: [..., vector:world_context]`): the resolver retrieves from the
+curated `world_context` Qdrant corpus (~293 chunks; a `tradecraft` corpus of ~1716
+chunks also exists) through the stack embedder port (bge-m3, 1024-dim) as a separate,
+non-citable preamble — opportunistic, relevance-floored, country-filtered,
+degrade-not-drop when the corpus is empty. It is **staggered on** — enabled today for
+`leadership_transition` + `internal_stability`; the other units resolve only the
+structured `substrate` source, pending review-gated expansion.
 
 The mechanism (the `GroundingBlock` descriptor field, the `SubstrateGroundingResolver`,
 the `inline_target` GROUND phase, the seed adapters) is described in `DESIGN.md` §3.4

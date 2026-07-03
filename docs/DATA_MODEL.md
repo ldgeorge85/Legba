@@ -70,7 +70,7 @@ chain — see "The journal — off-chain by design"); the consult audit trail
 | **Nexuses** | `nexuses` (0033) | `relationship_reifier` (`write_nexus`); `proposed_edge_governance` promotion | **supersession-versioned** (closes on polarity/label change; decay mutates open) |
 | **Proposed edges** | `proposed_edges` (0001) | `entity_resolution` (co-occurrence) | **mutate-in-place** (status + confidence accrual; no version chain) |
 | **Analyst outputs** | `analyst_outputs` (0011) | `write_analyst_output` | **append-only** (kind-routed across 12 `OutputKind`s incl. `finding` / `meta_finding` / `scorecard`; validation fail → DLQ) |
-| **Scorecard** | `analyst_outputs` (kind=`scorecard`) | `scorecard_producer` (deterministic META, daily, pure SQL) | **append-only** — ONE banded row per active **g20/watch-tagged desk** (19 G20 + 5 watch = 24) over already-verified claims in a **14-day band window**; every band names its verified-claim basis id; a dimension with no qualifying verified claim reads `insufficient-evidence` (never fabricated) |
+| **Scorecard** | `analyst_outputs` (kind=`scorecard`) | `scorecard_producer` (deterministic META, daily, pure SQL) | **append-only** — ONE banded row per active **g20/watch-tagged desk** (19 G20 + 6 watch = 25) over already-verified claims in a **14-day band window**; every band names its verified-claim basis id; a dimension with no qualifying verified claim reads `insufficient-evidence` (never fabricated) |
 | **Acute forecasts** (pilot) | `acute_forecasts` (0047) | `forecast_scoreboard` (deterministic META, weekly) | **append** (idempotent weekly issue) + **resolution mutate-in-place** (graded EXOGENOUSLY when the forward window closes). ISOLATED from the findings feed; surfaced only on the calibration scoreboard; reports NO proven skill today (honest — a degenerate p-vector abstains, zero rows) |
 | **Unit gold set** | `unit_reference_labels` (0057) | the labels API (`registry/labels_api.py`) | **append-only** — one `(unit, target)` gold answer grounded to `canonical_source_ids`; the per-unit correctness scorer joins live unit output against it. Tiny today (n≈1 → correctness reports insufficient-sample) |
 | **Hypotheses** | `hypotheses` (0004, ACH) | `competing_hypotheses` (TRACE_ONLY) | **append** rows + **status transitions mutate-in-place** |
@@ -109,20 +109,22 @@ the TargetActor's lifecycle/cursor `actor_state`. A non-discovery target is a
 **passive subscriber** — NOOP on tick.
 
 A *target* here is a **scoped subject / desk** — a named scope-frame a set of
-analysts work — **not** a surveilled entity. The trusted spine covers **24
+analysts work — **not** a surveilled entity. The trusted spine covers **25
 desks** selected by a coverage tag: the 19 G20 country desks (tag `g20`) plus a
-5-desk high-consequence **watch** tier — Israel, Iran, Ukraine, Taiwan, North
-Korea (descriptor ids `country_watch_il/ir/ua/tw/kp`, tag `watch`). The four
+6-desk high-consequence **watch** tier — Israel, Iran, Ukraine, Taiwan, North
+Korea, Pakistan (descriptor ids `country_watch_il/ir/ua/tw/kp/pk`, tag `watch`). The seven
 units + `country_composition` subscribe on `has_tag("g20") or has_tag("watch")`
 and the scorecard enumerates any active desk tagged either — so adding a country
-is **register-a-target, no code**.
+is **register-a-target, no code**. (The composition tower adds the 5 `region_*`
+region-frame targets and the thematic `escalation_composition`.)
 
 ### What does analysis read and write?
 **Reads depend on the analyst's altitude.** A first-order reasoning analyst —
-the four bounded reasoning UNITS (`leadership_transition`, `energy_security`,
-`escalation`, `narrative_coordination`, fanned out per g20/watch desk) and the
+the seven bounded reasoning UNITS (`leadership_transition`, `energy_security`,
+`escalation`, `narrative_coordination`, `internal_stability`, `military_posture`,
+`economic_coercion`, fanned out per g20/watch desk) and the
 generic `inline_target` — reads a scope-filtered signal slice (24h default; the
-four units widen it to a **72h** raw-signal window) + open `facts` / `nexuses` /
+units widen it to a **72h** raw-signal window) + open `facts` / `nexuses` /
 `hypotheses` + a Tier-1 grounding preamble of **accumulated** substrate
 facts/nexuses/situations (e.g. *"US head of government Trump since 2025-01-20;
 US–Iran active conflict since 2026-02-28; NATO member since 1949"*) — so a unit
@@ -178,8 +180,8 @@ Some units score genuinely low, and the read surfaces that rather than hiding it
 it lands in the generic `analyst_outputs` table (`kind='scorecard'`), written by
 `scorecard_producer` (a deterministic META analyst; daily; pure SQL, no LLM,
 `$0`). Each tick it writes **exactly one banded row per active g20/watch desk**
-(19 G20 + 5 watch = 24) from a few high-precision RULES over that desk's
-**already-verified** claims (the four unit findings + the `country_composition`)
+(19 G20 + 6 watch = 25) from a few high-precision RULES over that desk's
+**already-verified** claims (the seven unit findings + the `country_composition`)
 inside a **14-day band window**. It is a *perspective over* verified sub-claims,
 never a fresh judgment:
 
@@ -200,7 +202,7 @@ scorecard reports that rather than inventing a verdict).
 ## The contested-claims fact model
 
 Task #101 Holes-B (migrations 0054 + 0055; the current migration head is
-**0057**) turns "two credible
+**0060**) turns "two credible
 sources disagree on one `(subject, predicate)` value" from an invisible race into
 a **first-class, derived, recomputable** state — without ever letting a machine
 overwrite the disputed facts. The substrate change is small and almost entirely
@@ -368,8 +370,9 @@ the isolated forecast pilot `acute_forecasts` + the per-unit gold set
 
 **A note on producers (data-model relevant, not a behaviour spec).** The rows in
 `analyst_outputs` are no longer written by one monolithic per-country analyst.
-The trusted spine is bottom-up: four bounded `inline_target` UNITS →
-`country_composition` (per country) → `world_assessor` (global) →
+The trusted spine is bottom-up: seven bounded `inline_target` UNITS →
+`country_composition` (per country) → `region_composition` (5 region frames) →
+`world_assessor` (global), plus the thematic `escalation_composition` →
 `scorecard_producer` (deterministic banding). The old monolithic
 `country_assessor` one-pager is **retired and stopped** (live head
 `state='retired'` + removed from bringup; nothing in the trusted spine reads it),

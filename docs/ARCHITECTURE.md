@@ -52,7 +52,7 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 - **TIER 1 — INLINE, at-ingest, per-signal (deterministic, no LLM).** The `data/filters/` **baseline enrichment pipeline** runs *synchronously on each Signal at acquisition*, BEFORE fan-out, inside the `SourceActor`: `language_detect → geocode → ner_multilingual → classify → source_credibility → ingest_dedupe (dedupe_4tier, tiers 1-2) → fact_extractor`. It is deterministic / local-NLP (GLiREL + DeBERTa zero-shot + pycountry/Nominatim) — **no analyst LLM** — and its *writes are altitude-0 substrate*: the **enriched signal** (geo/language/tags/entity_classes promoted to indexed columns, in-place on the one `signals` row) plus **altitude-0 `facts`** (`source_type='ingestion'`, `valid_from`-stamped) + **entity rows / `signal_entity_links`** off the NER spans. This is the "enrich once, read many" tier (§6.1, Flow 1). See `data/filters/__init__.py` for the kind registry; `data/sources/baseline.py:282-294` for the tier ordering; `data/filters/dedupe.py:248` (`kind="dedupe_4tier"`); `data/filters/fact_extractor.py` (§5.7).
 - **TIER 2 — SLICE / CADENCE analysts (`data/analysts/`, LLM + deterministic reasoning).** These read *accumulated slices / substrate* on a Dapr reminder or a reactive trigger and *reason* — they do NOT run per-signal. This is altitudes 1-3 (findings, situations, hypotheses, nexuses, meta-findings, deep consult). The cost firewall between the two: heavy reasoning is cadence-batched so LLM cost is decoupled from the ingest firehose.
 
-**What triggers / schedules what** (Tier 2) — two mechanisms, both **Dapr reminders/triggers** (no external cron in the loop): **(a) reactive coalescing triggers** — per-target analysts fire when enough new signals accumulate (NATS-driven); **(b) cadence reminders** — cross-target & meta analysts fire on a schedule (the four bounded reasoning UNITS + the `country_composition`/`world_assessor` compositions on a ~6–12h beat, `competing_hypotheses`/`graph_mining`/`relationship_reifier` ~12h, `scorecard_producer`/`calibration_tracking` daily, `forecast_scoreboard` weekly). SourceActors schedule their own polls (the Tier-1 pipeline rides each poll). The reminder *is* the scheduler.
+**What triggers / schedules what** (Tier 2) — two mechanisms, both **Dapr reminders/triggers** (no external cron in the loop): **(a) reactive coalescing triggers** — per-target analysts fire when enough new signals accumulate (NATS-driven); **(b) cadence reminders** — cross-target & meta analysts fire on a schedule (the seven bounded reasoning UNITS + the `country_composition`/`region_composition`/`world_assessor` composition tower + the thematic `escalation_composition` on a ~6–12h beat, the deterministic I&W pair `indicator_tracker`/`collection_gap`, `competing_hypotheses`/`graph_mining`/`relationship_reifier` ~12h, `scorecard_producer`/`calibration_tracking` daily, `forecast_scoreboard` weekly). SourceActors schedule their own polls (the Tier-1 pipeline rides each poll). The reminder *is* the scheduler.
 
 **Where Wikidata / grounding fit (out-of-band, decoupled by the substrate):** Wikidata is **not a live source** — it never touches the signal pipeline. It is a **seed** (`scripts/seed.py --source wikidata_leaders`, operator-run / cron-able) that writes *current* `head of state` facts INTO the substrate (superseding the stale officeholder). Separately, at *analysis time*, grounding-enabled analysts' **GROUND phase** READS those current facts back OUT of the substrate and injects a dated preamble into the LLM prompt (Flow 10). The two movements don't know about each other — the substrate is the hand-off. See §5.8.
 
@@ -61,12 +61,12 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 **What runs OUTSIDE the source→output loop (out-of-band).** Not everything is the live `SOURCE ─▶ … ─▶ OUTPUT` pipeline. The decoupled processes — each handing off through the substrate, never on the signal hot path:
 - **Seeds** (`scripts/seed.py` → `data/seed/`): curated/authoritative roots imported INTO `facts`/`nexuses` with `source_type='seed'` + a `seed_batches` ledger row — adapters `world_baseline` / `wikidata_leaders` / `acled_conflict` / `sipri_arms_transfers` (operator-run / cron-able; §5.7, Flow 9). Wikidata is a *seed*, not a live source.
 - **Backfills** (`scripts/backfill_entity_canonicalization.py`, `scripts/backfill_entity_graph.py`; `SourceActor`'s optional `source_credibility` host-lookup at write-time, §6.1): one-shot substrate repairs over already-stored rows.
-- **Bringup / registration** (`scripts/bringup_register_*.py` + the 46-entry `bringup_register_source_catalog.py`): pushes descriptors into the registry tables at deploy — the live source/analyst set is the DB rows, not the `descriptors/*.yaml` files.
+- **Bringup / registration** (`scripts/bringup_register_*.py` + the ~47-entry `bringup_register_source_catalog.py`): pushes descriptors into the registry tables at deploy — the live source/analyst set is the DB rows (≈57 head source descriptors), not the `descriptors/*.yaml` files.
 - **Dapr Workflows** (`legba-dapr-workflow-worker`, `runtime/dapr_workflow/`): the multi-step durable jobs that don't fit a turn-based actor — the **GEPA optimizer** (§9, Flow 4) and **deep-consult** (§9, Flow 5). Scheduled detached from an actor run.
 - **Maintenance / GC** (deterministic analysts on cadence, `data/analysts/deterministic_handlers/`): `fact_decay` / `nexus_decay` (temporal-confidence decay + expiry), `finding_supersession`, `entity_gc`, `signals_retention` (0036), `integrity_sweep`, `reminder_gc` (`runtime/reminder_gc.py`, GC of reminders for retired `actor_state` rows). These UPDATE/prune pre-existing rows.
 - **Per-source liveness watchdog** (`liveness_watchdog.check_source_cadence_once`, cadence): detects a silent source by comparing `now()` to `max(signals.fetched_at)` per source, then lateral-joins `source_poll_outcomes` (0046) for the *why* — `SourceActor.pull_once` writes a `source_poll_outcomes` row for every NON-productive poll (empty HTTP-200-with-0-signals, or error; productive polls are self-evidencing via their `signals` rows and are not logged), carrying the handler's own health diagnosis so the watchdog alert (and the UI) can distinguish a genuinely quiet feed from a broken one.
 - **Meta-analysts over the substrate** (altitude 2): `meta_findings_synthesizer` / `cross_analyst_correlator` / `competing_hypotheses` / `calibration_tracking` — they read accumulated outputs, not signals (Tier-2 cadence, but analysis-of-analysis rather than first-order).
-- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0057`, current head **0057**): schema evolution, applied PG-direct out of band. The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), and the `unit_reference_labels` correctness-gold table (0057, §5.10).
+- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0060`, current head **0060**): schema evolution, applied PG-direct out of band. The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), the `unit_reference_labels` correctness-gold table (0057, §5.10), and the composition-supersession fold + critique index + null-target composition-head fold (0058–0060, supporting the one-live-head-per-desk composition tower).
 
 ### 0.1 Substrate data inventory — what is kept where, written-by / read-by
 
@@ -76,7 +76,7 @@ Per store, the actual datasets and their producers/consumers (verified 2026-06).
 |---|---|---|---|
 | **Postgres + Apache AGE** (PRIMARY / source of truth) | **descriptors** (`source_/target_/analyst_/action_pack_/stack_/wiring_descriptors`); **acquisition** (`signals`, `signal_aliases`, `signal_entity_links`); **knowledge substrate** (`facts`, `nexuses`, `entity_profiles`/`entity_profile_versions`, `hypotheses`, `proposed_edges`, `situations`, `graph_metrics`); **outputs/provenance** (`analyst_outputs`, `analyst_traces`, `analyst_critiques`, `output_dead_letter`, `descriptor_dead_letter`); **journal (OFF-chain)** (`journal_entries`, `journal_proposals` — 0048; the reflective voice, empty `derived_from`, excluded from the lineage catalog, §8.4); **runtime state** (`actor_state`, `actor_filter_state`, `trigger_state`, `discovery_state`); **governance** (`governor_events`, `budget_ledger`, `global_budget_envelope`, `budget_demotion_events`, `action_pack_invocations`, `alert_sink_deliveries`); **liveness** (`source_poll_outcomes` — provenance for non-productive source polls, 0046); **consult audit** (`consult_sessions` / `consult_turns`, 0039); **audit** (`audit_checkpoints`, `descriptor_audit_log`); **seeding** (`seed_batches`); **reference** (`iso_countries`, `source_credibility`, `vocabulary_entries`); plus the **dormant AGE graph `legba_graph`** *inside* PG (9 vertex / 14 edge labels registered, but **near-empty / off-path** — the operative graph is the relational `nexuses` table; §5.5 "AGE re-evaluation") | Tier-1 pipeline (signals/facts/entities); Tier-2 analysts + workflows (outputs/facts/nexuses/hypotheses); registry (descriptors/audit); runtime (state); seeds (facts/nexuses + `seed_batches`) | every read path — analyst slices, consult tools, grounding resolver, the API/UI, lineage walks |
 | **NATS JetStream** | **transport / events, NOT a dataset store** — `legba_signals` (interest-retention signal bus), 4 registry-lifecycle streams, the DLQ stream, work-queues, consult-step relay. Transient fan-out; the durable copy is always in PG | SourceActors (signal publish), registry (lifecycle events), analysts (output envelopes + consult steps) | subscription consumers, the reconcile loop, the SSE relay, job workers |
-| **Qdrant** | **1 collection `legba_signals`** — signal vectors (1024-dim BGE-M3 cosine), used by ingest-dedupe tiers 3-4 (the expensive semantic tier) | Tier-1 dedupe / embedder | dedupe tier 3-4; consult `vector_search`. (Grounding Tier-2 `vector:world_context` is a *declared future seam*, §5.8 — not a live collection) |
+| **Qdrant** | **3 collections** — `legba_signals` (signal vectors, 1024-dim BGE-M3 cosine, ingest-dedupe tiers 3-4) **plus the two LIVE RAG corpora** `tradecraft` (~1716 chunks) and `world_context` (~293 chunks), both 1024-dim bge-m3 cosine, embedded through the stack embedder port | Tier-1 dedupe / embedder; the RAG loader (`data/rag/`) for the corpora | dedupe tier 3-4; consult `vector_search` + `search_context`; the **live** grounding resolver — `vector:world_context` retrieval is provisioned and flipped ON for `leadership_transition` + `internal_stability` (opportunistic, relevance-floored, country-filtered, degrade-not-drop), §5.8 |
 | **Redis** | **TTL'd cache only** — geocode cache, ingest-dedup hints, registry-health, intelmq source state (~84 keys live) | Tier-1 filters, health checker | the same filters / health (cache-aside; never a source of truth) |
 | **SeaweedFS** | object store for retained media — **schema-slotted stack-component kind; NO handler shipped** (eager-media extraction is a seam, §6.3) | (none) | (none) |
 
@@ -95,9 +95,9 @@ lens for the rest of this document.
 |---|---|---|---|
 | **0 — Extraction** | temporal facts (atomic `(subject, predicate, value)` assertions, valid-from/until + supersession) | the ingest-time **`fact_extractor`** enrichment stage (per-signal, GLiREL backend) + analyst/workflow `write_fact` | **LIVE** — `OutputKind.FACT` + `write_fact` + `facts` temporal schema; ≈4.6k facts total (≈3.7k ingestion-sourced) (§5.7) |
 | **0 — Relations** | reified typed signed **Nexus** (`subject →[intermediary]→ object`, `rel_type` + polarity ∈ {−1,0,+1} + intent) | the **`relationship_reifier`** META analyst (8B-LLM types co-mention pairs) | **LIVE** — `OutputKind.NEXUS` + `write_nexus` + `nexuses` table; ≈4.9k nexuses total (≈3.2k signed, polarity ≠ 0) (§5.7) |
-| **1 — First-order (bounded units)** | cited, faithfulness-verified findings — each unit answers ONE narrow question | FOUR `inline_target` reasoning UNITS (`leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`; `method.kind=llm_planner`), each fanned out per desk — 24 desks: the 19 G20 country desks + a 5-country high-consequence `watch` tier (§7.2) | **LIVE** — the monolithic `country_assessor` is RETIRED and STOPPED (nothing in the spine reads it; ≈1.2k historical findings remain in the DB, unread — not a clean slate); the forecast-as-claim `country_predictor` is RETIRED/STOPPED (≈539 historical prediction rows remain) (§5.10, §14) |
+| **1 — First-order (bounded units)** | cited, faithfulness-verified findings — each unit answers ONE narrow question | SEVEN `inline_target` reasoning UNITS (`leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`, `economic_coercion`; `method.kind=llm_planner`), each fanned out per desk — 25 desks: the 19 G20 country desks + a 6-country high-consequence `watch` tier (§7.2) | **LIVE** — the monolithic `country_assessor` is RETIRED and STOPPED (nothing in the spine reads it; ≈1.2k historical findings remain in the DB, unread — not a clean slate); the forecast-as-claim `country_predictor` is RETIRED/STOPPED (≈539 historical prediction rows remain) (§5.10, §14) |
 | **1 — Maintenance** | situations (**first-class temporal frames**, 0040–0042) / supersessions / critiques / STIX / fact-&-nexus decay | situation_clustering (+ `thematic_proposal`), finding_supersession, `critic`, emit-bindings, `fact_decay` / `nexus_decay` / `structural_balance` / `graph_mining` | **LIVE** — situations carry `situation_signature` + `valid_from`/`valid_until`/`superseded_by` + `target_id` (0040–0042); the events substitute (no `events` table). The forecast-as-claim `predictor` producers (`country_predictor`, `india_energy_predictor`) are RETIRED/STOPPED (≈539 historical prediction rows remain) — forecasting returns only as the measured `acute_forecasts` scoreboard (§5.10) |
-| **2 — Composition** | per-country + world composition (a hedged, cited synthesis over the *verified* units; an unverified sub-claim never enters — INNER JOIN on the faithfulness critique) + meta-findings | `country_composition` + `world_assessor` (both repointed to `meta_findings_synthesizer`), `cross_analyst_correlator` | **LIVE** — `world_assessor` GRADUATED into the world composition; it is NOT the old verdict-from-nowhere monolith (§5.10) |
+| **2 — Composition** | the composition tower (a hedged, cited synthesis over the *verified* units; an unverified sub-claim never enters — INNER JOIN on the faithfulness critique) + meta-findings | `country_composition` → `region_composition` (5 region frames: Africa, Americas, Europe, Indo-Pacific, MENA) → `world_assessor`, plus the thematic cross-desk `escalation_composition` (carries a correlation guard against double-counting correlated desks) — all on `meta_findings_synthesizer`; `cross_analyst_correlator` | **LIVE** — `world_assessor` GRADUATED into the world composition; it is NOT the old verdict-from-nowhere monolith; one live head per desk survives supersession (§5.10) |
 | **top — Banded scorecard + skill scoreboard** | one banded per-country row from high-precision RULES over already-verified claims (demote-never-promote) + the per-unit skill numbers | `scorecard_producer` (deterministic META, 12th OutputKind `scorecard`), `unit_correctness_scorer` / `calibration_tracking` / `forecast_scoreboard` | **LIVE** — honest: an unqualified dimension reads `insufficient-evidence`; the live scorecard is a MIX (some countries band, e.g. the US reads all-insufficient because its unit faithfulness is genuinely low); the forecast pilot reports NO proven skill (§5.10) |
 | **2 — Second-order** | hypotheses (competing claims, ACH matrix; per-cell scoring is LLM-scored on Heuer CC/C/N/I/II with a lexical fallback — §5.3) | the **`competing_hypotheses`** (alias `ach`) META analyst + `calibration_tracking` (Brier reads `resolved_outcome`; exogenous resolver built + firing — subsequent-facts auto-resolver that ABSTAINS on undirected theses + operator-label path — alongside the live self-consistency tier, §5.3) | **LIVE** — ≈940 hypotheses (253 confirmed / 287 refuted / ≈400 active) (§5.7) |
 | **3 — On-demand deep** | deep consult (a staged analytical job: plan→acquire→analyze→synthesize) | the **deep-consult Dapr Workflow** | **LIVE** — registered alongside `optimizer_workflow` (§9) |
@@ -105,18 +105,19 @@ lens for the rest of this document.
 
 Two clean regimes fall out: **extraction is always-on at ingest** (altitude 0,
 once per signal); **deep analysis is on-demand** (altitude 3). The entire stack —
-altitude 0 (temporal facts + reified Nexus), altitude 1 (the four bounded units +
-the continuous live loop), altitude 2 (the per-country + world composition,
-meta-findings + ACH hypotheses) and altitude 3 (deep consult) — is now wired and
+altitude 0 (temporal facts + reified Nexus), altitude 1 (the seven bounded units +
+the continuous live loop), altitude 2 (the per-country → per-region → world
+composition tower, meta-findings + ACH hypotheses) and altitude 3 (deep consult) — is now wired and
 live-proven; what was the "open frontier" of the pre-2026-06 drafts has been
 built out as the **data-analysis rigor layer** (§5.7). Each tier rides a rail
 that already existed with a working precedent (§9).
 
 **The product is the composed, verified spine, not any single analyst.** What
-Legba surfaces at altitude 1+ is a decompositional chain, read bottom-up: FOUR
+Legba surfaces at altitude 1+ is a decompositional chain, read bottom-up: SEVEN
 narrow reasoning UNITS (each cited to source and put through a **mandatory
 faithfulness verify pass**, §5.10) → a per-country **composition** that admits
-only verified sub-claims → a **world composition** over the per-country reads → a
+only verified sub-claims → a per-region **composition** → a **world composition**
+over the per-region reads (plus a thematic cross-desk `escalation_composition`) → a
 deterministic **banded scorecard** + a per-unit **skill scoreboard**. Every
 claim is cited, checked for groundedness against its cited evidence, and
 auditable through a receipt chain to the original signal (§8, §12). Legba **measures
@@ -317,7 +318,7 @@ built-in kinds (`build_analyst_run_method`, `analyst_deps_builder.py:227-278`):
 (via the `analyst_kind` vocabulary). The same twelve are listed in
 `_KIND_MODULE_NAMES` (`data/analysts/__init__.py:88-101`), consumed by
 `discover_analyst_kinds()`. The *analyst kind* (the `build_*` branch) is distinct
-from the `method.kind`: e.g. the four bounded units are analyst-kind
+from the `method.kind`: e.g. the seven bounded units are analyst-kind
 `inline_target` but carry `method.kind = llm_planner` (the LLM-planner finding
 shape; `descriptors/analyst_leadership_transition.yaml`), while `country_composition`
 and `world_assessor` are analyst-kind `meta_findings_synthesizer` — the world
@@ -379,10 +380,14 @@ The kinds added by the data-analysis rigor arc (§5.7) and now **registered**:
   dormancy is closed.
 
 The bringup set (`scripts/bringup_register_analysts.py`) registers the current
-producer graph: the **four bounded units** (`leadership_transition`,
-`energy_security`, `escalation`, `narrative_coordination` — all `inline_target`),
-`country_composition` + `world_assessor` (the per-country + world composition,
-`meta_findings_synthesizer`), `scorecard_producer` + `forecast_scoreboard` +
+producer graph: the **seven bounded units** (`leadership_transition`,
+`energy_security`, `escalation`, `narrative_coordination`, `internal_stability`,
+`military_posture`, `economic_coercion` — all `inline_target`),
+`country_composition` + `region_composition` + `world_assessor` (the per-country →
+per-region → world composition tower) plus the thematic `escalation_composition`
+(all `meta_findings_synthesizer`), the deterministic I&W pair `indicator_tracker`
+(run-over-run indicator diffs) + `collection_gap` (starved desk × dimension cells),
+`scorecard_producer` + `forecast_scoreboard` +
 `unit_correctness_scorer` (the banded scorecard + skill scoreboard, all
 `deterministic` META, §5.10), `composition_lineage_sweep` (a read-only
 lineage-integrity audit over the composition outputs), `country_critic` (critic),
@@ -564,8 +569,13 @@ Analyst capability is **granted, not hard-coded**. An `ActionPack`
 *(tools + prompt fragments/rules + escalation channels + a per-pack governor +
 an applicability predicate)*. Seed packs: `media_processing` (`process_media`),
 `incident_response` (`escalate`/`create_incident` → channels), `substrate_read`
-(the consult kind's four governed read tools), and `escalate_finding` (fires on
-gated findings). (The `discovery` pack was retired per decision F-1.)
+(the consult kind's **~17 governed read tools**, incl. the live semantic
+`search_context` corpus search), and `escalate_finding` (the delivery edge: it
+alerts a finding when **post-verify `effective_confidence × severity`** crosses its
+`confidence_gate` — a verify-demoted finding does not alert; severity is a
+first-class read column, not a tag; external delivery currently lands on the NATS
+subject `channels.escalations` only, bus-only). (The `discovery` pack was retired
+per decision F-1.)
 
 Effective capability is an **intersection**: an analyst declares `action_packs`
 (what it *may* use); a target or domain template declares `allowed_action_packs`
@@ -748,20 +758,30 @@ new store — it is (Tier 0) curating *current* data **in**, and (Tier 1)
   (`data/analysts/inline_target.py:592-612`) **prepends** that preamble to the LLM
   user prompt — degrade-not-drop: any resolver/read failure logs and yields
   `None` (no preamble), never failing the run, and an empty candidate set
-  produces no header. Opted IN on the **four bounded units**
+  produces no header. Opted IN on all **seven bounded units**
   (`analyst_leadership_transition.yaml`, `analyst_energy_security.yaml`,
-  `analyst_escalation.yaml`, `analyst_narrative_coordination.yaml` —
-  `grounding.enabled: true`, each drawing `sources: [substrate, situations,
-  graph_structure]`). The per-country + world compositions do not re-ground: they
-  synthesize over the already-grounded, faithfulness-verified unit findings (§5.10).
+  `analyst_escalation.yaml`, `analyst_narrative_coordination.yaml`,
+  `analyst_internal_stability.yaml`, `analyst_military_posture.yaml`,
+  `analyst_economic_coercion.yaml` — `grounding.enabled: true`, each drawing
+  `sources: [substrate, situations, graph_structure]`). Two units —
+  `leadership_transition` and `internal_stability` — additionally draw
+  `vector:world_context`, the LIVE opportunistic RAG source (a separate,
+  non-citable grounding preamble retrieved from the curated `world_context` Qdrant
+  corpus with a relevance floor + country filter, degrade-not-drop; the staggered
+  RAG expansion, §5.8). The composition tower does not re-ground: it
+  synthesizes over the already-grounded, faithfulness-verified unit findings (§5.10).
   - **Canary (live-verified).** A US assessment's context now contains
     "United States — head of state: Donald Trump (since 2025-01-20)".
 
-- **Tier 2 — vector `world_context` collection.** A curated unstructured-brief
-  collection is a **declared future seam** (it needs the embedder-through-port,
-  L-114). The schema already accepts `sources: [vector:world_context]` so
-  descriptors can pre-declare it, but the deps-builder logs and the resolver
-  no-ops on any non-`substrate` source until that wiring lands
+- **Tier 2 — vector `world_context` collection (LIVE).** A curated unstructured-brief
+  collection, now wired (the embedder-through-port L-114 landed; SEAM #11 resolved). The
+  resolver retrieves from the `world_context` Qdrant corpus (~293 chunks; a `tradecraft`
+  corpus of ~1716 chunks also exists) through the stack embedder port (bge-m3, 1024-dim)
+  as a separate, non-citable grounding preamble — opportunistic, relevance-floored,
+  country-filtered, degrade-not-drop when the corpus is empty. It is **staggered on**:
+  currently flipped ON for `leadership_transition` + `internal_stability` (their
+  `grounding.sources` include `vector:world_context`); the other units resolve only the
+  structured `substrate` source, pending review-gated expansion
   (`analyst_deps_builder.py:419-425`).
 
 Grounding is purely additive over the substrate: it is a couple of cheap
@@ -785,7 +805,7 @@ The whole subsystem is **flag-gated and ships OFF by default** (both
 `LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` default to OFF in
 code *and* in `docker-compose.yml` via `${VAR:-0}`); they are enabled (`=1`) only
 on this instance through the gitignored `.env`. The contested-claims schema landed
-at migrations 0054–0055; the current migration **head is 0057**.
+at migrations 0054–0055; the current migration **head is 0060**.
 
 **Per-fact source credibility (Wave 0, migration 0054).** A `facts.source_credibility
 real` column carries the trust weight of the most credible source backing a fact
@@ -902,21 +922,22 @@ called on a near-tie and correctly *abstained* on symmetric evidence — provena
 is correct), but a successful LLM **pick** (`llm_tiebreaks ≥ 1`) is **unobserved live
 so far** (it awaits an asymmetric near-tie in the soak).
 
-### 5.10 The analysis spine — units → composition → world → scorecard, verified
+### 5.10 The analysis spine — units → composition tower → world → scorecard, verified
 
 This is the **product**: the decompositional chain that turns the enriched signal
 pool into cited, verified, drillable reads. It is composed bottom-up, and every
 first-order claim passes a **mandatory faithfulness verify pass** before anything
 above it may consume it.
 
-**1 — Four bounded reasoning UNITS.** Four `inline_target` LLM analysts —
-`leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`
+**1 — Seven bounded reasoning UNITS.** Seven `inline_target` LLM analysts —
+`leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`,
+`internal_stability`, `military_posture`, `economic_coercion`
 (`descriptors/analyst_*.yaml`, `method.kind=llm_planner`, core plane
 `llm.primary.openai_compat` = self-hosted gpt-oss-120b, $0) — each answer **one
 narrow question** and are scoped to every desk by a single coverage-tag fan-out
-`has_tag("g20") or has_tag("watch")` (24 desks: the 19 G20 country desks + a
-5-country high-consequence `watch` tier — Israel, Iran, Ukraine, Taiwan, North
-Korea, descriptor ids `country_watch_il/ir/ua/tw/kp`; adding a country is
+`has_tag("g20") or has_tag("watch")` (25 desks: the 19 G20 country desks + a
+6-country high-consequence `watch` tier — Israel, Iran, Ukraine, Taiwan, North
+Korea, Pakistan, descriptor ids `country_watch_il/ir/ua/tw/kp/pk`; adding a country is
 register-a-target, no code — §7.2). Each run: **ASSEMBLE** a cited 72h raw-signal
 slice + the §5.8 grounding preamble of ACCUMULATED facts/nexuses/situations (e.g.
 "US head of government Trump since 2025-01-20; US–Iran active conflict since
@@ -961,18 +982,32 @@ flagged unsupported.
 **3 — Per-country composition.** `country_composition`
 (`descriptors/analyst_country_composition.yaml`, the `meta_findings_synthesizer`
 kind fanned out per desk on the same `has_tag("g20") or has_tag("watch")` coverage
-tag) reads the four verified units for its country and
+tag) reads the seven verified units for its country and
 writes a hedged, cited synthesis. Its read slice admits **only verify-passed
 sub-claims above the floor** — an **INNER JOIN on the faithfulness critique** — so
-an unverified sub-claim can never enter a composition. A country whose four units
+an unverified sub-claim can never enter a composition. A country whose seven units
 produced no verify-passed sub-claim yields an empty slice → the kind emits a
 `confidence=0.0` "no source findings to synthesize" finding rather than inventing a
-read.
+read. Supersession keeps **one live head per desk**.
 
-**4 — World composition.** `world_assessor` (the same `meta_findings_synthesizer`
+**4 — Per-region composition.** `region_composition`
+(`descriptors/analyst_region_composition.yaml`, the same `meta_findings_synthesizer`
+kind) composes the verified per-country reads into **five region frames** — Africa,
+Americas, Europe, Indo-Pacific, MENA (targets `region_*`) — each a cited, hedged
+regional synthesis over its member desks. Same INNER-JOIN-on-verify discipline; same
+empty-slice honesty.
+
+**4b — Thematic composition.** `escalation_composition`
+(`descriptors/analyst_escalation_composition.yaml`) is a **thematic cross-desk**
+composition (not geographic): it fans over the per-desk escalation reads and
+synthesizes a single cross-desk escalation picture. It carries a **correlation
+guard** (`data.correlation_guard`) so correlated desks are not double-counted, and
+its output passes the same faithfulness verify.
+
+**5 — World composition.** `world_assessor` (the same `meta_findings_synthesizer`
 kind running **globally**, `analyst_world_assessor.yaml:44`) composes over the
-per-country compositions into a cited, hedged world view that drills country →
-units → source. It **graduated into** this role — it is **not** the retired
+per-region compositions into a cited, hedged world view that drills world → region →
+country → units → source. It **graduated into** this role — it is **not** the retired
 verdict-from-nowhere monolith (that framing is gone).
 
 **5 — Banded scorecard.** `scorecard_producer`
@@ -1168,8 +1203,8 @@ This is the heart of the analysis runtime (`AnalystActor`,
    `_reminder_guard` → `_cadence_targets()` (`:1464`) evaluates the
    `subscription.targets` Starlark predicate (`ANALYST_SUBSCRIPTION` surface,
    e.g. `has_tag('g20') or has_tag('watch')`) against the active target
-   descriptors. **One selector binds all 24 desks** (the 19 G20 targets + the
-   5-country `watch` tier) — no per-target enumeration.
+   descriptors. **One selector binds all 25 desks** (the 19 G20 targets + the
+   6-country `watch` tier) — no per-target enumeration.
 3. **Fan-out (A2 concurrency).** `_fanout_to_workers()` (`:1351`) chunks the
    matched targets at `_FANOUT_CHUNK = 5` (`:548`) and dispatches **one run per
    matched target** to a distinct **per-(analyst,target) worker actor**
@@ -1553,7 +1588,7 @@ Two properties hold across every layer and are not bolt-ons:
 
 The full loop — **altitudes 0 through 3** — runs end-to-end from cold-start
 (empty volumes, the `0001_baseline.sql` baseline + the forward chain
-`0032`…`0057` under `src/legba/data/migrations/`, current head **0057** — the
+`0032`…`0060` under `src/legba/data/migrations/`, current head **0060** — the
 `facts`/`nexuses`/`seed_batches` schema plus the entity-profile composite key
 (`0035`), signals retention (`0036`), the AGE output label (`0037`), the ACH
 `resolved_outcome` column (`0038`), the consult-sessions tables (`0039`),
@@ -1562,16 +1597,18 @@ backfills (`0043`–`0045`), `source_poll_outcomes` (`0046`), the `acute_forecas
 pilot table (`0047`, §5.10), the journal table (`0048`), the
 receipt/derived-from repairs + data cleanups (`0049`–`0053`), the contested-claims
 schema — `facts.source_credibility` (`0054`) + the `fact_contention` sidecar
-(`0055`, §5.9), a second dangling-`derived_from` prune (`0056`), and the
-`unit_reference_labels` correctness-gold table (`0057`, §5.10)):
+(`0055`, §5.9), a second dangling-`derived_from` prune (`0056`), the
+`unit_reference_labels` correctness-gold table (`0057`, §5.10), and the
+composition-supersession fold + critique index + null-target composition-head fold
+(`0058`–`0060`)):
 
 - Real RSS sources (BBC / Deutsche Welle / Al Jazeera) acquire enriched signals —
   geo, language, and entity-class promoted to indexed columns; the
   `fact_extractor` stage extracts temporal `facts` (`source_type=ingestion`,
   ≈3.7k of ≈4.6k total) with `valid_from` stamped + value-change supersession.
 - Fan-out on `legba.signals.>` routes them to the country desks, each
-  subscribing by a geo/tag predicate; the **four bounded units** each bind to all
-  24 desks (the 19 G20 targets + the 5-country `watch` tier) via a single
+  subscribing by a geo/tag predicate; the **seven bounded units** each bind to all
+  25 desks (the 19 G20 targets + the 6-country `watch` tier) via a single
   `has_tag("g20") or has_tag("watch")` selector and fan out one run per desk.
 - The units produce distinct per-country findings, each **cited to source, put
   through the mandatory faithfulness verify pass** (deterministic floor + the LLM
@@ -1629,7 +1666,8 @@ schema — `facts.source_credibility` (`0054`) + the `fact_contention` sidecar
   the same worker (plan→acquire→analyze→synthesize), submitted detached via
   `POST /api/v1/deep_consult` (202 + task_id), polled to a persisted finding.
 - An on-demand **consult** engine runs a ReAct analyst against the live substrate
-  (`POST /api/v1/consult`, `consult_on_demand` kind, 4 governed read tools) in
+  (`POST /api/v1/consult`, `consult_on_demand` kind, ~17 governed read tools incl. the
+  live semantic `search_context` corpus search) in
   two modes: **`chat`** (default — multi-turn via a client-held `messages[]`, no
   durable finding; each ReAct step streamed to a request-scoped NATS subject and
   relayed to the browser as SSE via `GET /api/v1/consult/stream/{request_id}`)

@@ -25,7 +25,7 @@ Acquisition belongs to **sources**, not to the things that consume data. A sourc
 ingests an observation once, enriches it once, and publishes one canonical,
 target-agnostic **signal**; the **fan-out** plane then routes that single signal to
 every interested **target** — *"ingest once, enrich once, match many."* One BBC feed
-serves every country desk (all twenty-four) without re-fetching. (It is unrelated to
+serves every country desk (all twenty-five) without re-fetching. (It is unrelated to
 the AGPL "source-available" license.)
 
 ### Is this an OSINT / "intelligence" tool?
@@ -65,29 +65,38 @@ cite → verify → audit — is the point, not the model.
 ### What does the analysis actually produce?
 A stack of cited, verified reports, built bottom-up:
 
-1. **Four bounded reasoning units** — `leadership_transition`, `energy_security`,
-   `escalation`, `narrative_coordination` — each an LLM **analyst** (kind
+1. **Seven bounded reasoning units** — `leadership_transition`, `energy_security`,
+   `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`,
+   `economic_coercion` — each an LLM **analyst** (kind
    `inline_target`) scoped to every country desk via a `has_tag("g20") or has_tag("watch")`
-   fan-out (the 19 G20 plus a 5-country **watch** tier = 24 desks), each
+   fan-out (the 19 G20 plus a 6-country **watch** tier = 25 desks), each
    answering **one narrow question**. A run assembles a cited 72h signal slice plus a
    grounding preamble of accumulated facts/nexuses/situations from the substrate,
    synthesizes a strict-JSON **finding** whose prose carries `[N]` citation markers
    mapped to signal ids, then runs the **mandatory faithfulness verify**.
-2. **Per-country composition** (`country_composition`) reads a country's four *verified*
+2. **Per-country composition** (`country_composition`) reads a country's seven *verified*
    units and writes one hedged, cited synthesis; an unverified sub-claim never enters it
    (it joins on the faithfulness critique).
-3. **World composition** (`world_assessor`) composes over the country compositions into a
-   cited, hedged world view you can drill **country → units → source**. This is *not* the
-   old single-shot "world verdict from nowhere" — that framing was retired; `world_assessor`
-   graduated into the composition.
-4. **A banded scorecard** (`scorecard_producer`, deterministic) writes one banded row per
-   active `g20`/`watch`-tagged desk (the 24) from high-precision rules over already-verified
+3. **Per-region composition** (`region_composition`) folds the per-country reads into
+   **five region frames** (Africa, Americas, Europe, Indo-Pacific, MENA); a thematic
+   **`escalation_composition`** also fuses the per-desk escalation reads cross-desk under a
+   correlation guard.
+4. **World composition** (`world_assessor`) composes over the region compositions into a
+   cited, hedged world view you can drill **world → region → country → units → source**.
+   This is *not* the old single-shot "world verdict from nowhere" — that framing was
+   retired; `world_assessor` graduated into the composition.
+5. **A banded scorecard** (`scorecard_producer`, deterministic) writes one banded row per
+   active `g20`/`watch`-tagged desk (the 25) from high-precision rules over already-verified
    claims in a **14-day band window** — every band names the verified-claim id it rests on,
    and a dimension with no qualifying verified claim reads *insufficient-evidence* with an
    explicit reason rather than a fabricated band.
-5. **A skill scoreboard** reports per-unit eval (faithfulness + correctness-vs-reference),
+6. **A skill scoreboard** reports per-unit eval (faithfulness + correctness-vs-reference),
    the exogenous calibration Brier, and the acute-forecast BSS — each honestly, including
    no-skill / insufficient-sample results.
+
+Two deterministic **I&W** analysts run alongside the tower: `indicator_tracker`
+(run-over-run diffs on the structured indicators the units emit) and `collection_gap`
+(which desk × dimension cells are starved of evidence).
 
 ### What is the faithfulness verify pass?
 Every cited finding is scored for **faithfulness** in `[0,1]` by an LLM judge —
@@ -121,9 +130,9 @@ You declare descriptors; the runtime stands up **actors** from them.
 
 ### Do I have to write code for each source or each country?
 No. There is no code to write per feed, per target, or per analysis. You register
-descriptors and the **Dapr virtual-actor** runtime instantiates them. The 24 country desks
-(the 19 G20 plus a 5-country **watch** tier) are materialized from one **discovery**
-template — there is no per-country code, and the four reasoning units fan out to all of them
+descriptors and the **Dapr virtual-actor** runtime instantiates them. The 25 country desks
+(the 19 G20 plus a 6-country **watch** tier) are materialized from one **discovery**
+template — there is no per-country code, and the seven reasoning units fan out to all of them
 via one `has_tag("g20") or has_tag("watch")` predicate. Adding a country is just registering
 a target, no code.
 
@@ -181,7 +190,7 @@ or its **cadence** heartbeat fires.
 ### What is proven versus experimental?
 The **proven core** is now the full cited-and-verified spine, demonstrated end-to-end on the
 G20 exemplar from a cold start: source acquisition → **baseline enrichment** → predicate
-**fan-out** → the four bounded **units** → **per-country composition** → **world composition**,
+**fan-out** → the seven bounded **units** → **per-country composition** → **per-region composition** → **world composition**,
 with each claim cited, faithfulness-verified, and folded through `effective_confidence`, plus
 the deterministic **banded scorecard** and full **lineage** / provenance and **temporal facts**.
 

@@ -14,12 +14,13 @@ registry is [SEAMS.md](SEAMS.md); per-route/per-panel maturity is in
 
 Live and source-first — **single-operator / single-tenant**, single-node,
 run-it-yourself. The analysis spine runs end-to-end: catalog sources flow
-through enrichment and fan-out; the four bounded units write `[N]`-cited
-findings that pass the mandatory faithfulness verify; `country_composition`
-and `world_assessor` compose the **verified** sub-claims into hedged
-per-country and world reads; `scorecard_producer` writes one banded row per
-active desk. Cold-start from empty volumes through to a verified scorecard is
-proven from a single baseline schema migration.
+through enrichment and fan-out; the seven bounded units write `[N]`-cited
+findings that pass the mandatory faithfulness verify; the composition tower
+(`country_composition` → `region_composition` → `world_assessor`, plus the
+thematic `escalation_composition`) composes the **verified** sub-claims into
+hedged per-country, per-region, and world reads; `scorecard_producer` writes
+one banded row per active desk. Cold-start from empty volumes through to a
+verified scorecard is proven from a single baseline schema migration.
 
 And, plainly:
 
@@ -46,11 +47,14 @@ is made.**
 
 | Capability | State | Notes |
 |---|---|---|
-| Source-first acquisition + predicate fan-out | **built** | ~46-source catalog (~50 live sources incl. seed/baseline); poll + push acquisition. `stream` mode is a guarded enum seam. |
+| Source-first acquisition + predicate fan-out | **built** | ~57-source catalog (~50 live/active sources incl. seed/baseline; added state-media feeds IRNA / PressTV / Ukrinform + UCDP GED); a `source_class` taxonomy (`reporting` / `analysis` / `official` / `state_media`) tags each source; poll + push acquisition. `stream` mode is a guarded enum seam. |
 | Baseline enrichment (language / geo / GLiREL NER + relation extraction) | **built** | Hosted out-of-process; relation backend is **GLiREL** (`jackboyla/glirel-large-v0`). |
-| Four bounded reasoning units → cited findings | **built** | `leadership_transition` / `energy_security` / `escalation` / `narrative_coordination`, each fanned out across the 24 country desks (19 G20 + a 5-country watch tier) via `has_tag("g20") or has_tag("watch")`; reactive + cadence firing; `[N]`-cited strict-JSON findings. |
+| Seven bounded reasoning units → cited findings | **built** | `leadership_transition` / `energy_security` / `escalation` / `narrative_coordination` / `internal_stability` / `military_posture` / `economic_coercion`, each fanned out across the 25 country desks (19 G20 + a 6-country watch tier) via `has_tag("g20") or has_tag("watch")`; reactive + cadence firing; `[N]`-cited strict-JSON findings. |
 | Mandatory faithfulness verify pass | **built** | Faithfulness judge (currently the same core gpt-oss-120b model, **not** cross-family — temporary; known limitation) + deterministic citation-presence floor; `effective_confidence = min(confidence, faithfulness_score)`; gates a visible low-confidence tier, never hard-deletes. Measures groundedness, not truth. |
-| Per-country + world composition | **built** | `country_composition` and `world_assessor` (both `meta_findings_synthesizer`); read slice INNER-JOINs the faithfulness critique — unverified sub-claims never enter; empty-slice yields an explicit no-read, not an invention. |
+| Composition tower (per-country → per-region → world) | **built** | `country_composition` → `region_composition` (5 region frames: Africa, Americas, Europe, Indo-Pacific, MENA) → `world_assessor`, plus the thematic cross-desk `escalation_composition` (carries a correlation guard against double-counting correlated desks) — all `meta_findings_synthesizer`; read slice INNER-JOINs the faithfulness critique — unverified sub-claims never enter; empty-slice yields an explicit no-read, not an invention. One live head per desk (supersession). |
+| Deterministic I&W (indicators + collection gaps) | **built** | `indicator_tracker` (run-over-run diffs on the structured indicators the units emit) + `collection_gap` (starved desk × dimension cells) — both `deterministic` META, no LLM. |
+| Post-verify alert gate (severity as a read column) | **built (bus-only delivery)** | Severity is a first-class read column (not a tag); alerts key on post-verify `effective_confidence × severity` (a verify-demoted finding does not alert); `escalate_finding` pack is the delivery edge. External delivery currently lands on the NATS subject `channels.escalations` only (bus-only) — no paged-human integration is claimed. |
+| Opportunistic vector RAG (grounding, not citable) | **built (flipped on 2 units)** | Two live Qdrant collections — `tradecraft` (~1716 chunks) and `world_context` (~293 chunks), bge-m3 1024-dim via the stack embedder port; inline retrieval with a relevance floor + country filter, degrade-not-drop when the corpus is empty. Currently flipped ON for `leadership_transition` + `internal_stability` (`grounding.sources` includes `vector:world_context`); the rest of the units are unchanged. |
 | Banded per-country scorecard | **built** | `scorecard_producer` (deterministic META; 12th OutputKind `scorecard`); one row per active country desk (any target tagged `g20`/`watch`); every band names its verified-claim basis; no-basis dimensions read `insufficient-evidence`; sub-floor faithfulness demotes to `low-faithfulness`. |
 | Skill scoreboard (faithfulness + correctness-vs-reference) | **built, honest-null** | Per-unit eval + exogenous calibration Brier + acute-forecast BSS. Correctness-vs-reference gold set is **tiny (n=1, reported insufficient-sample)**; a no-skill result is published, not hidden. |
 | Measured GEPA self-optimizer (`unit_optimizer`) | **built (experimental)** | Scoped to one unit; every candidate carries a real paired faithfulness delta on the same faithfulness judge (currently the core model); `human_gated`, **never auto-promotes** on a degenerate / insufficient / non-positive delta (live example: `0.34 → 0.29`). Monolithic `country_optimizer` is cadence-frozen. |
@@ -62,7 +66,7 @@ is made.**
 | First-person reflective journal (off-chain voice) | **built (runs on cadence)** | 11th OutputKind (`journal`); dedicated `journal_entries` table — off the fact/finding/nexus chain (always-empty `derived_from`, excluded from lineage). `journal_assessor` (12h entry) + `journal_consolidator` (daily) run as an introspective voice; writes never reach product output. Routing reflections back via the human-gated `journal_proposals` queue is a future item. |
 | On-demand consult (chat + deep) + MCP `legba_consult` tool | **built** | `POST /api/v1/consult`; consult + deep-consult run on Claude Opus 4.8 (billed, used sparingly). |
 | STIX 2.1 bundle producer (NATS + file sinks) | **built** | Real + e2e-proven. |
-| Curated seeding (`world_baseline`) | **built** | `seed_batches` ledger; `world_baseline` + `wikidata_leaders` + `acled_conflict` + `sipri_arms_transfers` adapters live (UCDP / World Bank designed). |
+| Curated seeding (`world_baseline`) | **built** | `seed_batches` ledger; `world_baseline` + `wikidata_leaders` + `acled_conflict` + `sipri_arms_transfers` adapters live; the UCDP GED adapter (`source.ucdp.ged`) is built but currently **paused pending an access token**; World Bank designed. |
 | Time-series metrics (observability) + BM25 search | **declared seam** | No metrics store; `search_signals` falls back to Postgres FTS (SEAMS #21). `anomaly_detection` is unaffected — it reads `time_bucket()` from the primary Postgres pool. |
 | SeaweedFS object store | **guarded seam** | Schema-slotted stack kind; no live integration module (deferred). |
 | Eager media extraction (Whisper / VLM / OCR) + non-text UI renderers | **guarded seam** | Job loop is built end-to-end and refuses loudly with no endpoint configured (SEAMS #1/#13). |
@@ -78,7 +82,7 @@ Sequenced and documented in [SEAMS.md](SEAMS.md), so the trusted spine stays
 clean:
 
 - **`country_assessor` (monolithic per-country one-pager) — RETIRED /
-  STOPPED.** The four units + composition supersede it; nothing in the spine
+  STOPPED.** The seven units + composition supersede it; nothing in the spine
   reads it. Its ~1.2k historical findings remain in the DB, unread — not
   deleted, not a clean slate.
 - **`country_predictor`, `india_energy_predictor` (forecast-as-claim) —

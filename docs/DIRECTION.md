@@ -26,7 +26,8 @@ the same core reasoning model that writes the analysis, not cross-family (a
 deliberate, temporary choice; see `AI_MODELS.md` §3) — plus a deterministic
 citation-presence floor); it does **not** adjudicate whether the claim is true
 about the world. Within the **built** system this document still separates the
-**measured core** — the four units, the per-country and world compositions, the
+**measured core** — the seven units, the per-country / per-region / world
+composition tower, the
 banded scorecard, and the provenance / drill-down that carries them — from **the
 ambitious legs, which now return ONLY as measured, honestly-reported
 experiments**:
@@ -722,29 +723,39 @@ Three tiers:
    dated "AUTHORITATIVE CURRENT CONTEXT (treat as ground truth over prior knowledge)"
    preamble built from the current authoritative facts (the temporal-honesty gate,
    preferring `seed`/`curated` provenance) about the target geo + slice entities.
-   Degrade-not-drop, token-capped, bare-QID-skipping. Opted in on **the four bounded
+   Degrade-not-drop, token-capped, bare-QID-skipping. Opted in on **all seven bounded
    units** (`leadership_transition` / `energy_security` / `escalation` /
-   `narrative_coordination`) — the grounding was **ported off the now-retired
+   `narrative_coordination` / `internal_stability` / `military_posture` /
+   `economic_coercion`) — the grounding was **ported off the now-retired
    `country_assessor` monolith onto the units** (2026-07-01), which also widened the
    raw-signal window to 72h so a unit integrates the multi-week substrate, not only
-   the fresh slice. The per-country and world compositions read already-grounded,
-   already-verified units and so need no preamble of their own. Canary passed live.
-3. **Tier 2 — vector `world_context` collection (designed, NOT built).** A curated
+   the fresh slice. The per-country / per-region / world compositions read
+   already-grounded, already-verified units and so need no preamble of their own.
+   Canary passed live.
+3. **Tier 2 — vector `world_context` collection (BUILT / LIVE).** A curated
    unstructured-brief collection for free-text background the structured facts can't
-   carry. The `GroundingBlock` accepts `vector:world_context` as a source so
-   descriptors can pre-declare it, but the resolver acts only on the structured
-   `substrate` source until the embedder-through-port wiring (L-114) lands.
+   carry. The `GroundingBlock` accepts `vector:world_context` as a source, and — with the
+   embedder-through-port wiring (L-114) now landed — the resolver retrieves from the
+   curated `world_context` Qdrant corpus (~293 chunks; a `tradecraft` corpus of ~1716
+   chunks also exists) through the stack embedder port (bge-m3, 1024-dim): a separate,
+   non-citable grounding preamble, opportunistic, relevance-floored, country-filtered,
+   degrade-not-drop when the corpus is empty. It is **staggered on** — currently enabled
+   for `leadership_transition` + `internal_stability` (their `grounding.sources` include
+   `vector:world_context`), pending review-gated expansion.
 
 **Integration points.** `GroundingBlock` (`src/legba/data/schemas/analyst.py`);
 `SubstrateGroundingResolver` / `build_grounding_preamble` /
 `collect_grounding_candidates` (`src/legba/runtime/grounding.py`); the GROUND phase
 (`src/legba/data/analysts/inline_target.py`); `_build_grounding_hook`
 (`src/legba/runtime/analyst_deps_builder.py`); the seed adapters
-(`src/legba/data/seed/adapters/wikidata_leaders.py`, `world_baseline.py`); the
-four unit descriptors carrying the `grounding:` block
-(`descriptors/analyst_leadership_transition.yaml`, `analyst_energy_security.yaml`,
-`analyst_escalation.yaml`, `analyst_narrative_coordination.yaml`).
+(`src/legba/data/seed/adapters/wikidata_leaders.py`, `world_baseline.py`); the RAG
+loader (`src/legba/data/rag/`); the seven unit descriptors carrying the `grounding:`
+block (`descriptors/analyst_leadership_transition.yaml`, `analyst_energy_security.yaml`,
+`analyst_escalation.yaml`, `analyst_narrative_coordination.yaml`,
+`analyst_internal_stability.yaml`, `analyst_military_posture.yaml`,
+`analyst_economic_coercion.yaml`).
 
 **Status:** Tier 0 + Tier 1 **built** (deployed + canary-verified live); Tier 2
-(vector `world_context`) **designed, NOT built** — gated on the embedder-through-port
-(L-114). See `ANALYSIS.md` §7.9 and `DESIGN.md` §3.4.
+(vector `world_context`) is now **BUILT / LIVE** — the embedder-through-port wiring
+(L-114) landed and RAG is staggered on for `leadership_transition` + `internal_stability`
+(SEAM #11 resolved). See `ANALYSIS.md` §7.9 and `DESIGN.md` §3.4.

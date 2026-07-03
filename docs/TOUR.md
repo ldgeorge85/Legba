@@ -92,8 +92,9 @@ on one node, not a distributed tamper-proof ledger.
 
 ## 5. Up the spine: composition, world read, scorecard
 
-Desk-level synthesis fuses the four units' **verified** claims (unverified
-ones never enter), and the world read composes the desk reads:
+Desk-level synthesis fuses the seven units' **verified** claims (unverified
+ones never enter); the per-region composition folds the desk reads into five
+region frames, and the world read composes the region reads:
 
 ```bash
 # The latest per-country composition for a desk:

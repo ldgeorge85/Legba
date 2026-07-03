@@ -27,22 +27,26 @@ outputs (**findings**, **situations**, hypotheses, critiques) with full
 provenance. It fires on a **coalescing trigger** and/or a **cadence**
 heartbeat.
 
-**bounded reasoning unit / unit** — One of four narrow, single-question
+**bounded reasoning unit / unit** — One of seven narrow, single-question
 `inline_target` analysts — **leadership_transition**, **energy_security**,
-**escalation**, **narrative_coordination** — fanned out to all 24 country desks
-(19 G20 + the 5-desk **watch** tier) by a `has_tag("g20") or has_tag("watch")`
+**escalation**, **narrative_coordination**, **internal_stability**,
+**military_posture**, **economic_coercion** — fanned out to all 25 country desks
+(19 G20 + the 6-desk **watch** tier) by a `has_tag("g20") or has_tag("watch")`
 predicate. Each run assembles a cited 72h signal slice plus a **grounding
 preamble**, synthesizes one strict-JSON finding whose prose carries `[N]`
 citation markers, then runs the mandatory **faithfulness verify**. Skill is
 reported per unit, never as a platform-wide claim.
 
 **composition** — A second-order finding that synthesizes already-**verified**
-sub-claims, never raw signals. **country_composition** reads one desk's four
-verified units and writes a hedged, cited per-country read; **world_assessor**
-composes those into one cited world view, drillable country → unit → source.
-An unverified sub-claim never enters a composition; a desk with no
-verify-passed claims yields an honest confidence-0.0 "nothing to synthesize"
-finding.
+sub-claims, never raw signals. **country_composition** reads one desk's seven
+verified units and writes a hedged, cited per-country read; **region_composition**
+folds the per-country reads into one of **five region frames** (Africa, Americas,
+Europe, Indo-Pacific, MENA); **world_assessor** composes the region reads into one
+cited world view, drillable world → region → country → unit → source; the thematic
+**escalation_composition** fuses the per-desk escalation reads cross-desk under a
+correlation guard. An unverified sub-claim never enters a composition; a desk with
+no verify-passed claims yields an honest confidence-0.0 "nothing to synthesize"
+finding. Supersession keeps one live head per desk.
 
 **descriptor** — A strict, content-hashed, registry-managed declarative config
 record (validated by pydantic) that declares a source, target, analyst, or
@@ -54,8 +58,9 @@ changes go live via the registry `PUT` API.
 **exemplar use case (G20 country assessment)** — Geopolitical assessment of
 the G20 countries is the proven end-to-end demonstration of the pipeline — not
 the system's identity. There is no code per country: the G20 targets are
-materialized from one **discovery** template, and the 5-country **watch tier**
-was added by simply registering targets.
+materialized from one **discovery** template, and the 6-country **watch tier**
+(Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan) was added by simply
+registering targets.
 
 **finding** — The primary typed analyst output: a written analytic conclusion
 carrying `derived_from` provenance and a **receipt-chain** entry, itself
@@ -79,7 +84,7 @@ predictors).
 
 **per-target assessment** — The analytic product about one specific target.
 Since 2026-07 this is **country_composition**'s hedged synthesis over that
-desk's four verified reasoning **units** — NOT the retired
+desk's seven verified reasoning **units** — NOT the retired
 **country_assessor** one-pager. Its global sibling is the world composition
 (see **world_assessor**).
 
@@ -297,8 +302,11 @@ annotated, never adjudicated into the facts table.
 dated "authoritative current context" preamble of currently-valid facts,
 nexuses, and situations from the substrate, correcting the LLM's stale
 training cutoff. Restricted to still-valid facts of **seed/curated**
-provenance only; the four **bounded reasoning units** opt in. The designed
-Tier-2 vector `world_context` is a seam.
+provenance only; all seven **bounded reasoning units** opt in. The Tier-2 vector
+`world_context` RAG source is now **LIVE** (retrieved from a curated Qdrant corpus
+through the stack embedder port, bge-m3 1024-dim; opportunistic, relevance-floored,
+country-filtered, degrade-not-drop) and **staggered on** for `leadership_transition`
++ `internal_stability`.
 
 **modality** — The medium of a signal — text, image, audio, video, structured,
 or binary — treated as a first-class axis from ingest onward. A modality
@@ -536,11 +544,12 @@ reads each run (default ~last 24h, scope-filtered, ~50 rows plus peer
 findings) rather than the whole pool. Each analyst kind has its own reader.
 
 **world_assessor** — The global, target-less **composition**: it runs exactly
-once per tick, composing over the per-country **country_composition** reads —
-every factual clause cited to a verified country read, drillable
-country → unit → source. It no longer writes a raw-signal executive one-pager
-(that framing was retired); it graduated into the world composition and
-remains the canary for grounding + cadence health.
+once per tick, composing over the per-region **region_composition** reads (which
+in turn fold the per-country **country_composition** reads) —
+every factual clause cited to a verified region/country read, drillable
+world → region → country → unit → source. It no longer writes a raw-signal
+executive one-pager (that framing was retired); it graduated into the world
+composition and remains the canary for grounding + cadence health.
 
 ---
 
@@ -593,10 +602,13 @@ TAXII 2.1), an alert, a webhook, a NATS stream, an A2A envelope, or MCP.
 emit surfaces (TAXII push, the A2A skill router) are off-by-default declared
 seams.
 
-**escalate_finding / alert sink** — A pack that fires when a finding crosses
-an escalation gate (severity ≥ high OR confidence ≥ 0.85), delivering to alert
-sinks (NATS, Pushover, XMPP/Matrix) up a severity ladder, with per-attempt
-delivery audit rows.
+**escalate_finding / alert sink** — A pack that fires when a finding crosses an
+escalation gate keyed on **post-verify `effective_confidence × severity`** (severity
+is a first-class read column now, not a tag, so a verify-demoted finding does NOT
+alert), with per-attempt delivery audit rows. External delivery currently lands on
+the NATS subject `channels.escalations` only (**bus-only**); other alert-sink handlers
+(Pushover, XMPP/Matrix) exist in code but are not the live escalation edge, and no
+paged-human integration is claimed.
 
 **governor** — The `PackGovernorEnforcer`: per-pack invocation/rate/cost caps
 plus the global token envelope, applied before each tool call (precall-check →

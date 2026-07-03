@@ -65,25 +65,34 @@ measures **groundedness**: does each claim follow from the evidence it cites?
 *not* one model's verdict — it is a composition of small, individually-checked
 reads:
 
-1. **Four bounded reasoning units** (`inline_target` LLM analysts —
+1. **Seven bounded reasoning units** (`inline_target` LLM analysts —
    `leadership_transition`, `energy_security`, `escalation`,
-   `narrative_coordination`), each fanned out to every **country desk** by a
+   `narrative_coordination`, `internal_stability`, `military_posture`,
+   `economic_coercion`), each fanned out to every **country desk** by a
    `has_tag("g20") or has_tag("watch")` predicate (the 19 G20 desks plus a
-   5-country high-consequence **watch** tier — 24 desks total), each answering
+   6-country high-consequence **watch** tier — 25 desks total), each answering
    **one** narrow question over a cited 72-hour signal slice plus an
    accumulated-facts grounding preamble, each ending in a **mandatory
    faithfulness verify** (§3.5).
 2. **Per-country composition** (`country_composition`, a
-   `meta_findings_synthesizer`) reads the four *verified* units for a country and
+   `meta_findings_synthesizer`) reads the seven *verified* units for a country and
    writes a hedged, cited synthesis; an unverified sub-claim never enters it.
-3. **World composition** (`world_assessor`, repointed to
-   `meta_findings_synthesizer`) composes over the per-country compositions into a
-   cited, hedged world view that drills country → units → source. It is *not* the
-   old verdict-from-nowhere monolith; that framing was retired.
-4. **A banded scorecard** (`scorecard_producer`, §3.6) writes one deterministic,
+3. **Per-region composition** (`region_composition`, same kind) composes the
+   verified per-country reads into **five region frames** (Africa, Americas,
+   Europe, Indo-Pacific, MENA); a thematic **`escalation_composition`** additionally
+   fuses the per-desk escalation reads cross-desk under a correlation guard.
+4. **World composition** (`world_assessor`, repointed to
+   `meta_findings_synthesizer`) composes over the per-region compositions into a
+   cited, hedged world view that drills world → region → country → units → source.
+   It is *not* the old verdict-from-nowhere monolith; that framing was retired.
+5. **A banded scorecard** (`scorecard_producer`, §3.6) writes one deterministic,
    rule-derived band per active country desk over already-verified claims (banded
    across a 14-day window), and an honest **skill scoreboard** publishes per-unit
    eval + calibration results — including the results that show *no* skill.
+
+Two deterministic **I&W** analysts run alongside the tower: `indicator_tracker`
+(run-over-run diffs on the structured indicators the units emit) and
+`collection_gap` (which desk × dimension cells are starved of evidence).
 
 **Design principles (why it is shaped this way):**
 
@@ -121,18 +130,19 @@ A cold start from empty volumes (the single `0001_baseline.sql` schema migration
 brings the full loop up: roughly 50 poll sources on cron (RSS / API / bulk — the
 BBC / Deutsche Welle / Al Jazeera feeds are the canonical RSS exemplars) →
 enriched signals (geo + language + entity classes promoted to indexed columns) →
-fan-out on `legba.signals.>` → the country desks (19 G20 + a 5-country watch
-tier). The **reactive acquisition
+fan-out on `legba.signals.>` → the country desks (19 G20 + a 6-country watch
+tier = 25 desks). The **reactive acquisition
 path** (source polls → fan-out → coalesced trigger fires → analyst run) is
 **proven live in the real stack** — most recently re-verified after the
 `dapr-scheduler` embedded-etcd fix that restores reminder recurrence (§6.3 /
 RUNBOOK §0); before that fix the loop fired once at boot then went silent.
 
-On top of that path the full **analysis spine (§1.1) is live**: the four bounded
-units → per-country composition → world composition → banded scorecard, each cited
+On top of that path the full **analysis spine (§1.1) is live**: the seven bounded
+units → per-country composition → per-region composition → world composition →
+banded scorecard (plus the thematic `escalation_composition`), each cited
 and each unit checked by the mandatory faithfulness pass, drillable to source. The
 older monolithic per-country analyst (`country_assessor`) is **retired and
-stopped** — nothing in the trusted spine reads it (the composition reads the four
+stopped** — nothing in the trusted spine reads it (the composition reads the seven
 verified units), and it was the single largest producer of unverified one-pager
 output (`docs/SEAMS.md` #35); its ~1.2k historical findings remain in the DB,
 unread (not a clean slate). The forecast-as-claim predictors (`country_predictor`,
@@ -296,7 +306,7 @@ worker actors**, addressed `analyst::<descriptor_id>::<target_id>`. The primary
 dispatches the matched targets to their workers via `ActorProxy`, **bounded
 concurrent** (a semaphore of `_FANOUT_CHUNK`, default 5) so a wide analyst
 (e.g. an `inline_target` unit like `energy_security`, or `country_composition`,
-each fanned across the ~24 active country desks — 19 G20 plus a 5-country watch
+each fanned across the ~25 active country desks — 19 G20 plus a 6-country watch
 tier) runs its per-target work in
 parallel instead of serializing through one actor's turn queue. Workers are
 **lazy-activated**: they carry no descriptor of their own and are only ever
@@ -369,16 +379,24 @@ provenance, not prompt text).
   NULL AND (valid_until IS NULL OR valid_until > now())`, preferring `seed`/`curated`
   provenance) about the target geo + top slice entities. It is degrade-not-drop (a
   read failure leaves the prompt untouched), token-capped (`max_facts`), and skips
-  bare-QID values so it never injects an unreadable line. Opted in on the **four
+  bare-QID values so it never injects an unreadable line. Opted in on all **seven
   bounded units** (`leadership_transition` / `energy_security` / `escalation` /
-  `narrative_coordination`, `grounding.enabled: true`) and the journal (§7.6); the
-  compositions (`country_composition` / `world_assessor`) instead compose over the
-  units' already-verified findings rather than a raw preamble.
-- **Tier 2 — vector `world_context` collection** (declared **future seam**). A
+  `narrative_coordination` / `internal_stability` / `military_posture` /
+  `economic_coercion`, `grounding.enabled: true`) and the journal (§7.6); the
+  compositions (`country_composition` / `region_composition` / `world_assessor`)
+  instead compose over the units' already-verified findings rather than a raw preamble.
+- **Tier 2 — vector `world_context` collection** (**LIVE**, the L-114 wiring landed). A
   curated unstructured-brief collection for free-text background the structured
-  facts can't carry; the `GroundingBlock` accepts `vector:world_context` as a source
-  so descriptors can pre-declare it, but the resolver acts only on the structured
-  `substrate` source until the embedder-through-port wiring (L-114) lands.
+  facts can't carry, retrieved from Qdrant through the stack embedder port (bge-m3,
+  1024-dim). The `GroundingBlock` accepts `vector:world_context` as a source, and the
+  resolver now performs the retrieval — **inline, opportunistic RAG with a relevance
+  floor + a country filter, degrade-not-drop when the corpus is empty** (a separate,
+  non-citable grounding preamble, distinct from the citable substrate facts). Two live
+  Qdrant corpora back it: `world_context` (~293 chunks) and `tradecraft` (~1716
+  chunks). RAG is **staggered on**: currently flipped ON for `leadership_transition`
+  and `internal_stability` (their `grounding.sources` include `vector:world_context`);
+  the remaining units draw the structured `substrate` source only, pending
+  review-gated expansion.
 
 `ANALYSIS.md` §7.9 is the in-depth narrative; `AI_MODELS.md` §6 explains why this
 sits where it does relative to the bound model (it mitigates the model's training
@@ -418,9 +436,11 @@ The score is folded, not enforced destructively:
 time (`runtime/actor_critic.py`) and gates a **visible low-confidence tier** — a
 weakly-grounded finding is demoted and labelled, never hard-deleted. A planted
 fabrication (a claim with no supporting cited evidence) is flagged unsupported.
-The four units carry `method.llm.verify`; so do both compositions, and
-`country_composition` **INNER JOINs on the faithfulness critique** so an
-unverified sub-claim is structurally unable to enter the per-country synthesis.
+The seven units carry `method.llm.verify`; so do all the compositions
+(`country_composition` / `region_composition` / `world_assessor` / the thematic
+`escalation_composition`), and `country_composition` **INNER JOINs on the
+faithfulness critique** so an unverified sub-claim is structurally unable to enter
+the per-country synthesis.
 
 ### 3.6 The banded scorecard, the skill scoreboard, and the measured experiments
 
@@ -601,8 +621,11 @@ plane), `prompt_fragments`, `rules`, `channels` (output bindings), a per-pack
 capability is the intersection `analyst.action_packs ∩
 target.allowed_action_packs ∩ pack.applicability`, gated by the governor. Seed
 packs: `media_processing`, `incident_response`, `substrate_read` (the consult
-kind's governed read tools), and `escalate_finding` (the example pack that
-fires on gated findings). (The `discovery` pack was retired per decision F-1.)
+kind's ~17 governed read tools, incl. the live semantic `search_context` corpus
+search), and `escalate_finding` (the example pack that fires on gated findings —
+it keys on post-verify `effective_confidence × severity`, with severity as a
+first-class read column, and delivers on the NATS `channels.escalations` subject,
+bus-only). (The `discovery` pack was retired per decision F-1.)
 The dispatch path
 (`data/analysts/agency/agency.py`) is **resolve → govern → dispatch**: the
 `PackGovernorEnforcer` (`governor.py`) **live-enforces** the per-pack caps
@@ -871,7 +894,7 @@ the Dapr-Workflow client or the in-process fallback). Nothing dials Temporal.io.
 ## 7. Data shape
 
 Substrate schema is built by a single `src/legba/data/migrations/0001_baseline.sql`
-(Postgres) plus the forward chain (`0032`…`0057`, migration head **`0057`**). A cold start from empty volumes
+(Postgres) plus the forward chain (`0032`…`0060`, migration head **`0060`**). A cold start from empty volumes
 applies them in order. (The historical 0001→0031 migration chain was flattened to this
 baseline for the clean-slate release; it remains in git history.)
 
@@ -1193,7 +1216,7 @@ planes are wired, by role:
 
 - **Core analyst plane** — the self-hosted `gpt-oss-120b`
   (`llm.primary.openai_compat`, $0 to run) drives every production analyst: the
-  four units, the compositions, and the deterministic-plus-LLM handlers.
+  seven units, the composition tower, and the deterministic-plus-LLM handlers.
 - **Faithfulness verify judge** — currently the **same core `gpt-oss-120b`**
   (`llm.primary.openai_compat`) scores groundedness on the verify pass (§3.5). It
   is **not** cross-family — a deliberate, temporary choice after the 8B judge
