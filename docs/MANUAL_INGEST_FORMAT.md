@@ -9,8 +9,10 @@ validation contract. The loader that consumes a validated batch lives in
 [`src/legba/data/seed/manual_batch.py`](../src/legba/data/seed/manual_batch.py)
 (`run_manual_batch`, the skip/merge/force reconciliation) and is driven by the
 [`scripts/manual_ingest.py`](../scripts/manual_ingest.py) CLI (`--batch DIR
-[--mode skip|merge|force] [--dry-run]`), run in the registry container like
-`migrate`/`seed`.*
+[--mode skip|merge|force] [--dry-run]`), run in the **runtime** container
+(`legba/legba-runtime-dapr`) — NOT the registry image, whose lighter build lacks
+`pycountry` (the seed geocode path imports it), so `legba-registry` dies with
+`ModuleNotFoundError: pycountry`. Otherwise driven like `migrate`/`seed`.*
 
 Manual ingestion rides the existing seed plane (`src/legba/data/seed/`): a batch
 is validated, then written through the same temporal write path

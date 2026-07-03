@@ -10,16 +10,19 @@ the batch manifest (``skip`` default / ``merge`` / ``force``) and overridable
 here; nothing is ever mutated in place or hard-deleted — a value change is a
 temporal supersession (the prior row is closed, not gone).
 
-Run it in the registry container exactly like ``migrate`` / ``seed`` — a mounted
-repo + ``LEGBA_DATA_PG_DB=legba`` (the known gotcha: the registrar defaults to
-``legba_pivot_test``; the live DB is ``legba``):
+Run it in the RUNTIME container (``legba/legba-runtime-dapr``) with a mounted repo
++ ``LEGBA_DATA_PG_DB=legba`` (the known gotcha: the registrar defaults to
+``legba_pivot_test``; the live DB is ``legba``). NOTE — use the runtime image, NOT
+``legba-registry``: the seed plane's geocode path imports ``pycountry``, which is
+absent from the lighter registry image, so the registry image dies with
+``ModuleNotFoundError: pycountry`` (verified live 2026-07-03):
 
     docker run --rm --network legba_default \
         -e LEGBA_DATA_PG_HOST=legba-postgres-1 \
         -e LEGBA_DATA_PG_DB=legba \
         -e LEGBA_DATA_PG_USER=legba -e LEGBA_DATA_PG_PASSWORD=… \
         -v "$(pwd)":/work -w /work --entrypoint python \
-        legba-registry scripts/manual_ingest.py --batch ./batches/my_backfill --dry-run
+        legba/legba-runtime-dapr:latest scripts/manual_ingest.py --batch ./batches/my_backfill --dry-run
 
 Usage:
     # dry-run — print the create/merge/supersede/conflict diff; write NOTHING
