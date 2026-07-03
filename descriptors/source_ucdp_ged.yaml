@@ -1,0 +1,89 @@
+# S1-T9 — shared SourceDescriptor: source.ucdp.ged (kind: ucdp).
+#
+# UCDP (Uppsala Conflict Data Program) Georeferenced Event Dataset (GED) —
+# global organized-violence events (state-based / non-state / one-sided),
+# one row per lethal event with geo (lat/long + country + admin), the two
+# conflict sides, violence type, and best/high/low fatality estimates.
+# Handler: src/legba/data/sources/ucdp.py (UCDPSourceHandler, config schema
+# UCDPConfig). Structured records → one Signal per event. Feeds the escalation
+# (U5) + military_posture (U6) bounded units.
+#
+# PUBLIC / NO-AUTH: unlike ACLED (OAuth2 account), GED is a free public API
+# (https://ucdpapi.pcr.uu.se/api/gedevents/{version}). No vault secrets — the
+# descriptor ships state: active like the USGS earthquakes feed. LICENSE:
+# UCDP data is CC BY 4.0 (free reuse WITH attribution) — attribute "Uppsala
+# Conflict Data Program (UCDP)" on any external re-export.
+#
+# READY TO POLL, integrator-verified live: the handler is written against the
+# documented GED API shape and unit-tested with a fixture response. The live
+# fetch is verified post-deploy (the environment this was built in cannot be
+# assumed to reach ucdpapi.pcr.uu.se). To gate it until then, flip
+# identity.state to draft (draft descriptors register but get no live actor).
+#
+# REGISTER (standalone descriptor — same path ACLED/USGS use):
+#   POST {registry}/api/v1/registry/descriptors/source  (body = this YAML)
+# or add "source_ucdp_ged.yaml" to a descriptor-file registrar and re-run it.
+
+identity:
+  id: source.ucdp.ged
+  name: UCDP — Georeferenced Event Dataset (Conflict Events)
+  kind: ucdp
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: active
+  owner: s1_units_sources
+  created: "2026-07-02T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Global feed — consuming targets narrow by Subscription.geo.
+  geo: []
+  languages: [en]
+  tags: [conflict, armed_conflict, political_violence, fatalities, events, structured, global]
+
+acquisition: poll
+
+cadence:
+  # GED releases ~annually; the candidate dataset updates ~monthly. A daily
+  # poll is generous and, with the StartDate high-water cursor + dedupe, cheap.
+  schedule:
+    factory_kind: cron
+    raw: "0 4 * * *"
+  cooldown_seconds: 600
+  jitter_seconds: 300
+
+config:
+  # GED dataset release version. Point at a candidate release string for the
+  # most-current (monthly) UCDP Candidate Events Dataset.
+  version:
+    factory_kind: text
+    raw: "24.1"
+  # No country/region/violence-type filter — full global feed; targets narrow
+  # via Subscription. Wide lookback because GED is a batch (not streaming)
+  # release; the external-id + content-hash dedupe absorbs the overlap.
+  lookback_days:
+    factory_kind: number
+    raw: 365
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # external_id (UCDP event id) canonical
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # Records carry lat/long + country already; geocode refines the structured
+    # geo column. No text enrichers — the source_headline field is short.
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 2592000           # ~30d — candidate publishes monthly
+  delivery: lossy
+
+subscription_policy: open
