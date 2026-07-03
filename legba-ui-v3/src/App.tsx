@@ -29,6 +29,7 @@ import { CommandPalette } from '@/components/CommandPalette'
 import { UnboundPanelPlaceholder } from '@/components/PanelChrome'
 import { PanelTierProvider } from '@/components/PanelTierContext'
 import { PanelErrorBoundary } from '@/components/PanelErrorBoundary'
+import { DockviewPanelApiProvider } from '@/components/DockviewPanelApiContext'
 import { useRegistry } from '@/panel-registry/useRegistry'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
 import { extractScope, instanceId, resolvePanel } from '@/panel-registry/loader'
@@ -89,13 +90,15 @@ function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
       }
       const Component = entry.Component
       return (
-        <PanelErrorBoundary label={synthetic.id}>
-          <PanelTierProvider tier={entry.definition.tier ?? 'live'}>
-            <Suspense fallback={<PanelLoading />}>
-              <Component registration={synthetic} scope={{}} mode={params.mode} />
-            </Suspense>
-          </PanelTierProvider>
-        </PanelErrorBoundary>
+        <DockviewPanelApiProvider value={props.api}>
+          <PanelErrorBoundary label={synthetic.id}>
+            <PanelTierProvider tier={entry.definition.tier ?? 'live'}>
+              <Suspense fallback={<PanelLoading />}>
+                <Component registration={synthetic} scope={{}} mode={params.mode} />
+              </Suspense>
+            </PanelTierProvider>
+          </PanelErrorBoundary>
+        </DockviewPanelApiProvider>
       )
     }
     return <UnboundPanelPlaceholder panelId="?" descriptorId="(no binding)" />
@@ -113,13 +116,15 @@ function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
   const Component = resolved.Component
   const scope = extractScope(registration)
   return (
-    <PanelErrorBoundary label={registration.id}>
-      <PanelTierProvider tier={resolved.definition.tier ?? 'live'}>
-        <Suspense fallback={<PanelLoading />}>
-          <Component registration={registration} scope={scope} mode={params!.mode} />
-        </Suspense>
-      </PanelTierProvider>
-    </PanelErrorBoundary>
+    <DockviewPanelApiProvider value={props.api}>
+      <PanelErrorBoundary label={registration.id}>
+        <PanelTierProvider tier={resolved.definition.tier ?? 'live'}>
+          <Suspense fallback={<PanelLoading />}>
+            <Component registration={registration} scope={scope} mode={params!.mode} />
+          </Suspense>
+        </PanelTierProvider>
+      </PanelErrorBoundary>
+    </DockviewPanelApiProvider>
   )
 }
 
