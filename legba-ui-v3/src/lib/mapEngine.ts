@@ -2,8 +2,9 @@
  * World-map renderer selection (S7-T5).
  *
  * Two renderers ship, both fully wired to the shared world store:
- *   - 'leaflet'  — DOM/SVG, always composites in a Dockview tile (the current,
- *                  known-good map). DEFAULT.
+ *   - 'leaflet'  — DOM/SVG, always composites in a Dockview tile (the
+ *                  known-good map). FALLBACK — served only when the browser
+ *                  cannot create a WebGL context (see DEFAULT note below).
  *   - 'maplibre' — WebGL, rendered through the TileWebGLOverlay harness that
  *                  routes the GPU canvas OUT of the tile transform (the S7-T5
  *                  unlock), adding the banded-verdict choropleth + signal-density
