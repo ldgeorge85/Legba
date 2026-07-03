@@ -1,0 +1,118 @@
+# S2-T5 — FLASHPOINT DYAD pilot: escalation_dyad (Iran ↔ Israel).
+#
+# A THEMATIC composition (the SAME meta_findings_synthesizer kind + the S2-T4
+# thematic READ_SLICE branch) that fuses ONE dimension — the `escalation` UNIT —
+# across EXACTLY TWO desks (country_watch_ir + country_watch_il) into ONE dyad
+# read:
+#
+#     escalation-unit head (Iran) + escalation-unit head (Israel)  →  ONE IR-IL read
+#
+# ── why the ESCALATION-UNIT heads, not the country_composition heads ─────────
+# The T7 CORRELATION GUARD (the whole point of a dyad) fires only when two cited
+# heads share a `derived_from` element. A `country_composition` head's
+# `derived_from` are that desk's per-unit finding UUIDs — DISJOINT between IR and
+# IL — so composing over them makes the guard INERT. An `escalation`-UNIT head's
+# `derived_from` are SIGNAL UUIDs; a single cross-border IR-IL incident lands as
+# one signal row in BOTH desks' slices, so the two heads' `derived_from`
+# INTERSECT → the guard collapses them to one independent component and CAPS the
+# fused confidence (never double-counting the shared wire). That is exactly the
+# "same underlying wire signal" case escalation_composition was built for — a dyad
+# is just a 2-desk desk set.
+#
+# ── the S2-T5 desk allow-list (subscription.substrate.thematic_desks) ────────
+# escalation_composition (S2-T4) spans EVERY g20+watch desk. This dyad narrows to
+# a 2-desk allow-list via the `thematic_desks` marker (read by READ_SLICE →
+# _assemble_thematic_unit_slice: it restricts both the target-id read filter AND
+# the desk-coverage roster to these two desks). The marker is additive + guarded:
+# escalation_composition carries NO `thematic_desks`, so it is byte-for-byte
+# unchanged (spans all desks).
+#
+# ── STANDALONE — feeds NOTHING (no upward propagation) ───────────────────────
+# The dyad is DERIVED FROM the IR + IL escalation reads. It is deliberately NOT
+# wired into the country→region→world tower: re-injecting it would DOUBLE-COUNT
+# IR+IL escalation evidence up a path where the guard cannot see it, and would
+# break the tower's clean bottom-up one-hop lineage. It is a headline LATERAL read
+# surfaced via the findings/read API + UI. (If upward visibility is later wanted,
+# the clean hook is adding escalation_dyad to the target-less world_assessor's
+# other_analysts — an explicit, separate change, never the country tower.)
+#
+# ── target-LESS (one global run) + verify OPT-IN + supersession ──────────────
+# NO `subscription.targets` block ⇒ ONE global run (target_filter=None), like
+# escalation_composition + world_assessor. `method.llm.verify` PRESENCE is the
+# verify opt-in the dispatch keys on. It writes target-less (target_id NULL); the
+# composition supersession signature is independent, so a fresh dyad head
+# supersedes the prior one without touching any other composition.
+
+identity:
+  id: escalation_dyad
+  name: IR–IL Escalation Dyad (escalation heads of Iran + Israel → one dyad read)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: meta_findings_synthesizer
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: s2_t5
+
+subscription:
+  # NO `targets` block ⇒ ONE global run (target_filter=None). The read is keyed by
+  # the ANALYST dimension (`escalation`) restricted to the 2 dyad desks.
+  other_analysts:
+    - id: escalation
+      data_types: [finding]
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+    # THEMATIC discriminator (S2-T4): routes this target-less, verify-declaring run
+    # to the thematic READ_SLICE branch. Value = the UNIT analyst_id fused.
+    thematic_dimension: escalation
+    # DYAD allow-list (S2-T5): restrict the thematic fuse to EXACTLY these two
+    # desks (Iran + Israel) instead of every g20+watch desk. Absent on
+    # escalation_composition ⇒ that composition still spans all desks.
+    thematic_desks: [country_watch_ir, country_watch_il]
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # Runtime dispatch is on identity.kind (meta_findings_synthesizer); method.kind
+  # only needs a valid enum. llm_planner matches the single-turn chat_complete
+  # shape the kind uses (same as analyst_escalation_composition.yaml).
+  kind: llm_planner
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  llm:
+    # MODEL POLICY (operator): synthesis on the CORE plane via a stack_ref ($0).
+    # NEVER hardcode a model — a stack_ref makes switching a one-line descriptor PUT.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Faithfulness VERIFY judge over the dyad composition itself (same TEMPORARY
+    # same-core-model limitation the other compositions carry; a dedicated
+    # reasoning judge is planned). This verify block's PRESENCE is the OPT-IN the
+    # dispatch keys on; it also enforces the shared T7 anti-double-counting cap.
+    # Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic floor.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrow context)
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # STAGGERED after BOTH inputs land: the escalation unit fires 07/19 UTC and the
+  # thematic escalation_composition composes at :30 past 08/20. The dyad reads the
+  # same escalation heads, so fire at :45 past 08/20 — a small margin after the
+  # freshest IR/IL escalation heads are present.
+  fallback_schedule: "45 8,20 * * *"
+  # 11h — below the 12h interval, stamped per-analyst at completion. A cooldown ==
+  # the 12h interval would land past the next fire and silently halve the cadence.
+  cooldown_seconds: 39600
+
+outputs: []

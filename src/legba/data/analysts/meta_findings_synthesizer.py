@@ -243,6 +243,15 @@ to the thematic branch INSTEAD of the world-over-regions branch (both are
 target-less + verify-declaring). Lives in the open ``subscription.substrate`` dict
 (``dict[str, Any]``) so no schema change / registry rebuild is needed to add it."""
 
+
+THEMATIC_DESKS_KEY: str = "thematic_desks"
+"""The optional ``subscription.substrate`` marker (S2-T5) restricting a THEMATIC
+composition to an ALLOW-LIST of desk ids instead of every g20+watch desk — the
+IR-IL escalation DYAD sets ``['country_watch_ir','country_watch_il']``. Absent /
+empty ⇒ the thematic read spans ALL desks (escalation_composition is byte-for-byte
+unchanged). Only meaningful alongside ``THEMATIC_DIMENSION_KEY``. Lives in the open
+``subscription.substrate`` dict so no schema change is needed."""
+
 # The g20+watch desk-coverage roster: one card per active ASSESSED desk (the
 # tags every unit fans out to — matches scorecard_producer's roster + the units'
 # ``has_tag('g20') or has_tag('watch')`` subscription). The thematic compose diffs
@@ -2074,6 +2083,28 @@ def thematic_dimension(descriptor: Any) -> str | None:
     return None
 
 
+def thematic_desks(descriptor: Any) -> list[str] | None:
+    """The THEMATIC composition DESK allow-list (S2-T5), or ``None``.
+
+    Reads ``subscription.substrate[THEMATIC_DESKS_KEY]`` (the open substrate dict,
+    no schema change). A non-empty list/tuple of desk ids ⇒ this thematic
+    composition fuses the named UNIT dimension across ONLY those desks (the IR-IL
+    escalation DYAD → ``['country_watch_ir','country_watch_il']``) instead of every
+    g20+watch desk. Absent / empty ⇒ ``None`` → the thematic read spans ALL desks
+    (escalation_composition is byte-for-byte unchanged). Only meaningful alongside a
+    ``thematic_dimension`` marker.
+    """
+    sub = getattr(descriptor, "subscription", None)
+    substrate = getattr(sub, "substrate", None) if sub is not None else None
+    if not isinstance(substrate, Mapping):
+        return None
+    raw = substrate.get(THEMATIC_DESKS_KEY)
+    if isinstance(raw, (list, tuple)):
+        desks = [str(d).strip() for d in raw if str(d).strip()]
+        return desks or None
+    return None
+
+
 # S2-T2 REGION composition — resolve a region frame → its member country desks.
 _REGION_MEMBERS_SQL = """
     SELECT descriptor_id
@@ -2302,6 +2333,7 @@ async def _assemble_thematic_unit_slice(
     time_window_hours: int,
     limit: int,
     verify_floor: float | None,
+    desk_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """S2-T4 — assemble the THEMATIC composition slice: ONE verified head per DESK
     of a UNIT analyst dimension, across ALL desks, with desk-coverage gaps.
@@ -2330,7 +2362,7 @@ async def _assemble_thematic_unit_slice(
         time_window_hours=time_window_hours,
         limit=limit,
         target_id=None,
-        target_ids=None,
+        target_ids=(list(desk_ids) if desk_ids else None),  # S2-T5: dyad allow-list
         verify_floor=verify_floor,
         include_meta=False,     # the escalation UNIT is a FIRST-ORDER finding
         dedupe_heads=True,      # one head per (analyst,target) desk, superseded folded
@@ -2349,6 +2381,10 @@ async def _assemble_thematic_unit_slice(
         return rows
 
     roster = await _resolve_desk_roster(conn)
+    if desk_ids:
+        # S2-T5 DYAD: coverage spans ONLY the allow-list desks (not all g20+watch).
+        allow = {str(d) for d in desk_ids}
+        roster = [d for d in roster if d["desk_id"] in allow]
     coverage: list[dict[str, Any]] = []
     for desk in roster:
         did = desk["desk_id"]
@@ -2481,6 +2517,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             time_window_hours=time_window_hours,
             limit=limit,
             verify_floor=_resolve_verify_floor(descriptor),
+            desk_ids=thematic_desks(descriptor),   # S2-T5: dyad desk allow-list (None ⇒ all desks)
         )
 
     # WORLD branch (S2-T3) — the target-LESS verify-declaring global meta = the
@@ -2585,4 +2622,5 @@ __all__ = [
     "read_other_analyst_findings",
     "run_method",
     "thematic_dimension",
+    "thematic_desks",
 ]

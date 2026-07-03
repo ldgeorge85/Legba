@@ -152,6 +152,7 @@ ANALYST_FILES = [
     # post-supersession, verify-floored) instead of the world-over-regions branch;
     # the T7 cross-desk correlation guard de-dupes shared underlying signals.
     "analyst_escalation_composition.yaml",   # NEW — S2-T4 (thematic escalation composition over all desks)
+    "analyst_escalation_dyad.yaml",          # NEW — S2-T5 (IR-IL thematic escalation dyad; thematic_desks=[ir,il], guard fires on shared signals)
     "analyst_composition_lineage_sweep.yaml", # NEW — P3-T6 (deterministic META sweep: multi-floor lineage-integrity over world+country composition outputs via validate_lineage; read-only audit)
     "analyst_scorecard_producer.yaml",  # NEW — P4-T2 (banded-scorecard producer; deterministic META, one scorecard row per active G20 country; data.bands = the T1 verdict, T5 eval folded)
     "analyst_forecast_scoreboard.yaml",  # NEW — P4-T7 (acute-forecast scoreboard producer; deterministic META, weekly-idempotent driver of the forecast_acute pilot: issue → exogenous-resolve → count. Side-writes acute_forecasts rows only; TRACE_ONLY counts receipt; forecasting surfaces ONLY in the T4 scoreboard, never as a claim)
