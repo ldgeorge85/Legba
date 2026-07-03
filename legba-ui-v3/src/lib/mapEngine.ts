@@ -9,28 +9,45 @@
  *                  unlock), adding the banded-verdict choropleth + signal-density
  *                  heatmap.
  *
- * WHY LEAFLET IS THE DEFAULT: the overlay's "not black" rendering can only be
- * confirmed with an in-browser screenshot, which the build environment cannot
- * produce — and a black default map must never ship (hard rule). So maplibre is
- * OPT-IN pending that visual check; flip it with NO rebuild —
+ * DEFAULT = 'maplibre' (S7-T5 integration, 2026-07-02): the overlay's "not
+ * black" rendering was confirmed via the containerized render harness — the same
+ * harness the S7-T2 spike used to call maplibre black in-tile now shows the
+ * banded-verdict choropleth painting correctly, because the TileWebGLOverlay
+ * portals the GPU canvas to <body>, OUT of every Dockview CSS transform (an
+ * architectural fix, GPU-agnostic). A WebGL-availability guard below downgrades
+ * to Leaflet on any browser that genuinely cannot create a WebGL context, so a
+ * black default can never ship. Overrides still win, with NO rebuild —
  *
- *   ?map=maplibre                                 // URL override (wins)
- *   localStorage.legba_map_engine = 'maplibre'    // or 'leaflet'
+ *   ?map=leaflet                                  // URL override (wins, either way)
+ *   localStorage.legba_map_engine = 'leaflet'     // or 'maplibre'
  *
- * INTEGRATOR: once you confirm `?map=maplibre` renders (not black) and behaves,
- * change the default below to 'maplibre'. Leaflet + its `leaflet` deps stay
- * regardless — the ReadGeoLens mini-map and this fallback both use them.
+ * Leaflet + its `leaflet` deps stay regardless — the ReadGeoLens mini-map and
+ * the fallback both use them.
  */
 export type MapEngine = 'maplibre' | 'leaflet'
 
+/** True if the browser can create a WebGL context (maplibre needs one). */
+function hasWebGL(): boolean {
+  try {
+    const c = document.createElement('canvas')
+    return !!(c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl'))
+  } catch {
+    return false
+  }
+}
+
 export function mapEngine(): MapEngine {
   try {
+    // An explicit override is honored unconditionally (debugging / preference).
     const url = new URLSearchParams(window.location.search).get('map')
     if (url === 'leaflet' || url === 'maplibre') return url
     const ls = localStorage.getItem('legba_map_engine')
     if (ls === 'leaflet' || ls === 'maplibre') return ls
+    // Default to the richer maplibre choropleth, but never hand back a renderer
+    // the browser can't composite — fall back to the always-safe Leaflet.
+    return hasWebGL() ? 'maplibre' : 'leaflet'
   } catch {
-    /* SSR / private mode → default */
+    /* SSR / private mode → the safe DOM/SVG renderer */
+    return 'leaflet'
   }
-  return 'leaflet'
 }
