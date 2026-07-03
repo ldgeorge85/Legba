@@ -462,6 +462,142 @@ async def test_escalate_verify_confirmed_finding_still_escalates(pool):
     ]
 
 
+async def test_escalate_high_severity_verified_reaches_sink(pool):
+    """S3-T4 ACCEPT (positive) — a fixture HIGH-severity, VERIFIED finding
+    reaches the sink.
+
+    Severity rides as the `severity:high` TAG the bounded units stamp (NOT a
+    payload field), proving the tag→read→gate path. Raw confidence 0.75 is BELOW
+    the 0.85 gate on its own, so this finding only escalates because the `high`
+    severity weight (1.2) lifts the alert score: 0.75 × 1.2 = 0.90 ≥ 0.85. The
+    faithful verdict (faithfulness 1.0) leaves the effective confidence == 0.75,
+    so the fold does not demote it."""
+    target_id = f"target.a3.{uuid4().hex[:8]}"
+    who = f"analyst::hsev_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc = _escalation(pool, emitted, account=who)
+    async with pool.acquire() as conn:
+        await _insert_target(
+            conn, target_id=target_id, tags=["g20", "news"],
+            allows=[{"pack_id": "escalate_finding"}],
+        )
+        payload = FindingPayload(
+            title="Border force concentration confirmed",
+            body="satellite-confirmed buildup [1]",
+            confidence=0.75,
+            tags=["escalation", "severity:high", f"target:{target_id}"],
+        )
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            output_row_id=uuid4(), target_id=target_id, actor_id="analyst::t::v",
+            verification_block={"faithfulness_score": 1.0, "confidence_ceiling": None},
+        )
+        inv = await _invocations(conn, requested_by=who)
+    assert emitted, "a high-severity verified finding must reach the sink"
+    subject, record = emitted[0]
+    assert subject == "channels.escalations"
+    assert record["payload"]["severity"] == "high"  # lifted from the tag
+    assert [(r["tool_name"], r["outcome"]) for r in inv] == [("escalate", "completed")]
+
+
+async def test_escalate_high_severity_verify_demoted_is_a_noop(pool):
+    """S3-T4 ACCEPT (negative) — a HIGH-severity finding the verify pass FLOORS
+    must NOT reach the sink.
+
+    This is the exact raw-confidence gate S3-T4 closes: under the old
+    severity-OR-confidence gate an explicit `high` severity fired regardless of
+    confidence, so a floored high-severity finding still paged. Now the score is
+    ``effective × severity_weight`` = min(0.97, 0.2) × 1.2 = 0.24 < 0.85 → hard
+    no-op, even though the RAW confidence (0.97) and the severity would each have
+    cleared the old gate."""
+    target_id = f"target.a3.{uuid4().hex[:8]}"
+    who = f"analyst::hdem_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc = _escalation(pool, emitted, account=who)
+    async with pool.acquire() as conn:
+        await _insert_target(
+            conn, target_id=target_id, tags=["g20", "news"],
+            allows=[{"pack_id": "escalate_finding"}],
+        )
+        payload = FindingPayload(
+            title="Alarming but weakly-cited escalation",
+            body="one uncited assertion",
+            confidence=0.97,
+            tags=["escalation", "severity:high", f"target:{target_id}"],
+        )
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            output_row_id=uuid4(), target_id=target_id, actor_id="analyst::t::v",
+            verification_block={"faithfulness_score": 0.2, "confidence_ceiling": None},
+        )
+        inv = await _invocations(conn, requested_by=who)
+        ev = await _events(conn, requested_by=who)
+    assert emitted == [] and inv == [] and ev == []
+
+
+async def test_escalate_indicator_activation_is_a_trigger_class(pool):
+    """S3-T4 trigger class (b) — a S3-T2 indicator_tracker FLIP into `triggered`
+    escalates on its own, independent of confidence/severity.
+
+    The summary finding carries a LOW confidence (1.0 here is incidental — set
+    it low to prove confidence is not what fires) and NO severity, but a
+    `data.activation_count > 0` (plus the `indicator_triggered` tag) marks a
+    pre-registered warning signpost firing. Delivered on a g20 target so the
+    escalate pack's applicability leg passes."""
+    target_id = f"target.a3.{uuid4().hex[:8]}"
+    who = f"analyst::flip_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc = _escalation(pool, emitted, account=who)
+    async with pool.acquire() as conn:
+        await _insert_target(
+            conn, target_id=target_id, tags=["g20", "news"],
+            allows=[{"pack_id": "escalate_finding"}],
+        )
+        payload = FindingPayload(
+            title="Indicator tracker: 1 indicator flip(s), 1 newly triggered",
+            body="!! [BR/escalation] border-force-buildup: not_observed -> triggered",
+            confidence=0.3,  # well below the 0.85 gate — NOT what fires
+            tags=["deterministic", "indicator_tracker", "indicator_triggered"],
+            data={"flip_count": 1, "activation_count": 1, "groups_compared": 1},
+        )
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            output_row_id=uuid4(), target_id=target_id, actor_id="analyst::t::v",
+        )
+        inv = await _invocations(conn, requested_by=who)
+    assert emitted, "an indicator activation must escalate as its own trigger class"
+    assert [(r["tool_name"], r["outcome"]) for r in inv] == [("escalate", "completed")]
+
+
+async def test_escalate_indicator_no_activation_does_not_trigger(pool):
+    """Control for trigger (b) — an indicator_tracker summary with ZERO
+    activations (a non-activating flip, e.g. triggered→expired) and a sub-gate
+    confidence does NOT escalate. Only an activation (→triggered) is the
+    trigger, and the confidence/severity score is below the gate."""
+    target_id = f"target.a3.{uuid4().hex[:8]}"
+    who = f"analyst::noflip_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc = _escalation(pool, emitted, account=who)
+    async with pool.acquire() as conn:
+        await _insert_target(
+            conn, target_id=target_id, tags=["g20", "news"],
+            allows=[{"pack_id": "escalate_finding"}],
+        )
+        payload = FindingPayload(
+            title="Indicator tracker: 1 indicator flip(s), 0 newly triggered",
+            body="- [BR/escalation] airspace-closure: triggered -> expired",
+            confidence=0.3,
+            tags=["deterministic", "indicator_tracker"],
+            data={"flip_count": 1, "activation_count": 0, "groups_compared": 1},
+        )
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            output_row_id=uuid4(), target_id=target_id, actor_id="analyst::t::v",
+        )
+        inv = await _invocations(conn, requested_by=who)
+    assert emitted == [] and inv == []
+
+
 async def test_escalate_below_gate_is_a_noop(pool):
     who = f"analyst::low_{uuid4().hex[:8]}"
     emitted: list = []
@@ -521,11 +657,26 @@ async def test_escalate_non_g20_target_fails_applicability(pool):
 @pytest.mark.parametrize(
     ("severity", "confidence", "expect"),
     [
-        ("critical", 0.1, True),    # explicit severity wins
-        ("high", 0.1, True),
+        # S3-T4 — the gate keys on the SINGLE alert score
+        # ``effective_confidence × severity_weight`` crossing 0.85. ``confidence``
+        # here is ALREADY the verify-folded effective confidence.
+        # A high-severity but DEMOTED finding (low effective confidence) must NOT
+        # fire — the raw-confidence gate S3-T4 closes (these two were True under
+        # the old severity-OR-confidence gate):
+        ("critical", 0.1, False),   # 0.1 × 1.5 = 0.15 < 0.85
+        ("high", 0.1, False),       # 0.1 × 1.2 = 0.12 < 0.85
+        # High severity boosts a sub-gate confidence over the line (severity now
+        # MATTERS, but only atop real post-verify confidence):
+        ("critical", 0.9, True),    # 0.9 × 1.5 = 1.35
+        ("high", 0.75, True),       # 0.75 × 1.2 = 0.90
+        ("high", 0.2, False),       # 0.2 × 1.2 = 0.24 (verify-demoted)
+        # Below-`high` severities keep the plain confidence-gate behavior
+        # (baseline weight 1.0) — no regression:
         ("medium", 0.1, False),
-        ("nonsense", 0.1, False),   # unknown severity never fires
-        (None, 0.9, True),          # confidence gate
+        ("medium", 0.9, True),
+        ("nonsense", 0.1, False),   # unknown severity → baseline weight
+        ("nonsense", 0.9, True),
+        (None, 0.9, True),          # severity-less → plain confidence gate
         (None, 0.84, False),
         (None, None, False),
     ],

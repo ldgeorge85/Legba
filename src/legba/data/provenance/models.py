@@ -28,6 +28,63 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
+# Severity — the read column derived from a finding's `severity:<level>` tag
+# ---------------------------------------------------------------------------
+#
+# The bounded reasoning UNITS stamp an assessed severity as a single
+# ``severity:<low|moderate|elevated|high|critical>`` TAG alongside their prose
+# (see the unit descriptors). ``AlertPayload`` instead carries a first-class
+# ``severity`` field on the model. S3-T4 lifts the unit tag to the
+# ``analyst_outputs.severity`` READ COLUMN on write, and the alert path keys on
+# it — so both the read-path API (``substrate_query_port.list_findings`` /
+# ``substrate_reads_api``, which already SELECT ``f.severity``) and the
+# escalation gate see a first-class value instead of a buried tag.
+
+# Both live severity vocabularies: the unit tags (low/moderate/elevated/high/
+# critical) and the AlertPayload ladder (info/low/medium/high/critical). The
+# rank only picks the strongest when (defensively) more than one is present.
+_SEVERITY_RANK: dict[str, int] = {
+    "info": 0,
+    "low": 1,
+    "moderate": 2,
+    "medium": 2,
+    "elevated": 3,
+    "high": 4,
+    "critical": 5,
+}
+_SEVERITY_TAG_PREFIX = "severity:"
+
+
+def severity_from_tags(tags: Any) -> str | None:
+    """The ``severity:<level>`` value carried in a finding's tags, or ``None``.
+
+    Returns the canonical level string (e.g. ``"high"``). Unknown level strings
+    are ignored (no guessing). When several severity tags are present — the
+    prompt asks for exactly one, so this is defensive — the HIGHEST-ranked wins,
+    so a mixed emit never silently under-reports. ``tags`` may be any iterable of
+    strings (a payload's ``tags`` list); non-string entries are skipped.
+    """
+    if not tags:
+        return None
+    best: str | None = None
+    best_rank = -1
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        s = t.strip()
+        if not s.lower().startswith(_SEVERITY_TAG_PREFIX):
+            continue
+        level = s[len(_SEVERITY_TAG_PREFIX):].strip().lower()
+        rank = _SEVERITY_RANK.get(level)
+        if rank is None:
+            continue
+        if rank > best_rank:
+            best_rank = rank
+            best = level
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Source-kind ingestion (target writes)
 # ---------------------------------------------------------------------------
 

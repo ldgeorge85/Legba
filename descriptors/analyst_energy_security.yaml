@@ -174,6 +174,16 @@ cadence:
 # eval.rubric — the topic-scoped rubric the critic grades this unit's findings
 # against (and the contract the verify gate's faithfulness floor backs up).
 # REQUIRED for the critic->optimizer loop; without it the critic hard-fails.
+
+# S3-T4 — agency grant: the escalate_finding pack. When one of THIS unit's
+# findings crosses the alert gate (effective_confidence × severity, folded
+# post-verify) the actor run path fires `escalate` through the full agency
+# pipeline. Effective capability = this grant ∩ target.allowed_action_packs ∩
+# pack.applicability (g20) — so only g20 desks actually deliver to the operator
+# channel; a watch-only desk denies with a visible governor BLOCK by design.
+action_packs:
+  - pack_id: escalate_finding
+
 eval:
   rubric: |
     {"dimensions": [

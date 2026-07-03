@@ -13,6 +13,7 @@ import asyncpg
 
 from ..data.provenance._core import AnalystContext
 from ..data.provenance.kinds import OutputKind
+from ..data.provenance.models import severity_from_tags
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,31 @@ async def _emit_output_bindings(
             )
 
 
+def _is_indicator_activation(payload: Any) -> bool:
+    """S3-T4 trigger class (b) — is this finding a S3-T2 indicator FLIP into
+    ``triggered``?
+
+    ``indicator_tracker`` emits a summary FINDING carrying
+    ``data['activation_count']`` (the count of ``not_observed → triggered``
+    flips this sweep) and, when any activation fired, the ``indicator_triggered``
+    tag. Either signal marks a pre-registered warning signpost firing — an
+    escalation trigger in its own right, independent of the finding's
+    confidence/severity. Tolerant of the free-form JSONB shape; returns False on
+    anything malformed (degrade, never raise into the run).
+    """
+    data = getattr(payload, "data", None)
+    if isinstance(data, dict):
+        try:
+            if int(data.get("activation_count") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    tags = getattr(payload, "tags", None)
+    if isinstance(tags, (list, tuple)) and "indicator_triggered" in tags:
+        return True
+    return False
+
+
 async def _maybe_escalate_finding(
     conn: Any,
     *,
@@ -204,27 +230,39 @@ async def _maybe_escalate_finding(
     actor_id: str,
     verification_block: dict[str, Any] | None = None,
 ) -> None:
-    """A-3c — gate + fire the ``escalate_finding`` pack for one landed finding.
+    """A-3c / S3-T4 — gate + fire the ``escalate_finding`` pack for one landed
+    finding.
 
-    Gate: an explicit severity (the payload attr for alert-kinds, else
-    ``payload.data['severity']`` for LLM kinds that stamp one) at/above the
-    pack's ``severity_gate``, OR confidence at/above ``confidence_gate``.
+    TWO escalation trigger classes feed the escalate pack (which stays the
+    delivery edge):
 
-    S8-T2 — the confidence leg gates on the verify-DEMOTED EFFECTIVE
-    confidence, not the raw LLM-asserted ``payload.confidence``. When the
-    faithfulness verify pass produced a verdict for this finding
-    (``verification_block``), fold it exactly as the read-path gate does:
-    ``effective = min(confidence, faithfulness_score[, confidence_ceiling])``.
-    A finding the verify pass floored therefore cannot escalate on its
-    pre-verify number. ``verification_block`` is NULL when nothing was verified
-    (TRACE_ONLY / a non-verify kind) → effective == raw (gate unchanged).
-    Severity is left as-is — the severity-still-in-TAGS column move is S3-T4.
+      (a) the ``effective_confidence × severity`` score crosses the gate
+          (:func:`escalation_gate_decision`); OR
+      (b) a S3-T2 ``indicator_tracker`` FLIP into ``triggered``
+          (:func:`_is_indicator_activation`) — a pre-registered warning signpost
+          firing escalates on its own, independent of confidence/severity.
+
+    Severity (trigger a) resolves from, in order: the payload ``severity`` field
+    (alert kinds), ``payload.data['severity']``, then the ``severity:<level>``
+    TAG the bounded units stamp (S3-T4 keys the alert path on the unit tag,
+    mirroring the write-path column lift in ``provenance/writes``).
+
+    S8-T2 — the score gates on the verify-DEMOTED EFFECTIVE confidence, not the
+    raw LLM-asserted ``payload.confidence``. When the faithfulness verify pass
+    produced a verdict for this finding (``verification_block``), fold it exactly
+    as the read-path gate does: ``effective = min(confidence,
+    faithfulness_score[, confidence_ceiling])``. A finding the verify pass
+    floored therefore cannot escalate on its pre-verify number — nor on a
+    high-severity tag alone (the raw-confidence gate S3-T4 closes).
+    ``verification_block`` is NULL when nothing was verified (TRACE_ONLY / a
+    non-verify kind) → effective == raw (gate unchanged).
 
     The target leg resolves PER RUN: the finding's target supplies its
     ``allowed_action_packs`` + scope for the applicability predicate. No
     target in context → empty allow-list → the resolution denies with an
     operator-visible governor BLOCK (escalation is a target-bound
-    capability by design).
+    capability by design) — so trigger (b) on a target-less META flip finding is
+    RECOGNIZED here but still governed at the delivery edge.
     """
     from ..data.analysts.agency.binding import (
         GLOBAL_SCOPE,
@@ -236,6 +274,8 @@ async def _maybe_escalate_finding(
     data = getattr(payload, "data", None)
     if severity is None and isinstance(data, dict):
         severity = data.get("severity")
+    if severity is None:
+        severity = severity_from_tags(getattr(payload, "tags", None))
     confidence = getattr(payload, "confidence", None)
     # Fold the faithfulness verdict into the gated confidence. Mirrors the
     # critique payload's ``overall_score = min(faithfulness_score,
@@ -246,11 +286,14 @@ async def _maybe_escalate_finding(
             _cap = verification_block.get(_cap_key)
             if isinstance(_cap, (int, float)) and not isinstance(_cap, bool):
                 confidence = min(confidence, float(_cap))
-    if not escalation_gate_decision(
-        severity=severity,
-        confidence=confidence,
-        severity_gate=escalation.severity_gate,
-        confidence_gate=escalation.confidence_gate,
+    if not (
+        escalation_gate_decision(
+            severity=severity,
+            confidence=confidence,
+            severity_gate=escalation.severity_gate,
+            confidence_gate=escalation.confidence_gate,
+        )
+        or _is_indicator_activation(payload)
     ):
         return
 
