@@ -16,8 +16,8 @@
 
 Legba watches a set of feeds and writes intelligence assessments you can check.
 Point it at sources (news RSS, GeoJSON hazard feeds, APIs, webhooks), declare
-what you care about (we run 24 country desks: the G20 plus Israel, Iran,
-Ukraine, Taiwan, North Korea), and it produces short analytic reads — each
+what you care about (we run 25 country desks: the G20 plus Israel, Iran,
+Pakistan, Ukraine, Taiwan, North Korea), and it produces short analytic reads — each
 claim cited to a source, each citation checked by a second verification pass,
 and everything auditable hop-by-hop back to the original item.
 
@@ -25,12 +25,14 @@ and everything auditable hop-by-hop back to the original item.
  feeds ──► signals ──► facts / entities / situations      (the knowledge substrate)
                           │
                           ▼
-              4 bounded reasoning units                    (one narrow question each,
-        leadership · energy · escalation · narrative       per country desk)
+              7 bounded reasoning units                    (one narrow question each,
+   leadership · energy · escalation · narrative ·          per country desk)
+   internal-stability · military-posture · economic-coercion
                           │  cited [N] → verified
                           ▼
-                per-country composition ──► world read     (synthesis over VERIFIED
-                          │                                 sub-claims only)
+   country ──► region ──► world composition                (synthesis over VERIFIED
+        (+ a cross-desk thematic escalation read)           sub-claims only)
+                          │
                           ▼
                    banded scorecard                        (one row per desk; missing
                                                             evidence says so honestly)
@@ -65,8 +67,9 @@ deploy/deploy.sh --seed                     # optional: + curated knowledge seed
 ```
 
 One script stands up the whole thing in the load-bearing order: schema →
-credential vault → the substrate stack → ~46 catalog sources → the 24 country
-desks → the analyst set → runtime. Clean-slate only (no migration path from
+credential vault → the substrate stack → the 46-source catalog (plus the shared
+and state-media feeds) → the 25 country desks → the analyst set → runtime.
+Clean-slate only (no migration path from
 pre-pivot Legba). Step-by-step manual bring-up, a throwaway validation stack,
 and troubleshooting live in [docs/SETUP.md](docs/SETUP.md) and
 [docs/RUNBOOK.md](docs/RUNBOOK.md).
@@ -89,13 +92,13 @@ read its citations, check its verification, and drill it to the source article.
 Sources own acquisition: a source polls (or receives a push), emits one
 canonical, target-agnostic **signal**, enriched once (language, geo, entities)
 and published once. A fan-out plane routes each signal to every subscribed
-**desk** by predicate — one BBC feed serves two dozen desks without
-re-fetching. Per desk, four bounded **units** each answer one narrow question
+**desk** by predicate — one BBC feed serves all 25 desks without
+re-fetching. Per desk, seven bounded **units** each answer one narrow question
 over a cited 72-hour slice plus accumulated context from the temporal knowledge
 substrate (facts and relationships with validity windows — so it integrates
 over weeks, not just today, and stale model priors get overridden). Unit
 findings pass the **verify gate**; only verified sub-claims compose upward into
-the per-country read, the world read, and the scorecard. Every derived row
+the per-country read, the regional and world reads, and the scorecard. Every derived row
 carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
 `GET /api/v1/lineage`. Deep dives: [architecture](docs/ARCHITECTURE.md) ·
 [flows](docs/FLOWS.md) · [analysis methodology](docs/ANALYSIS.md).
@@ -139,8 +142,7 @@ the stack registry. Details: [docs/AI_MODELS.md](docs/AI_MODELS.md).
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Conceptual orientation — the four planes and why the system is shaped this way |
 | [docs/ACQUISITION.md](docs/ACQUISITION.md) | The acquisition plane — `SourceActor`, baseline enrichment, fan-out / subscription |
 | [docs/ANALYSIS.md](docs/ANALYSIS.md) | The analysis plane — units, composition, verify, coalescing triggers, action-pack agency |
-| [docs/SOURCES.md](docs/SOURCES.md) | The source catalog — the 3 / 46 / ~50 scope model and the per-source table of what Legba ingests |
-| [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) | Source handler kinds and the data sources reachable through them |
+| [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) | The source catalog — the tiered scope model (3 cold-start / 46 catalog / live), the per-source table, and the source-handler kinds reachable through them |
 | [docs/MANUAL_INGEST_FORMAT.md](docs/MANUAL_INGEST_FORMAT.md) | The manual-ingest batch format — manifest + per-kind JSONL schemas for hand-supplied data |
 | [docs/AI_MODELS.md](docs/AI_MODELS.md) | The hosted models, providers, and how the runtime reaches them |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operator runbook — bring-up, migrations, registration, troubleshooting |

@@ -53,9 +53,10 @@ manual path and stop at the working set you will sit at 3 feeds** (this is exact
 why reviews correctly say "only 3 RSS feeds" of an under-bootstrapped instance).
 On the manual path, do not skip §8.
 
-For reference, the live production instance reaches **~49 distinct
-signal-producing sources** (the 46 catalog sources plus seed/baseline adapters).
-That is the "full scope" number you are aiming for.
+For reference, the live production instance reaches **~53 distinct
+signal-producing sources** (the 46 catalog sources plus the shared and
+state-media feeds and the seed/baseline adapters). That is the "full scope"
+number you are aiming for.
 
 This is the canonical, self-hostable demo set — G20 world-news plus hazard feeds.
 It is an exemplar, not a closed list: the same pipeline applies to any domain
@@ -149,15 +150,16 @@ docker exec legba-legba-registry-1 python -m legba.data.migrate
 >
 > A fresh deploy applies the single proven baseline
 > (`deploy/baseline/0001_baseline.sql`) and then this runner applies any FUTURE
-> (`0054`+) migrations. The baseline pre-seeds the ledger to head `0053`, so on a
-> baseline-provisioned DB `migrate` reports nothing pending. (`deploy/deploy.sh`
+> (`0054`+) migrations. The baseline pre-seeds the ledger to `0053`; on a
+> baseline-provisioned DB `migrate` then applies the seven post-baseline
+> migrations (`0054`–`0060`) and advances the head to `0060`. (`deploy/deploy.sh`
 > does both steps for you.)
 
-Verify (migration head should be **0053**; ISO countries table fully seeded):
+Verify (migration head should be **0060**; ISO countries table fully seeded):
 
 ```
 docker exec legba-postgres-1 psql -U legba -d legba \
-    -c "SELECT name FROM legba_data_migrations ORDER BY name"   # head 0053
+    -c "SELECT name FROM legba_data_migrations ORDER BY name"   # head 0060
 docker exec legba-postgres-1 psql -U legba -d legba \
     -c "SELECT count(*) FROM iso_countries"                     # expect 249
 ```
@@ -188,14 +190,14 @@ proxy. Each `built` line in the runtime boot log (§9) confirms one resolved.
 
 ---
 
-## 7. Register the source-first working set (3 RSS + G20 + analysts + packs)
+## 7. Register the source-first working set (sources + G20/watch desks + analysts + packs)
 
 This is the canonical demo set in one dependency-ordered pass. Pin
 `LEGBA_DATA_PG_DB=legba` — the DB-direct registrars default to
 `legba_pivot_test`.
 
 ```
-# Action packs + the 3 shared sources + 19 G20 country targets + 4 analysts:
+# Action packs + the 3 shared sources + 19 G20 country targets + the legacy analyst bundle:
 docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
   python scripts/bringup_register_p17_workingset.py
 ```
@@ -203,16 +205,57 @@ docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
 This registers the **3 shared sources** (`source.bbc.world` /
 `source.aljazeera.world` / `source.dw.world`), the **19 G20 country targets**
 (`country_g20_<iso2>`, geo-predicate `source_selector` + per-country subscription
-+ inline analyst), the **4 source-first analysts** (`country_assessor` /
-`country_critic` / `country_optimizer` / `consult_default`), and the action packs
++ inline analyst), a **legacy analyst bundle** (`country_critic` /
+`country_optimizer` / `consult_default`, plus the now-**retired**
+`country_assessor` — superseded by the bounded units below and kept only as an
+inert feeder), and the action packs
 (`media_processing` / `incident_response` / `discovery`).
 
-> Note: `scripts/bringup_register_sources.py` is a standalone registrar for the
-> same 3 feeds; the working-set script above already covers them, so you do not
-> need to run it separately.
+> **The live analysis producers are NOT in that bundle.** The seven bounded
+> reasoning units (`leadership_transition` / `energy_security` / `escalation` /
+> `narrative_coordination` / `internal_stability` / `military_posture` /
+> `economic_coercion`) and the composition tower (`country_composition` →
+> `region_composition` → `world_assessor`, plus the cross-desk thematic
+> `escalation_composition`, and the deterministic I&W meta-analysts
+> `indicator_tracker` / `collection_gap`) are registered by
+> `scripts/bringup_register_analysts.py` — run it here too (it is `deploy.sh`
+> step [6]):
+>
+> ```
+> docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+>   python scripts/bringup_register_analysts.py
+> ```
+>
+> Then register the six-country **watch tier** (Israel / Iran / Ukraine / Taiwan
+> / North Korea / Pakistan) to reach the full **25 desks** (the units are scoped
+> by a `has_tag("g20") or has_tag("watch")` predicate, so they fan out to the
+> watch desks automatically):
+>
+> ```
+> docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+>   python scripts/bringup_register_watch_country_targets.py
+> ```
 
-At this point the instance has **only the 3 cold-start RSS feeds**. Continue to
-§8 — do not stop here.
+> **Run `scripts/bringup_register_sources.py` too — do NOT skip it.** It is no
+> longer just the 3 shared feeds: it now also registers the watch-desk
+> **state-media voices** (`source.irna.english` / `source.presstv.english` /
+> `source.ukrinform.english` — `source_class: state_media`, read as
+> framing/official-position evidence) and the **UCDP** georeferenced
+> conflict-event feed (`source.ucdp.ged`, public / no-auth). The
+> `p17_workingset` pass above covers only the 3 shared feeds, so skipping this
+> silently drops those four sources on a fresh install:
+>
+> ```
+> docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+>   python scripts/bringup_register_sources.py
+> ```
+>
+> (`source.ucdp.ged` registers `active` but is a fresh integration — its live
+> fetch is verified post-deploy, so it may not emit signals immediately.)
+
+At this point the instance has the cold-start RSS feeds plus the state-media /
+UCDP sources — still only a handful. Continue to §8 for the full 46-source
+catalog — do not stop here.
 
 ---
 
@@ -314,9 +357,9 @@ SQL
 ```
 
 **Verify you reached full scope** — `distinct_sources` must be **dozens, not 3**.
-A current-scope instance reaches **~49 distinct signal-producing sources** once
-the §8 catalog + the seed/baseline adapters are active. If you see only 3, you
-skipped §8 — go back and register the catalog.
+A current-scope instance reaches **~53 distinct signal-producing sources** once
+the §7 sources + §8 catalog + the seed/baseline adapters are active. If you see
+only 3, you skipped §8 — go back and register the catalog.
 
 Enriched signals (`language IS NOT NULL`) confirm the `nlp_client` built; findings
 in `analyst_outputs` (with `derived_from` provenance) confirm the fan-out →
