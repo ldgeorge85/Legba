@@ -1,8 +1,9 @@
 # Legba — Data Sources
 
 This doc catalogs Legba's data sources: how many there are and at what scope
-(the three-tier model and the 46-source catalog), the fourteen source-handler
-kinds a descriptor can use, and how to register a source or add a new handler
+(the three-tier model and the 46-source catalog), the fifteen source-handler
+kinds a descriptor can use, the editorial `source_class` taxonomy a descriptor
+declares, and how to register a source or add a new handler
 kind. It is written for operators deciding what to register and for developers
 adding a handler. For how a feed becomes a canonical signal (actor → baseline
 enrichment → publish) see `ACQUISITION.md`; for the exact registration
@@ -34,22 +35,23 @@ are being counted. Anchor every scope claim to these:
 |---|---|---|---|
 | **1 — Minimal cold-start** | **3** shared RSS | The smallest loop that proves the path from empty volumes: BBC World, Al Jazeera World, Deutsche Welle. This is *all a fresh deploy gets* if it stops at the documented working-set. | `scripts/bringup_register_sources.py` (standalone 3-source registrar) and the working-set script `scripts/bringup_register_p17_workingset.py` (RUNBOOK §7) |
 | **2 — Full repo catalog** | **46** sources | The full catalog of independently-verified, no-auth feeds: **43 `rss` + 3 `geojson`** hazard feeds. **NOT auto-run on deploy and NOT part of the working-set bring-up** — a separate manual step a fresh operator currently misses. Running it is how you reach current/full scope. | `scripts/bringup_register_source_catalog.py` (the `CATALOG` tuple — 46 `CatalogEntry`, owner `s1_catalog`) |
-| **3 — Live-productive** | **49** sources | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the 46-catalog sources **plus** seed / world-baseline curated adapters. | Live reconcile against the production `signals` table |
+| **3 — Live-productive** | **53** sources | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the 46-catalog sources **plus** the operator-pinned standalone descriptors (state-media, Telegram, …; §2.3) **plus** seed / world-baseline curated adapters. | Live reconcile against the production `signals` table |
 
 Two adjacent counts round out the picture (neither is a different set of
 *feeds* — they are registry / fan-out bookkeeping):
 
-- **52 registered head source descriptors** — distinct non-autowired active
+- **50 registered head source descriptors** — distinct non-autowired **active**
   head `source_descriptors` rows in the registry (the catalog plus the
-  operator-pinned `descriptors/source_*.yaml` and seed sources; a few of these
-  are registered but quiet, which is why "registered" (52) ≥ "live-productive"
-  (49)).
-- **63 autowired per-target fan-out templates** (`src_autowire*` / `src_tmpl*`)
-  — these are **generated, not hand-authored** feeds. They are not new
-  upstreams; they are the discovery/auto-wire machinery's per-target binding
-  templates (one published BBC feed fans out to nineteen G20 targets without
-  re-fetching anything — see `ACQUISITION.md` §6). Do **not** count them as
-  ingest sources.
+  operator-pinned `descriptors/source_*.yaml` and seed sources; a further 4 are
+  registered but **paused** and 3 **retired**, which is why the active-registered
+  count and the live-productive count differ).
+- **Autowired per-target fan-out templates** (`src_autowire*` / `src_tmpl*`) —
+  these are **generated, not hand-authored** feeds, materialized on demand by the
+  discovery/auto-wire machinery; they are not new upstreams, and this reference
+  deployment currently materializes **none** (fan-out rides the shared NATS
+  subjects instead — one published BBC feed fans out to the G20 targets without
+  re-fetching anything; see `ACQUISITION.md` §6). Do **not** count them as ingest
+  sources.
 
 > **Why three numbers.** A fresh deploy that stops at the documented
 > working-set gets **only 3 RSS feeds** — the minimal cold-start verification
@@ -58,9 +60,10 @@ Two adjacent counts round out the picture (neither is a different set of
 > bring-up does **not** invoke (§4). A review that sees "only 3 RSS feeds" is
 > reading the cold-start set.
 
-**The one-line answer.** *3 minimal · 46 catalog · 49 live-productive* — plus
-52 registered descriptors and 63 autowired fan-out templates. The fix for the
-"only 3 feeds" state is to register the 46-source catalog (§4).
+**The one-line answer.** *3 minimal · 46 catalog · 53 live-productive* — plus
+50 active-registered head descriptors (and no autowired fan-out templates
+materialized in this deployment). The fix for the "only 3 feeds" state is to
+register the 46-source catalog (§4).
 
 ---
 
@@ -145,12 +148,56 @@ experimental forecast pilot reads (see `README.md` and `ANALYSIS.md`).
 > Africa, DFAT Smartraveller, CISA, Kyodo, SIPRI, EMSC. These are excluded from
 > the catalog count.
 
+### 2.3 Pinned standalone sources — state-media and UCDP
+
+Beyond the 46-entry catalog, a handful of **operator-pinned** `descriptors/source_*.yaml`
+sources are registered individually (the same standalone path ACLED / Telegram
+use), NOT via the catalog script — so they are counted in the live-productive /
+registered tiers of §1 but are **not** part of the "46 catalog". Three
+**state-media** RSS feeds and one **UCDP** conflict-event feed landed with the
+bounded-unit waves:
+
+| Source id | Kind | Auth | `source_class` | Live status |
+|---|---|---|---|---|
+| `source.irna.english` | `rss` | none | `state_media` | **Active** — polls healthy (empty windows in the observed period). Islamic Republic News Agency (Iran). |
+| `source.presstv.english` | `rss` | none | `state_media` | **Active** — registered and polling. Press TV (Iran, English). |
+| `source.ukrinform.english` | `rss` | none | `state_media` | **Active** — registered and polling (has hit transient feed errors). Ukrinform (Ukraine state wire). |
+| `source.ucdp.ged` | `ucdp` (§7.15) | none *(designed)* | `analysis` | **Registered active but NOT productive.** The descriptor ships as a no-auth public GED API, but the live endpoint currently returns **`401 Unauthorized`** — so it writes zero signals and is effectively **paused pending an access token / upstream authorization**. Feeds the `escalation` + `military_posture` units once it clears. |
+
+The state-media feeds exist precisely so the `narrative_coordination` unit (and
+the `source_class` weighting, §2.4) can read them as **framing** — an
+official-position signal, LOW-tier for establishing facts — rather than as
+neutral reporting. **Honest note:** these are recent additions; their productive
+signal volume is still thin (IRNA/Press TV/Ukrinform windows have largely been
+empty or transient-error in the observed period), and UCDP is blocked upstream as
+noted.
+
+### 2.4 The `source_class` editorial taxonomy
+
+Every `SourceDescriptor.scope` now carries a **`source_class`** field
+(`src/legba/data/schemas/source.py`, `SourceClass` literal) — the source's
+**editorial class**, so the analysis plane can weight a claim by *what kind of
+source made it*, not just by host credibility (§9). It is one of four values,
+defaulted to the conservative `reporting` bucket so every pre-existing descriptor
+still validates unchanged:
+
+| `source_class` | Meaning | Examples |
+|---|---|---|
+| `reporting` | Straight news / wire reporting (the default) | BBC, Deutsche Welle, Al Jazeera, GDELT, MediaCloud, Telegram |
+| `analysis` | Research / data projects and coded-event datasets | ACLED, UCDP |
+| `official` | Primary government / IGO sources | USGS, OpenSanctions, CISA KEV, ReliefWeb (UN OCHA) |
+| `state_media` | State-controlled outlets — read as *framing*, not fact | IRNA, Press TV, Ukrinform |
+
+The `narrative_coordination` unit weighs `state_media == framing`, and the
+`collection_gap` I&W analyst names which `source_class` would plausibly feed a
+starved desk × dimension cell (see `ANALYSIS.md` §3.11).
+
 ---
 
 ## 3. Credentialed sources: live status
 
 The 46-source catalog exercises two handler kinds (`rss`, `geojson`); the full
-set of fourteen kinds is documented in §7. The catalog is the **no-auth,
+set of fifteen kinds is documented in §7. The catalog is the **no-auth,
 verified-live** subset that needs no credentials to register; the credentialed /
 push kinds below need a per-deployment secret in the vault before they poll,
 and each is registered by a per-source bringup. They are in **neither** the
@@ -162,7 +209,7 @@ the reference deployment:
 | Source (descriptor) | Auth | Status |
 |---|---|---|
 | `source.telegram.org_channels` | Telegram API (id/hash/session) | **Active** — thousands of signals, hourly. The live exemplar of a credentialed source. |
-| `source.gdelt.doc_api` | none (free `json_api`) | **Active** — registered; the handler works, but GDELT's free DOC API rate-limits (`429`) bursty polls; it produces on its spaced cron cadence. |
+| `source.gdelt.doc_api` | none (free `json_api`) | Registered; the handler works, but GDELT's free DOC API rate-limits (`429`) bursty polls. **Currently `paused`** in the reference deployment (flip to active to resume the spaced cron cadence). |
 | `source.acled.conflict` | **OAuth2 password grant** (account email + password) | **Handler migrated to OAuth2** (ACLED retired the legacy api-key method); creds **authenticate** (token issued). Activation is blocked one step upstream: the ACLED account must be **granted data-API access in the ACLED Access portal** (a read returns `403 Access denied` until then). Once granted, flip the descriptor to active. |
 | `source.gdelt.bigquery` | GCP service account | descriptor-defined, **dormant** — no creds. |
 | `source.mediacloud.world` | MediaCloud API key | descriptor-defined, **dormant** — no creds. |
@@ -171,9 +218,9 @@ the reference deployment:
 | `source.reliefweb.reports` | keyless, but `appname` must be **approved** by ReliefWeb | descriptor-defined, **dormant** — would `403` until the appname is approved. |
 
 The takeaway: of the credentialed tier only **Telegram** is fully productive;
-**GDELT-DOC** is wired+active (rate-limit-pending); **ACLED** is code-ready and
-auth-validated but blocked on ACLED-side account authorization; the rest ship as
-ready descriptors awaiting creds/infra.
+**GDELT-DOC** is wired but currently `paused` (rate-limit-managed); **ACLED** is
+code-ready and auth-validated but blocked on ACLED-side account authorization; the
+rest ship as ready descriptors awaiting creds/infra.
 
 ---
 
@@ -207,19 +254,22 @@ stack → register working set → **register the catalog** → boot the runtime
 in **`SETUP.md`** (the from-zero bootstrap guide) and **`RUNBOOK.md`** (operator
 runbook). This doc does not duplicate them.
 
-**Validated live scope** (a representative running deployment):
+**Validated live scope** (a representative running deployment, point-in-time
+reconcile against the production tables):
 
 | Metric | Count |
 |---|---|
-| Distinct sources actively producing signals | **49** |
-| Signals ingested | **54,197** |
-| Findings produced | **19,629** |
-| Facts | **3,019** |
-| Nexuses | **3,822** |
-| Situations | **25** |
-| Hypotheses | **398** |
+| Distinct sources actively producing signals | **53** |
+| Signals ingested | **90,983** |
+| Analyst outputs (all kinds) | **5,595** |
+| — of which findings | **3,083** |
+| Facts | **4,971** |
+| Nexuses | **5,140** |
+| Situations | **61** |
+| Hypotheses | **1,017** |
 
-The 49 live sources = the 46 catalog integrations plus the seed /
+The 53 live sources = the 46 catalog integrations plus the operator-pinned
+standalone descriptors (state-media, Telegram, …; §2.3) plus the seed /
 world-baseline curated sources.
 
 ---
@@ -289,7 +339,8 @@ descriptor-validation-time config parsing).
 ## 7. Implemented source kinds
 
 The runtime discovers handlers by walking `legba.data.sources` and collecting
-`kind → handler class` pairs (`src/legba/data/sources/__init__.py`). **Fourteen**
+`kind → handler class` pairs (`src/legba/runtime/source_factory.py`, the
+`_SOURCE_MODULE_TABLE`). **Fifteen**
 first-party kinds are registered today. Credential references in config are
 **vault references** (a dotted credential id), never the raw secret — the
 runtime resolves them at call time and the handler never caches them past a
@@ -557,6 +608,36 @@ Three of the 46 catalog entries are `geojson` (USGS `significant_week`, NWS
 `severity=Severe,Extreme` alerts, NASA EONET `days=3`); the other 43 are `rss`
 — see §2 for the full catalog table and §4 for the bring-up script.
 
+### 7.15 `ucdp` — UCDP Georeferenced Event Dataset (conflict events)
+
+*Poll · free · `UCDPSourceHandler` (`ucdp.py`)*
+
+Polls the Uppsala Conflict Data Program **Georeferenced Event Dataset (GED)** —
+global organized-violence events (state-based / non-state / one-sided), one row
+per lethal event with geo (lat/long + country + admin), the two conflict sides,
+violence type, and best/high/low fatality estimates. Each structured record
+yields one `Signal`; enrichment is `geocode`-only (the records carry coordinates
+already). The bounded-unit waves added it as a conflict-event feed for the
+`escalation` and `military_posture` units — a UCDP counterpart to the `analysis`-class ACLED.
+
+**Key config (`UCDPConfig`)** — `version` (GED dataset release string, e.g.
+`"24.1"`, or a candidate release for the ~monthly Candidate Events Dataset),
+`lookback_days` (default 365 — GED is a batch, not a stream). The cursor tracks a
+`StartDate` high-water mark; external-id + content-hash dedupe absorb the overlap.
+
+**Auth (designed) — none.** GED is documented as a free, public, no-auth endpoint
+(`https://ucdpapi.pcr.uu.se/api/gedevents/{version}`), unlike ACLED's OAuth2
+account — the descriptor ships `state: active` with no vault secret. **LICENSE:**
+UCDP data is CC BY 4.0 (free reuse *with* attribution — attribute "Uppsala
+Conflict Data Program (UCDP)" on any re-export).
+
+> **Honest live status.** The handler is written against the documented GED API
+> shape and unit-tested against a fixture, but the **live endpoint currently
+> returns `401 Unauthorized`** for this deployment — so the source is registered
+> and active yet **produces zero signals**: effectively **paused pending an access
+> token / upstream authorization**. Treat UCDP as wired-but-not-yet-flowing until
+> the upstream 401 clears.
+
 ---
 
 ## 8. Cost-tier summary
@@ -567,6 +648,7 @@ Three of the 46 catalog entries are `geojson` (USGS `significant_week`, NWS
 | `geojson` | poll | free | none | any RFC-7946 GeoJSON document URL |
 | `gdelt_query` | poll | free tier (GCP scan-billed; capped) | GCP service account | GDELT 2.0, 100+ langs, ~15-min |
 | `acled` | poll | free (non-commercial) | API key + email | ACLED conflict/protest events |
+| `ucdp` | poll | free (CC BY 4.0) | none *(designed; live endpoint currently 401s)* | UCDP GED organized-violence events |
 | `mediacloud` | poll | free tier | API key | Media Cloud open-news corpus |
 | `opensanctions` | poll | free (bulk) / paid (API) | none (bulk) / API key | sanctions / PEPs / criminal lists |
 | `scraper` | poll | free (+ optional proxy cost) | none / proxy pool | arbitrary sites via drop-in impl |
@@ -594,7 +676,7 @@ How it works:
 2. Normalize the host: lowercase, strip `www.`, drop user-info + port, decode
    punycode (IDN).
 3. Look it up in the registry-backed `source_credibility` table (created in
-   `0001_baseline.sql`; the migration head is **0046**). On a miss, retry
+   `0001_baseline.sql`; the migration head is **0060**). On a miss, retry
    against progressively-trimmed parent domains
    (`news.bbc.co.uk` → `bbc.co.uk` → `co.uk`); first hit wins. A small
    per-instance TTL'd LRU cache (default 3600 s) avoids re-querying the same
