@@ -41,31 +41,19 @@ const AnalystOutputs = lazy(() => import('@/panels/analyst/Outputs'))
 const AnalystCrossTarget = lazy(() => import('@/panels/analyst/CrossTarget'))
 const AnalystCritiques = lazy(() => import('@/panels/analyst/Critiques'))
 
-const SystemTargetsRoster = lazy(() => import('@/panels/system/TargetsRoster'))
 const SystemFindings = lazy(() => import('@/panels/system/Findings'))
-const SystemPulse = lazy(() => import('@/panels/system/Pulse'))
 const SystemLineage = lazy(() => import('@/panels/system/Lineage'))
 const SystemBudget = lazy(() => import('@/panels/system/Budget'))
-const SystemEval = lazy(() => import('@/panels/system/Eval'))
 const SystemOptimizer = lazy(() => import('@/panels/system/Optimizer'))
 const SystemDeadLetter = lazy(() => import('@/panels/system/DeadLetter'))
-const SystemRuntime = lazy(() => import('@/panels/system/Runtime'))
-const SystemStreams = lazy(() => import('@/panels/system/Streams'))
-const SystemUsers = lazy(() => import('@/panels/system/Users'))
 const SystemConsult = lazy(() => import('@/panels/system/Consult'))
 const SystemDeepConsult = lazy(() => import('@/panels/system/DeepConsult'))
-const SystemBackfill = lazy(() => import('@/panels/system/Backfill'))
 const SystemSettings = lazy(() => import('@/panels/system/Settings'))
 
 const RegistryTargets = lazy(() => import('@/panels/registry/Targets'))
 const RegistryAnalysts = lazy(() => import('@/panels/registry/Analysts'))
 const RegistryStack = lazy(() => import('@/panels/registry/Stack'))
-const RegistryWirings = lazy(() => import('@/panels/registry/Wirings'))
-const RegistryMutations = lazy(() => import('@/panels/registry/Mutations'))
 const RegistryActionPacks = lazy(() => import('@/panels/registry/ActionPacks'))
-const RegistryDiscovery = lazy(() => import('@/panels/registry/DiscoveryPipeline'))
-
-const DashboardDynamic = lazy(() => import('@/panels/dashboard/Dynamic'))
 
 // Source-first surfaces (UI-2 / Tier C — pivot)
 const SourceRegistry = lazy(() => import('@/panels/source/SourceRegistry'))
@@ -90,7 +78,6 @@ const SystemEntityGraph = lazy(() => import('@/panels/system/EntityGraph'))
 const SystemNotableStructure = lazy(() => import('@/panels/system/NotableStructure'))
 const SystemAlertCenter = lazy(() => import('@/panels/system/AlertCenter'))
 const SystemReportExport = lazy(() => import('@/panels/system/ReportExport'))
-const SystemTenantView = lazy(() => import('@/panels/system/TenantView'))
 
 // The Inspector — unified detail surface (redesign Move 1, the keystone).
 const SystemInspector = lazy(() => import('@/components/inspector/InspectorPanel'))
@@ -103,7 +90,8 @@ const V4Map = lazy(() => import('@/panels/v4/MapPanel'))
 const V4Flow = lazy(() => import('@/panels/v4/FlowPanel'))
 const V4Why = lazy(() => import('@/panels/v4/WhyPanel'))
 const V4Assessment = lazy(() => import('@/panels/v4/AssessmentPanel'))
-const V4Case = lazy(() => import('@/panels/v4/CasePanel'))
+const V4Kpi = lazy(() => import('@/panels/v4/KpiPanel'))
+const V4Timeline = lazy(() => import('@/panels/v4/TimelinePanel'))
 
 // ---------------------------------------------------------------------------
 // Registry table.
@@ -166,19 +154,7 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     Component: AnalystCritiques,
   },
 
-  // --- Cross-target dashboards (D1–D3) ---
-  'system.targets.roster': {
-    definition: def('system.targets.roster', 'system_targets_roster', 'dashboard', null, 'Target Roster', false, ['personal', 'cis'], 'List'),
-    Component: SystemTargetsRoster,
-  },
-  'system.pulse': {
-    definition: def('system.pulse', 'system_pulse', 'dashboard', null, 'Global Pulse', false, ['personal', 'cis'], 'Heart'),
-    Component: SystemPulse,
-  },
-  'dashboard.dynamic': {
-    definition: def('dashboard.dynamic', 'dashboard_dynamic', 'dashboard', 'dashboard_id', 'Dashboard', true, ['personal', 'cis'], 'LayoutDashboard'),
-    Component: DashboardDynamic,
-  },
+  // (Cross-target dashboards D1–D3 removed — S7-T2 consolidation.)
 
   // --- Operator (O1–O5) ---
   'registry.targets': {
@@ -193,22 +169,11 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('registry.stack', 'registry_stack', 'operator', null, 'Stack Registry', false, ['personal'], 'Layers'),
     Component: RegistryStack,
   },
-  'registry.wirings': {
-    definition: def('registry.wirings', 'registry_wirings', 'operator', null, 'Wiring Editor', false, ['personal'], 'Cable'),
-    Component: RegistryWirings,
-  },
-  'registry.mutations': {
-    definition: def('registry.mutations', 'registry_mutations', 'operator', null, 'Mutations Queue', false, ['personal'], 'GitPullRequest'),
-    Component: RegistryMutations,
-  },
   'registry.action_packs': {
     definition: def('registry.action_packs', 'registry_action_packs', 'operator', null, 'Action-Pack Grants', false, ['personal'], 'KeyRound'),
     Component: RegistryActionPacks,
   },
-  'registry.discovery': {
-    definition: def('registry.discovery', 'registry_discovery', 'operator', null, 'Discovery Pipeline', false, ['personal'], 'Radar'),
-    Component: RegistryDiscovery,
-  },
+  // (registry.wirings / registry.mutations / registry.discovery removed — S7-T2.)
 
   // --- System (S1–S8 + P-1 cross-target findings + consult) ---
   'system.findings': {
@@ -226,10 +191,6 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.budget', 'system_budget', 'system', null, 'Budget Ledger', false, ['personal'], 'DollarSign'),
     Component: SystemBudget,
   },
-  'system.eval': {
-    definition: def('system.eval', 'system_eval', 'system', null, 'Eval Scorecard', false, ['personal'], 'ClipboardCheck'),
-    Component: SystemEval,
-  },
   'system.optimizer': {
     definition: def('system.optimizer', 'system_optimizer', 'system', null, 'Optimizer Candidates', false, ['personal'], 'Sparkles'),
     Component: SystemOptimizer,
@@ -238,18 +199,8 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.dead_letter', 'system_dead_letter', 'system', null, 'Dead-letter Inspector', false, ['personal'], 'AlertOctagon'),
     Component: SystemDeadLetter,
   },
-  'system.runtime': {
-    definition: def('system.runtime', 'system_runtime', 'system', null, 'Runtime Actor Health', false, ['personal'], 'HeartPulse'),
-    Component: SystemRuntime,
-  },
-  'system.streams': {
-    definition: def('system.streams', 'system_streams', 'system', null, 'NATS Stream Tail', false, ['personal'], 'Rss'),
-    Component: SystemStreams,
-  },
-  'system.users': {
-    definition: def('system.users', 'system_users', 'system', null, 'Users', false, ['personal'], 'UserCog'),
-    Component: SystemUsers,
-  },
+  // (system.runtime → merged into system.actor_health; system.streams / system.users
+  //  removed — S7-T2 consolidation.)
   'system.consult': {
     definition: def('system.consult', 'system_consult', 'system', null, 'Consult', false, ['personal'], 'MessageSquare'),
     Component: SystemConsult,
@@ -257,10 +208,6 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'system.deep_consult': {
     definition: def('system.deep_consult', 'system_deep_consult', 'system', null, 'Deep Consult', false, ['personal'], 'BrainCircuit'),
     Component: SystemDeepConsult,
-  },
-  'system.backfill': {
-    definition: def('system.backfill', 'system_backfill', 'system', null, 'Backfill Replay', false, ['personal'], 'Rewind'),
-    Component: SystemBackfill,
   },
   'system.settings': {
     definition: def('system.settings', 'system_settings', 'operator', null, 'Model Stack Settings', false, ['personal'], 'Settings'),
@@ -350,10 +297,7 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.report_export', 'system_report_export', 'system', null, 'Report Export', false, ['personal', 'cis'], 'FileDown'),
     Component: SystemReportExport,
   },
-  'system.tenant_view': {
-    definition: def('system.tenant_view', 'system_tenant_view', 'system', null, 'Tenant View', false, ['personal', 'cis'], 'Building2'),
-    Component: SystemTenantView,
-  },
+  // (system.tenant_view removed — S7-T2; multitenancy is ingestion-only.)
 
   // --- The Inspector (singleton; selection-linked; the keystone) ---
   'system.inspector': {
@@ -384,9 +328,14 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('v4.assessment', 'v4_assessment', 'system', null, 'World Assessment', false, ['personal', 'cis'], 'ScrollText'),
     Component: V4Assessment,
   },
-  'v4.case': {
-    definition: def('v4.case', 'v4_case', 'system', null, 'Casework Board', false, ['personal', 'cis'], 'NotebookPen'),
-    Component: V4Case,
+  // (v4.case Casework Board removed — S7-T2; shelved, no pin board reachable.)
+  'v4.kpi': {
+    definition: def('v4.kpi', 'v4_kpi', 'system', null, 'KPI Strip', false, ['personal', 'cis'], 'Gauge'),
+    Component: V4Kpi,
+  },
+  'v4.timeline': {
+    definition: def('v4.timeline', 'v4_timeline', 'system', null, 'Timeline', false, ['personal', 'cis'], 'Clock'),
+    Component: V4Timeline,
   },
 }
 
@@ -416,49 +365,35 @@ function def(
 //   * system.search / alert_center / report_export / tenant_view — client-only
 //                              product surfaces (no dedicated backend route yet)
 const PREVIEW_KINDS: ReadonlySet<PanelKind> = new Set([
-  'system.backfill',
   'system.optimizer.diff',
   'system.search',
   'system.alert_center',
   'system.report_export',
-  'system.tenant_view',
 ])
 for (const k of PREVIEW_KINDS) {
   PANEL_REGISTRY[k].definition.tier = 'preview'
 }
 
-// §6 redesign DROP set — panels still in PANEL_REGISTRY so existing
-// layouts that reference them by id don't 404, but marked hidden so
-// they don't surface in the sidebar / singleton list.  Per
-// legba_panels_redesign_2026_05_28.md §3.9:
-//   * system.pulse   — "Global Pulse" cross-tenant geo-aggregate; no
-//                      global_pulse_correlator analyst exists
-//   * system.eval    — empty until critiques have rows AND a rubric UI
-//   * system.users   — single-operator deployment, no multi-user need
-//   * system.streams — NATS-event-tail stub; the data is reachable via
-//                      the registry's /events websocket if needed
-//   * registry.wirings   — wiring_descriptors table is empty
-//   * registry.mutations — three-tab aggregate; only the prompt-module
-//                          promotion tab has real data and that's
-//                          already P-11 (system.optimizer)
-//   * dashboard.dynamic  — abstract "widget catalog" with no widgets
-const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set([
-  'system.pulse',
-  'system.eval',
-  'system.users',
-  'system.streams',
-  'registry.wirings',
-  'registry.mutations',
-  'dashboard.dynamic',
-  // #90 Wave A consolidation (UI_REDESIGN_PLAN_2026-06-23):
-  'registry.discovery',       // dead — 0 descriptors carry a `discovery` block
-  'system.backfill',          // hard-disabled honest-501 stub (already preview)
-  'system.targets.roster',    // collapsed → Target Registry (one Targets panel)
-  'v4.case',                  // Casework Board shelved (no pin entry points wired)
-  'system.tenant_view',       // multitenancy not product-baked (ingestion-only)
-  // 'v4.assessment' UNHIDDEN (S7-T1 item 2) — the verified composition one-pager
-  // is a first-class product surface (full one-pager, cited prose), not a teaser.
-  'system.runtime',           // Runtime Actor Health = same endpoint as Actor Health (dup)
+// Hidden-but-registered set — merge/consolidation targets kept in the bundle
+// (so any saved layout or ⌘K deep-link still resolves them) but dropped from the
+// sidebar so the workstation catalog stays ~25-30 GOOD panels.  The S7-T1 §6
+// DROP set (system.pulse/eval/users/streams, registry.wirings/mutations,
+// dashboard.dynamic, registry.discovery, system.backfill/runtime/tenant_view,
+// system.targets.roster, v4.case) was DELETED outright in S7-T2 — those kinds no
+// longer exist.  What remains hidden here are LIVE panels merged into a peer:
+//   * system.report_export       — the Report panel's own Download supersedes it
+//   * system.optimizer.diff       — operator review aid folded under Optimizer
+//   * source.subscription_builder — niche source-config; reachable via ⌘K
+//   * source.subscription_policy  — niche source-config; reachable via ⌘K
+//   * source.fanout               — niche explorer; reachable via ⌘K
+//   * system.stream_lag           — rolled into the System Status at-a-glance view
+const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
+  'system.report_export',
+  'system.optimizer.diff',
+  'source.subscription_builder',
+  'source.subscription_policy',
+  'source.fanout',
+  'system.stream_lag',
 ])
 for (const k of HIDDEN_KINDS) {
   PANEL_REGISTRY[k].definition.hidden = true

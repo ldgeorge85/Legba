@@ -25,43 +25,48 @@ describe('groupForKind', () => {
     }
   })
 
-  it('routes registry.* and source.* panels into Configure', () => {
-    expect(groupForKind('registry.targets')).toBe('configure')
-    expect(groupForKind('registry.sources')).toBe('configure')
-    expect(groupForKind('source.fanout')).toBe('configure')
+  it('routes registry.* and source.* panels into Operations', () => {
+    expect(groupForKind('registry.targets')).toBe('operations')
+    expect(groupForKind('registry.sources')).toBe('operations')
+    expect(groupForKind('source.detail')).toBe('operations')
   })
 
-  it('routes the system.* family across Monitor / Investigate / Configure / Operate', () => {
-    expect(groupForKind('system.findings')).toBe('monitor')
-    expect(groupForKind('system.alert_center')).toBe('monitor')
-    expect(groupForKind('system.report_export')).toBe('monitor')
-    expect(groupForKind('system.lineage')).toBe('investigate')
-    expect(groupForKind('system.search')).toBe('investigate')
-    expect(groupForKind('system.consult')).toBe('investigate')
-    expect(groupForKind('system.tenant_view')).toBe('configure')
-    // #90 — the analysis tools are pinned to Investigate (Intelligence), not the
-    // system.*→operate prefix fallback.
-    expect(groupForKind('system.optimizer')).toBe('investigate')
-    expect(groupForKind('system.optimizer.diff')).toBe('investigate')
-    expect(groupForKind('system.eval_scorecard')).toBe('investigate')
-    expect(groupForKind('system.deep_consult')).toBe('investigate')
-    // True plumbing stays in Operate.
-    expect(groupForKind('system.budget')).toBe('operate')
-    expect(groupForKind('system.governor')).toBe('operate')
-    expect(groupForKind('system.actor_health')).toBe('operate')
-    expect(groupForKind('system.audit')).toBe('operate')
+  it('routes the system.* / v4.* families across the five groups', () => {
+    // Awareness — the live surfaces + detail rail.
+    expect(groupForKind('system.findings')).toBe('awareness')
+    expect(groupForKind('system.alert_center')).toBe('awareness')
+    expect(groupForKind('system.inspector')).toBe('awareness')
+    expect(groupForKind('v4.map')).toBe('awareness')
+    // Investigation — dig into the why.
+    expect(groupForKind('system.lineage')).toBe('investigation')
+    expect(groupForKind('system.search')).toBe('investigation')
+    expect(groupForKind('system.entities')).toBe('investigation')
+    expect(groupForKind('v4.why')).toBe('investigation')
+    // Analysis — reason over the substrate.
+    expect(groupForKind('system.consult')).toBe('analysis')
+    expect(groupForKind('system.deep_consult')).toBe('analysis')
+    expect(groupForKind('system.optimizer')).toBe('analysis')
+    expect(groupForKind('system.eval_scorecard')).toBe('analysis')
+    // Products — the finished intelligence.
+    expect(groupForKind('v4.assessment')).toBe('products')
+    expect(groupForKind('system.journal')).toBe('products')
+    // Operations — the plumbing catch-all.
+    expect(groupForKind('system.budget')).toBe('operations')
+    expect(groupForKind('system.governor')).toBe('operations')
+    expect(groupForKind('system.actor_health')).toBe('operations')
+    expect(groupForKind('system.audit')).toBe('operations')
   })
 
   it('auto-slots an unknown kind via prefix fallback', () => {
     // A hypothetical new registry.* / system.* panel with no explicit
     // override still lands in the right group purely from its prefix.
-    expect(groupForKind('registry.brand_new' as PanelKind)).toBe('configure')
-    expect(groupForKind('system.brand_new' as PanelKind)).toBe('operate')
-    expect(groupForKind('source.brand_new' as PanelKind)).toBe('configure')
+    expect(groupForKind('registry.brand_new' as PanelKind)).toBe('operations')
+    expect(groupForKind('system.brand_new' as PanelKind)).toBe('operations')
+    expect(groupForKind('source.brand_new' as PanelKind)).toBe('operations')
   })
 
-  it('falls back to "more" for an unrecognized prefix', () => {
-    expect(groupForKind('weird.panel' as PanelKind)).toBe('more')
+  it('falls back to Operations for an unrecognized prefix', () => {
+    expect(groupForKind('weird.panel' as PanelKind)).toBe('operations')
   })
 })
 
@@ -85,9 +90,9 @@ describe('buildNavGroups', () => {
   })
 
   it('omits empty groups', () => {
-    // Only registry kinds → only the Configure group appears.
+    // Only registry kinds → only the Operations group appears.
     const groups = buildNavGroups(['registry.targets', 'registry.stack'])
-    expect(groups.map((g) => g.id)).toEqual(['configure'])
+    expect(groups.map((g) => g.id)).toEqual(['operations'])
     expect(groups[0].kinds).toContain('registry.targets')
   })
 

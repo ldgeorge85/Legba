@@ -1,28 +1,29 @@
 /**
- * Sidebar navigation grouping (TASK D5).
+ * Sidebar navigation grouping — the ONE grouped tree (S7-T2).
  *
- * Operators asked for the flat singleton panel list to be reorganized into
- * collapsible, named sections instead of one long "Always-on" list. This
- * module owns the grouping policy: given a set of singleton `PanelKind`s, it
- * buckets them into ordered, named groups.
+ * The workstation sidebar is a single grouped tree modeled on the original
+ * mission-control UI (UI_UX_DIRECTION_2026-07-02 §"what the original got right"
+ * #1): five verb-grouped sections the analyst scans top to bottom —
  *
- * DESIGN — auto-slotting:
- *   Groups are derived from the panel-kind taxonomy, not hard-wired to a
- *   frozen membership list. Each panel is assigned by:
- *     1. an explicit per-kind override (`KIND_GROUP`) for the cases where the
- *        task group differs from the bare kind prefix (e.g. a `system.*`
- *        monitor/investigate panel belongs in Monitor or Investigate — not the
- *        default Operate group), then
- *     2. a prefix fallback (`PREFIX_GROUP`) keyed on the kind's leading
- *        segment (`registry.`, `system.`, `source.`, …), so a *new* panel
- *        kind added to the registry auto-slots into a sensible group with no
- *        change here, then
- *     3. a catch-all "More" group so every panel stays reachable even if a
- *        future prefix is introduced that we don't yet map.
+ *   AWARENESS      — what's happening now (feed, map, alerts, the detail rail)
+ *   INVESTIGATION  — dig into the why (entities, graph, lineage, search, flow)
+ *   ANALYSIS       — reason over it (consult, optimizer, eval)
+ *   PRODUCTS       — the finished intelligence (World Assessment, Journal)
+ *   OPERATIONS     — the plumbing that runs it (registries, health, ledgers)
+ *
+ * This REPLACES the prior two-level Intelligence/Operations split + Monitor/
+ * Investigate/Configure/Operate sub-buckets: one flat, five-headed tree.
+ *
+ * DESIGN — auto-slotting: groups are derived from the panel-kind taxonomy, not
+ * a frozen membership list. Each singleton panel is assigned by
+ *   1. an explicit per-kind override (`KIND_GROUP`), then
+ *   2. a prefix fallback (`PREFIX_GROUP`) keyed on the leading kind segment, so
+ *      a NEW panel kind auto-slots with no change here, then
+ *   3. an `operations` catch-all (the plumbing bucket) so every panel is always
+ *      reachable.
  *
  * Only singleton (non-binding) panels flow through here; per-target and
- * per-analyst panels keep their existing instance-scoped grouping in the
- * Sidebar.
+ * per-analyst panels keep their instance-scoped grouping in the Sidebar.
  */
 
 import type { PanelKind } from '@/types'
@@ -30,27 +31,24 @@ import { PANEL_REGISTRY } from './registry'
 
 /** A stable id for a nav group; also drives collapse persistence. */
 export type NavGroupId =
-  | 'monitor'
-  | 'investigate'
-  | 'configure'
-  | 'operate'
-  | 'more'
+  | 'awareness'
+  | 'investigation'
+  | 'analysis'
+  | 'products'
+  | 'operations'
 
 export interface NavGroupDef {
   id: NavGroupId
   label: string
 }
 
-/**
- * Ordered group catalog. Order here = render order in the sidebar.
- * `more` is the catch-all and always renders last.
- */
+/** Ordered group catalog. Order here = render order in the sidebar. */
 export const NAV_GROUP_DEFS: readonly NavGroupDef[] = [
-  { id: 'monitor', label: 'Monitor' },
-  { id: 'investigate', label: 'Investigate' },
-  { id: 'configure', label: 'Configure' },
-  { id: 'operate', label: 'Operate' },
-  { id: 'more', label: 'More' },
+  { id: 'awareness', label: 'Awareness' },
+  { id: 'investigation', label: 'Investigation' },
+  { id: 'analysis', label: 'Analysis' },
+  { id: 'products', label: 'Products' },
+  { id: 'operations', label: 'Operations' },
 ]
 
 const GROUP_ORDER: Record<NavGroupId, number> = NAV_GROUP_DEFS.reduce(
@@ -62,71 +60,57 @@ const GROUP_ORDER: Record<NavGroupId, number> = NAV_GROUP_DEFS.reduce(
 )
 
 /**
- * Explicit per-kind group assignment.
- *
- * The nav is organized by what the operator is *doing* — Monitor / Investigate /
- * Configure / Operate — not by subsystem. The `system.*` family spans all four,
- * so its monitor/investigate members are pinned here; everything else `system.*`
- * falls to Operate via the prefix fallback, and `registry.*`/`source.*` → Configure.
+ * Explicit per-kind group assignment. The sidebar is organized by what the
+ * analyst is *doing*, so the `system.*` family (which spans all five) is pinned
+ * here; registry.* / source.* fall to Operations via the prefix fallback.
  */
 const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
-  // --- Monitor: what's happening now ---
-  'system.findings': 'monitor',
-  'system.targets.roster': 'monitor',
-  'system.alert_center': 'monitor',
-  'system.report_export': 'monitor',
-  'system.pulse': 'monitor',
-  // The Journal is the navigable INDEX over the product / the narrative front
-  // door (JOURNAL_ASSESSOR_PLAN §9, UI Task #89) — Intelligence, not the
-  // system.* → Operate prefix fallback.
-  'system.journal': 'monitor',
+  // --- Awareness: the live surfaces + the detail rail ---
+  'system.findings': 'awareness',
+  'system.alert_center': 'awareness',
+  'system.inspector': 'awareness',
+  'v4.map': 'awareness',
+  'v4.kpi': 'awareness',
+  'v4.timeline': 'awareness',
 
-  // --- Investigate: dig into the why ---
-  'system.lineage': 'investigate',
-  'system.entities': 'investigate',
-  'system.entity_graph': 'investigate',
-  // #99 — the notable-structure overlay is an analysis product (Intelligence),
-  // not plumbing; the system.* prefix fallback would mis-bucket it to Operate.
-  'system.notable_structure': 'investigate',
-  'system.search': 'investigate',
-  'system.consult': 'investigate',
-  // #90 Wave A — these are ANALYSIS tools, not plumbing; the prefix fallback
-  // (system.* → operate → Operations) mis-bucketed them. Pin to Investigate
-  // (Intelligence) alongside Consult.
-  'system.deep_consult': 'investigate',
-  'system.optimizer': 'investigate',
-  'system.optimizer.diff': 'investigate',
-  'system.eval_scorecard': 'investigate',
+  // --- Investigation: dig into the why ---
+  'system.entities': 'investigation',
+  'system.entity_graph': 'investigation',
+  'system.lineage': 'investigation',
+  'system.search': 'investigation',
+  'system.notable_structure': 'investigation',
+  'v4.why': 'investigation',
+  'v4.flow': 'investigation',
 
-  // --- Configure: tenancy/admin (registries route via the prefix fallback) ---
-  'system.tenant_view': 'configure',
-  'system.settings': 'configure',
+  // --- Analysis: reason over the substrate ---
+  'system.consult': 'analysis',
+  'system.deep_consult': 'analysis',
+  'system.optimizer': 'analysis',
+  'system.optimizer.diff': 'analysis',
+  'system.eval_scorecard': 'analysis',
 
-  // --- v4 visual workspace panels ---
-  'v4.map': 'monitor',
-  'v4.assessment': 'monitor',
-  'v4.why': 'investigate',
-  'v4.case': 'investigate',
-  'v4.flow': 'operate',
+  // --- Products: the finished intelligence ---
+  'v4.assessment': 'products',
+  'system.journal': 'products',
+  'system.report_export': 'products',
 
-  // Everything else system.* (runtime, actor_health, dead_letter, stream_lag,
-  // governor, audit, budget, optimizer[.diff], eval[_scorecard], backfill,
-  // streams, users) → Operate via PREFIX_GROUP.
+  // Everything else system.* (settings, status, actor_health, dead_letter,
+  // governor, audit, budget, stream_lag) → Operations via PREFIX_GROUP.
 }
 
 /**
- * Prefix fallback keyed on the leading kind segment. A new panel kind added
- * to the registry without a `KIND_GROUP` override auto-slots here.
+ * Prefix fallback keyed on the leading kind segment. A new panel kind added to
+ * the registry without a `KIND_GROUP` override auto-slots here.
  */
 const PREFIX_GROUP: Record<string, NavGroupId> = {
-  registry: 'configure',
-  source: 'configure',
-  system: 'operate',
-  dashboard: 'monitor',
+  registry: 'operations',
+  source: 'operations',
+  system: 'operations',
+  v4: 'investigation',
   // `target.*` / `analyst.*` are binding-scoped and don't reach this module,
   // but map them anyway so the function is total for every PanelKind.
-  target: 'investigate',
-  analyst: 'operate',
+  target: 'investigation',
+  analyst: 'operations',
 }
 
 /** Resolve the leading segment of a panel kind (`system.optimizer.diff` → `system`). */
@@ -138,52 +122,11 @@ export function kindPrefix(kind: PanelKind): string {
 /**
  * Assign a single panel kind to its nav group.
  *
- * Resolution order: explicit override → prefix fallback → `more` catch-all.
- * Total over every `PanelKind`.
+ * Resolution order: explicit override → prefix fallback → `operations`
+ * catch-all (the plumbing bucket). Total over every `PanelKind`.
  */
 export function groupForKind(kind: PanelKind): NavGroupId {
-  return KIND_GROUP[kind] ?? PREFIX_GROUP[kindPrefix(kind)] ?? 'more'
-}
-
-/**
- * #89 — the two TOP-LEVEL product buckets the sidebar splits panels into:
- * `intelligence` (the analytical product the operator reads) vs `operations`
- * (the plumbing that runs it). The product is DERIVED from the nav group
- * (Monitor/Investigate → intelligence; Configure/Operate/More → operations) so
- * no per-panel list is maintained; a panel may override via its registry
- * `product_group` field.
- */
-export type ProductGroup = 'intelligence' | 'operations'
-
-export interface ProductGroupDef {
-  id: ProductGroup
-  label: string
-}
-
-/** Order = render order (Intelligence on top — the product leads). */
-export const PRODUCT_GROUP_DEFS: readonly ProductGroupDef[] = [
-  { id: 'intelligence', label: 'Intelligence' },
-  { id: 'operations', label: 'Operations' },
-]
-
-const NAVGROUP_PRODUCT: Record<NavGroupId, ProductGroup> = {
-  monitor: 'intelligence',
-  investigate: 'intelligence',
-  configure: 'operations',
-  operate: 'operations',
-  more: 'operations',
-}
-
-/**
- * Resolve a panel kind to its product bucket: an explicit registry
- * `product_group` override wins, else derive from the panel's nav group.
- * Total over every `PanelKind`.
- */
-export function productForKind(kind: PanelKind): ProductGroup {
-  return (
-    PANEL_REGISTRY[kind]?.definition.product_group ??
-    NAVGROUP_PRODUCT[groupForKind(kind)]
-  )
+  return KIND_GROUP[kind] ?? PREFIX_GROUP[kindPrefix(kind)] ?? 'operations'
 }
 
 export interface NavGroup {
@@ -195,9 +138,9 @@ export interface NavGroup {
 /**
  * Bucket a list of singleton panel kinds into ordered, non-empty nav groups.
  *
- * Within a group, kinds are sorted by their registry `defaultTitle` so the
- * list is stable and alphabetical regardless of registry declaration order.
- * Empty groups are omitted so the sidebar never renders a header with no rows.
+ * Within a group, kinds are sorted by their registry `defaultTitle` so the list
+ * is stable and alphabetical regardless of registry declaration order. Empty
+ * groups are omitted so the sidebar never renders a header with no rows.
  */
 export function buildNavGroups(kinds: readonly PanelKind[]): NavGroup[] {
   const byGroup = new Map<NavGroupId, PanelKind[]>()

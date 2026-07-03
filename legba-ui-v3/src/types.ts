@@ -30,32 +30,28 @@ export type PanelKind =
   | 'analyst.outputs'
   | 'analyst.cross_target'
   | 'analyst.critiques'
-  // Cross-target dashboards (D1–D3)
-  | 'system.targets.roster'
-  | 'system.pulse'
-  | 'dashboard.dynamic'
+  // Cross-target dashboards
+  //   (D1–D3 system.targets.roster / system.pulse / dashboard.dynamic
+  //    DELETED in S7-T2 panel consolidation — roster→registry.targets,
+  //    no pulse correlator, no dynamic widgets)
   // Operator (O1–O5)
   | 'registry.targets'
   | 'registry.analysts'
   | 'registry.stack'
-  | 'registry.wirings'
-  | 'registry.mutations'
   | 'registry.action_packs'
-  | 'registry.discovery'
+  //   (registry.wirings / registry.mutations / registry.discovery DELETED —
+  //    empty wiring table, superseded mutations queue, 0 discovery descriptors)
   // System (S1–S8 + P-1 cross-target findings feed)
   | 'system.findings'
   | 'system.lineage'
   | 'system.budget'
-  | 'system.eval'
   | 'system.optimizer'
   | 'system.dead_letter'
-  | 'system.runtime'
-  | 'system.streams'
-  | 'system.users'
   | 'system.consult'
   | 'system.deep_consult'
-  | 'system.backfill'
   | 'system.settings'
+  //   (system.eval→system.eval_scorecard, system.runtime→system.actor_health,
+  //    system.streams/users/backfill DELETED in S7-T2 consolidation)
   // System Status — at-a-glance per-layer health (acquisition/analysis/queues/infra)
   | 'system.status'
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
@@ -80,18 +76,22 @@ export type PanelKind =
   | 'system.search'
   | 'system.alert_center'
   | 'system.report_export'
-  | 'system.tenant_view'
+  //   (system.tenant_view DELETED — multitenancy is ingestion-only, not baked)
   // The Inspector — the unified detail surface (redesign Move 1, the keystone)
   | 'system.inspector'
   // The Journal — Legba's reflective voice + navigable index over the product
   // (JOURNAL_ASSESSOR_PLAN §9, Wave 3)
   | 'system.journal'
-  // v4 visual workspace panels (geotemporal / flow / provenance / casework)
+  // v4 visual workspace panels (geotemporal / flow / provenance)
+  //   (v4.case Casework Board DELETED in S7-T2 — shelved, no pin board reachable)
   | 'v4.map'
   | 'v4.flow'
   | 'v4.why'
   | 'v4.assessment'
-  | 'v4.case'
+  // Mission-control default-layout surfaces (S7-T2): the KPI glance strip and
+  // the global banded Timeline lanes — self-fetching singletons.
+  | 'v4.kpi'
+  | 'v4.timeline'
 
 export type PanelCategory =
   | 'target'

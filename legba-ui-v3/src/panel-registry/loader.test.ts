@@ -81,22 +81,13 @@ describe('resolvePanel', () => {
       'analyst_outputs',
       'analyst_cross_target',
       'analyst_critiques',
-      'system_targets_roster',
-      'system_pulse',
-      'dashboard_dynamic',
       'registry_targets',
       'registry_analysts',
       'registry_stack',
-      'registry_wirings',
-      'registry_mutations',
       'system_lineage',
       'system_budget',
-      'system_eval',
       'system_optimizer',
       'system_dead_letter',
-      'system_runtime',
-      'system_streams',
-      'system_users',
       'system_consult',
     ]
     for (const panel_id of all) {
@@ -140,7 +131,7 @@ describe('instanceId', () => {
     )
   })
   it('uses kind alone when unbound (singleton)', () => {
-    expect(instanceId('system.runtime', {})).toBe('system.runtime')
+    expect(instanceId('system.consult', {})).toBe('system.consult')
   })
   it('picks first non-null scope value when multiple set', () => {
     expect(

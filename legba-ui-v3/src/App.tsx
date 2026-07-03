@@ -198,60 +198,62 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Seed the dockview with the rebalanced daily-driver grid on first ready
-  // (redesign Move 6 — "the active task gets the room").
+  // Seed the dockview with the MISSION-CONTROL default layout on first ready
+  // (S7-T2 task 3 — the headline of the reform). First screenful = glance state
+  // + the product, per the original UI:
   //
-  //   +----------------------------------+------------------+
-  //   |  Live feed (active task)         |   INSPECTOR      |
-  //   |  ~65% width — the surface you    |   ~35% width     |
-  //   |  scan; the room it deserves      |   (detail/drill) |
-  //   +----------------------------------+   selection →    |
-  //   |  World map (demoted strip ~28%)  |   detail         |
-  //   |                                  |                  |
-  //   +----------------------------------+------------------+
+  //   +-------------------------------------------------------------------+
+  //   |  KPI STRIP  (signals / findings / situations / sources + deltas)  |
+  //   +------------------+--------------------------+---------------------+
+  //   |  LIVE FEED       |   WORLD MAP              |  WORLD ASSESSMENT   |
+  //   |  (anchor)        |   (real size)           |  (the REPORT)       |
+  //   +------------------+                          |  + Inspector (tab)  |
+  //   |  TIMELINE lanes  |                          |                     |
+  //   +------------------+--------------------------+---------------------+
   //
-  // The Why room is tabbed in the FEED group (not the short map strip) so its
-  // graph + provenance surfaces get real vertical room; the feed is the default
-  // active tab. The map no longer anchors the canvas (it ate ~70% before); the
-  // live feed is the anchor and the Inspector is a first-class ~35% right rail.
-  // The map is demoted to a bottom strip — situational context, not the screen.
-  // Group sizes are pinned after seeding so the split isn't a naive 50/50.
+  // KPI is the full-width top strip; the feed anchors the left with the global
+  // Timeline lanes beneath it; the world map takes the center at real size; the
+  // verified World Assessment report is a first-class right panel (the now-
+  // unhidden v4.assessment) with the Inspector tabbed behind it. Everything is
+  // brushed by the one shared selection store. Sizes are pinned after seeding.
   useEffect(() => {
     if (!dockApi || seededRef.current) return
     seededRef.current = true
     if (mode !== 'personal' && mode !== 'cis') return
 
-    // #90 feed merge — the boot anchor is the single "Live Feed"
-    // (system.findings): one unified findings+signals feed with a Live on/off
-    // button and a Source (All/Findings/Signals) filter (subsumed v4.feed).
-    const feed = addSingleton(dockApi, 'system.findings', mode)
-    const inspector = addSingleton(dockApi, 'system.inspector', mode, {
+    // KPI glance strip anchors the TOP so it spans full width; the body seeds
+    // below it, then splits into the feed | map | report columns.
+    const kpi = addSingleton(dockApi, 'v4.kpi', mode)
+    const feed = addSingleton(dockApi, 'system.findings', mode, {
+      referencePanel: 'v4.kpi',
+      direction: 'below',
+    })
+    addSingleton(dockApi, 'v4.map', mode, {
       referencePanel: 'system.findings',
       direction: 'right',
     })
-    const map = addSingleton(dockApi, 'v4.map', mode, {
+    const report = addSingleton(dockApi, 'v4.assessment', mode, {
+      referencePanel: 'v4.map',
+      direction: 'right',
+    })
+    // The Inspector tabs behind the report on the right rail — the detail/drill
+    // surface the whole wall brushes into.
+    addSingleton(dockApi, 'system.inspector', mode, {
+      referencePanel: 'v4.assessment',
+      direction: 'within',
+    })
+    // The global Timeline lanes sit beneath the feed (bottom-left strip).
+    const timeline = addSingleton(dockApi, 'v4.timeline', mode, {
       referencePanel: 'system.findings',
       direction: 'below',
     })
-    // The Why room (graph + provenance) needs real vertical room — the old
-    // Knowledge Graph filled the whole canvas. Seeding it `within` the demoted
-    // ~28%-tall map strip cramped its lineage/ego graphs to a sliver. Tab it in
-    // the FEED group instead (the dominant ~65%-wide, ~72%-tall surface), so The
-    // Why opens at full feed height. The feed stays the active default tab; the
-    // map keeps its bottom strip and the Inspector its ~35% right rail.
-    addSingleton(dockApi, 'v4.why', mode, {
-      referencePanel: 'system.findings',
-      direction: 'within',
-    })
-    // Adding v4.why `within` the feed group makes it the active tab; the live
-    // feed is the boot anchor, so restore it as the default-focused tab.
+    // The report is the default-active tab on the right rail (not the Inspector),
+    // and the feed is the default-active tab on the left (not the timeline).
+    report?.api.setActive()
     feed?.api.setActive()
 
-    // Pin the rebalanced proportions (Dockview defaults to ~50/50 per split):
-    // Inspector ≈ 35% width (the research target for a detail pane), the map a
-    // demoted ≈ 28%-tall bottom strip, leaving the feed the dominant surface.
-    // (the feed anchor is sized implicitly by the inspector/map weights below)
-    sizeWorkspace(dockApi, { inspector, map })
+    // Pin the mission-control proportions (Dockview defaults to ~50/50 splits).
+    sizeMissionControl(dockApi, { kpi, report, timeline })
   }, [dockApi, mode])
 
   useEffect(() => {
@@ -332,7 +334,7 @@ export function App() {
         referencePanel: `target.findings:${targetId}` as PanelKind,
         direction: 'right',
       })
-      sizeWorkspace(dockApi, { inspector })
+      sizeInspectorRail(dockApi, inspector)
     },
     [dockApi, mode],
   )
@@ -353,7 +355,7 @@ export function App() {
         referencePanel: `analyst.outputs:${analystId}` as PanelKind,
         direction: 'right',
       })
-      sizeWorkspace(dockApi, { inspector })
+      sizeInspectorRail(dockApi, inspector)
     },
     [dockApi, mode],
   )
@@ -406,8 +408,6 @@ export function App() {
           registrations={visibleRegistrations}
           onOpen={onOpenPanel}
           onApplyPreset={onApplyPreset}
-          onInvestigateTarget={onInvestigateTarget}
-          onInvestigateAnalyst={onInvestigateAnalyst}
           onOpenPalette={() => setPaletteOpen(true)}
           onSaveLayout={onSaveLayout}
           onRestoreLayout={onRestoreLayout}
@@ -482,32 +482,46 @@ function addSingleton(
 }
 
 /**
- * Pin the rebalanced boot proportions (redesign Move 6). Dockview splits
- * ~50/50 by default; this nudges the groups to the research-backed weights:
- * the Inspector to ~35% of the canvas width and the map to a demoted bottom
- * strip (~28% tall), leaving the live feed the dominant surface.
+ * Pin the mission-control boot proportions (S7-T2). Dockview splits ~50/50 by
+ * default; this nudges the groups to the wall's weights: a thin full-width KPI
+ * strip on top (~100px), the World Assessment report rail at ~30% width on the
+ * right, and the global Timeline lanes as a ~160px bottom-left strip, leaving
+ * the world map the dominant center surface and the feed a healthy top-left.
  *
- * Sizing is best-effort: it reads the live canvas dimensions off the root
- * element and asks each group to take a fraction. If the panels didn't seed
- * (mode gating) the calls are simply skipped — the layout still works, just at
- * Dockview's default proportions.
+ * Sizing is best-effort: a failed resize must never break boot.
  */
-function sizeWorkspace(
+function sizeMissionControl(
   api: DockviewApi,
   panels: {
-    inspector?: ReturnType<DockviewApi['addPanel']>
-    map?: ReturnType<DockviewApi['addPanel']>
+    kpi?: ReturnType<DockviewApi['addPanel']>
+    report?: ReturnType<DockviewApi['addPanel']>
+    timeline?: ReturnType<DockviewApi['addPanel']>
   },
 ) {
   // Defer one frame so Dockview has laid out the groups before we resize.
   requestAnimationFrame(() => {
     const width = api.width || 1280
-    const height = api.height || 800
     try {
-      panels.inspector?.api.setSize({ width: Math.round(width * 0.35) })
-      panels.map?.api.setSize({ height: Math.round(height * 0.28) })
+      panels.kpi?.api.setSize({ height: 100 })
+      panels.report?.api.setSize({ width: Math.round(width * 0.3) })
+      panels.timeline?.api.setSize({ height: 160 })
     } catch {
       // setSize is best-effort; a failed resize must never break boot.
+    }
+  })
+}
+
+/**
+ * Pin the Inspector to a ~35% right rail after an Investigate grid seeds — the
+ * detail/drill pane the grid brushes into.
+ */
+function sizeInspectorRail(api: DockviewApi, inspector?: ReturnType<DockviewApi['addPanel']>) {
+  requestAnimationFrame(() => {
+    const width = api.width || 1280
+    try {
+      inspector?.api.setSize({ width: Math.round(width * 0.35) })
+    } catch {
+      // best-effort
     }
   })
 }
