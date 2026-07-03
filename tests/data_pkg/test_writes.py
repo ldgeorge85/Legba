@@ -105,6 +105,27 @@ def test_alert_payload_severity_enum():
     assert p.severity == "critical"
 
 
+def test_severity_from_tags():
+    from legba.data.provenance.models import severity_from_tags
+
+    # Lifts the single `severity:<level>` tag, both live vocabularies.
+    assert severity_from_tags(["escalation", "severity:high", "target:br"]) == "high"
+    assert severity_from_tags(["severity:moderate"]) == "moderate"
+    assert severity_from_tags(["severity:critical"]) == "critical"
+    # Case-insensitive on the prefix + level.
+    assert severity_from_tags(["Severity:High"]) == "high"
+    # No severity tag / empty / None → None (no guessing).
+    assert severity_from_tags(["escalation", "target:br"]) is None
+    assert severity_from_tags([]) is None
+    assert severity_from_tags(None) is None
+    # Unknown level string is ignored, not surfaced.
+    assert severity_from_tags(["severity:apocalyptic"]) is None
+    # Several present (defensive) → the highest-ranked wins.
+    assert severity_from_tags(["severity:low", "severity:critical"]) == "critical"
+    # Non-string entries are skipped, not fatal.
+    assert severity_from_tags(["severity:high", 3, None]) == "high"
+
+
 def test_ed25519_signer_roundtrip():
     seed = b"\x42" * 32
     signer = Ed25519Signer(seed, did="did:legba:test")
@@ -357,6 +378,58 @@ async def test_write_alert_carries_severity(pg_conn):
     )
     assert fetched["kind"] == "alert"
     assert fetched["severity"] == "high"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_write_finding_lifts_severity_tag_to_column(pg_conn):
+    """S3-T4 — a FINDING carries severity as a `severity:<level>` TAG (bounded
+    units) rather than a payload field; the write path lifts it to the
+    analyst_outputs.severity READ COLUMN so the read/alert path keys on it."""
+    actx = _analyst_ctx()
+    s1 = await _insert_source_signal(pg_conn, title="root")
+    output, dlq = await write_finding(
+        pg_conn,
+        analyst_ctx=actx,
+        payload=FindingPayload(
+            title="Escalation risk elevated",
+            body="cited assessment [1]",
+            confidence=0.6,
+            tags=["escalation", "severity:high", "target:br"],
+        ),
+        derived_from=[s1],
+    )
+    assert dlq is None and output is not None
+    fetched = await pg_conn.fetchrow(
+        "SELECT kind, severity FROM analyst_outputs WHERE id = $1", output.id
+    )
+    assert fetched["kind"] == "finding"
+    assert fetched["severity"] == "high"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_write_finding_without_severity_tag_leaves_column_null(pg_conn):
+    """S3-T4 control — a finding with no `severity:<level>` tag leaves the
+    column NULL (no guessing; the alert gate then keys on confidence alone)."""
+    actx = _analyst_ctx()
+    s1 = await _insert_source_signal(pg_conn, title="root")
+    output, dlq = await write_finding(
+        pg_conn,
+        analyst_ctx=actx,
+        payload=FindingPayload(
+            title="Routine summary",
+            body="nothing notable [1]",
+            confidence=0.5,
+            tags=["escalation", "target:br"],
+        ),
+        derived_from=[s1],
+    )
+    assert dlq is None and output is not None
+    fetched = await pg_conn.fetchrow(
+        "SELECT severity FROM analyst_outputs WHERE id = $1", output.id
+    )
+    assert fetched["severity"] is None
 
 
 @pytest.mark.integration

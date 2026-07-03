@@ -127,4 +127,15 @@ cadence:
   # each country's cadence (12h→24h). 11h keeps a 1h margin (matches the units).
   cooldown_seconds: 39600
 
+# S3-T4 — agency grant: the escalate_finding pack. A per-country COMPOSITION
+# whose second-order READ crosses the alert gate (effective_confidence ×
+# severity, folded post-verify) fires `escalate` through the full agency
+# pipeline. This composition runs PER-COUNTRY (target_id = the desk), so the
+# pack's g20 applicability leg resolves against the country target exactly like
+# the units — a g20 desk delivers, a non-g20 desk denies with a visible BLOCK.
+# (Region/world compositions are META/target-less and cannot pass the g20
+# applicability leg, so they carry no grant — the delivery edge stays as-is.)
+action_packs:
+  - pack_id: escalate_finding
+
 outputs: []

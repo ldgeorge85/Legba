@@ -37,7 +37,31 @@ logger = logging.getLogger(__name__)
 # universally applicable (no applies_to_tags / applicability_predicate).
 GLOBAL_SCOPE = TargetScopeView(target_id="__global__")
 
-_SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+# S3-T4 — per-severity multiplier applied to the verify-FOLDED effective
+# confidence to form the single alert score (``effective_confidence ×
+# severity``). Ordered low→high; both live vocabularies are covered — the unit
+# tags (low/moderate/elevated/high/critical) and the AlertPayload ladder
+# (info/low/medium/high/critical). Only ``high``/``critical`` (the escalate
+# pack's ``severity_gate`` and above) get a >1 boost, so a SEVERE finding can
+# alert on less post-verify confidence; everything below ``high`` stays at the
+# baseline 1.0 so it behaves exactly like the prior plain confidence gate (no
+# regression for the many kinds that never stamp severity). Crucially, NO weight
+# lets a verify-DEMOTED finding (low effective confidence) cross the threshold —
+# that is the raw-confidence gate S3-T4 closes (a high-severity TAG alone can no
+# longer fire an alert on a floored finding).
+_SEVERITY_WEIGHT = {
+    "info": 1.0,
+    "low": 1.0,
+    "moderate": 1.0,
+    "medium": 1.0,
+    "elevated": 1.0,
+    "high": 1.2,
+    "critical": 1.5,
+}
+# Baseline multiplier for a finding with NO (or an unknown) severity: the alert
+# score reduces to the effective confidence itself, so the gate is the plain
+# effective-confidence threshold — unchanged for severity-less findings.
+_SEVERITY_WEIGHT_BASELINE = 1.0
 
 
 @dataclass
@@ -174,22 +198,36 @@ def escalation_gate_decision(
     severity_gate: str = "high",
     confidence_gate: float = 0.85,
 ) -> bool:
-    """Should a landed finding be escalated?
+    """Should a landed finding be escalated? (S3-T4 combined gate.)
 
-    Findings rarely carry an explicit severity (the column is alert-kind
-    territory; LLM kinds may stamp one into ``payload.data['severity']``).
-    The gate therefore fires on EITHER: an explicit severity at/above
-    ``severity_gate``, OR confidence at/above ``confidence_gate``. Unknown
-    severity strings never fire (conservative — no guessing).
+    ``confidence`` is the verify-FOLDED EFFECTIVE confidence — the caller
+    (:func:`_maybe_escalate_finding`) demotes the raw LLM-asserted number to
+    ``min(raw, faithfulness_score[, confidence_ceiling])`` BEFORE calling this,
+    per S8-T2. The gate keys on a SINGLE alert score,
+    ``effective_confidence × severity_weight``, crossing ``confidence_gate``:
+
+      * a high-severity VERIFIED finding (high effective confidence) alerts —
+        ``high``/``critical`` carry a >1 weight, so a severe finding needs less
+        post-verify confidence to cross;
+      * a verify-DEMOTED finding (low effective confidence) does NOT alert, no
+        matter how severe — closing the raw-confidence gate the review flagged
+        (previously an explicit ``high``/``critical`` severity fired regardless
+        of confidence, so a floored high-severity finding still paged);
+      * a severity-less (or unknown-severity) finding reduces to the plain
+        effective-confidence gate (baseline weight 1.0) — nothing regresses for
+        the kinds that never stamp a severity.
+
+    ``severity_gate`` is accepted for call-site/back-compat; the per-severity
+    weight curve now encodes which severities get a boost (``high`` and above).
     """
-    if severity is not None:
-        rank = _SEVERITY_ORDER.get(str(severity).lower())
-        gate_rank = _SEVERITY_ORDER.get(str(severity_gate).lower(), 3)
-        if rank is not None and rank >= gate_rank:
-            return True
-    if confidence is not None and confidence >= confidence_gate:
-        return True
-    return False
+    if confidence is None:
+        return False
+    weight = (
+        _SEVERITY_WEIGHT.get(str(severity).lower(), _SEVERITY_WEIGHT_BASELINE)
+        if severity is not None
+        else _SEVERITY_WEIGHT_BASELINE
+    )
+    return (confidence * weight) >= confidence_gate
 
 
 __all__ = [

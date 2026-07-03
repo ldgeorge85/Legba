@@ -8,10 +8,14 @@
 # emitter publishes the escalation onto NATS `channels.escalations`) →
 # settle → `action_pack_invocations` + `governor_events` audit rows.
 #
-# Gate semantics (read by the actor run path from this tool config):
-# escalate fires when the finding carries an explicit severity at/above
-# `severity_gate`, OR confidence at/above `confidence_gate` (LLM findings
-# rarely stamp a severity; confidence is the live gate).
+# Gate semantics (read by the actor run path from this tool config — S3-T4):
+# escalate fires when the finding's ALERT SCORE — its verify-FOLDED effective
+# confidence times a per-severity weight (`effective_confidence × severity`) —
+# crosses `confidence_gate`. `high`/`critical` (>= `severity_gate`) carry a >1
+# weight so a severe finding alerts on less confidence; a severity-less finding
+# reduces to the plain confidence gate. A verify-DEMOTED finding can no longer
+# alert on a high-severity tag alone (the raw-confidence gate is closed). A
+# S3-T2 indicator_tracker flip into `triggered` is a second trigger class.
 #
 # Applicability: tag-scoped to g20 targets — the live working set — so the
 # applicability leg of the resolution is demonstrably real (a non-g20

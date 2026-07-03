@@ -69,6 +69,7 @@ from .models import (
     NexusPayload,
     PredictionPayload,
     SituationPayload,
+    severity_from_tags,
 )
 
 
@@ -796,7 +797,15 @@ async def _insert_analyst_output(
     produced_at: datetime,
     effective_schema_uri: str,
 ) -> None:
+    # S3-T4 — severity moves from a TAG to the read column. AlertPayload carries
+    # a first-class ``severity`` field; the bounded units instead stamp a
+    # ``severity:<level>`` TAG. When the payload has no explicit severity field,
+    # lift the tag onto the ``analyst_outputs.severity`` column so the read-path
+    # API and the alert gate key on a first-class value, not a buried tag. Only
+    # fills a NULL — an explicit payload severity always wins.
     severity = getattr(payload, "severity", None)
+    if severity is None:
+        severity = severity_from_tags(getattr(payload, "tags", None))
     data_payload = payload.model_dump(mode="json")
     await conn.execute(
         """
