@@ -139,6 +139,33 @@ def signal_subject_filter(
     )
 
 
+# ---------------------------------------------------------------------------
+# Backfill event-class — the manual signals lane (S4-T4)
+# ---------------------------------------------------------------------------
+#
+# A *backfilled* signal (a manually-ingested, backdated observation loaded via
+# :mod:`legba.data.seed.manual_batch`) rides the NORMAL signal contract —
+# baseline enrichment, entity/geo, fan-out, dedupe — but it is a HISTORICAL
+# observation, not "what just happened". So it publishes on the ``backfill``
+# event-class subject and carries ``event_class=backfill`` in its ``payload``
+# (the persistence home — the ``signals`` table has no ``event_class`` column;
+# ``published_at`` already lives in payload beside it). Consequences:
+#
+#   * Every UNIT's fresh REACTIVE-window read EXCLUDES it — a months-old event
+#     must never surface as a fresh signal in a unit's reactive slice. That is
+#     exactly the one predicate below, ANDed into each window read.
+#   * The ACCUMULATION / fact / grounding / dedupe / entity-resolution paths
+#     KEEP it — a backfill SHOULD inform the knowledge those paths accumulate.
+BACKFILL_EVENT_CLASS = "backfill"
+
+# The one-line ``WHERE`` fragment every fresh-slice window read ANDs in to keep
+# backfill out of a unit's reactive slice. ``payload->>'event_class'`` is NULL
+# for a normal signal (no such key) → ``NULL IS DISTINCT FROM 'backfill'`` is
+# TRUE → the row is kept; a backfill row's value equals ``'backfill'`` →
+# ``'backfill' IS DISTINCT FROM 'backfill'`` is FALSE → the row is excluded.
+SIGNALS_EXCLUDE_BACKFILL_SQL = "(payload->>'event_class') IS DISTINCT FROM 'backfill'"
+
+
 class NatsStore:
     def __init__(self, cfg: NatsConfig):
         if nats is None:  # pragma: no cover

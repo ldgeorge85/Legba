@@ -39,6 +39,7 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 import asyncpg
 
+from ..nats import SIGNALS_EXCLUDE_BACKFILL_SQL
 from ..provenance.models import FindingPayload
 
 # Share the package-canonical result+port types with the inline_target sibling
@@ -371,7 +372,13 @@ async def read_cross_target_slice(
             if g not in union_geo:
                 union_geo.append(g)
 
-    clauses = [f"fetched_at > NOW() - make_interval(hours => $1)"]
+    # Fresh cross-target reactive window — exclude backfill (S4-T4): a backdated
+    # manual observation (fetched_at=load-time) must not surface as fresh
+    # cross-target raw input; it still informs facts/grounding via accumulation.
+    clauses = [
+        f"fetched_at > NOW() - make_interval(hours => $1)",
+        SIGNALS_EXCLUDE_BACKFILL_SQL,
+    ]
     params: list[Any] = [int(time_window_hours)]
     scope_clauses: list[str] = []
     if union_sources:

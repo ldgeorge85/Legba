@@ -78,15 +78,20 @@ manifest on a wet run.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable
-from uuid import UUID, uuid4
+from typing import Any, Awaitable, Callable, Iterable
+from uuid import UUID, uuid4, uuid5
 
+from pydantic import BaseModel, ConfigDict
+
+from ..nats import BACKFILL_EVENT_CLASS
 from ..provenance import (
     FactPayload,
     NexusPayload,
@@ -95,6 +100,8 @@ from ..provenance import (
     write_nexus,
 )
 from ..provenance.writes import _canonical_rel_type, _source_tier_rank
+from ..sources._contract import InMemoryStateStore, Signal, SourceContext
+from ..sources.baseline import run_baseline
 from ..vocabulary import normalize_predicate
 from ._base import SeedContext, SeedEntity, SeedFact, SeedNexus, SeedSource
 from ._driver import _content_hash, _resolve_entity, _seed_ctx
@@ -104,17 +111,46 @@ from .manual_schema import (
     ManualEntityRecord,
     ManualFactRecord,
     ManualNexusRecord,
+    ManualSignalRecord,
     ValidatedBatch,
     validate_batch,
 )
 
 logger = logging.getLogger(__name__)
 
-# The knowledge-layer lanes this loader writes. The signals lane (S4-T4) and the
-# vector-docs lane (the RAG plane) enter through their own sinks — a batch may
-# declare them, but THIS loader defers them (reports the counts, writes nothing).
+# The knowledge-layer lanes this loader writes. The signals lane (S4-T4) rides
+# the NORMAL signal contract (see the SIGNALS section below); the vector-docs
+# lane (the RAG plane) enters through its own Qdrant sink — a batch may declare
+# it, but THIS loader defers it (reports the count, writes nothing).
 _KNOWLEDGE_LANES = ("entities", "facts", "nexuses")
-_DEFERRED_LANES = ("signals", "docs")
+_DEFERRED_LANES = ("docs",)
+
+# The optional enrichment hook the loader threads into ``run_baseline`` — the
+# registry pipeline factory's ``(signal, ctx) -> signal|None`` stage (language /
+# geocode / classify / NER). The CLI runs WITHOUT it (tier-1 structured
+# enrichment only); a runtime caller or a test may wire one.
+EnrichmentStage = Callable[[Signal, SourceContext], Awaitable["Signal | None"]]
+# The optional fan-out hook — ``(signal, event_class) -> awaitable``. Best-effort
+# and OFF in the CLI (a backfill is excluded from every reactive window anyway,
+# so nothing reactive consumes the fan-out); wired where a live publisher exists.
+PublishSignal = Callable[[Signal, str], Awaitable[Any]]
+
+# The manual-ingest source-id prefix. Every backfilled signal is stamped with
+# ``source.manual.<batch>`` as its origin source, and a matching (non-polling)
+# ``source_descriptors`` head row is registered so the source resolves for
+# provenance / lineage / the UI without ever being polled or poll-liveness-checked.
+_MANUAL_SOURCE_PREFIX = "source.manual."
+# A fixed namespace so a backfilled signal's id is DETERMINISTIC on
+# ``(source_id, external_id|content_hash)`` — a batch re-run collides on the row
+# id (``ON CONFLICT (id) DO NOTHING``) and is an idempotent no-op, not a dup.
+_SIGNAL_ID_NAMESPACE = UUID("6f2a7b1e-9c3d-4e5a-8b0f-2d4c6e8a1b3f")
+
+
+class _ManualSourceConfig(BaseModel):
+    """A bare config for the manual source's :class:`SourceContext` — the
+    baseline reads no config keys off it, so it carries none."""
+
+    model_config = ConfigDict(extra="allow")
 
 
 class RecordAction(str, Enum):
@@ -311,9 +347,12 @@ def _seed_payloads(vb: ValidatedBatch) -> list[SeedEntity | SeedFact | SeedNexus
     """Map the validated knowledge-lane records to typed seed payloads.
 
     Used for the ``seed_batches`` content-hash (a stable fingerprint of what the
-    batch writes) and by :class:`ManualBatchSeedSource.map`. Confidence is
-    resolved here so the fingerprint reflects the real written value. Signals /
-    docs are excluded — they are not this loader's lanes.
+    batch writes to the KNOWLEDGE layer) and by :class:`ManualBatchSeedSource.map`.
+    Confidence is resolved here so the fingerprint reflects the real written value.
+    Signals (S4-T4) and docs are excluded from THIS fingerprint — they carry their
+    own idempotency (a signal's deterministic id + ``ON CONFLICT``; a doc's
+    ``(corpus, doc_id, chunk_seq)`` key), so they are reconciled on their own sinks
+    rather than through the knowledge-lane content-hash dedupe.
     """
     manifest = vb.manifest
     out: list[SeedEntity | SeedFact | SeedNexus] = []
@@ -422,6 +461,13 @@ class ManualBatchReport:
     entities_resolved: int = 0
     facts: dict[str, int] = field(default_factory=lambda: {k: 0 for k in _ACTION_KEYS})
     nexuses: dict[str, int] = field(default_factory=lambda: {k: 0 for k in _ACTION_KEYS})
+    # The signals lane (S4-T4): backfilled observations written through the
+    # normal signal contract. ``create`` = a new row written; ``skip`` = the
+    # deterministic id already exists (idempotent re-run) or a baseline filter
+    # dropped it; ``dlq`` = the write raised. Signals never supersede (they are
+    # append-only observations deduped by canonical link, not asserted facts).
+    signals: dict[str, int] = field(default_factory=lambda: {k: 0 for k in _ACTION_KEYS})
+    manual_source_id: str | None = None
     deferred: dict[str, int] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -437,6 +483,7 @@ class ManualBatchReport:
             + self.facts["supersede"]
             + self.nexuses["create"]
             + self.nexuses["supersede"]
+            + self.signals["create"]
         )
         return touched > 0
 
@@ -451,6 +498,8 @@ class ManualBatchReport:
             "entities_resolved": self.entities_resolved,
             "facts": dict(self.facts),
             "nexuses": dict(self.nexuses),
+            "signals": dict(self.signals),
+            "manual_source_id": self.manual_source_id,
             "deferred_lanes": dict(self.deferred),
             "conflicts": list(self.conflicts),
             "errors": list(self.errors),
@@ -643,6 +692,219 @@ async def _apply_nexus(
 
 
 # ---------------------------------------------------------------------------
+# SIGNALS lane (S4-T4) — backfill through the NORMAL signal contract
+# ---------------------------------------------------------------------------
+#
+# A backfilled record maps to a target-agnostic ``Signal`` that rides the exact
+# write path a live source uses: per-source baseline enrichment (``run_baseline``
+# — content_hash/language/geo-from-scope/tags always; geocode/NER when an
+# enrichment stage is wired), then ``write_canonical_signal`` (the host-side
+# source-credibility lookup + the canonical INSERT + dedupe), then a best-effort
+# fan-out. The ONE thing that marks it historical: ``event_class=backfill`` in
+# the payload (beside ``published_at``, the real event time). Every UNIT's fresh
+# reactive-window read excludes that event_class; the accumulation / fact /
+# grounding / entity-resolution paths keep it. See ``legba.data.nats``.
+
+
+def manual_source_id(batch_id: str) -> str:
+    """The ``source.manual.<batch>`` origin source id for a batch's signals.
+
+    The batch id is flattened to a single dotless token (source ids are NATS
+    subject tokens; dots are separators) so the fan-out subject + subscription
+    resolution stay well-formed.
+    """
+    token = re.sub(r"[^a-z0-9]+", "_", batch_id.strip().lower()).strip("_") or "batch"
+    return f"{_MANUAL_SOURCE_PREFIX}{token}"
+
+
+def _signal_content_hash(record: ManualSignalRecord) -> str:
+    """A stable content fingerprint for one backfilled signal.
+
+    Keys the deterministic id (so a re-run dedupes) and the dedupe layer. Built
+    from the natural content: external id (when the source carried one), title,
+    body, and the real event time.
+    """
+    basis = "\x1f".join(
+        [
+            record.external_id or "",
+            record.title or "",
+            record.body or "",
+            record.published_at.astimezone(timezone.utc).isoformat(),
+        ]
+    )
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+
+def _deterministic_signal_id(source_id: str, natural_key: str) -> UUID:
+    """A stable signal id from ``(source_id, external_id|content_hash)`` so a
+    batch re-run collides on ``ON CONFLICT (id) DO NOTHING`` (idempotent)."""
+    return uuid5(_SIGNAL_ID_NAMESPACE, f"{source_id}\x1f{natural_key}")
+
+
+def signal_from_record(
+    record: ManualSignalRecord,
+    *,
+    manifest: BatchManifest,
+    source_id: str,
+    fetched_at: datetime,
+) -> Signal:
+    """Map one validated ``ManualSignalRecord`` to a canonical ``Signal``.
+
+    ``published_at`` (the REAL event time, backdated) + ``event_class=backfill``
+    live in the payload (their persistence home — the ``signals`` table has no
+    such columns). ``fetched_at`` is the LOAD time. Inline ``entities`` go under
+    ``payload.entities`` so the (no-window) entity-resolution analyst picks the
+    backfill up and feeds it into the graph/facts; inline ``geo`` becomes the
+    indexed ``geo`` column so the accumulation reads scope it correctly.
+    """
+    content_hash = _signal_content_hash(record)
+    natural_key = record.external_id or content_hash
+    payload: dict[str, Any] = dict(record.data or {})
+    if record.title:
+        payload.setdefault("title", record.title)
+    if record.body:
+        payload.setdefault("body", record.body)
+    # event_class + published_at — the backfill markers the window reads key on.
+    payload["event_class"] = BACKFILL_EVENT_CLASS
+    payload["published_at"] = record.published_at.astimezone(timezone.utc).isoformat()
+    if record.entities:
+        payload.setdefault("entities", list(record.entities))
+    payload.setdefault(
+        "manual_batch",
+        {"batch_id": manifest.batch_id, "operator": manifest.operator},
+    )
+    return Signal(
+        signal_id=_deterministic_signal_id(source_id, natural_key),
+        source_id=source_id,
+        source_version="1",
+        produced_by_kind="source",
+        fetched_at=fetched_at,
+        owner_tenant="default",
+        modality=record.modality or "text",
+        payload=payload,
+        canonical_url=record.canonical_url,
+        language_hint=record.language,
+        language=record.language,
+        geo=list(record.geo),
+        tags=list(record.tags),
+        source_credibility=record.source_credibility,
+        content_hash=content_hash,
+    )
+
+
+async def _register_manual_source(
+    conn: Any, *, source_id: str, manifest: BatchManifest
+) -> None:
+    """Register (idempotently) the ``source.manual.<batch>`` head descriptor.
+
+    Written ``state='configured'`` (NOT ``'active'``) + ``kind='manual'`` so the
+    source RESOLVES for provenance/lineage/UI yet is excluded from boot actor
+    wiring, from the poll-stall liveness watchdog, and from cadence polling — a
+    manual source never polls. Stable ``version='1'`` + ``ON CONFLICT (…) DO
+    NOTHING`` makes a re-run a no-op (exactly one head row per batch source).
+    """
+    body = {
+        "identity": {
+            "id": source_id,
+            "name": f"Manual backfill — {manifest.batch_id}",
+            "kind": "manual",
+            "schema_uri": "legba/source/1.0.0",
+            "version": "1",
+            "abstraction_level": "L1",
+            "state": "configured",
+            "owner": manifest.operator,
+        },
+        "scope": {
+            "owner_tenant": "default",
+            "geo": [],
+            "languages": [],
+            "tags": ["manual", "backfill"],
+        },
+        "acquisition": "manual",
+        "manual_batch": {
+            "batch_id": manifest.batch_id,
+            "operator": manifest.operator,
+            "no_poll": True,
+            "event_class": BACKFILL_EVENT_CLASS,
+        },
+    }
+    await conn.execute(
+        """
+        INSERT INTO source_descriptors
+            (descriptor_id, version, schema_uri, is_head, abstraction_level,
+             kind, state, owner, name, body, inherits, created_at)
+        VALUES ($1, '1', 'legba/source/1.0.0', true, 'L1',
+                'manual', 'configured', $2, $3, $4::jsonb, '{}'::text[], now())
+        ON CONFLICT (descriptor_id, version) DO NOTHING
+        """,
+        source_id,
+        manifest.operator,
+        f"Manual backfill — {manifest.batch_id}",
+        json.dumps(body),
+    )
+
+
+async def _apply_signal(
+    conn: Any,
+    record: ManualSignalRecord,
+    *,
+    manifest: BatchManifest,
+    source_id: str,
+    fetched_at: datetime,
+    enrichment_stage: EnrichmentStage | None,
+    publish_signal: PublishSignal | None,
+    report: ManualBatchReport,
+) -> RecordAction:
+    """Enrich + write ONE backfilled signal through the normal contract.
+
+    Returns ``create`` (written), ``skip`` (idempotent id collision on a re-run,
+    or a baseline filter dropped it), or ``dlq`` (the write raised).
+    """
+    sig = signal_from_record(
+        record, manifest=manifest, source_id=source_id, fetched_at=fetched_at
+    )
+    ctx = SourceContext(
+        target_id=source_id,
+        target_version="1",
+        source_id=source_id,
+        config=_ManualSourceConfig(),
+        state_store=InMemoryStateStore(),
+        # A record's inline geo also seeds the baseline geo-from-scope backstop;
+        # when the record carried none, a wired geocode stage fills the column.
+        scope_geo=list(record.geo),
+    )
+    enriched = await run_baseline(
+        sig, ctx, media="reference", enrichment_stage=enrichment_stage
+    )
+    if enriched is None:  # a baseline enrichment filter dropped it.
+        return RecordAction.SKIP
+
+    # The canonical write rides the runtime source path (host-side credibility
+    # lookup + INSERT + dedupe). Imported lazily so importing this module (and
+    # the pure classifier tests) doesn't pull the runtime source stack in.
+    from ...runtime.source_actor import write_canonical_signal
+
+    written_id = await write_canonical_signal(
+        conn, enriched, source_version="1", owner_tenant="default"
+    )
+    if written_id is None:  # ON CONFLICT (id) — an idempotent re-run no-op.
+        return RecordAction.SKIP
+
+    # Best-effort fan-out on the backfill event-class subject. A publish failure
+    # must never lose the (already-written) row — and nothing reactive consumes
+    # a backfill anyway (every window read excludes it), so this is advisory.
+    if publish_signal is not None:
+        try:
+            await publish_signal(enriched, BACKFILL_EVENT_CLASS)
+        except Exception as exc:  # pragma: no cover — advisory fan-out
+            logger.warning(
+                "manual_batch.signal.publish_failed signal=%s err=%s",
+                enriched.signal_id, exc,
+            )
+    return RecordAction.CREATE
+
+
+# ---------------------------------------------------------------------------
 # The ledger row (reuses the driver's content-hash dedupe)
 # ---------------------------------------------------------------------------
 
@@ -715,6 +977,8 @@ async def run_manual_batch(
     batch_dir: str | Path,
     mode: BatchMode | str | None = None,
     dry_run: bool = False,
+    enrichment_stage: EnrichmentStage | None = None,
+    publish_signal: PublishSignal | None = None,
 ) -> ManualBatchReport:
     """Validate + load one manual-ingest batch through the seed plane.
 
@@ -840,7 +1104,46 @@ async def run_manual_batch(
                             f"nexus ({n.subject}|{n.rel_type}|{n.object}): {exc}"
                         )
 
-                # 4) Persist the report + counts onto the ledger row (a wet run;
+                # 4) Signals (S4-T4) — backfill through the normal signal
+                #    contract. Register the ``source.manual.<batch>`` origin
+                #    source once, then write each signal (event_class=backfill,
+                #    published_at=event time, fetched_at=load time). One load time
+                #    for the whole batch so a re-run's fetched_at is stable-ish.
+                if vb.signals:
+                    src_id = manual_source_id(manifest.batch_id)
+                    report.manual_source_id = src_id
+                    load_time = datetime.now(tz=timezone.utc)
+                    # A dry-run rolls the whole transaction back, so it must not
+                    # emit a real fan-out for a row that will never persist.
+                    eff_publish = None if dry_run else publish_signal
+                    try:
+                        async with conn.transaction():
+                            await _register_manual_source(
+                                conn, source_id=src_id, manifest=manifest
+                            )
+                    except Exception as exc:  # degrade-not-drop
+                        report.errors.append(f"manual source register {src_id!r}: {exc}")
+                    for s in vb.signals:
+                        try:
+                            async with conn.transaction():
+                                action = await _apply_signal(
+                                    conn,
+                                    s,
+                                    manifest=manifest,
+                                    source_id=src_id,
+                                    fetched_at=load_time,
+                                    enrichment_stage=enrichment_stage,
+                                    publish_signal=eff_publish,
+                                    report=report,
+                                )
+                            report.record("signals", action)
+                        except Exception as exc:  # degrade-not-drop
+                            report.record("signals", RecordAction.DLQ)
+                            report.errors.append(
+                                f"signal ({s.external_id or s.title!r}): {exc}"
+                            )
+
+                # 5) Persist the report + counts onto the ledger row (a wet run;
                 #    on dry_run the whole transaction is discarded below).
                 manifest_with_report = dict(manifest_json)
                 manifest_with_report["report"] = report.as_dict()
@@ -855,6 +1158,7 @@ async def run_manual_batch(
                         {
                             "facts": report.facts,
                             "nexuses": report.nexuses,
+                            "signals": report.signals,
                             "entities": report.entities_resolved,
                             "deferred": report.deferred,
                         }
@@ -881,4 +1185,6 @@ __all__ = [
     "ManualBatchSeedSource",
     "ManualBatchReport",
     "run_manual_batch",
+    "manual_source_id",
+    "signal_from_record",
 ]

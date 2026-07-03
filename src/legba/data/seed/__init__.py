@@ -54,7 +54,9 @@ from .manual_batch import (
     RecordAction,
     classify_fact,
     classify_nexus,
+    manual_source_id,
     run_manual_batch,
+    signal_from_record,
 )
 from .adapters.acled_conflict import ACLEDConflictSeedSource
 from .adapters.sipri_arms_transfers import SIPRIArmsTransfersSeedSource
@@ -121,6 +123,9 @@ __all__ = [
     "classify_fact",
     "classify_nexus",
     "run_manual_batch",
+    # manual-ingest signals backfill lane (S4-T4)
+    "manual_source_id",
+    "signal_from_record",
     "ADAPTERS",
     "get_adapter",
     "list_adapters",
