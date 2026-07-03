@@ -8,17 +8,34 @@
 # UCDPConfig). Structured records → one Signal per event. Feeds the escalation
 # (U5) + military_posture (U6) bounded units.
 #
-# PUBLIC / NO-AUTH: unlike ACLED (OAuth2 account), GED is a free public API
-# (https://ucdpapi.pcr.uu.se/api/gedevents/{version}). No vault secrets — the
-# descriptor ships state: active like the USGS earthquakes feed. LICENSE:
+# KEYED — TOKEN-GATED: UCDP now requires a free access token (introduced to
+# protect the service from bot traffic). The token rides EVERY request as the
+# HTTP header `x-ucdp-access-token` (per https://ucdp.uu.se/apidocs/). LICENSE:
 # UCDP data is CC BY 4.0 (free reuse WITH attribution) — attribute "Uppsala
 # Conflict Data Program (UCDP)" on any external re-export.
 #
-# READY TO POLL, integrator-verified live: the handler is written against the
-# documented GED API shape and unit-tested with a fixture response. The live
-# fetch is verified post-deploy (the environment this was built in cannot be
-# assumed to reach ucdpapi.pcr.uu.se). To gate it until then, flip
-# identity.state to draft (draft descriptors register but get no live actor).
+# PAUSED until the token lands (S-2 keyed convention):
+#   * identity.state is DRAFT. Draft descriptors register fine in bulk but get
+#     NO live actor (runtime/dapr_host.py: "draft/configured — no live actor
+#     wanted"), so a token-less rig stays healthy with this file committed and
+#     the handler never 401-spams. (The deploy-hygiene pass keeps the LIVE
+#     descriptor paused until a token is loaded.)
+#   * config.access_token_secret is a VAULT REF (a credential_id, never the
+#     plaintext). At pull time the handler resolves it via
+#     SourceContext.secrets_resolve → CredentialVault.resolve and sends it as
+#     the `x-ucdp-access-token` header. With NO token configured the handler
+#     degrades cleanly (skips the pull, records "ucdp: no token configured").
+#
+# OPERATOR FLIP (to go live once the token arrives):
+#   1. Store the token (request one at https://ucdp.uu.se/apidocs/):
+#        POST {registry}/api/v1/registry/vault/secrets
+#             {"secret_id": "source.ucdp.access_token", "plaintext": "<token>"}
+#      (or set LEGBA_UCDP_ACCESS_TOKEN in the runtime env for a quick bring-up;
+#      the vault ref takes precedence over the env var).
+#   2. Register/refresh this descriptor through the source registrar.
+#   3. Transition draft → configured → active:
+#        POST {registry}/api/v1/registry/descriptors/source/source.ucdp.ged/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
 #
 # REGISTER (standalone descriptor — same path ACLED/USGS use):
 #   POST {registry}/api/v1/registry/descriptors/source  (body = this YAML)
@@ -31,7 +48,7 @@ identity:
   schema_uri: legba/source/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
-  state: active
+  state: draft                       # KEYED/TOKEN-GATED — operator flips after the token lands
   owner: s1_units_sources
   created: "2026-07-02T00:00:00Z"
 
@@ -55,6 +72,13 @@ cadence:
   jitter_seconds: 300
 
 config:
+  # UCDP access token — VAULT REF (credential_id, never the plaintext). The
+  # handler resolves it at pull time and sends it as the `x-ucdp-access-token`
+  # header. Load it via the vault (source.ucdp.access_token) or set
+  # LEGBA_UCDP_ACCESS_TOKEN in the runtime env before flipping to active.
+  access_token_secret:
+    factory_kind: secret
+    raw: "source.ucdp.access_token"
   # GED dataset release version. Point at a candidate release string for the
   # most-current (monthly) UCDP Candidate Events Dataset.
   version:
@@ -80,7 +104,9 @@ pipeline:
       config: {}
   media: reference
 
-deps: {}
+deps:
+  vault_secrets:
+    - source.ucdp.access_token
 
 output:
   retention: interest

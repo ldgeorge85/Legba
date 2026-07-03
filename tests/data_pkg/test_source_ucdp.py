@@ -2,15 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for the UCDP GED source handler (S1-T9).
 
-UCDP GED is a PUBLIC, no-auth conflict-event API, so there is no OAuth round-
-trip to model (unlike ACLED). Tests mock ``httpx`` via ``httpx.MockTransport``
-to exercise the full pull / pagination / cursor / health logic without touching
-the network, plus a real fixture-file parse.
+UCDP GED is a TOKEN-GATED conflict-event API: every request must carry a free
+access token in the ``x-ucdp-access-token`` header. Tests mock ``httpx`` via
+``httpx.MockTransport`` to exercise the full pull / pagination / cursor / health
+logic without touching the network, plus a real fixture-file parse. An autouse
+fixture supplies a token via the ``LEGBA_UCDP_ACCESS_TOKEN`` env fallback so the
+parse/pagination tests exercise the wire logic (not the auth short-circuit); the
+dedicated no-token test clears it to prove the clean-degrade path.
 
 Test surface:
 
   * protocol satisfaction + config defaults / validation (resource / region /
     violence whitelists, page cap).
+  * auth: no-token pull/health degrade quietly (no HTTP, no 401 spam); the
+    token rides the ``x-ucdp-access-token`` header from either the vault ref
+    (``secrets_resolve``) or the env fallback.
   * pull happy-path against the on-disk fixture → one Signal per event, with
     geo + actors + fatalities + event-type mapping asserted.
   * pull pagination — follows ``NextPageUrl``, terminates when it is empty.
@@ -63,6 +69,24 @@ from legba.runtime.source_factory import (
 
 FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "ucdp_ged_sample.json"
 DESCRIPTORS_DIR = pathlib.Path(__file__).resolve().parents[2] / "descriptors"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _ucdp_env_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test a token via the env fallback by default.
+
+    The parse / pagination / cursor / health tests exercise the wire logic, not
+    auth — without a token the handler correctly short-circuits to the clean-
+    degrade path and yields nothing. Supplying a token here keeps those tests on
+    the fetch path; the dedicated no-token tests ``delenv`` this to assert the
+    degrade behavior.
+    """
+    monkeypatch.setenv("LEGBA_UCDP_ACCESS_TOKEN", "test-ucdp-token")
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +146,7 @@ def _make_ctx(
     config: UCDPConfig,
     store: InMemoryStateStore | None = None,
     now: datetime | None = None,
+    secrets_resolve: Any = None,
 ) -> SourceContext:
     return SourceContext(
         target_id="target.test.syria",
@@ -129,6 +154,7 @@ def _make_ctx(
         source_id="source.ucdp.ged",
         config=config,
         state_store=store or InMemoryStateStore(),
+        secrets_resolve=secrets_resolve,
         now_fn=(lambda: now) if now is not None else None,
         logger=logging.getLogger("test.ucdp"),
     )
@@ -234,6 +260,13 @@ def test_config_rejects_oversized_page() -> None:
 def test_config_rejects_extra_field() -> None:
     with pytest.raises(ValidationError):
         UCDPConfig(api_key_secret="vault://ucdp/key")
+
+
+def test_config_accepts_access_token_secret() -> None:
+    # The credential is a vault ref, defaulting to None (no token configured).
+    assert UCDPConfig().access_token_secret is None
+    cfg = UCDPConfig(access_token_secret="source.ucdp.access_token")
+    assert cfg.access_token_secret == "source.ucdp.access_token"
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +453,139 @@ async def test_client_side_violence_filter() -> None:
     assert sorted(s.payload["external_id"] for s in collected) == ["1", "3"]
     # High-water still advances across ALL seen events (dedupe absorbs overlap).
     assert store.snapshot()["ucdp_cursor"]["last_date_start"] == "2023-05-10"
+
+
+# ---------------------------------------------------------------------------
+# auth — access token (x-ucdp-access-token header) + clean degrade
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pull_degrades_quietly_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No token → skip the pull entirely: no HTTP, no cursor mutation, and a
+    quiet 'ucdp: no token configured' note on the health counters."""
+    monkeypatch.delenv("LEGBA_UCDP_ACCESS_TOKEN", raising=False)
+    handler = UCDPSourceHandler()
+    mock = _MockResponses([_page_response([_make_event(ev_id=1)])])
+    _patch_client(handler, mock)
+    store = InMemoryStateStore()
+    # No access_token_secret and no secrets_resolve on the ctx.
+    ctx = _make_ctx(config=UCDPConfig(), store=store)
+
+    collected = await _collect(
+        handler, ctx, since=datetime(2023, 1, 1, tzinfo=timezone.utc)
+    )
+    assert collected == []
+    # The degrade path must NOT touch the network (this is the anti-401-spam
+    # guarantee) and must not advance/create the cursor.
+    assert mock.calls == []
+    assert store.snapshot().get("ucdp_cursor") is None
+    assert handler._health.last_status == "degraded"
+    assert handler._health.last_error == "ucdp: no token configured"
+
+
+@pytest.mark.asyncio
+async def test_health_check_degraded_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LEGBA_UCDP_ACCESS_TOKEN", raising=False)
+    handler = UCDPSourceHandler()
+    mock = _MockResponses([_page_response([_make_event(ev_id=1)])])
+    _patch_client(handler, mock)
+    ctx = _make_ctx(config=UCDPConfig())
+
+    health = await handler.health_check(ctx)
+    assert health.state == "degraded"
+    assert health.last_error == "ucdp: no token configured"
+    # Degrades WITHOUT probing — an unauthenticated probe would just 401.
+    assert mock.calls == []
+
+
+@pytest.mark.asyncio
+async def test_pull_attaches_token_from_vault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Vault ref resolved via secrets_resolve → x-ucdp-access-token header.
+
+    The env fallback is cleared to prove the token comes from the vault ref."""
+    monkeypatch.delenv("LEGBA_UCDP_ACCESS_TOKEN", raising=False)
+    handler = UCDPSourceHandler()
+    mock = _MockResponses([_page_response([_make_event(ev_id=1)])])
+    _patch_client(handler, mock)
+
+    seen: list[str] = []
+
+    async def _resolver(vault_id: str) -> str:
+        seen.append(vault_id)
+        return "SECRET-TOKEN-123"
+
+    cfg = UCDPConfig(access_token_secret="source.ucdp.access_token")
+    ctx = _make_ctx(config=cfg, secrets_resolve=_resolver)
+
+    collected = await _collect(
+        handler, ctx, since=datetime(2023, 1, 1, tzinfo=timezone.utc)
+    )
+    assert len(collected) == 1
+    assert seen == ["source.ucdp.access_token"]
+    assert len(mock.calls) == 1
+    assert mock.calls[0].headers["x-ucdp-access-token"] == "SECRET-TOKEN-123"
+
+
+@pytest.mark.asyncio
+async def test_pull_attaches_token_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Env fallback (no vault ref) → x-ucdp-access-token header."""
+    monkeypatch.setenv("LEGBA_UCDP_ACCESS_TOKEN", "ENV-TOKEN-9")
+    handler = UCDPSourceHandler()
+    mock = _MockResponses([_page_response([_make_event(ev_id=1)])])
+    _patch_client(handler, mock)
+    ctx = _make_ctx(config=UCDPConfig())
+
+    collected = await _collect(
+        handler, ctx, since=datetime(2023, 1, 1, tzinfo=timezone.utc)
+    )
+    assert len(collected) == 1
+    assert mock.calls[0].headers["x-ucdp-access-token"] == "ENV-TOKEN-9"
+
+
+@pytest.mark.asyncio
+async def test_vault_ref_takes_precedence_over_env() -> None:
+    """When both are present the vault ref wins (env is only a fallback)."""
+    handler = UCDPSourceHandler()  # env token set by the autouse fixture
+    mock = _MockResponses([_page_response([_make_event(ev_id=1)])])
+    _patch_client(handler, mock)
+
+    async def _resolver(vault_id: str) -> str:
+        return "VAULT-WINS"
+
+    cfg = UCDPConfig(access_token_secret="source.ucdp.access_token")
+    ctx = _make_ctx(config=cfg, secrets_resolve=_resolver)
+
+    await _collect(handler, ctx, since=datetime(2023, 1, 1, tzinfo=timezone.utc))
+    assert mock.calls[0].headers["x-ucdp-access-token"] == "VAULT-WINS"
+
+
+@pytest.mark.asyncio
+async def test_token_rides_followed_next_page() -> None:
+    """The token header rides EVERY request, including followed NextPageUrl."""
+    handler = UCDPSourceHandler()  # env token from the autouse fixture
+    page2 = f"{UCDP_API_BASE}/gedevents/24.1?page=1&pagesize=1000&StartDate=2023-01-01"
+    mock = _MockResponses(
+        [
+            _page_response([_make_event(ev_id=1)], next_url=page2),
+            _page_response([_make_event(ev_id=2)], next_url=None),
+        ]
+    )
+    _patch_client(handler, mock)
+    ctx = _make_ctx(config=UCDPConfig())
+
+    await _collect(handler, ctx, since=datetime(2023, 1, 1, tzinfo=timezone.utc))
+    assert len(mock.calls) == 2
+    assert mock.calls[0].headers["x-ucdp-access-token"] == "test-ucdp-token"
+    assert mock.calls[1].headers["x-ucdp-access-token"] == "test-ucdp-token"
 
 
 # ---------------------------------------------------------------------------
