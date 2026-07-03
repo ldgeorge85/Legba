@@ -150,14 +150,25 @@ class ChannelEmitter:
     webhook POST, a2a skill invoke) by subclassing / injecting. Kept thin so the
     SEAM is complete without re-implementing every sink — the output-kind
     surface is reused, not re-cut.
+
+    ``pg_pool`` (optional, migration 0061) makes the emit DURABLY auditable: the
+    NATS publish stays the delivery edge, but every emit ALSO writes one row to
+    ``alert_sink_deliveries`` (repurposed into the unified per-delivery audit —
+    see the migration comment) recording WHAT was delivered WHERE and whether
+    the publish confirmed. That is the durable answer to "who got alerted?" — the
+    in-memory ``emitted`` list is process-local and vanishes on restart. The
+    write is best-effort: an audit-write failure is logged, never raised, so a
+    blipped writer connection cannot break an escalation the operator needs.
     """
 
     def __init__(
         self,
         *,
         nats_publish: Callable[[str, bytes], Awaitable[None]] | None = None,
+        pg_pool: Any | None = None,
     ) -> None:
         self._nats_publish = nats_publish
+        self._pg_pool = pg_pool
         self.emitted: list[dict[str, Any]] = []
 
     async def emit(
@@ -171,8 +182,8 @@ class ChannelEmitter:
             "config": dict(channel.config),
             "payload": payload,
         }
+        subject = str(channel.config.get("subject") or f"channels.{channel.name}")
         if channel.kind in ("alert", "nats_stream") and self._nats_publish is not None:
-            subject = str(channel.config.get("subject") or f"channels.{channel.name}")
             try:
                 await self._nats_publish(subject, json.dumps(record).encode("utf-8"))
                 record["delivered"] = True
@@ -192,7 +203,86 @@ class ChannelEmitter:
                 "alert", "nats_stream"
             )
         self.emitted.append(record)
+        await self._write_delivery_audit(channel, subject, payload, record)
         return record
+
+    async def _write_delivery_audit(
+        self,
+        channel: Channel,
+        subject: str,
+        payload: dict[str, Any],
+        record: dict[str, Any],
+    ) -> None:
+        """Write one durable ``alert_sink_deliveries`` audit row for this emit.
+
+        The DURABLE record of what was delivered (migration 0061). Fields the
+        escalate/incident gate resolves flow in via the emit ``payload``
+        (``output_id`` = the persisted analyst_outputs finding, ``target_id`` =
+        the country, ``severity`` + ``effective_confidence`` = the verify-FOLDED
+        alert-score inputs). ``attempted_at`` defaults to now() = the emit time.
+
+        Best-effort: no pool wired → no-op (unit paths / test rigs). Any write
+        error (FK blip, connection drop) is swallowed with a warning — the
+        delivery already happened; the audit is observability, not correctness.
+        """
+        if self._pg_pool is None:
+            return
+        import json
+        from uuid import UUID
+
+        raw_output = payload.get("output_id")
+        output_uuid: UUID | None = None
+        if raw_output is not None:
+            try:
+                output_uuid = raw_output if isinstance(raw_output, UUID) else UUID(str(raw_output))
+            except (ValueError, AttributeError, TypeError):
+                output_uuid = None
+
+        conf = payload.get("effective_confidence")
+        try:
+            eff_conf = float(conf) if conf is not None else None
+        except (ValueError, TypeError):
+            eff_conf = None
+
+        delivered = bool(record.get("delivered"))
+        summary = {
+            "action": payload.get("action"),
+            "title": str(payload.get("title") or "")[:200],
+            "requested_by": payload.get("requested_by"),
+            "delivered": delivered,
+        }
+        sql = """
+            INSERT INTO alert_sink_deliveries (
+                alert_row_id, channel_name, sink_kind, sink_target,
+                target_id, severity, effective_confidence, attempt_number,
+                status, error_message, delivered_at, payload_summary
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $9, $10, $11::jsonb)
+        """
+        import datetime as _dt
+
+        args = (
+            output_uuid,
+            channel.name,
+            channel.kind,
+            subject,
+            payload.get("target_id"),
+            payload.get("severity"),
+            eff_conf,
+            "delivered" if delivered else "failed",
+            record.get("error"),
+            _dt.datetime.now(tz=_dt.timezone.utc) if delivered else None,
+            json.dumps(summary, separators=(",", ":")),
+        )
+        try:
+            # Duck-typed .execute — an asyncpg Pool or a raw connection both work
+            # (mirrors legba.data.outputs.alert._record_delivery), so this module
+            # stays library-agnostic at type level.
+            await self._pg_pool.execute(sql, *args)
+        except Exception as exc:  # pragma: no cover - fault-injection path
+            logger.warning(
+                "channel.emit.audit_write_failed name=%s status=%s err=%s",
+                channel.name, record.get("delivered"), exc,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +425,15 @@ async def _emit_to_channels(
         "detail": call.args.get("detail", ""),
         "target_ref": call.args.get("target_ref"),
         "requested_by": call.requested_by,
+        # Durable-audit fields (migration 0061): the ChannelEmitter reads these
+        # off the payload to write the per-delivery audit row. ``output_id`` is
+        # the persisted analyst_outputs finding, ``target_id`` the country, and
+        # ``effective_confidence`` the verify-FOLDED alert-score confidence the
+        # escalate gate crossed. Absent for a caller that does not set them
+        # (e.g. a bare consult-loop create_incident) → the audit columns are NULL.
+        "output_id": call.args.get("output_id"),
+        "target_id": call.args.get("target_id"),
+        "effective_confidence": call.args.get("effective_confidence"),
     }
     emitted = []
     for ch in targets:

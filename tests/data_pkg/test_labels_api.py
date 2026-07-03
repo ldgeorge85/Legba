@@ -182,13 +182,18 @@ def test_migration_file_present_at_next_number_and_idempotent():
     target = mig_dir / "0057_unit_reference_labels.sql"
     assert target.exists(), f"missing migration: {target}"
 
-    # It is the next free number (no 0058+, and 0057 is the only 0057_).
+    # 0057 was the next free number when this migration was added (head 0056
+    # then). Later migrations (0058+) legitimately follow, so assert 0057 exists
+    # and followed 0056 with no gap — NOT that it is the GLOBAL head, which
+    # regressed this test every time a new migration landed (matches the
+    # integrity-sweep tests' 0056/0059 pattern).
     nums = sorted(
         int(m.group(1))
         for p in mig_dir.glob("[0-9][0-9][0-9][0-9]_*.sql")
         if (m := re.match(r"(\d{4})_", p.name))
     )
-    assert max(nums) == 57, f"expected highest migration number 0057, got {max(nums)}"
+    assert 57 in nums
+    assert 56 in nums
     assert nums.count(57) == 1, "duplicate 0057_ migration number"
 
     sql = target.read_text()

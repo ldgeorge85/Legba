@@ -326,6 +326,13 @@ async def _maybe_escalate_finding(
             "detail": str(getattr(payload, "body", "") or "")[:2000],
             "target_ref": f"analyst_outputs:{output_row_id}",
             "action": "escalate",
+            # Durable per-delivery audit inputs (migration 0061): the finding id,
+            # its country, and the verify-FOLDED effective confidence the gate
+            # crossed — threaded so the ChannelEmitter writes an auditable
+            # "who got alerted" row keyed on the SAME numbers this gate used.
+            "output_id": str(output_row_id) if output_row_id is not None else None,
+            "target_id": target_id,
+            "effective_confidence": confidence,
         },
     )
     if outcome.admitted and outcome.tool_result is not None:
