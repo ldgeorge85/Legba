@@ -21,6 +21,7 @@
     "@excalidraw/excalidraw": "^0.18.1",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-table": "^8.20.0",
+    "@tanstack/react-virtual": "^3.10.8",
     "@xyflow/react": "^12.11.0",
     "clsx": "^2.1.1",
     "cytoscape": "^3.34.0",
