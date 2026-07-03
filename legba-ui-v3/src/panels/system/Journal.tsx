@@ -33,12 +33,10 @@
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { AlertTriangle, BookOpen } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import ProvenanceChip from '@/v4/components/ProvenanceChip'
-import { MD_COMPONENTS } from '@/v4/why/WorldAssessment'
+import CitedProse from '@/components/CitedProse'
 import { selectRow } from '@/state/selection'
 import { fetchJournal } from '@/lib/api'
 import type { JournalEntry, JournalClaim, JournalRef, JournalCalibration } from '@/lib/api'
@@ -204,13 +202,13 @@ function EntryCard({
         </div>
       )}
 
-      {/* The narrative — markdown, ref markers stripped (the chip binding lives
-          in the claims sidecar, rendered below). */}
+      {/* The narrative — rendered through the shared CitedProse (markdown always
+          rendered, never raw). The `[[ref:<uuid>]]` markers are already stripped
+          (the chip binding lives in the claims sidecar, rendered below), so no
+          citations are passed here. */}
       {bodyText.trim() && (
         <div className="mb-3 text-sm" data-testid="journal-entry-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-            {bodyText}
-          </ReactMarkdown>
+          <CitedProse text={bodyText} citations={[]} />
         </div>
       )}
 

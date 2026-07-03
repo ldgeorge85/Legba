@@ -42,6 +42,8 @@ import {
 import { ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
+import CitedProse from '@/components/CitedProse'
+import { extractCitations } from '@/lib/citationsModel'
 import type { Severity } from '@/v4/world/types'
 import { apiGet } from '@/lib/api'
 import { feedPreview } from '@/lib/proseText'
@@ -896,11 +898,16 @@ function FeedCard({
   superseded?: boolean
 }) {
   const isSignal = row.source === 'signal'
-  // #8 feed hygiene — the preview renders to PLAIN TEXT: unwrap a raw
-  // {"title","body"} JSON-envelope body, strip markdown (`**BLUF:**`/`##`), and
-  // drop citation-marker noise (`[3][4][31]`). The full cited card lives in the
-  // Inspector; this scan line stays flat.
-  const preview = feedPreview(row.body)
+  // #8 feed hygiene — the preview renders through the shared `CitedProse` (inline
+  // variant): a raw {"title","body"} JSON envelope is unwrapped, markdown
+  // (`**BLUF:**`/`##`) is stripped to a flat scan line, and citation markers
+  // resolve to tiny chips when the row carries its citation list (else they're
+  // dropped, never `[3][4]` noise). The full cited card lives in the Inspector.
+  // `hasPreview` gates rendering so an empty body shows nothing (parity with the
+  // old plaintext preview).
+  const rowData = (row as { data?: Record<string, unknown> | null }).data ?? null
+  const citations = row.source === 'finding' && rowData ? extractCitations(rowData) : []
+  const hasPreview = feedPreview(row.body).length > 0
   // The tight numbered-row layout: a left severity colour rail + muted row index,
   // a bold title line that carries the at-a-glance scan, and ONE muted meta line
   // (target/analyst or source/geo) with a relative-time stamp on the right.
@@ -995,7 +1002,11 @@ function FeedCard({
         )}
       </div>
 
-      {preview && <div className="mt-0.5 text-ink-2 line-clamp-2">{preview}</div>}
+      {hasPreview && (
+        <div className="mt-0.5 line-clamp-2 text-ink-2">
+          <CitedProse variant="inline" text={row.body ?? ''} citations={citations} />
+        </div>
+      )}
     </button>
   )
 }

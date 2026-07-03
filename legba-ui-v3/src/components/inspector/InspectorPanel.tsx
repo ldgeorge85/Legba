@@ -175,6 +175,7 @@ function DetailView({ detail }: { detail: InspectorDetail }) {
               text={report.text}
               citations={citations}
               verification={verification}
+              confidence={typeof detail.body.confidence === 'number' ? detail.body.confidence : null}
               analystId={typeof detail.body.analyst_id === 'string' ? detail.body.analyst_id : null}
             />
           </div>
