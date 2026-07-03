@@ -67,6 +67,7 @@ from .deterministic_handlers import (
     adversarial_signals,
     anomaly_detection,
     calibration_tracking,
+    collection_gap,
     composition_lineage_sweep,
     cross_source_coalesce,
     cross_source_dedup,
@@ -142,6 +143,12 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # warning signposts a duty officer reads); a no-flip sweep is suppressed via
     # the run's force_trace_only (NOT this map — the map is the always-on kind).
     "indicator_tracker": OutputKind.FINDING,
+    # S3-T3 collection_gap — monthly aggregation of the scorecard
+    # insufficient-evidence signal into a "collection requirements" FINDING
+    # (which desk×dimension cells are starved + the source classes that would
+    # feed them). A user-facing collection-management product; a no-gap sweep is
+    # suppressed via the run's force_trace_only (NOT this map).
+    "collection_gap": OutputKind.FINDING,
     # Hypothesis lifecycle (Piece 3, Task D) — side-writes HYPOTHESIS rows via
     # write_hypothesis + returns a FindingPayload summary. NOT in the
     # operator-confirmed trace-only list, so unchanged here (left FINDING).
@@ -245,6 +252,11 @@ SUB_HANDLERS: dict[str, Any] = {
     # I&W indicators per (target_id, source unit analyst_id); emits a summary
     # finding on status flips, trace-only on a no-flip/unchanged sweep.
     "indicator_tracker": indicator_tracker.handle,
+    # S3-T3 collection_gap — monthly deterministic aggregation of the scorecard
+    # insufficient-evidence signal per desk×dimension into a "collection
+    # requirements" finding (starved cells + the plausible feed source classes);
+    # trace-only when nothing is starved.
+    "collection_gap": collection_gap.handle,
     # Hypothesis lifecycle (Piece 3, Task D) — emits forward-claim hypotheses
     # over rising situations + tests standing ones vs later evidence. Side-writes
     # HYPOTHESIS rows via the live write_hypothesis path; returns a FINDING summary.
