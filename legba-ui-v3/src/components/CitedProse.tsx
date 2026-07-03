@@ -29,6 +29,7 @@ import { MD_COMPONENTS } from '@/lib/markdownComponents'
 import { selectRow } from '@/state/selection'
 import { VerdictBadge } from '@/components/VerdictBadge'
 import {
+  citationLabel,
   citationsByMarker,
   evidenceAnchorId,
   normalizeCitationMarkers,
@@ -77,7 +78,7 @@ function CitationCard({ c }: { c: Citation }) {
     >
       <span className="mb-1 flex items-center gap-1.5">
         <span className="rounded bg-slate-800 px-1 font-mono text-[10px] text-accent-info">
-          {c.marker}
+          {citationLabel(c.marker)}
         </span>
         <span className="text-[10px] uppercase tracking-wide text-slate-500">
           {c.refKind === 'finding' ? 'sub-claim' : 'signal'}
@@ -121,7 +122,7 @@ function CitationChip({ c, onClick }: { c: Citation; onClick: () => void }) {
         data-marker={c.marker}
         className="mx-0.5 inline-flex items-center rounded bg-surf-3 px-1 align-super text-[10px] font-medium leading-none text-accent-info hover:bg-surf-1 hover:underline"
       >
-        {c.marker}
+        {citationLabel(c.marker)}
       </button>
       <CitationCard c={c} />
     </span>
@@ -238,8 +239,9 @@ export default function CitedProse({
                 className="mx-0.5 rounded bg-surf-3 px-1 align-super text-[9px] text-accent-info"
                 title={tok.citation.title ?? tok.citation.source ?? `evidence ${tok.citation.marker}`}
                 data-testid="cited-prose-inline-chip"
+                data-marker={tok.citation.marker}
               >
-                {tok.citation.marker}
+                {citationLabel(tok.citation.marker)}
               </span>
             )
           }
