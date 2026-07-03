@@ -211,7 +211,8 @@ async def test_judge_engaged_refines_and_can_only_tighten(monkeypatch):
     assert judge.calls == 1
     assert rep.judge_status == "llm"
     assert rep.judge_unavailable_reason is None
-    # min(floor=1.0, judge=2/3) = 2/3.
+    # Judge is authoritative (C1): here judge=2/3, below the floor's 1.0, so it
+    # still tightens — the judge_score stands on its own (no min() co-veto).
     assert rep.faithfulness_score == pytest.approx(2 / 3)
     assert any(s.reason == "judge_contradicted" for s in rep.unsupported_spans)
 
@@ -236,6 +237,106 @@ async def test_flag_on_but_no_judge_component_labelled(monkeypatch):
     rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=None)
     assert rep.judge_status == "deterministic"
     assert rep.judge_unavailable_reason == "no_judge_component"
+
+
+# ---------------------------------------------------------------------------
+# C1 (2026-07-03) — verify-floor co-veto + citation-aware segmentation
+# ---------------------------------------------------------------------------
+
+
+async def test_judge_authoritative_over_floor_false_negative(monkeypatch):
+    """C1 Fix 1: when the judge RAN and passed the claims, its verdict is
+    AUTHORITATIVE — a floor false-negative no longer min()-vetoes a passing judge
+    to 0. This is the ~1-in-8 silently-floored-to-zero bug."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    # The floor scores this 0/2 (both read as uncited present-facts); the judge
+    # grades both against the cited evidence and passes them.
+    body = (
+        "The central bank raised rates by fifty basis points.\n"
+        "Reserves fell for a third straight month.\n"
+    )
+    citations = [{"marker": "[1]", "signal_id": str(uuid4())}]
+    judge = _StubJudge('{"verdicts": ["supported", "supported"]}')
+    rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
+    assert rep.judge_status == "llm"
+    # Floor alone = 0.0; the judge is authoritative → 1.0, NOT min()=0.
+    assert rep.faithfulness_score == pytest.approx(1.0)
+    assert rep.supported_claims == 2
+
+
+def test_citation_after_period_stays_attached_to_sentence():
+    """C1 Fix 2: a citation placed AFTER the sentence period (the style the unit
+    prompts mandate) is re-attached to the sentence, so the claim is SUPPORTED, not
+    a no_citation false-negative."""
+    sid1, sid2 = str(uuid4()), str(uuid4())
+    body = "Border forces mobilized in the eastern zones.\n[21][26]\n"
+    citations = [
+        {"marker": "[21]", "signal_id": sid1},
+        {"marker": "[26]", "signal_id": sid2},
+    ]
+    rep = _deterministic_floor(body, citations)
+    assert rep.checkable_claims == 1
+    assert rep.supported_claims == 1
+    assert rep.faithfulness_score == 1.0
+    assert rep.unsupported_spans == []
+
+
+def test_bold_watch_heading_skips_forward_looking_section():
+    """C1 Fix 3: a BOLD **Indicators to watch** heading (not just a '#' heading)
+    triggers the forward-looking section skip, so its bullets are NOT scored as
+    uncited present-fact claims."""
+    sid = str(uuid4())
+    body = (
+        "The lira fell three percent today [1].\n"
+        "**Indicators to watch**\n"
+        "- A sustained protest wave would confirm destabilization.\n"
+        "- A snap election call would break this read.\n"
+    )
+    citations = [{"marker": "[1]", "signal_id": sid}]
+    rep = _deterministic_floor(body, citations)
+    # Only the one cited factual claim is checkable; the watch bullets are skipped.
+    assert rep.checkable_claims == 1
+    assert rep.supported_claims == 1
+    assert rep.faithfulness_score == 1.0
+
+
+def test_bold_severity_scaffold_not_swallowed_as_heading():
+    """C1 Fix 3 guard: **Severity:** High has content AFTER the bold close, so it
+    must NOT match the bold-HEADING skip (which would swallow the following lines).
+    A following cited claim is still checkable."""
+    sid = str(uuid4())
+    body = (
+        "**Severity:** High\n"
+        "The central bank intervened in the currency market [1].\n"
+    )
+    citations = [{"marker": "[1]", "signal_id": sid}]
+    rep = _deterministic_floor(body, citations)
+    assert rep.checkable_claims == 1  # the cited claim, NOT swallowed by a heading
+    assert rep.supported_claims == 1
+    assert rep.faithfulness_score == 1.0
+
+
+def test_fullwidth_and_paren_markers_normalized():
+    """C1 Fix 4: full-width 【N】 and parenthesized (57, 87) number-lists normalize
+    to ASCII [N] so their claims resolve; a single-number paren (2023) is left
+    alone (not a spurious citation)."""
+    s3, s57, s87 = str(uuid4()), str(uuid4()), str(uuid4())
+    body = (
+        "Enrichment rose at the main site 【3】.\n"
+        "Two reactors were reported offline (57, 87).\n"
+        "The treaty entered into force in the year (2023).\n"
+    )
+    citations = [
+        {"marker": "[3]", "signal_id": s3},
+        {"marker": "[57]", "signal_id": s57},
+        {"marker": "[87]", "signal_id": s87},
+    ]
+    rep = _deterministic_floor(body, citations)
+    # 【3】→[3] resolves; (57,87)→[57][87] resolve; (2023) stays a plain uncited claim.
+    assert rep.checkable_claims == 3
+    assert rep.supported_claims == 2
+    assert [s.reason for s in rep.unsupported_spans] == ["no_citation"]
+    assert any("2023" in s.text for s in rep.unsupported_spans)
 
 
 # ---------------------------------------------------------------------------

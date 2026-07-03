@@ -298,6 +298,29 @@ _CLAIM_MARKER_RE = re.compile(r"\[(\d+)\]")
 # whenever the composition path is selected and vice-versa.
 _REF_MARKER_RE = re.compile(r"\[\[ref:(\d+)\]\]")
 
+# C1 (2026-07-03) — citation-marker drift normalization, applied to the body at
+# the TOP of _segment_claims so BOTH the section-segmentation and the [N] matching
+# that consumes the spans see ASCII markers. (a) full-width / CJK lenticular
+# brackets the core plane (gpt-oss / Qwen) non-deterministically emits — mirrors
+# inline_target._VARIANT_CITATION_RE; (b) a parenthesized comma-list of TWO OR
+# MORE numbers, ``(57, 87)`` -> ``[57][87]``, while a single-number paren
+# ``(2023)`` is LEFT ALONE (year false-positive). verify.py stays stdlib-only — no
+# inline_target import.
+_VARIANT_CITATION_RE = re.compile(r"[【［〔〖](\s*\d+\s*)[】］〕〗]")
+_PAREN_CITATION_LIST_RE = re.compile(r"\((\s*\d+(?:\s*,\s*\d+)+\s*)\)")
+
+
+def _normalize_verify_markers(text: str) -> str:
+    """Rewrite citation-marker drift variants to ASCII ``[N]`` before parsing."""
+    if not text:
+        return text
+    text = _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
+    text = _PAREN_CITATION_LIST_RE.sub(
+        lambda m: "".join(f"[{n.strip()}]" for n in m.group(1).split(",")),
+        text,
+    )
+    return text
+
 # Hedge-laundering tolerance: a composed clause is flagged only when its finding
 # confidence exceeds its cited sub-claim's ceiling by MORE than this (float noise
 # guard; 0.9-over-0.5 is far past it, 0.5-over-0.5 is not).
@@ -310,6 +333,21 @@ _HEDGE_EPSILON: float = 1e-6
 # sentence is not fractured into an uncited fragment (the shake-down's jp/kr FP).
 # Everything else splits on a sentence terminator + whitespace, or a newline.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<!\.[A-Z]\.)(?<=[.!?])\s+|\n+")
+
+# C1 (2026-07-03) — a whole-line BOLD heading (``**Indicators to watch**`` or
+# ``- **Indicators to watch:**``): a line that is ONLY a bold run + optional
+# leading bullets + optional trailing colon. A ``**Severity:** High`` scaffold line
+# (content AFTER the bold close) deliberately does NOT match — it stays a
+# label:value scaffold, not a section heading. Used so _segment_claims skips the
+# forward-looking watch section under the bold heading style, not just ``#``.
+_BOLD_HEADING_RE = re.compile(r"^\s*(?:[-*>]\s+)*\*\*[^*\n]+\*\*\s*:?\s*$")
+
+# C1 (2026-07-03) — a span that is ONLY citation markers (``[21][26]`` or
+# ``[[ref:3]]``), the orphan the sentence splitter severs off a claim whose
+# citation trails the period. Re-attached to the preceding span in _segment_claims.
+_CITATION_ONLY_RE = re.compile(
+    r"^\s*(?:\[\d+\]|\[\[ref:\d+\]\])(?:\s*(?:\[\d+\]|\[\[ref:\d+\]\]))*\s*$"
+)
 
 # Section headings whose CONTENT is not a checkable factual assertion: the
 # "indicators to watch" block is explicitly forward-looking ("would confirm /
@@ -898,22 +936,41 @@ def _segment_claims(body: str) -> list[str]:
     """Split a finding body into sentence-ish claim spans (deterministic)."""
     if not body:
         return []
-    # Drop everything from the 'indicators to watch' heading onward — that whole
-    # section is forward-looking by construction (the assessor prompt defines it
-    # as "developments that would confirm or break this assessment").
+    # C1 (2026-07-03): normalize citation-marker drift (full-width 【N】,
+    # parenthesized (57, 87) lists) up front so BOTH the segmentation below and the
+    # [N] matching that consumes these spans see ASCII markers.
+    body = _normalize_verify_markers(body)
+    # Drop everything from a 'watch'-family heading onward — that whole section is
+    # forward-looking by construction (the assessor prompt defines it as
+    # "developments that would confirm or break this assessment"). C1: recognize a
+    # BOLD-only heading (**Indicators to watch**) as well as a '#' markdown heading
+    # — the units emit BOTH styles, and the bold form was silently un-skipped, so
+    # its forward-looking bullets were scored as uncited present-fact claims.
     lines = body.splitlines()
     kept: list[str] = []
     skipping = False
     for line in lines:
-        head = line.lstrip("#-*> ").strip().lower()
-        if line.lstrip().startswith("#"):
+        is_heading = line.lstrip().startswith("#") or bool(_BOLD_HEADING_RE.match(line))
+        if is_heading:
+            head = line.strip().strip("#*->: ").lower()
             skipping = any(head.startswith(h) for h in _NON_FACTUAL_HEADINGS)
         if skipping:
             continue
         kept.append(line)
     text = "\n".join(kept)
     raw = _SENTENCE_SPLIT_RE.split(text)
-    return [c.strip() for c in raw if c.strip()]
+    spans = [c.strip() for c in raw if c.strip()]
+    # C1: re-attach a citation-ONLY span to the sentence it trails — the splitter
+    # severs "…zones. [21][26]" into "…zones." + "[21][26]", orphaning the markers
+    # from the claim they support (the exact style the unit prompts mandate). Merge
+    # each pure-marker span back onto the preceding span.
+    merged: list[str] = []
+    for span in spans:
+        if merged and _CITATION_ONLY_RE.match(span):
+            merged[-1] = f"{merged[-1]} {span}"
+        else:
+            merged.append(span)
+    return merged
 
 
 def _deterministic_floor(
@@ -1257,12 +1314,18 @@ async def _maybe_llm_judge(
         floor.judge_unavailable_reason = "judge_empty"
         return floor
 
-    # Refine: the judge's per-claim verdicts replace the floor's per-claim
-    # grading. A claim the floor passed but the judge marks unsupported/
-    # contradicted is ADDED as an unsupported span; the score becomes supported/
-    # checkable over the judge's verdicts, but never drops below nor rises above
-    # what the evidence supports — we take the MIN(floor, judge) score so the
-    # judge can only tighten, never inflate, the deterministic floor.
+    # Refine: when the LLM judge RAN, its per-claim verdicts are AUTHORITATIVE.
+    # The judge grades EVERY prose span (via _is_judgeable_claim — INCLUDING the
+    # BLUF / synthesis / absence spans the mechanical floor exempts, per the H1
+    # fix) against each cited signal's TITLE+SNIPPET with a calibrated
+    # fabrication-vs-analysis prompt, so it is the better grader. C1 (2026-07-03):
+    # we DO NOT min(floor, judge). The deterministic floor's citation-PRESENCE
+    # heuristic mis-scores well-cited findings to 0 (it severs a citation placed
+    # after the period, mis-reads a bold watch section), and min() then discarded a
+    # healthy judge verdict — silently flooring ~1-in-8 findings to 0 and dropping
+    # them from composition + alerting. The floor is the FALLBACK for the
+    # judge-UNAVAILABLE path (returned early above), NOT a co-veto; a claim the
+    # judge marks unsupported/contradicted is still added as an unsupported span.
     judged_spans: list[UnsupportedSpan] = []
     judged_texts: set[str] = set()
     supported = 0
@@ -1277,7 +1340,6 @@ async def _maybe_llm_judge(
             judged_spans.append(UnsupportedSpan(text=claim_text, reason=reason))
     checkable = len(verdicts)
     judge_score = 1.0 if checkable == 0 else supported / checkable
-    refined_score = min(floor.faithfulness_score, judge_score)
 
     # (#116c) Reconcile the surfaced span set so supported + unsupported ≤
     # checkable on the 'llm' path:
@@ -1297,9 +1359,19 @@ async def _maybe_llm_judge(
         for s in floor.unsupported_spans
         if s.reason not in _ADVISORY_REASONS and s.text.strip() not in judged_texts
     ]
+    # C1 (2026-07-03): the judge is authoritative over the PROSE it graded (no
+    # min() co-veto with the buggy citation-presence floor), BUT a residual
+    # non-advisory floor span the judge could NOT grade is a real, judge-blind
+    # defect that must still count — notably an uncited 'triggered' STRUCTURED
+    # indicator (S3-T1), which is not prose. Fold each such span in as an extra
+    # unsupported checkable item so a clean prose pass cannot erase it.
+    effective_checkable = checkable + len(residual_floor_spans)
+    refined_score = (
+        1.0 if effective_checkable == 0 else supported / effective_checkable
+    )
     return FaithfulnessReport(
         faithfulness_score=refined_score,
-        checkable_claims=max(floor.checkable_claims, checkable),
+        checkable_claims=max(floor.checkable_claims, effective_checkable),
         supported_claims=supported,
         # The judge's semantic spans + any floor structural span the judge did NOT
         # re-grade + the advisory (uncounted) notes.

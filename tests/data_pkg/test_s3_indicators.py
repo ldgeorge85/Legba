@@ -409,9 +409,10 @@ async def test_exempt_prose_watch_section_still_not_rescored(monkeypatch):
 
 
 async def test_uncited_triggered_survives_judge_min(monkeypatch):
-    """The demotion is folded into the floor BEFORE the judge, so the judge's
-    min(floor, judge) refinement preserves it even when the judge passes all
-    prose."""
+    """An uncited 'triggered' indicator is a judge-BLIND structured defect. The
+    judge is authoritative over PROSE (C1: no min() co-veto), but the residual
+    indicator penalty is still folded into the refined score, so the demotion
+    survives even when the judge passes all prose."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     body = "## Assessment\nThe situation is calm across the border [1].\n"
     citations = [{"marker": "[1]", "signal_id": str(uuid4())}]
@@ -423,8 +424,8 @@ async def test_uncited_triggered_survives_judge_min(monkeypatch):
         judge_llm=_AllSupportedJudge(),
     )
     assert rep.judge_status == "llm"
-    # floor folded indicators → 0.5; judge says prose supported (1.0);
-    # min(0.5, 1.0) = 0.5 → demotion survives.
+    # 1 prose claim (judge: supported) + 1 uncited-triggered indicator (a
+    # judge-blind residual floor span) → 1/(1+1) = 0.5; the demotion survives.
     assert rep.faithfulness_score == pytest.approx(0.5)
 
 
