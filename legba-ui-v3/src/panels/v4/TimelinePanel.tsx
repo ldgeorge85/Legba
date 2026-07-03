@@ -170,6 +170,16 @@ export default function TimelinePanel() {
   const sigPts = useMemo(() => points.filter((p) => p.kind === 'signal'), [points])
   const findPts = useMemo(() => points.filter((p) => p.kind === 'finding'), [points])
   const sitPts = useMemo(() => points.filter((p) => p.kind === 'situation'), [points])
+  // Category-lane v2 (S7-T6): the signal-lane color legend, restricted to the
+  // categories actually present so the key stays relevant, most-frequent first.
+  const categoriesPresent = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of sigPts) {
+      const c = p.category
+      if (c && CATEGORY_COLOR[c]) counts.set(c, (counts.get(c) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c)
+  }, [sigPts])
   const xDomain = useMemo(() => timeDomain(points), [points])
   const nowMs = Date.now()
 
@@ -185,17 +195,31 @@ export default function TimelinePanel() {
   return (
     <PanelBoundary>
       <div className="flex h-full w-full flex-col bg-surface-300" data-testid="global-timeline">
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-800 px-3 py-1.5 text-[11px] text-slate-400">
-          <span className="font-medium text-slate-300">Timeline</span>
-          <span className="flex items-center gap-3">
-            <LegendDot color={KIND_COLOR.signal} label="signals" />
-            <LegendDot color={KIND_COLOR.finding} label="findings" />
-            <LegendDot color={KIND_COLOR.situation} label="situations" />
-            <span className="tabular-nums text-slate-500">{points.length} events</span>
-          </span>
+        <div className="shrink-0 border-b border-line px-3 py-1.5 text-[11px] text-ink-3">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-ink-1">Timeline</span>
+            <span className="flex items-center gap-3">
+              <LegendDot color={KIND_COLOR.signal} label="signals" />
+              <LegendDot color={KIND_COLOR.finding} label="findings" />
+              <LegendDot color={KIND_COLOR.situation} label="situations" />
+              <span className="tabular-nums text-ink-3">{points.length} events</span>
+            </span>
+          </div>
+          {/* category-lane v2 key — the signal-lane color coding, present-only */}
+          {categoriesPresent.length > 0 && (
+            <div
+              className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-ink-3"
+              data-testid="timeline-category-legend"
+            >
+              <span className="uppercase tracking-wide text-[10px] text-ink-3">signal lane</span>
+              {categoriesPresent.map((c) => (
+                <LegendDot key={c} color={CATEGORY_COLOR[c]} label={c} />
+              ))}
+            </div>
+          )}
         </div>
         {points.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
+          <div className="flex flex-1 items-center justify-center text-sm text-ink-3">
             {isLoading ? 'Loading timeline…' : 'No recent timeline events.'}
           </div>
         ) : (
@@ -260,9 +284,9 @@ function TLTooltip({ active, payload }: { active?: boolean; payload?: unknown[] 
   if (!active || !payload || payload.length === 0) return null
   const p = (payload[0] as { payload: LanePoint }).payload
   return (
-    <div className="max-w-xs rounded border border-slate-700 bg-surface-100 p-2 text-[11px]">
-      <div className="truncate font-medium text-slate-200">{p.title}</div>
-      <div className="mt-1 text-slate-500">
+    <div className="max-w-xs rounded border border-line-strong bg-surface-100 p-2 text-[11px]">
+      <div className="truncate font-medium text-ink-1">{p.title}</div>
+      <div className="mt-1 text-ink-3">
         {p.kind}
         {p.subtitle ? ` · ${p.subtitle}` : ''} · {new Date(p.ts).toLocaleString()}
       </div>
@@ -272,7 +296,7 @@ function TLTooltip({ active, payload }: { active?: boolean; payload?: unknown[] 
 
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
-    <span className="flex items-center gap-1 text-slate-500">
+    <span className="flex items-center gap-1 text-ink-3">
       <span className="h-2 w-2 rounded-full" style={{ background: color }} />
       {label}
     </span>

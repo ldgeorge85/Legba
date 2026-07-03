@@ -30,7 +30,7 @@ import {
 } from '@/lib/verdictModel'
 
 const CHIP =
-  'inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 text-[10px] leading-none text-slate-300'
+  'inline-flex items-center gap-1 rounded border border-line bg-surf-2 px-1.5 py-0.5 text-[10px] leading-none text-ink-2'
 
 /** Muted tonal accent per confidence level (a thin dot only — no filled chip,
  *  so it never reads as a severity color). `unassessed` gets a hollow ring. */
@@ -38,7 +38,7 @@ const CONFIDENCE_DOT: Record<ConfidenceLevel, string> = {
   high: 'bg-emerald-400/80',
   moderate: 'bg-sky-400/80',
   low: 'bg-amber-400/80',
-  unassessed: 'border border-slate-500 bg-transparent',
+  unassessed: 'border border-line-strong bg-transparent',
 }
 
 function pct(x: number | null): string {
@@ -83,8 +83,8 @@ export function VerdictBadge({
       data-testid="verdict-badge"
     >
       <span className={CHIP} title={likelihoodTitle} data-testid="verdict-likelihood">
-        <span className="uppercase tracking-wide text-slate-500">L</span>
-        <span className={v.likelihood === 'unstated' ? 'italic text-slate-500' : ''}>
+        <span className="uppercase tracking-wide text-ink-3">L</span>
+        <span className={v.likelihood === 'unstated' ? 'italic text-ink-3' : ''}>
           {v.likelihood}
         </span>
       </span>
@@ -93,8 +93,8 @@ export function VerdictBadge({
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${CONFIDENCE_DOT[v.confidence]}`}
           aria-hidden
         />
-        <span className="uppercase tracking-wide text-slate-500">C</span>
-        <span className={v.confidence === 'unassessed' ? 'italic text-slate-500' : ''}>
+        <span className="uppercase tracking-wide text-ink-3">C</span>
+        <span className={v.confidence === 'unassessed' ? 'italic text-ink-3' : ''}>
           {confidenceLabel(v.confidence)}
         </span>
       </span>
@@ -113,7 +113,7 @@ export function VerdictLegend({ className }: { className?: string }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center rounded p-0.5 text-slate-500 hover:text-slate-300"
+        className="inline-flex items-center rounded p-0.5 text-ink-3 hover:text-ink-2"
         title="What do L (likelihood) and C (confidence) mean? — ICD-203"
         aria-expanded={open}
         data-testid="verdict-legend-toggle"
@@ -129,38 +129,38 @@ export function VerdictLegend({ className }: { className?: string }) {
             onClick={() => setOpen(false)}
           />
           <span
-            className="absolute left-0 top-5 z-50 w-72 rounded-lg border border-slate-700 bg-slate-900 p-3 text-left shadow-xl"
+            className="absolute left-0 top-5 z-50 w-72 rounded-lg border border-line-strong bg-surf-3 p-3 text-left shadow-xl"
             data-testid="verdict-legend-popover"
           >
-            <div className="mb-1 text-[11px] font-semibold text-slate-200">
+            <div className="mb-1 text-[11px] font-semibold text-ink-1">
               Verdict vocabulary (ICD-203)
             </div>
-            <div className="mb-1 text-[10px] leading-relaxed text-slate-400">
+            <div className="mb-1 text-[10px] leading-relaxed text-ink-2">
               Two independent axes — a claim's{' '}
-              <span className="text-slate-200">likelihood</span> (how probable) is
+              <span className="text-ink-1">likelihood</span> (how probable) is
               never conflated with the{' '}
-              <span className="text-slate-200">confidence</span> we place in it
+              <span className="text-ink-1">confidence</span> we place in it
               (how well the evidence backs it).
             </div>
-            <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">
+            <div className="mt-2 text-[10px] uppercase tracking-wide text-ink-3">
               L · likelihood
             </div>
             <ul className="mt-0.5 space-y-0.5">
               {LIKELIHOOD_LEGEND.map((row) => (
-                <li key={row.band} className="flex justify-between gap-2 text-[10px] text-slate-300">
+                <li key={row.band} className="flex justify-between gap-2 text-[10px] text-ink-2">
                   <span>{row.band}</span>
-                  <span className="font-mono text-slate-500">{row.range}</span>
+                  <span className="font-mono text-ink-3">{row.range}</span>
                 </li>
               ))}
             </ul>
-            <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">
+            <div className="mt-2 text-[10px] uppercase tracking-wide text-ink-3">
               C · confidence
             </div>
             <ul className="mt-0.5 space-y-0.5">
               {CONFIDENCE_LEGEND.map((row) => (
-                <li key={row.level} className="text-[10px] text-slate-300">
-                  <span className="font-medium text-slate-200">{confidenceLabel(row.level)}</span>
-                  <span className="text-slate-500"> — {row.meaning}</span>
+                <li key={row.level} className="text-[10px] text-ink-2">
+                  <span className="font-medium text-ink-1">{confidenceLabel(row.level)}</span>
+                  <span className="text-ink-3"> — {row.meaning}</span>
                 </li>
               ))}
             </ul>

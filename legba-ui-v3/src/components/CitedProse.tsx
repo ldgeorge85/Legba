@@ -72,28 +72,28 @@ function CitationCard({ c }: { c: Citation }) {
   const hasCredibility = typeof c.effectiveConfidence === 'number'
   return (
     <span
-      className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden w-72 rounded-lg border border-slate-700 bg-slate-900 p-2.5 text-left align-top shadow-xl group-hover/cite:block group-focus-within/cite:block"
+      className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden w-72 rounded-lg border border-line bg-surf-3 p-2.5 text-left align-top shadow-xl group-hover/cite:block group-focus-within/cite:block"
       data-testid="citation-card"
       role="tooltip"
     >
       <span className="mb-1 flex items-center gap-1.5">
-        <span className="rounded bg-slate-800 px-1 font-mono text-[10px] text-accent-info">
+        <span className="rounded bg-surf-2 px-1 font-mono text-[10px] text-accent-info">
           {citationLabel(c.marker)}
         </span>
-        <span className="text-[10px] uppercase tracking-wide text-slate-500">
+        <span className="text-[10px] uppercase tracking-wide text-ink-3">
           {c.refKind === 'finding' ? 'sub-claim' : 'signal'}
         </span>
       </span>
       {c.title && (
-        <span className="block text-[12px] font-medium leading-snug text-slate-200">{c.title}</span>
+        <span className="block text-[12px] font-medium leading-snug text-ink-1">{c.title}</span>
       )}
       {c.source && (
-        <span className="mt-0.5 block truncate text-[10px] text-slate-500" title={c.source}>
+        <span className="mt-0.5 block truncate text-[10px] text-ink-3" title={c.source}>
           {c.source}
         </span>
       )}
       {c.evidenceText && (
-        <span className="mt-1.5 block max-h-24 overflow-hidden text-[11px] italic leading-snug text-slate-400">
+        <span className="mt-1.5 block max-h-24 overflow-hidden text-[11px] italic leading-snug text-ink-2">
           “{c.evidenceText.length > 240 ? `${c.evidenceText.slice(0, 240)}…` : c.evidenceText}”
         </span>
       )}
@@ -103,7 +103,7 @@ function CitationCard({ c }: { c: Citation }) {
             input={{ effectiveConfidence: c.effectiveConfidence, citationCount: 1 }}
           />
         ) : (
-          <span className="text-[10px] italic text-slate-600">credibility not recorded</span>
+          <span className="text-[10px] italic text-ink-3">credibility not recorded</span>
         )}
       </span>
     </span>
@@ -254,7 +254,9 @@ export default function CitedProse({
 
   const components = citedComponents(byMarker, onCite)
   return (
-    <div className={className} data-testid="cited-prose">
+    // `report-prose` gives the reading columns a 45–75ch measure + 16px/1.7
+    // off-white type scale (S7-T6); the caller's className still layers on top.
+    <div className={`report-prose ${className ?? ''}`} data-testid="cited-prose">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {prose}
       </ReactMarkdown>

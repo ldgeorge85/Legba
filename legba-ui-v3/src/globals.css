@@ -124,6 +124,26 @@ body {
 .space-y-density > * + * { margin-top: var(--density-section); }
 .space-y-rows > * + * { margin-top: var(--density-row); }
 
+/* ---------------------------------------------------------------------------
+   Readable report / prose measure (S7-T6). The reading columns (the World
+   Assessment report, the desk Intelligence Card, the Inspector, the Journal —
+   everything CitedProse renders in its `block` variant) opt into a comfortable
+   reading scale: a 45–75ch line MEASURE (caps line length for scanning), a
+   16px base with a 1.7 leading, and OFF-WHITE ink (`--ink-1`). Panels stay
+   dense; only prose bodies read like a document. The markdown element map
+   (`markdownComponents.tsx`) supplies the per-element rhythm on top of this.
+   --------------------------------------------------------------------------- */
+.report-prose {
+  max-width: 72ch; /* 45–75ch measure — caps line length for comfortable scanning */
+  font-size: 1rem; /* 16px base (was 13–14px) */
+  line-height: 1.7;
+  color: var(--ink-1); /* off-white primary ink */
+}
+.report-prose :where(p, li) {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
 /* Dockview dark theme tweaks to match Personal-mode palette. */
 .dockview-theme-abyss {
   --dv-paneview-active-outline-color: #3b82f6;

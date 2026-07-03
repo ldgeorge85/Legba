@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
+    "lint:tokens": "node tools/lint-tokens.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
