@@ -140,6 +140,19 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
   return out
 }
 
+/**
+ * The short DISPLAY label for a citation chip — the clean bracketed ordinal
+ * `[N]`. Both marker forms collapse to it so a chip reads identically on every
+ * surface: a composition `[[ref:3]]` renders `[3]`, a unit `[8]` renders `[8]`.
+ * This is DISPLAY ONLY — the underlying `marker` (and its tokenization +
+ * `[[ref:N]]`→citation mapping + hover card) is untouched. A marker with no
+ * extractable ordinal falls back to itself (never fabricated).
+ */
+export function citationLabel(marker: string): string {
+  const m = /(\d+)/.exec(marker)
+  return m ? `[${m[1]}]` : marker
+}
+
 /** Marker → Citation lookup (last write wins on a duplicate marker). */
 export function citationsByMarker(citations: Citation[]): Map<string, Citation> {
   const m = new Map<string, Citation>()

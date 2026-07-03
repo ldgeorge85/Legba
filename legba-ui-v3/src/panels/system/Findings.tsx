@@ -1,48 +1,50 @@
 /**
- * Live Feed (`system.findings`) — the single unified feed (#90 feed merge).
+ * Live Feed (`system.findings`) — the unified, reformed feed (S7-T4).
  *
- * ONE feed of findings AND signals. Reads `GET /api/v1/findings` and
- * `GET /api/v1/signals` (substrate-reads endpoint family) and folds in two NATS
- * live tails (`analyst.*.finding` + `legba.signals.>`). The former separate
- * "pulse" rail (v4.feed) and "browse" workbench are collapsed into orthogonal
- * controls on this one panel:
+ * ONE feed component, driven by TanStack Table (sorting / row model) + TanStack
+ * Virtual (windowing) instead of the ≥10 bespoke lists it replaces, with a
+ * single typed-facet FilterBar and HARD stream separation:
  *
- *  - **Live** (on/off button) — the only "mode" control. Live-ON tails new
- *    findings+signals in realtime (the pulse); Live-OFF tears down both WS subs,
- *    clears the live buffers, and leaves a stable, paginated read (the browse).
- *  - **Source** (All / Findings / Signals) — gates which REST seed AND which
- *    live tail are active at the DATA layer (Findings pays zero cost for signals
- *    and vice-versa; at most two subscriptions, same as the old pulse rail).
- *  - **Cluster** (clustered ⇄ flat) — situation clustering, FINDINGS-ONLY:
- *    near-dup re-assessments of one situation collapse to the latest, with the
- *    superseded history one click away. Signals are atomic events and never
- *    cluster (enforced by the `clusterKeyOf` source guard in findingsViews);
- *    they render flat below the finding clusters (Cluster ON) or interleaved by
- *    recency (Cluster OFF).
+ *  - **Two hard-separated streams.** Intelligence (analyst findings — the
+ *    finished product, DEFAULT) and Signals (raw intake) NEVER interleave; a
+ *    stream toggle switches between them and only the active stream fetches +
+ *    tails. This is the S7-T4 fix for the old `source=all` mode that mixed raw
+ *    signals into finished compositions.
+ *  - **One FilterBar** (`FeedFilterBar`) — typed `key:value` chips
+ *    (severity/verified/confidence/country/kind/analyst/last) + free text, with
+ *    verification as a FIRST-CLASS facet on the ICD-203 verdict vocabulary. The
+ *    whole filter + stream + sort serialize to a saved view AND to the `#view=`
+ *    URL hash (addressable, no router).
+ *  - **Review-first + live-tail with pause-on-scroll.** The stable paginated
+ *    read is primary; the live tail is a toggle. Scrolling DOWN pauses the live
+ *    prepend (so a read isn't yanked) and buffers new rows behind a "N new"
+ *    banner; scrolling back to the top — or clicking the banner — resumes.
+ *  - **Latest-per-situation.** Superseded near-dups are hidden by default
+ *    (P-FS supersession index); a toggle reveals them. Signals are atomic and
+ *    never cluster.
  *
- *  Plus: saved views, a findings-only hourly sparkline, server filters
- *  (target/analyst/severity) + client text/sort, and the keystone
- *  selection-follow (#89: click a country → its findings AND its geo signals).
- *
- * All grouping / sorting / view / row-mapping logic lives in
- * `@/lib/findingsViews` so it is unit-tested without a DOM. Row click drives the
- * shared selection store (opens the Inspector).
+ * The pure logic lives in `@/lib/feedFilters` (filter model, verdict, view
+ * serialization) and `@/lib/findingsViews` (row mapping, supersession, live-tail
+ * envelopes) so it is unit-tested without a DOM. Row click drives the shared
+ * selection store (opens the Inspector).
  */
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import { ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react'
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+} from '@tanstack/react-table'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { ArrowDownToLine, EyeOff, Eye } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
+import { VerdictBadge } from '@/components/VerdictBadge'
 import CitedProse from '@/components/CitedProse'
+import { FeedFilterBar } from '@/components/FeedFilterBar'
 import { extractCitations } from '@/lib/citationsModel'
 import type { Severity } from '@/v4/world/types'
 import { apiGet } from '@/lib/api'
@@ -52,34 +54,41 @@ import { useBatchedTail } from '@/lib/liveTail'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
 import {
-  DEFAULT_FILTER,
   FINDINGS_TAIL_FILTER,
   SIGNALS_TAIL_FILTER,
   buildSupersessionIndex,
-  clusterBySituation,
-  loadSavedViews,
   mapTailEnvelope,
-  persistSavedViews,
   relativeTime,
-  removeView,
   rowDedupKey,
+  severityRank,
   signalRestToRow,
   signalTailToRow,
-  sortFindings,
-  upsertView,
-  type FindingsCluster,
-  type FindingsFilter,
-  type SavedView,
+  surfacedConfidence,
   type SignalRestRow,
-  type SortMode,
   type UnifiedRow,
 } from '@/lib/findingsViews'
+import {
+  DEFAULT_VIEW,
+  deriveRowVerdict,
+  loadFeedViews,
+  matchesFilter,
+  parseFilterInput,
+  persistFeedViews,
+  readViewHash,
+  removeFeedView,
+  serializeFilter,
+  upsertFeedView,
+  writeViewHash,
+  type FeedSavedView,
+  type FeedSort,
+  type FeedStream,
+  type ParsedFilter,
+} from '@/lib/feedFilters'
 
 /** A REST `/findings` row — every UnifiedRow field except the `source` stamp. */
 interface FindingRestRow extends Omit<UnifiedRow, 'source'> {
   data?: Record<string, unknown> | null
 }
-
 interface FindingsResponse {
   data: FindingRestRow[]
   next_cursor: string | null
@@ -89,16 +98,21 @@ interface SignalsResponse {
   next_cursor: string | null
 }
 
-type SourceFilter = 'all' | 'findings' | 'signals'
+/** One materialized feed row + its derived reading fields (computed once, reused
+ *  by the filter, the sort, the VerdictBadge and the cited preview). */
+interface RowItem {
+  row: UnifiedRow
+  citations: ReturnType<typeof extractCitations>
+  verdict: ReturnType<typeof deriveRowVerdict>
+}
 
-const SEVERITY_OPTIONS = ['all', 'low', 'medium', 'high', 'critical'] as const
+/** Scrolling past this many px from the top pauses the live prepend. */
+const SCROLL_PAUSE_PX = 24
+/** Above this row count we virtualize; below it a plain list is cheaper (and
+ *  keeps small feeds — and jsdom component tests — rendering every row). */
+const VIRTUALIZE_THRESHOLD = 40
 
-/**
- * The left at-a-glance severity rail colour (the old numbered feed's key scan
- * channel): critical=red, high=amber, medium=yellow, low/none=slate. Returns a
- * `border-l` colour class applied to the 3px rail on every FeedCard. Signals
- * carry no severity → slate.
- */
+/** The left severity rail colour (the at-a-glance scan channel). */
 function severityRailClass(severity: string | null | undefined): string {
   switch (severity) {
     case 'critical':
@@ -110,119 +124,125 @@ function severityRailClass(severity: string | null | undefined): string {
     case 'low':
       return 'border-l-accent-ok'
     default:
-      return 'border-l-slate-700'
+      return 'border-l-line'
   }
 }
 
-/** Stamp a REST findings row as a unified finding row. */
 function stampFinding(r: FindingRestRow): UnifiedRow {
   return { ...r, source: 'finding' }
 }
 
+/** Prepend-dedupe a live row into a buffer, capped. */
+function prependDedup(prev: UnifiedRow[], row: UnifiedRow, cap = 300): UnifiedRow[] {
+  if (prev.some((r) => rowDedupKey(r) === rowDedupKey(row))) return prev
+  return [row, ...prev].slice(0, cap)
+}
+
 export default function FindingsFeedPanel({ registration }: PanelProps) {
   const qc = useQueryClient()
-  const [filter, setFilter] = useState<FindingsFilter>(DEFAULT_FILTER)
-  // #90 feed merge — the two orthogonal controls that replaced the Pulse/Browse
-  // tabs: `source` gates which kinds stream; `live` gates whether the tails run.
-  const [source, setSource] = useState<SourceFilter>('all')
+
+  // ---- view state (stream · sort · filter), hydrated from #view= once ----
+  const initialView = useMemo(() => readViewHash() ?? DEFAULT_VIEW, [])
+  const [stream, setStream] = useState<FeedStream>(initialView.stream)
+  const [sort, setSort] = useState<FeedSort>(initialView.sort)
+  const [filter, setFilter] = useState<ParsedFilter>(() => parseFilterInput(initialView.query))
+  const [hideSuperseded, setHideSuperseded] = useState(true)
   const [live, setLive] = useState(true)
+  const [views, setViews] = useState<FeedSavedView[]>(() => loadFeedViews())
 
-  // KEYSTONE (#89): the feed FOLLOWS the global selection so "click a country →
-  // see exactly what its country_assessor recorded (+ its geo signals)" works.
-  // One-way only (selection → filter); the manual inputs stay editable.
-  const selection = useSelection((s) => s.selection)
+  // Serialize stream+sort+filter back into the #view= hash on every change.
   useEffect(() => {
-    if (selection?.kind === 'target') {
-      setFilter((f) => (f.target_id === selection.id ? f : { ...f, target_id: selection.id }))
-    } else if (selection?.kind === 'analyst') {
-      setFilter((f) => (f.analyst_id === selection.id ? f : { ...f, analyst_id: selection.id }))
-    }
-  }, [selection?.kind, selection?.id])
+    writeViewHash({ stream, sort, query: serializeFilter(filter) })
+  }, [stream, sort, filter])
 
-  // Findings page + load-more + live tail buffers.
-  const [appended, setAppended] = useState<FindingRestRow[]>([])
-  const [liveFindings, setLiveFindings] = useState<UnifiedRow[]>([])
+  // KEYSTONE (#89): the feed follows the global target selection so "click a
+  // country → see its findings (+ its geo signals)" works. One-way (selection →
+  // server target filter); the FilterBar chips stay independently editable.
+  const selection = useSelection((s) => s.selection)
+  const serverTargetId = selection?.kind === 'target' ? selection.id : ''
+
+  // ---- REST paging + live buffers (per active stream) ----
+  const [appended, setAppended] = useState<UnifiedRow[]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
-  // Signals page + load-more + live tail buffers.
-  const [signalsAppended, setSignalsAppended] = useState<SignalRestRow[]>([])
-  const [liveSignals, setLiveSignals] = useState<UnifiedRow[]>([])
-  const [signalsCursor, setSignalsCursor] = useState<string | null>(null)
+  const [liveShown, setLiveShown] = useState<UnifiedRow[]>([])
+  const [pending, setPending] = useState<UnifiedRow[]>([])
 
-  const [groupBySituation, setGroupBySituation] = useState(true)
-  const [textFilter, setTextFilter] = useState('')
-  const [views, setViews] = useState<SavedView[]>(() => loadSavedViews())
-  // Advanced filters / saved-views are tucked behind a disclosure so the list
-  // reclaims the vertical room the old multi-row filter bar + tall sparkline
-  // ate. The primary controls (source, search, live) stay always-visible.
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  // Pause-on-scroll: manual pause OR scrolled away from the top holds the tail.
+  const [manualPaused, setManualPaused] = useState(false)
+  const [scrolledAway, setScrolledAway] = useState(false)
+  const isPaused = manualPaused || scrolledAway
+  const isPausedRef = useRef(isPaused)
+  isPausedRef.current = isPaused
 
-  // Live OFF clears the live buffers so a paused feed never shows stale
-  // `live`-badged rows; the REST seed + 30s poll is the stable surface.
+  // Reset paging + live buffers whenever the stream or the server target flips.
+  useEffect(() => {
+    setAppended([])
+    setNextCursor(null)
+    setLiveShown([])
+    setPending([])
+  }, [stream, serverTargetId])
+
+  // Live OFF clears the live buffers (a paused feed never shows stale live rows).
   useEffect(() => {
     if (!live) {
-      setLiveFindings([])
-      setLiveSignals([])
+      setLiveShown([])
+      setPending([])
     }
   }, [live])
 
-  // ---- Findings REST query (gated off when source = Signals) ----
-  const findingParams = useMemo(() => {
+  // When we un-pause (scrolled back to top, tail on), drain the buffer in.
+  useEffect(() => {
+    if (!isPaused && pending.length > 0) {
+      setLiveShown((prev) => {
+        let next = prev
+        for (const r of [...pending].reverse()) next = prependDedup(next, r)
+        return next
+      })
+      setPending([])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPaused])
+
+  // ---- REST queries — only the ACTIVE stream fetches (hard separation) ----
+  const findingsParams = useMemo(() => {
     const p = new URLSearchParams({ limit: '50' })
-    if (filter.target_id) p.set('target_id', filter.target_id)
-    if (filter.analyst_id) p.set('analyst_id', filter.analyst_id)
-    if (filter.severity !== 'all') p.set('severity', filter.severity)
+    if (serverTargetId) p.set('target_id', serverTargetId)
+    const sev = filter.chips.find((c) => c.key === 'severity')?.value
+    if (sev) p.set('severity', sev) // exact-match facet — safe to push server-side
     return p
-  }, [filter.target_id, filter.analyst_id, filter.severity])
+  }, [serverTargetId, filter.chips])
 
   const findingsQ = useQuery<FindingsResponse>({
-    queryKey: ['findings-feed', findingParams.toString()],
-    enabled: source !== 'signals',
+    queryKey: ['feed-findings', findingsParams.toString()],
+    enabled: stream === 'intelligence',
     queryFn: async () => {
-      const r = await apiGet<FindingsResponse>(`/findings?${findingParams.toString()}`)
-      // NB: do NOT clear the live buffer here — queryFn is re-run by the 30s
-      // refetchInterval, and wiping liveFindings/liveSignals on a background
-      // poll permanently drops id-less ephemeral live signals. Live buffers are
-      // cleared only on a real filter change / Live-off / manual refresh below.
+      const r = await apiGet<FindingsResponse>(`/findings?${findingsParams.toString()}`)
       setAppended([])
       setNextCursor(r.next_cursor ?? null)
-      return r
-    },
-    refetchInterval: 30_000, // poll backstop; live-tail handles real-time
-  })
-
-  // ---- Signals REST query (gated off when source = Findings) ----
-  // Signals are target-agnostic + carry no analyst_id/severity; only target_id
-  // (resolved server-side to scope.geo) applies.
-  const signalParams = useMemo(() => {
-    const p = new URLSearchParams({ limit: '50' })
-    if (filter.target_id) p.set('target_id', filter.target_id)
-    return p
-  }, [filter.target_id])
-
-  const signalsQ = useQuery<SignalsResponse>({
-    queryKey: ['signals-feed', signalParams.toString()],
-    enabled: source !== 'findings',
-    queryFn: async () => {
-      const r = await apiGet<SignalsResponse>(`/signals?${signalParams.toString()}`)
-      // (see findings queryFn) — never clear liveSignals on the 30s poll.
-      setSignalsAppended([])
-      setSignalsCursor(r.next_cursor ?? null)
       return r
     },
     refetchInterval: 30_000,
   })
 
-  // Clear the live buffers when the FILTER actually changes (params are memoized,
-  // so these fire only on a real filter change — never on the 30s poll). Stops
-  // stale-filter live rows lingering without the poll-wipes-live data loss.
-  useEffect(() => {
-    setLiveFindings([])
-  }, [findingParams])
-  useEffect(() => {
-    setLiveSignals([])
-  }, [signalParams])
+  const signalsParams = useMemo(() => {
+    const p = new URLSearchParams({ limit: '50' })
+    if (serverTargetId) p.set('target_id', serverTargetId)
+    return p
+  }, [serverTargetId])
 
-  // -------- NATS live tails (both gated by the single Live button + Source) --------
+  const signalsQ = useQuery<SignalsResponse>({
+    queryKey: ['feed-signals', signalsParams.toString()],
+    enabled: stream === 'signals',
+    queryFn: async () => {
+      const r = await apiGet<SignalsResponse>(`/signals?${signalsParams.toString()}`)
+      setAppended([])
+      setNextCursor(r.next_cursor ?? null)
+      return r
+    },
+    refetchInterval: 30_000,
+  })
+
+  // -------- live tails (only the active stream tails) --------
   const filterRef = useRef(filter)
   filterRef.current = filter
   const findingsTail = useLiveTail(
@@ -231,154 +251,136 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
       if (ev.type !== 'event') return
       const row = mapTailEnvelope(ev.payload)
       if (!row) return
-      const f = filterRef.current
-      if (f.target_id && row.target_id !== f.target_id) return
-      if (f.analyst_id && row.analyst_id !== f.analyst_id) return
-      if (f.severity !== 'all' && row.severity !== f.severity) return
-      setLiveFindings((prev) => {
-        if (prev.some((r) => r.id === row.id)) return prev
-        return [row, ...prev].slice(0, 200)
-      })
+      // Respect the active facets on the tail so a paused-and-resumed feed stays
+      // consistent with the filter (verdict recomputed per row).
+      const cites = row.data ? extractCitations(row.data) : []
+      if (!matchesFilter(row, deriveRowVerdict(row, cites.length), filterRef.current)) return
+      if (isPausedRef.current) setPending((prev) => prependDedup(prev, row))
+      else setLiveShown((prev) => prependDedup(prev, row))
     },
-    live && source !== 'signals',
+    live && stream === 'intelligence',
   )
   const signalsTail = useBatchedTail(
     SIGNALS_TAIL_FILTER,
     (events) => {
-      const f = filterRef.current
       const mapped = events
         .map(signalTailToRow)
         .filter((r): r is UnifiedRow => r !== null)
-        // signals respect only the target_id filter (no analyst/severity on signals)
-        .filter((r) => !f.target_id || r.target_id === f.target_id)
+        .filter((r) => matchesFilter(r, deriveRowVerdict(r, 0), filterRef.current))
       if (mapped.length === 0) return
-      setLiveSignals((prev) => {
-        const have = new Set(prev.map(rowDedupKey))
-        const fresh = mapped.filter((r) => !have.has(rowDedupKey(r)))
-        if (fresh.length === 0) return prev
-        return [...fresh, ...prev].slice(0, 200)
-      })
+      if (isPausedRef.current) setPending((prev) => mapped.reduce((acc, r) => prependDedup(acc, r), prev))
+      else setLiveShown((prev) => mapped.reduce((acc, r) => prependDedup(acc, r), prev))
     },
-    { intervalMs: 5000, enabled: live && source !== 'findings' },
+    { intervalMs: 5000, enabled: live && stream === 'signals' },
   )
-  const connected = findingsTail.connected || signalsTail.connected
+  const connected = stream === 'signals' ? signalsTail.connected : findingsTail.connected
 
-  // ---- Merge → dedup → source-filter → text-filter → sort ----
-  const rows = useMemo(() => {
-    const findingsPage = source !== 'signals' ? (findingsQ.data?.data ?? []).map(stampFinding) : []
-    const findingsAppendedRows = source !== 'signals' ? appended.map(stampFinding) : []
-    const signalsPage = source !== 'findings' ? (signalsQ.data?.data ?? []).map(signalRestToRow) : []
-    const signalsAppendedRows =
-      source !== 'findings' ? signalsAppended.map(signalRestToRow) : []
+  // ---- merge → dedup → filter → supersession-hide ----
+  const restRows = useMemo<UnifiedRow[]>(() => {
+    if (stream === 'intelligence') return (findingsQ.data?.data ?? []).map(stampFinding)
+    return (signalsQ.data?.data ?? []).map(signalRestToRow)
+  }, [stream, findingsQ.data, signalsQ.data])
 
+  const { rows, supersededHidden } = useMemo<{ rows: RowItem[]; supersededHidden: number }>(() => {
+    const now = Date.now()
     const seen = new Set<string>()
     const merged: UnifiedRow[] = []
-    for (const r of [
-      ...liveSignals,
-      ...liveFindings,
-      ...findingsPage,
-      ...signalsPage,
-      ...findingsAppendedRows,
-      ...signalsAppendedRows,
-    ]) {
-      // Belt-and-suspenders: a disabled query can hold stale data + the live
-      // buffers may outlive a Source flip, so re-assert the Source filter here.
-      if (source === 'findings' && r.source !== 'finding') continue
-      if (source === 'signals' && r.source !== 'signal') continue
+    for (const r of [...liveShown, ...restRows, ...appended]) {
+      // Belt-and-suspenders: the buffers can outlive a stream flip.
+      if (stream === 'intelligence' && r.source !== 'finding') continue
+      if (stream === 'signals' && r.source !== 'signal') continue
       const k = rowDedupKey(r)
       if (seen.has(k)) continue
       seen.add(k)
       merged.push(r)
     }
-    const q = textFilter.trim().toLowerCase()
-    const filtered = q
-      ? merged.filter((r) =>
-          [r.title, r.body, r.target_id, r.analyst_id, r.source_id]
-            .filter((v): v is string => typeof v === 'string')
-            .some((v) => v.toLowerCase().includes(q)),
-        )
-      : merged
-    return sortFindings(filtered, filter.sort)
-  }, [
-    findingsQ.data,
-    signalsQ.data,
-    appended,
-    signalsAppended,
-    liveFindings,
-    liveSignals,
-    source,
-    filter.sort,
-    textFilter,
-  ])
+    // Verdict + citation count once per row (reused by filter + the badge).
+    const withVerdict: RowItem[] = merged.map((r) => {
+      const citations = r.source === 'finding' && r.data ? extractCitations(r.data) : []
+      return { row: r, citations, verdict: deriveRowVerdict(r, citations.length) }
+    })
+    const filtered = withVerdict.filter((x) => matchesFilter(x.row, x.verdict, filter, now))
 
-  const findingRows = useMemo(() => rows.filter((r) => r.source === 'finding'), [rows])
-  const signalRows = useMemo(() => rows.filter((r) => r.source === 'signal'), [rows])
-
-  // Situation clustering (P-FS) — findings only. Cluster ON groups the findings
-  // and renders signals as a flat block after; Cluster OFF passes the whole
-  // merged list to a single flat pseudo-cluster (signals interleave by sort).
-  const supersessionIndex = useMemo(() => buildSupersessionIndex(findingRows), [findingRows])
-  const clusters = useMemo(
-    () =>
-      groupBySituation
-        ? clusterBySituation(findingRows, true, supersessionIndex)
-        : clusterBySituation(rows, false),
-    [rows, findingRows, groupBySituation, supersessionIndex],
-  )
-  const clustered = clusters.some((c) => !c.flat)
-  const collapsed = useMemo(
-    () => clusters.reduce((n, c) => n + (c.history?.length ?? 0), 0),
-    [clusters],
-  )
-
-  /** Volume sparkline: FINDINGS per hour over the last 24h (signals run ~100×
-   *  findings volume and would swamp the rhythm). */
-  const hourly = useMemo(() => {
-    const now = Date.now()
-    const buckets: Array<{ hour: number; label: string; count: number }> = []
-    for (let i = 23; i >= 0; i--) {
-      const start = new Date(now - i * 3600_000)
-      start.setMinutes(0, 0, 0)
-      buckets.push({
-        hour: start.getTime(),
-        label: `${start.getHours().toString().padStart(2, '0')}:00`,
-        count: 0,
+    // Latest-per-situation: drop superseded finding ids (P-FS index) unless the
+    // reveal toggle is off. Signals never carry supersession.
+    let hidden = 0
+    let visible = filtered
+    if (hideSuperseded && stream === 'intelligence') {
+      const idx = buildSupersessionIndex(filtered.map((x) => x.row))
+      visible = filtered.filter((x) => {
+        if (idx.superseded.has(x.row.id)) {
+          hidden += 1
+          return false
+        }
+        return true
       })
     }
-    const cutoff = now - 24 * 3600_000
-    for (const r of findingRows) {
-      const t = Date.parse(r.produced_at)
-      if (!Number.isFinite(t) || t < cutoff) continue
-      const idx = 23 - Math.floor((now - t) / 3600_000)
-      if (idx >= 0 && idx < buckets.length) buckets[idx].count += 1
-    }
-    return buckets
-  }, [findingRows])
+    return { rows: visible, supersededHidden: hidden }
+  }, [restRows, appended, liveShown, stream, filter, hideSuperseded])
 
-  const hasMore =
-    (!!nextCursor && source !== 'signals') || (!!signalsCursor && source !== 'findings')
+  // ---- TanStack Table (sorting + row model) ----
+  const columns = useMemo<ColumnDef<RowItem>[]>(
+    () => [
+      { id: 'produced_at', accessorFn: (x) => Date.parse(x.row.produced_at) || 0 },
+      { id: 'severity', accessorFn: (x) => severityRank(x.row.severity) },
+      { id: 'confidence', accessorFn: (x) => surfacedConfidence(x.row) ?? -1 },
+    ],
+    [],
+  )
+  const sorting: SortingState = useMemo(() => {
+    if (sort === 'severity') return [{ id: 'severity', desc: true }, { id: 'produced_at', desc: true }]
+    if (sort === 'confidence') return [{ id: 'confidence', desc: true }, { id: 'produced_at', desc: true }]
+    return [{ id: 'produced_at', desc: true }]
+  }, [sort])
 
+  const table = useReactTable({
+    data: rows,
+    columns,
+    state: { sorting },
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getRowId: (x) => rowDedupKey(x.row),
+  })
+  const sortedRows = table.getRowModel().rows
+
+  // ---- virtualization ----
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualize = sortedRows.length > VIRTUALIZE_THRESHOLD
+  const virtualizer = useVirtualizer({
+    count: sortedRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 70,
+    overscan: 10,
+  })
+
+  function onScroll(e: UIEvent<HTMLDivElement>) {
+    setScrolledAway(e.currentTarget.scrollTop > SCROLL_PAUSE_PX)
+  }
+  function resumeLive() {
+    setManualPaused(false)
+    if (parentRef.current) parentRef.current.scrollTop = 0
+    setScrolledAway(false)
+  }
+
+  // ---- load more ----
+  const hasMore = !!nextCursor
   async function loadMore() {
-    if (nextCursor && source !== 'signals') {
-      const p = new URLSearchParams(findingParams)
-      p.set('cursor', nextCursor)
+    if (!nextCursor) return
+    const params = stream === 'intelligence' ? findingsParams : signalsParams
+    const p = new URLSearchParams(params)
+    p.set('cursor', nextCursor)
+    if (stream === 'intelligence') {
       const next = await apiGet<FindingsResponse>(`/findings?${p.toString()}`)
-      setAppended((prev) => [...prev, ...next.data])
+      setAppended((prev) => [...prev, ...next.data.map(stampFinding)])
       setNextCursor(next.next_cursor ?? null)
-    }
-    if (signalsCursor && source !== 'findings') {
-      const p = new URLSearchParams(signalParams)
-      p.set('cursor', signalsCursor)
+    } else {
       const next = await apiGet<SignalsResponse>(`/signals?${p.toString()}`)
-      setSignalsAppended((prev) => [...prev, ...next.data])
-      setSignalsCursor(next.next_cursor ?? null)
+      setAppended((prev) => [...prev, ...next.data.map(signalRestToRow)])
+      setNextCursor(next.next_cursor ?? null)
     }
   }
 
   function openRow(row: UnifiedRow) {
-    // #4 optimistic inspector — hand the Inspector the prose we ALREADY have so
-    // it paints the report in <300ms instead of waiting ~9s on the lineage
-    // chain. The full detail (citations, provenance, refs) hydrates behind it.
     const preview =
       row.source === 'finding' && row.body
         ? {
@@ -390,399 +392,226 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
           }
         : undefined
     selectRow(row.source === 'signal' ? 'signal' : 'finding', row.id, row.title ?? undefined, {
-      origin: 'findings',
+      origin: 'feed',
       preview,
     })
   }
 
-  // Situation-level provenance deep-link (findings clusters only).
-  function openSituationLineage(cluster: FindingsCluster<UnifiedRow>) {
-    if (cluster.situation_id.startsWith('sit:')) {
-      const sid = cluster.situation_id.slice(4)
-      selectRow('situation', sid, `situation ${sid}`, { origin: 'findings' })
-    } else if (cluster.latest) {
-      openRow(cluster.latest)
-    }
-  }
-
-  // -------- saved views --------
+  // ---- saved views ----
   function saveCurrentView() {
     const name = window.prompt('Save view as:')?.trim()
     if (!name) return
-    const next = upsertView(views, { ...filter, name })
+    const next = upsertFeedView(views, { name, stream, sort, query: serializeFilter(filter) })
     setViews(next)
-    persistSavedViews(next)
+    persistFeedViews(next)
   }
-  function applyView(name: string) {
-    const v = views.find((x) => x.name === name)
-    if (!v) return
-    setFilter({
-      target_id: v.target_id,
-      analyst_id: v.analyst_id,
-      severity: v.severity,
-      sort: v.sort,
-    })
+  function applyView(v: FeedSavedView) {
+    setStream(v.stream)
+    setSort(v.sort)
+    setFilter(parseFilterInput(v.query))
   }
   function deleteView(name: string) {
-    const next = removeView(views, name)
+    const next = removeFeedView(views, name)
     setViews(next)
-    persistSavedViews(next)
+    persistFeedViews(next)
   }
 
-  const isLoading =
-    (source !== 'signals' && findingsQ.isLoading) ||
-    (source !== 'findings' && signalsQ.isLoading)
-  const isFetching = findingsQ.isFetching || signalsQ.isFetching
+  const isLoading = stream === 'intelligence' ? findingsQ.isLoading : signalsQ.isLoading
+  const isFetching = stream === 'intelligence' ? findingsQ.isFetching : signalsQ.isFetching
   const error =
     (findingsQ.error instanceof Error ? findingsQ.error : null) ||
     (signalsQ.error instanceof Error ? signalsQ.error : null)
-  const liveCount = liveFindings.length + liveSignals.length
-  const sevDisabled = source === 'signals'
+  const pendingCount = pending.length
 
   return (
     <PanelChrome
       registration={registration}
-      subtitle={`${findingRows.length} findings${
-        signalRows.length ? ` · ${signalRows.length} signals` : ''
-      }${hasMore ? ' · more' : ''}${liveCount ? ` · ${liveCount} live` : ''}${
-        clustered && collapsed ? ` · ${collapsed} superseded collapsed` : ''
+      subtitle={`${sortedRows.length} ${stream === 'signals' ? 'signals' : 'findings'}${
+        hasMore ? ' · more' : ''
+      }${supersededHidden ? ` · ${supersededHidden} superseded hidden` : ''}${
+        liveShown.length ? ` · ${liveShown.length} live` : ''
       }`}
       actions={
-        <button
-          onClick={() => setLive((v) => !v)}
-          className={`text-label px-2 py-0.5 rounded border ${
-            live
-              ? connected
-                ? 'border-accent-ok text-accent-ok'
-                : 'border-amber-700 text-amber-400'
-              : 'border-slate-700 text-slate-500'
-          }`}
-          title={
-            live
-              ? connected
-                ? 'Live tail connected — click to pause (stable read)'
-                : 'Live tail connecting…'
-              : 'Live tail off — click to resume realtime'
-          }
-          data-testid="findings-tail-toggle"
-        >
-          {live ? (connected ? '● live' : '● connecting') : '○ live off'}
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* stream toggle — HARD separation: findings never mix with signals */}
+          <div
+            className="inline-flex overflow-hidden rounded border border-line text-label"
+            role="group"
+            aria-label="feed stream"
+            data-testid="feed-stream-toggle"
+          >
+            <button
+              className={`px-2 py-0.5 ${stream === 'intelligence' ? 'bg-surf-3 text-ink-1' : 'text-ink-3 hover:text-ink-1'}`}
+              onClick={() => setStream('intelligence')}
+              data-testid="feed-stream-intelligence"
+              title="Finished intelligence — analyst findings & compositions (default)"
+            >
+              intelligence
+            </button>
+            <button
+              className={`border-l border-line px-2 py-0.5 ${stream === 'signals' ? 'bg-surf-3 text-ink-1' : 'text-ink-3 hover:text-ink-1'}`}
+              onClick={() => setStream('signals')}
+              data-testid="feed-stream-signals"
+              title="Raw intake — signals, never interleaved with finished intelligence"
+            >
+              signals
+            </button>
+          </div>
+          <select
+            className="rounded border border-line bg-surf-2 px-1 py-0.5 text-label text-ink-2"
+            value={sort}
+            onChange={(e) => setSort(e.target.value as FeedSort)}
+            data-testid="feed-sort"
+            title="sort order"
+          >
+            <option value="recency">recency</option>
+            <option value="severity">severity</option>
+            <option value="confidence">confidence</option>
+          </select>
+          <button
+            onClick={() => setLive((v) => !v)}
+            className={`rounded border px-2 py-0.5 text-label ${
+              live
+                ? connected
+                  ? 'border-accent-ok text-accent-ok'
+                  : 'border-accent-warning text-accent-warning'
+                : 'border-line text-ink-3'
+            }`}
+            title={
+              live
+                ? connected
+                  ? 'Live tail connected — click to pause (stable read)'
+                  : 'Live tail connecting…'
+                : 'Live tail off — click to resume realtime'
+            }
+            data-testid="feed-live-toggle"
+          >
+            {live ? (connected ? '● live' : '● connecting') : '○ live off'}
+          </button>
+        </div>
       }
       onRefresh={() => {
         setAppended([])
-        setSignalsAppended([])
-        setLiveFindings([])
-        setLiveSignals([])
+        setLiveShown([])
+        setPending([])
         setNextCursor(null)
-        setSignalsCursor(null)
-        qc.invalidateQueries({ queryKey: ['findings-feed'] })
-        qc.invalidateQueries({ queryKey: ['signals-feed'] })
-        findingsQ.refetch()
-        signalsQ.refetch()
+        qc.invalidateQueries({ queryKey: ['feed-findings'] })
+        qc.invalidateQueries({ queryKey: ['feed-signals'] })
+        if (stream === 'intelligence') findingsQ.refetch()
+        else signalsQ.refetch()
       }}
     >
-      {/* Compact toolbar — the old tall sparkline + multi-row filter bar fold
-          into ONE thin row so the list gets the room. Primary controls (source,
-          search, clustered/flat, live) stay visible; everything else (sparkline,
-          target/analyst/severity/sort, saved views) tucks behind the disclosure. */}
-      <div className="flex items-center gap-2 mb-2 text-label flex-wrap">
-        {/* Source — gates which kinds stream (data-layer). */}
-        <div
-          className="inline-flex rounded border border-slate-700 overflow-hidden"
-          role="group"
-          aria-label="feed source"
-          data-testid="findings-source-toggle"
-        >
-          {(['all', 'findings', 'signals'] as const).map((s, i) => (
-            <button
-              key={s}
-              onClick={() => setSource(s)}
-              className={`px-2 py-0.5 ${i > 0 ? 'border-l border-slate-700' : ''} ${
-                source === s ? 'bg-surface-300 text-slate-200' : 'text-slate-500 hover:text-slate-300'
-              }`}
-              data-testid={`findings-source-${s}`}
-              title={
-                s === 'all'
-                  ? 'findings + signals'
-                  : s === 'findings'
-                    ? 'analyst findings only'
-                    : 'raw signals only'
-              }
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-        <input
-          className="flex-1 min-w-[140px] bg-surface-200 border border-slate-700 rounded p-1 px-2"
-          placeholder="search title/body/source…"
-          value={textFilter}
-          onChange={(e) => setTextFilter(e.target.value)}
-          data-testid="findings-text-filter"
-        />
-        {/* flat ⇄ clustered toggle — findings-only; "latest per situation" default */}
-        <div
-          className="inline-flex rounded border border-slate-700 overflow-hidden"
-          role="group"
-          aria-label="findings grouping"
-        >
+      <FeedFilterBar
+        parsed={filter}
+        onChange={setFilter}
+        views={views}
+        onApplyView={applyView}
+        onSaveView={saveCurrentView}
+        onDeleteView={deleteView}
+        severityDisabled={stream === 'signals'}
+      />
+
+      {/* secondary controls: supersession reveal + fetching hint */}
+      <div className="mb-1 flex items-center gap-2 text-label text-ink-3">
+        {stream === 'intelligence' && (
           <button
-            className={`px-1.5 py-0.5 ${
-              groupBySituation ? 'bg-surface-300 text-slate-200' : 'text-slate-500'
-            }`}
-            onClick={() => setGroupBySituation(true)}
-            data-testid="findings-mode-clustered"
-            title="Latest per situation — near-dup findings collapse under their situation"
+            className="inline-flex items-center gap-1 hover:text-ink-1"
+            onClick={() => setHideSuperseded((v) => !v)}
+            data-testid="feed-superseded-toggle"
+            title="Latest-per-situation: hide near-dup findings a newer run superseded"
           >
-            clustered
+            {hideSuperseded ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+            {hideSuperseded ? 'latest per situation' : 'showing superseded'}
           </button>
-          <button
-            className={`px-1.5 py-0.5 border-l border-slate-700 ${
-              !groupBySituation ? 'bg-surface-300 text-slate-200' : 'text-slate-500'
-            }`}
-            onClick={() => setGroupBySituation(false)}
-            data-testid="findings-mode-flat"
-            title="Flat — every row, no situation grouping"
-          >
-            flat
-          </button>
-        </div>
-        {/* keep the canonical checkbox toggle (test + a11y) — visually hidden, still wired */}
+        )}
+        {/* keep a checkbox mirror for a11y/tests */}
         <label className="sr-only">
           <input
             type="checkbox"
-            checked={groupBySituation}
-            onChange={(e) => setGroupBySituation(e.target.checked)}
-            data-testid="findings-group-toggle"
+            checked={hideSuperseded}
+            onChange={(e) => setHideSuperseded(e.target.checked)}
+            data-testid="feed-superseded-checkbox"
           />
           latest per situation
         </label>
-        {/* advanced-filters disclosure — sparkline, target/analyst/severity/sort, saved views */}
+        {isFetching && <span>loading…</span>}
+      </div>
+
+      {/* pause-on-scroll banner — buffered live rows waiting behind a scroll */}
+      {live && pendingCount > 0 && (
         <button
-          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${
-            showAdvanced
-              ? 'border-slate-600 text-slate-200 bg-surface-300'
-              : 'border-slate-700 text-slate-400 hover:text-slate-200'
-          }`}
-          onClick={() => setShowAdvanced((v) => !v)}
-          data-testid="findings-advanced-toggle"
-          aria-expanded={showAdvanced}
-          title="advanced filters, sort & saved views"
+          onClick={resumeLive}
+          className="mb-1 flex w-full items-center justify-center gap-1.5 rounded border border-accent-ok/50 bg-accent-ok/10 py-1 text-label text-accent-ok hover:bg-accent-ok/20"
+          data-testid="feed-resume-live"
         >
-          <SlidersHorizontal className="h-3 w-3" />
-          filters
-          {showAdvanced ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <ArrowDownToLine className="h-3 w-3" />
+          {pendingCount} new {stream === 'signals' ? 'signal' : 'finding'}
+          {pendingCount === 1 ? '' : 's'} — resume live
         </button>
-        {isFetching && <span className="text-slate-500">loading…</span>}
-      </div>
+      )}
 
-      {/* Always mounted (controls stay reachable + queryable) but visually
-          collapsed via `hidden` until the disclosure is opened — so the list
-          reclaims the room without losing a11y/test reach of the controls. */}
-      <div className={showAdvanced ? '' : 'hidden'}>
-        <div
-          className="mb-2 rounded border border-slate-800 bg-surf-2 p-2 space-y-2"
-          data-testid="findings-advanced"
-        >
-          {/* hourly volume sparkline (findings) — denser, inside the disclosure */}
-          <div className="h-[44px]" data-testid="findings-sparkline">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={hourly} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id="findings-spark" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#34d399" stopOpacity={0.6} />
-                    <stop offset="100%" stopColor="#34d399" stopOpacity={0.05} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="label" hide />
-                <YAxis hide allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{
-                    background: '#1e293b',
-                    border: '1px solid #334155',
-                    borderRadius: 4,
-                    fontSize: 11,
+      {isLoading && <div className="text-ink-3 text-body">loading feed…</div>}
+      {error && <div className="text-accent-critical text-body">error: {error.message}</div>}
+
+      <div
+        ref={parentRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-auto text-xs"
+        data-testid="feed-list"
+      >
+        {sortedRows.length === 0 && !isLoading ? (
+          <div className="py-4 text-center text-body text-ink-3">no items match the filter</div>
+        ) : virtualize ? (
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+            {virtualizer.getVirtualItems().map((vi) => {
+              const item = sortedRows[vi.index].original
+              return (
+                <div
+                  key={sortedRows[vi.index].id}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${vi.start}px)`,
+                    paddingBottom: 4,
                   }}
-                  labelStyle={{ color: '#cbd5e1' }}
-                  formatter={(value: unknown) => [String(value), 'findings']}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="count"
-                  stroke="#34d399"
-                  strokeWidth={1.5}
-                  fill="url(#findings-spark)"
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* target / analyst / severity / sort filters */}
-          <div className="flex items-center gap-2 text-xs flex-wrap">
-            <input
-              className="flex-1 min-w-[120px] bg-surface-200 border border-slate-700 rounded p-1 px-2"
-              placeholder="target_id filter…"
-              value={filter.target_id}
-              onChange={(e) => setFilter((f) => ({ ...f, target_id: e.target.value }))}
-              data-testid="findings-target-filter"
-            />
-            <input
-              className="flex-1 min-w-[120px] bg-surface-200 border border-slate-700 rounded p-1 px-2 disabled:opacity-40"
-              placeholder="analyst_id filter…"
-              value={filter.analyst_id}
-              disabled={sevDisabled}
-              title={sevDisabled ? 'signals carry no analyst' : undefined}
-              onChange={(e) => setFilter((f) => ({ ...f, analyst_id: e.target.value }))}
-              data-testid="findings-analyst-filter"
-            />
-            <select
-              className="bg-surface-200 border border-slate-700 rounded p-1 px-2 disabled:opacity-40"
-              value={filter.severity}
-              disabled={sevDisabled}
-              title={sevDisabled ? 'signals carry no severity' : undefined}
-              onChange={(e) => setFilter((f) => ({ ...f, severity: e.target.value }))}
-              data-testid="findings-severity-filter"
-            >
-              {SEVERITY_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  severity: {s}
-                </option>
-              ))}
-            </select>
-            <select
-              className="bg-surface-200 border border-slate-700 rounded p-1 px-2"
-              value={filter.sort}
-              onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value as SortMode }))}
-              data-testid="findings-sort"
-            >
-              <option value="recency">sort: recency</option>
-              <option value="severity">sort: severity</option>
-            </select>
-          </div>
-
-          {/* saved views */}
-          <div className="flex items-center gap-2 text-label flex-wrap">
-            <span className="text-slate-500">views:</span>
-            {views.length === 0 && <span className="text-slate-600">none saved</span>}
-            {views.map((v) => (
-              <span
-                key={v.name}
-                className="inline-flex items-center gap-1 bg-surface-200 border border-slate-700 rounded px-1.5 py-0.5"
-                data-testid={`findings-view-${v.name}`}
-              >
-                <button
-                  className="text-slate-300 hover:text-slate-100"
-                  onClick={() => applyView(v.name)}
-                  data-testid={`findings-view-apply-${v.name}`}
                 >
-                  {v.name}
-                </button>
-                <button
-                  className="text-slate-600 hover:text-rose-400"
-                  onClick={() => deleteView(v.name)}
-                  title="delete view"
-                  data-testid={`findings-view-delete-${v.name}`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            <button
-              className="text-slate-400 hover:text-slate-200 underline"
-              onClick={saveCurrentView}
-              data-testid="findings-save-view"
-            >
-              + save view
-            </button>
-            {source === 'signals' && (
-              <span
-                className="text-slate-600 ml-auto"
-                title="Clustering groups findings; signals are atomic"
-              >
-                (clustering applies to findings)
-              </span>
-            )}
-            {source !== 'signals' && !clustered && groupBySituation && findingRows.length > 0 && (
-              <span
-                className="text-slate-600 ml-auto"
-                title="No situation-bearing findings on this page"
-              >
-                (flat — no clustering data)
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {isLoading && <div className="text-slate-500 text-sm">loading feed…</div>}
-      {error && <div className="text-rose-400 text-sm">error: {error.message}</div>}
-
-      <div className="flex-1 overflow-auto space-y-1 text-xs" data-testid="findings-list">
-        {(() => {
-          // Running 1-based index for the tight numbered feed (the old at-a-glance
-          // row number). Counts every rendered row top-to-bottom — flat rows, each
-          // cluster's canonical row, then the signals tail — so the numbers read
-          // as one continuous list regardless of clustering.
-          let rowNo = 0
-          return clusters.map((cluster) =>
-            cluster.flat ? (
-              <div
-                key={cluster.situation_id}
-                data-testid={`findings-cluster-${cluster.situation_id}`}
-                className="space-y-1"
-              >
-                {cluster.rows.map((row) => (
                   <FeedCard
-                    key={rowDedupKey(row)}
-                    row={row}
-                    index={++rowNo}
-                    onOpen={() => openRow(row)}
+                    row={item.row}
+                    citations={item.citations}
+                    verdict={item.verdict}
+                    index={vi.index + 1}
+                    onOpen={() => openRow(item.row)}
                   />
-                ))}
-              </div>
-            ) : (
-              <ClusterBlock
-                key={cluster.situation_id}
-                cluster={cluster}
-                index={++rowNo}
-                onOpenRow={openRow}
-                onOpenSituation={openSituationLineage}
-              />
-            ),
-          )
-        })()}
-
-        {/* signals flat block — only when clustering findings (Cluster ON);
-            when flat, signals already interleave in the single flat cluster. */}
-        {groupBySituation && signalRows.length > 0 && (
-          <div className="space-y-1" data-testid="findings-signals-flat">
-            <div className="text-label text-ink-3 uppercase tracking-wide pt-1">
-              signals ({signalRows.length})
-            </div>
-            {signalRows.map((row, i) => (
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {sortedRows.map((r, i) => (
               <FeedCard
-                key={rowDedupKey(row)}
-                row={row}
+                key={r.id}
+                row={r.original.row}
+                citations={r.original.citations}
+                verdict={r.original.verdict}
                 index={i + 1}
-                onOpen={() => openRow(row)}
+                onOpen={() => openRow(r.original.row)}
               />
             ))}
           </div>
-        )}
-
-        {rows.length === 0 && !isLoading && (
-          <div className="text-slate-500 text-sm py-4 text-center">no items match filters</div>
         )}
       </div>
 
       {hasMore && (
-        <div className="border-t border-slate-800 pt-2 mt-2">
+        <div className="mt-2 border-t border-line pt-2">
           <button
             onClick={loadMore}
-            className="w-full bg-surface-200 hover:bg-surface-300 border border-slate-700 rounded p-1 text-xs"
-            data-testid="findings-load-more"
+            className="w-full rounded border border-line bg-surf-2 p-1 text-xs hover:bg-surf-3"
+            data-testid="feed-load-more"
           >
             load more
           </button>
@@ -793,142 +622,40 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
 }
 
 /**
- * One situation cluster: the canonical/latest finding shown, with the
- * superseded near-dups collapsed under a per-cluster expander.
- */
-function ClusterBlock({
-  cluster,
-  index,
-  onOpenRow,
-  onOpenSituation,
-}: {
-  cluster: FindingsCluster<UnifiedRow>
-  index?: number
-  onOpenRow: (row: UnifiedRow) => void
-  onOpenSituation: (cluster: FindingsCluster<UnifiedRow>) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const history = cluster.history ?? []
-  const latest = cluster.latest ?? cluster.rows[0]
-  const explicit = cluster.situation_id.startsWith('sit:')
-  const label = explicit
-    ? cluster.situation_id.slice(4)
-    : cluster.situation_id.replace(/^sig:/, '')
-
-  // Lightened: a thin left accent (coloured by the canonical row's severity) +
-  // a compact one-line header — no nested bordered card (no boxes-in-boxes).
-  return (
-    <div
-      data-testid={`findings-cluster-${cluster.situation_id}`}
-      className={`border-l-2 ${severityRailClass(latest.severity)} pl-2`}
-    >
-      <div className="flex items-center gap-2 text-label pb-0.5">
-        <button
-          className="text-accent-info hover:text-blue-300 font-mono truncate max-w-[40%] text-left"
-          onClick={() => onOpenSituation(cluster)}
-          title="open situation provenance"
-          data-testid={`findings-cluster-header-${cluster.situation_id}`}
-        >
-          {explicit ? '◆' : '≈'} {label}
-        </button>
-        {cluster.confirmed ? (
-          <span
-            className="rounded px-1 bg-emerald-950 text-emerald-300"
-            title={`P-FS confirmed${cluster.score != null ? ` · score ${cluster.score.toFixed(2)}` : ''}${
-              cluster.reason ? ` · ${cluster.reason}` : ''
-            }`}
-            data-testid={`findings-cluster-confirmed-${cluster.situation_id}`}
-          >
-            superseded ✓
-          </span>
-        ) : (
-          <span
-            className="rounded px-1 bg-slate-800 text-slate-400"
-            title="grouped client-side by shared situation signature (P-FS summary not on this page)"
-          >
-            grouped
-          </span>
-        )}
-        <span className="text-slate-500 ml-auto">latest of {cluster.rows.length}</span>
-      </div>
-
-      <FeedCard row={latest} index={index} onOpen={() => onOpenRow(latest)} />
-
-      {history.length > 0 && (
-        <div className="pt-0.5">
-          <button
-            className="w-full text-left text-label text-ink-2 hover:text-ink-1 py-0.5"
-            onClick={() => setOpen((v) => !v)}
-            data-testid={`findings-cluster-history-toggle-${cluster.situation_id}`}
-            aria-expanded={open}
-          >
-            {open ? '▾' : '▸'} {history.length} superseded finding
-            {history.length === 1 ? '' : 's'} (history)
-          </button>
-          {open && (
-            <div
-              className="space-y-1 pl-3 border-l border-slate-800 mt-1 opacity-80"
-              data-testid={`findings-cluster-history-${cluster.situation_id}`}
-            >
-              {history.map((row) => (
-                <FeedCard key={rowDedupKey(row)} row={row} superseded onOpen={() => onOpenRow(row)} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * One feed row — a finding OR a signal. Branches on `row.source`: a signal is a
- * slim variant (SIGNAL tag, source + geo/tag chips, no analyst, confidence only
- * when present, no severity badge). A finding keeps the full card.
+ * One feed row — a finding OR a signal. A finding carries the full card + a
+ * muted VerdictBadge (ICD-203); a signal is the slim raw-intake variant.
  */
 function FeedCard({
   row,
+  citations,
+  verdict,
   index,
   onOpen,
-  superseded = false,
 }: {
   row: UnifiedRow
+  citations: ReturnType<typeof extractCitations>
+  verdict: ReturnType<typeof deriveRowVerdict>
   index?: number
   onOpen: () => void
-  superseded?: boolean
 }) {
   const isSignal = row.source === 'signal'
-  // #8 feed hygiene — the preview renders through the shared `CitedProse` (inline
-  // variant): a raw {"title","body"} JSON envelope is unwrapped, markdown
-  // (`**BLUF:**`/`##`) is stripped to a flat scan line, and citation markers
-  // resolve to tiny chips when the row carries its citation list (else they're
-  // dropped, never `[3][4]` noise). The full cited card lives in the Inspector.
-  // `hasPreview` gates rendering so an empty body shows nothing (parity with the
-  // old plaintext preview).
-  const rowData = (row as { data?: Record<string, unknown> | null }).data ?? null
-  const citations = row.source === 'finding' && rowData ? extractCitations(rowData) : []
   const hasPreview = feedPreview(row.body).length > 0
-  // The tight numbered-row layout: a left severity colour rail + muted row index,
-  // a bold title line that carries the at-a-glance scan, and ONE muted meta line
-  // (target/analyst or source/geo) with a relative-time stamp on the right.
   return (
     <button
       onClick={onOpen}
-      className={`group w-full text-left bg-surf-2 hover:bg-surf-1 border-l-2 ${severityRailClass(
+      className={`group block w-full cursor-pointer border-l-2 text-left text-body ${severityRailClass(
         row.severity,
-      )} pl-2 pr-2 py-1 cursor-pointer block text-body`}
+      )} bg-surf-2 py-1 pl-2 pr-2 hover:bg-surf-1`}
       data-testid={isSignal ? `signal-${row.id}` : `finding-${row.id}`}
     >
-      {/* title row: index · badges · bold title … relative time */}
+      {/* title row */}
       <div className="flex items-baseline gap-2">
         {index != null && (
-          <span className="shrink-0 text-ink-3 text-label tabular-nums w-6 text-right">
-            {index}.
-          </span>
+          <span className="w-6 shrink-0 text-right text-label tabular-nums text-ink-3">{index}.</span>
         )}
         {row.live && (
           <span
-            className="shrink-0 self-center rounded px-1 text-label bg-emerald-900 text-emerald-200"
+            className="shrink-0 self-center rounded bg-accent-ok/20 px-1 text-label text-accent-ok"
             data-testid={`${isSignal ? 'signal' : 'finding'}-live-${row.id}`}
           >
             live
@@ -936,42 +663,28 @@ function FeedCard({
         )}
         {isSignal && (
           <span
-            className="shrink-0 self-center rounded px-1 text-label bg-sky-950 text-sky-300 uppercase tracking-wide"
+            className="shrink-0 self-center rounded bg-accent-info/15 px-1 text-label uppercase tracking-wide text-accent-info"
             data-testid={`signal-badge-${row.id}`}
           >
             signal
           </span>
         )}
-        {superseded && (
-          <span
-            className="shrink-0 self-center rounded px-1 text-label bg-surf-1 text-ink-3"
-            title="superseded by a newer finding for this situation"
-            data-testid={`finding-superseded-${row.id}`}
-          >
-            superseded
-          </span>
-        )}
-        <span
-          className={`min-w-0 flex-1 truncate font-semibold ${
-            superseded ? 'text-ink-2 line-through' : 'text-ink-1'
-          }`}
-          title={row.title ?? ''}
-        >
+        <span className="min-w-0 flex-1 truncate font-semibold text-ink-1" title={row.title ?? ''}>
           {row.title}
         </span>
         {row.severity && (
           <SeverityBadge severity={row.severity as Severity} className="shrink-0 self-center" />
         )}
         <span
-          className="shrink-0 self-center text-ink-3 text-label"
+          className="shrink-0 self-center text-label text-ink-3"
           title={new Date(row.produced_at).toLocaleString()}
         >
           {relativeTime(row.produced_at)}
         </span>
       </div>
 
-      {/* ONE muted meta line: target/analyst (findings) or source/geo (signals) */}
-      <div className="mt-0.5 flex items-center gap-2 text-label text-ink-3 overflow-hidden whitespace-nowrap">
+      {/* meta line */}
+      <div className="mt-0.5 flex items-center gap-2 overflow-hidden whitespace-nowrap text-label text-ink-3">
         {isSignal ? (
           <>
             <span className="truncate" title={row.source_id ?? ''}>
@@ -992,7 +705,6 @@ function FeedCard({
             <span className="truncate">{row.target_id ?? '(no target)'}</span>
             <span className="shrink-0">·</span>
             <span className="truncate">{row.analyst_id ?? '(no analyst)'}</span>
-            {row.confidence !== null && <span className="shrink-0">· c={row.confidence.toFixed(2)}</span>}
             {row.derived_from.length > 0 && (
               <span className="shrink-0">
                 · ←{row.derived_from.length} input{row.derived_from.length === 1 ? '' : 's'}
@@ -1002,8 +714,15 @@ function FeedCard({
         )}
       </div>
 
+      {/* verdict — findings only (signals are raw intake, not verify-assessed) */}
+      {!isSignal && (
+        <div className="mt-1">
+          <VerdictBadge verdict={verdict} />
+        </div>
+      )}
+
       {hasPreview && (
-        <div className="mt-0.5 line-clamp-2 text-ink-2">
+        <div className="mt-1 line-clamp-2 text-ink-2">
           <CitedProse variant="inline" text={row.body ?? ''} citations={citations} />
         </div>
       )}

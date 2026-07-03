@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest'
 import {
   extractCitations,
   citationsByMarker,
+  citationLabel,
   evidenceAnchorId,
   normalizeMarker,
   splitProse,
@@ -167,6 +168,21 @@ describe('normalizeMarker', () => {
     expect(normalizeMarker('[[ref:3]]')).toBe('[[ref:3]]')
     expect(normalizeMarker('')).toBeUndefined()
     expect(normalizeMarker(null)).toBeUndefined()
+  })
+})
+
+describe('citationLabel', () => {
+  it('collapses both marker forms to the clean bracketed ordinal [N]', () => {
+    // A composition ordinal marker renders the same clean short form as a unit
+    // marker — one consistent chip label everywhere (S7-T4 fix).
+    expect(citationLabel('[[ref:3]]')).toBe('[3]')
+    expect(citationLabel('[8]')).toBe('[8]')
+    expect(citationLabel('[[ref:12]]')).toBe('[12]')
+  })
+
+  it('falls back to the raw marker when no ordinal is extractable (never fabricated)', () => {
+    expect(citationLabel('[abc]')).toBe('[abc]')
+    expect(citationLabel('')).toBe('')
   })
 })
 
