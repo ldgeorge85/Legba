@@ -1658,6 +1658,24 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         payload = payload or {}
         target_filter = payload.get("target_filter")
         actor_id = self.id.id
+        # Durable scoping (review 2026-07-03). The production fan-out ALWAYS passes
+        # target_filter (source_first_runtime._work → proxy.run), but an AD-HOC
+        # invocation (a manual force / debug run) can omit it. A WORKER actor_id
+        # encodes its target in the third segment (``analyst::<id>::<target_id>``),
+        # so recover the filter from the id rather than silently running the
+        # whole-substrate META slice — a mis-scoped shape production never emits
+        # (it is the recurring "no-target forced run picks its own subjects"
+        # artifact, e.g. forcing the kp desk and getting an Iran finding). A
+        # PRIMARY / meta actor carries a 16-hex version hash in that slot (never a
+        # target), so it is left no-target — correct for the world/region/thematic
+        # composers, whose meta slice IS the intended shape.
+        if target_filter is None:
+            _seg = actor_id.split("::")
+            if len(_seg) == 3 and _seg[2]:
+                _third = _seg[2]
+                _is_version = len(_third) == 16 and all(c in "0123456789abcdef" for c in _third)
+                if not _is_version:
+                    target_filter = _third
         deps_bundle = await _resolve_analyst_deps(actor_id)
         if deps_bundle is None:
             return {
@@ -1680,8 +1698,13 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
             #
             # A no-target run with no record stays NOOP/no_state (the meta /
             # global path always has a record from _on_activate, so this only
-            # guards a defensive edge).
-            if target_filter:
+            # guards a defensive edge). NB: this lazy-activate keys on the EXPLICIT
+            # payload target_filter, NOT the id-derived one above — a never-
+            # activated worker is only ever brought to life by a real fan-out /
+            # coalesced fire (which passes target_filter), so a bare id-only force
+            # of a cold worker still noops (no spurious LLM spend). The id-derived
+            # target_filter only rescopes an ALREADY-active worker's run below.
+            if payload.get("target_filter"):
                 rec = self._minimal_worker_record(actor_id, deps_bundle, target_filter)
                 await self._set_record(rec)
                 await self._state_manager.save_state()

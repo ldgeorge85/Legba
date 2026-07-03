@@ -1675,9 +1675,12 @@ def build_graph_structure_block(structure: "GroundingGraphStructure | None") -> 
 # clause so a trace / prompt audit can grep for it.
 _WORLD_CONTEXT_HEADER = (
     "BACKGROUND PRIORS (context, not evidence — do not cite) — curated background "
-    "/ doctrine the platform retrieved for this question. Use it to FRAME your "
-    "reasoning (method, what to look for), NOT as a source of fact. It is NOT "
-    "citable: cite only the numbered signals for every claim, exactly as before:"
+    "/ doctrine the platform retrieved for this question. Use it ONLY to INTERPRET "
+    "the numbered signals (method, what to look for), NOT as a source of fact. "
+    "It is NOT citable, and you must NEVER state any fact drawn from these priors "
+    "in your assessment unless a numbered signal supports it — an uncited "
+    "background assertion WILL be scored unfaithful by the verify pass. Cite only "
+    "the numbered signals for every claim, exactly as before:"
 )
 
 
