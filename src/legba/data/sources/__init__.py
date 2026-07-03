@@ -137,6 +137,18 @@ except Exception:                                           # pragma: no cover
 else:                                                       # pragma: no cover
     __all__.extend(["ACLEDConfig", "ACLEDSourceHandler"])
 
+# UCDP GED handler (S1-T9). Public, no-auth conflict-event API (Uppsala
+# Conflict Data Program). Pure-Python; depends only on httpx (already in
+# pyproject.toml). Defensive import mirrors the ACLED / GDELT pattern so a
+# parallel-wave merge can't break the package import for already-landed
+# handlers.
+try:                                                        # pragma: no cover
+    from .ucdp import UCDPConfig, UCDPSourceHandler         # noqa: F401
+except Exception:                                           # pragma: no cover
+    pass
+else:                                                       # pragma: no cover
+    __all__.extend(["UCDPConfig", "UCDPSourceHandler"])
+
 # GDELT BigQuery handler (L-131). Defensive import — the runtime BigQuery
 # client (google-cloud-bigquery) is an optional dep; the handler module is
 # pure Python and imports the client lazily, so importing the module here

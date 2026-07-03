@@ -81,6 +81,7 @@ _SOURCE_MODULE_TABLE: tuple[tuple[str, str], ...] = (
     ("json_api",       "JsonApiSourceHandler"),
     ("generic_webhook", "GenericWebhookSourceHandler"),
     ("acled",          "ACLEDSourceHandler"),
+    ("ucdp",           "UCDPSourceHandler"),
     ("mediacloud",     "MediaCloudSourceHandler"),
     ("opensanctions",  "OpenSanctionsSourceHandler"),
     ("gdelt",          "GDELTBigQuerySourceHandler"),
