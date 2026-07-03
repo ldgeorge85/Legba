@@ -57,7 +57,12 @@ mapping:
 grounding:
   enabled: true
   scope: [target_geo, slice_entities]
-  sources: [substrate, situations, graph_structure]
+  # 2026-07-03 — first staggered world_context RAG expansion (review-gated:
+  # retrieval floor+country-filter live, per-unit rag_watch armed, one-line
+  # rollback = drop vector:world_context). internal_stability is the strongest
+  # Factbook fit (Government/political-structure background). Pre-flip baseline
+  # (rag_watch, n=15): faithfulness 0.611 / 9,417 tokens.
+  sources: [substrate, situations, graph_structure, vector:world_context]
   max_facts: 30
 
 method:
