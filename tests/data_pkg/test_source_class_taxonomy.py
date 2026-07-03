@@ -40,6 +40,7 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_aljazeera_world.yaml": "reporting",
     "source_dw_world.yaml": "reporting",
     "source_acled_conflict.yaml": "analysis",
+    "source_ucdp_ged.yaml": "analysis",  # S1-T9 conflict-event dataset (parallel branch)
     "source_gdelt_bigquery.yaml": "reporting",
     "source_gdelt_doc_api.yaml": "reporting",
     "source_intelmq_cisa_kev.yaml": "official",

@@ -41,6 +41,7 @@ scope:
   geo: []
   languages: [en]
   tags: [conflict, armed_conflict, political_violence, fatalities, events, structured, global]
+  source_class: analysis           # S1-T9/S1-T8 reconcile — research/data project (coded conflict-event data), mirrors ACLED
 
 acquisition: poll
 
