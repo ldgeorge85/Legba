@@ -2,12 +2,17 @@
  * Global selection store (v4) — the cross-room linking grammar AND the single
  * source of truth for "what is selected" across the whole app.
  *
- * Click a target on The World map → The Flow highlights its node → the findings
- * rail filters → The Why ego-graphs the entity → the Inspector renders its full
- * detail. One shared selection, FROZEN surface (UI_V4_PLAN §2.4 / redesign
- * Move 2): rooms are dumb subscribers; only this file owns the shape. Capped at
- * one selection (brushing-and-linking degrades past ~3 surfaces, which is why
- * there are 3 rooms + 1 Inspector, not 82 panels).
+ * Click a desk on the World map → the map, feed, timeline, Why graph and the
+ * World Assessment report all follow it → the Inspector renders its full detail.
+ * One shared, single-active selection, FROZEN surface (UI_V4_PLAN §2.4 / redesign
+ * Move 2): every panel is a dumb subscriber; only this file owns the shape.
+ *
+ * The selection is intentionally single-active (one desk/finding/entity at a
+ * time) — that is the workstation's brushing ANCHOR, and it also serializes to
+ * the URL hash for shareable deep-links (see lib/shareState.ts). Under the v2
+ * mission-control vision every panel projects this one selection (synchronized
+ * brushing everywhere), so the old "cap it at ~3 surfaces / 3 rooms not 82
+ * panels" rationale no longer binds — any number of panels can subscribe.
  *
  * This file replaces THREE former selection systems (redesign Move 2):
  *   1. this store (the v4 cross-room store)               — kept, extended here

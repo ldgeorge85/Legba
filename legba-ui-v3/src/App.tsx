@@ -44,6 +44,7 @@ import {
 import { applyInvestigateLayout, applyInvestigateAnalystLayout } from '@/lib/investigateLayout'
 import { toggleDebugMode } from '@/lib/debugMode'
 import { useSelection, type SelectionKind } from '@/state/selection'
+import { useShareState } from '@/lib/shareState'
 import type { PaletteRecord } from '@/components/usePaletteRecords'
 
 /**
@@ -174,6 +175,9 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [savedLayout, setSavedLayout] = useState(() => hasCustomLayout(mode))
   const seededRef = useRef(false)
+
+  // Shareable state — the selection ⇄ URL hash (addressability without a router).
+  useShareState()
 
   const onDockReady = useCallback((ev: DockviewReadyEvent) => {
     setDockApi(ev.api)
