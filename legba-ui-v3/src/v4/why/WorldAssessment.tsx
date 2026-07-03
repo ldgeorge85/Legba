@@ -151,7 +151,7 @@ function DownloadControls({ doc }: { doc: ReportDoc }) {
       <button
         type="button"
         onClick={() => downloadReportMarkdown(doc)}
-        className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
+        className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-xs font-medium text-ink-2 hover:border-line-strong hover:text-ink-1"
         data-testid="report-download-md"
         title="Download this report as Markdown (.md)"
       >
@@ -163,7 +163,7 @@ function DownloadControls({ doc }: { doc: ReportDoc }) {
         onClick={() => {
           if (!printReportPdf(doc)) downloadReportMarkdown(doc)
         }}
-        className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
+        className="inline-flex items-center gap-1 rounded border border-line px-2 py-1 text-xs font-medium text-ink-2 hover:border-line-strong hover:text-ink-1"
         data-testid="report-download-pdf"
         title="Print → Save as PDF (falls back to .md if pop-ups are blocked)"
       >
@@ -192,14 +192,14 @@ function LoadingSkeleton() {
 function EmptyState({ targetId }: { targetId?: string | null }) {
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="world-assessment-empty">
-      <div className="flex flex-col items-center gap-3 rounded-lg border border-slate-800 bg-surface-100 px-6 py-10 text-center">
-        <Globe className="h-7 w-7 text-slate-600" aria-hidden />
-        <div className="text-sm font-medium text-slate-300">
+      <div className="flex flex-col items-center gap-3 rounded-lg border border-line bg-surface-100 px-6 py-10 text-center">
+        <Globe className="h-7 w-7 text-ink-3" aria-hidden />
+        <div className="text-sm font-medium text-ink-2">
           {targetId ? `No assessment yet for ${targetId}` : 'No world assessment yet'}
         </div>
-        <div className="max-w-md text-xs leading-relaxed text-slate-500">
+        <div className="max-w-md text-xs leading-relaxed text-ink-3">
           The{' '}
-          <span className="font-mono text-slate-400">
+          <span className="font-mono text-ink-2">
             {targetId ? 'country_composition' : 'world_assessor'}
           </span>{' '}
           synthesizes one every ~6h.
@@ -238,11 +238,11 @@ function DeskIntelligenceCard({
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="desk-intelligence-card">
       {/* 1 · Banded headline + score + delta */}
-      <header className="border-b border-slate-800 pb-4">
+      <header className="border-b border-line pb-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-label uppercase tracking-wider text-slate-500">{scope}</div>
-            <h1 className="mt-1 truncate text-xl font-semibold text-slate-100">
+            <div className="text-label uppercase tracking-wider text-ink-3">{scope}</div>
+            <h1 className="mt-1 truncate text-xl font-semibold text-ink-1">
               {current?.title ?? targetId}
             </h1>
           </div>
@@ -252,12 +252,12 @@ function DeskIntelligenceCard({
           {band ? (
             <span className={`rounded border px-2 py-0.5 font-medium ${band.tone}`}>{band.label}</span>
           ) : (
-            <span className="rounded border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-slate-400">
+            <span className="rounded border border-line bg-surf-3 px-2 py-0.5 text-ink-2">
               unbanded
             </span>
           )}
           {current?.confidence != null && (
-            <span className="font-mono text-slate-400" title="composition confidence">
+            <span className="font-mono text-ink-2" title="composition confidence">
               conf {(current.confidence * 100).toFixed(0)}%
             </span>
           )}
@@ -271,13 +271,13 @@ function DeskIntelligenceCard({
             </span>
           )}
           {current && Number.isFinite(current.producedAt) && (
-            <span className="text-slate-500">as of {formatDistanceToNow(current.producedAt)} ago</span>
+            <span className="text-ink-3">as of {formatDistanceToNow(current.producedAt)} ago</span>
           )}
           {current && (
             <button
               type="button"
               onClick={() => selectRow('finding', current.id, current.title, { origin: 'desk-card' })}
-              className="ml-auto shrink-0 rounded border border-slate-700 px-2 py-0.5 text-slate-300 hover:border-slate-500 hover:text-slate-100"
+              className="ml-auto shrink-0 rounded border border-line px-2 py-0.5 text-ink-2 hover:border-line-strong hover:text-ink-1"
               data-testid="desk-trace"
               title="Trace this composition's provenance / inputs in The Why"
             >
@@ -289,15 +289,15 @@ function DeskIntelligenceCard({
 
       {/* 2 · BLUF */}
       {bluf && (
-        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/40 p-3" data-testid="desk-bluf">
-          <div className="text-label uppercase tracking-wider text-slate-500">BLUF</div>
-          <p className="mt-1 text-sm leading-relaxed text-slate-200">{bluf}</p>
+        <div className="mt-4 rounded-lg border border-line bg-surf-1 p-3" data-testid="desk-bluf">
+          <div className="text-label uppercase tracking-wider text-ink-3">BLUF</div>
+          <p className="mt-1 text-sm leading-relaxed text-ink-1">{bluf}</p>
         </div>
       )}
 
       {/* 3 · Composition (expanded) — the verified synthesis, the headline product. */}
       <section className="mt-6" data-testid="desk-composition">
-        <div className="mb-2 text-label uppercase tracking-wider text-slate-500">
+        <div className="mb-2 text-label uppercase tracking-wider text-ink-3">
           Verified composition · country_composition
         </div>
         {current ? (
@@ -309,27 +309,27 @@ function DeskIntelligenceCard({
               analystId={COUNTRY_COMPOSITION_ID}
             />
           ) : (
-            <p className="text-sm text-slate-500">This synthesis was published without a written summary.</p>
+            <p className="text-sm text-ink-3">This synthesis was published without a written summary.</p>
           )
         ) : (
-          <p className="text-sm text-slate-500" data-testid="desk-composition-pending">
+          <p className="text-sm text-ink-3" data-testid="desk-composition-pending">
             {isLoading ? 'Loading the composition…' : `No verified composition for ${targetId} yet.`}
           </p>
         )}
       </section>
 
       {/* 4 · The per-desk bounded UNIT cards. */}
-      <section className="mt-8 border-t border-slate-800 pt-5" data-testid="desk-units">
+      <section className="mt-8 border-t border-line pt-5" data-testid="desk-units">
         <CountryUnitsAssessment targetId={targetId} />
       </section>
 
       {/* 5 · Related — the evidence breadth backing this composition. */}
       {current && current.citations.length > 0 && (
-        <section className="mt-8 border-t border-slate-800 pt-5" data-testid="desk-related">
-          <div className="text-label uppercase tracking-wider text-slate-500">Related</div>
-          <div className="mt-1 text-xs text-slate-400">
+        <section className="mt-8 border-t border-line pt-5" data-testid="desk-related">
+          <div className="text-label uppercase tracking-wider text-ink-3">Related</div>
+          <div className="mt-1 text-xs text-ink-2">
             This read rests on{' '}
-            <span className="text-slate-200">{current.citations.length}</span> verified sub-claim
+            <span className="text-ink-1">{current.citations.length}</span> verified sub-claim
             {current.citations.length === 1 ? '' : 's'} — hover a{' '}
             <span className="font-mono text-accent-info">[[ref:N]]</span> chip above to inspect each,
             or trace the full flow.
@@ -339,9 +339,9 @@ function DeskIntelligenceCard({
 
       {/* 6 · History — older / superseded composition runs, collapsed. */}
       {history.length > 0 && (
-        <section className="mt-8 border-t border-slate-800 pt-5" data-testid="desk-history">
+        <section className="mt-8 border-t border-line pt-5" data-testid="desk-history">
           <details>
-            <summary className="cursor-pointer text-label uppercase tracking-wider text-slate-500">
+            <summary className="cursor-pointer text-label uppercase tracking-wider text-ink-3">
               History · {history.length} superseded run{history.length === 1 ? '' : 's'}
             </summary>
             <ul className="mt-2 space-y-1">
@@ -350,7 +350,7 @@ function DeskIntelligenceCard({
                   <button
                     type="button"
                     onClick={() => selectRow('finding', h.id, h.title, { origin: 'desk-history' })}
-                    className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-slate-400 hover:bg-slate-900/60 hover:text-slate-200"
+                    className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-ink-2 hover:bg-surf-1 hover:text-ink-1"
                     data-testid="desk-history-row"
                   >
                     {h.severity && (
@@ -362,7 +362,7 @@ function DeskIntelligenceCard({
                     )}
                     <span className="truncate">{h.title}</span>
                     {Number.isFinite(h.producedAt) && (
-                      <span className="ml-auto shrink-0 text-slate-600">
+                      <span className="ml-auto shrink-0 text-ink-3">
                         {formatDistanceToNow(h.producedAt)} ago
                       </span>
                     )}
@@ -433,22 +433,22 @@ export default function WorldAssessment() {
 
   return (
     <article className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="world-assessment">
-      <header className="mb-5 border-b border-slate-800 pb-4">
-        <div className="text-label uppercase tracking-wider text-slate-500" data-testid="world-assessment-scope">
+      <header className="mb-5 border-b border-line pb-4">
+        <div className="text-label uppercase tracking-wider text-ink-3" data-testid="world-assessment-scope">
           world_assessor finding · one producer
         </div>
-        <div className="mt-1 text-xs leading-relaxed text-slate-500" data-testid="world-assessment-framing">
+        <div className="mt-1 text-xs leading-relaxed text-ink-3" data-testid="world-assessment-framing">
           The composed, verified world view, synthesized over the per-country
           compositions &mdash; live now.
         </div>
         <div className="mt-1 flex items-start justify-between gap-3">
-          <h1 className="text-xl font-semibold text-slate-100">{assessment.title}</h1>
+          <h1 className="text-xl font-semibold text-ink-1">{assessment.title}</h1>
           <div className="flex shrink-0 items-center gap-1">
             <DownloadControls doc={toReportDoc(assessment, scope)} />
             <button
               type="button"
               onClick={() => selectRow('finding', assessment.id, assessment.title, { origin: 'assessment' })}
-              className="rounded border border-slate-700 px-2 py-1 text-xs font-medium text-slate-300 hover:border-slate-500 hover:text-slate-100"
+              className="rounded border border-line px-2 py-1 text-xs font-medium text-ink-2 hover:border-line-strong hover:text-ink-1"
               data-testid="world-assessment-trace"
               title="Trace this assessment's provenance / inputs in The Why"
             >
@@ -456,7 +456,7 @@ export default function WorldAssessment() {
             </button>
           </div>
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-3">
           {hasTime && (
             <span data-testid="world-assessment-asof">
               as of {formatDistanceToNow(assessment.producedAt)} ago
@@ -466,7 +466,7 @@ export default function WorldAssessment() {
       </header>
 
       {assessment.summary.trim() !== '' ? (
-        <div className="text-sm text-slate-300" data-testid="world-assessment-body">
+        <div className="text-sm text-ink-2" data-testid="world-assessment-body">
           <CitedAssessment
             text={assessment.summary}
             citations={assessment.citations}
@@ -475,7 +475,7 @@ export default function WorldAssessment() {
           />
         </div>
       ) : (
-        <p className="text-sm text-slate-500" data-testid="world-assessment-nobody">
+        <p className="text-sm text-ink-3" data-testid="world-assessment-nobody">
           This assessment was published without a written summary.
         </p>
       )}
@@ -518,7 +518,7 @@ export function CompactWorldAssessment() {
     <button
       type="button"
       onClick={() => selectRow('finding', assessment.id, assessment.title, { origin: 'inspector-assessment' })}
-      className="w-full rounded-md border border-line bg-surf-1 px-3 py-2.5 text-left hover:border-slate-500"
+      className="w-full rounded-md border border-line bg-surf-1 px-3 py-2.5 text-left hover:border-line-strong"
       data-testid="inspector-compact-assessment"
       title="Open the latest world assessment"
     >
@@ -528,7 +528,7 @@ export function CompactWorldAssessment() {
       <div className="mt-1 text-body font-medium text-ink-1">{assessment.title}</div>
       <div className="mt-1 flex items-center gap-2 text-label text-ink-3">
         {hasTime && <span>as of {formatDistanceToNow(assessment.producedAt)} ago</span>}
-        <span aria-hidden className="text-slate-600">·</span>
+        <span aria-hidden className="text-ink-3">·</span>
         <span className="text-sky-400">Open assessment →</span>
       </div>
     </button>
