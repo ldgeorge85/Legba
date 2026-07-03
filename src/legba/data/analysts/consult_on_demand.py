@@ -478,6 +478,8 @@ Finished intelligence — the platform's OWN analysis (analysis-derived; consult
   - list_targets() — the monitored targets + their ids (e.g. country_g20_ir); call this to resolve a place/topic to a valid target_id before query_hypotheses / compare_targets / list_findings.
   - list_sources([active_only], [silent_only]) — ingest sources + freshness; use to tell "no coverage on X" apart from "a quiet feed".
 
+OUTPUT CONTRACT — EVERY reply is EXACTLY ONE strict-JSON object and NOTHING else: no text before or after it, no markdown code fences, no comments, no trailing commas; all keys and string values in double quotes; the first character is { and the last is }. The object MUST be one of the three shapes below (a single tool call, a batch of tool calls, or the final answer). Any character outside that single JSON object breaks the parser and wastes a round.
+
 Loop protocol:
   - To call ONE tool, reply with strict JSON: {"tool": "<name>", "args": {...}}
   - To call SEVERAL INDEPENDENT tools in the SAME round (they run concurrently and cost ONE round, not one per tool), reply with strict JSON: {"tools": [{"tool": "<name>", "args": {...}}, {"tool": "<name>", "args": {...}}]} — up to 5. Batch ONLY tools that do NOT depend on each other's output; a call that needs a prior call's result (e.g. compare_targets after list_targets resolves the ids) must wait for the next round.
@@ -509,6 +511,13 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
 
     Tolerates markdown fences and trailing prose past the closing brace.
     Returns None on parse failure (caller decides how to recover).
+
+    STRING-AWARE brace matching: a ``{`` or ``}`` that appears INSIDE a quoted
+    JSON string value (e.g. ``{"answer": "the set is }"}``) is literal text, not
+    structural — so the close-brace scan skips characters inside strings and
+    honors backslash escapes (``\\"`` does NOT close the string). A naive
+    depth-counter that ignores strings closes early on the first in-string ``}``
+    and truncates the object into invalid JSON; this is the fix for that class.
     """
     candidate = (raw or "").strip()
     if not candidate:
@@ -526,8 +535,23 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
     candidate = candidate[start:]
     depth = 0
     end = len(candidate)
+    in_string = False
+    escaped = False
     for i, c in enumerate(candidate):
-        if c == "{":
+        if in_string:
+            # Inside a quoted string: braces are literal. Track escapes so an
+            # escaped quote (\") does not close the string, and a literal brace
+            # in the value can never shift the structural depth.
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+        elif c == "{":
             depth += 1
         elif c == "}":
             depth -= 1
@@ -1318,6 +1342,10 @@ async def run_method(
                 "phase": "reflect",
                 "kind": "unparseable",
                 "round": rounds_used,
+                # Persist the RAW unparseable reply so a malformed turn leaves a
+                # debuggable trail in the durable step trace (→
+                # consult_turns.steps) instead of silently vanishing.
+                "raw": (content or "")[:4000],
             })
             messages = messages + [
                 {"role": "assistant", "content": content},
@@ -1521,7 +1549,13 @@ async def run_method(
         for s in steps
         if s.get("kind") == "tool_call"
     ]
-    data_update: dict[str, Any] = {"tool_calls": tool_trace}
+    # Carry the FULL per-round ReAct step trace on the payload so the SINGLE
+    # ConsultResponsePayload carrier surfaces it to BOTH transports (chat
+    # envelope + deep row read-back) — the consult front door then persists it
+    # into ``consult_turns.steps`` so a turn is inspectable after the fact
+    # (previously never populated). Rounds are hard-capped (ROUNDS_CEILING), so
+    # the trace is bounded; the raw fields on unparseable steps are truncated.
+    data_update: dict[str, Any] = {"tool_calls": tool_trace, "steps": list(steps)}
     # Also stash the raw final reply so the operator can audit
     # malformed-but-recovered cases.
     if final_payload is None:

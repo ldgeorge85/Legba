@@ -272,3 +272,72 @@ def test_default_mode_is_chat(monkeypatch):
     r = client.post("/api/v1/consult", json={"question": "q"})
     assert r.status_code == 200
     assert captured["body"]["inputs"][0]["mode"] == "chat"
+
+
+# ---------------------------------------------------------------------------
+# S8-T6 — the ReAct step trace threads into consult_turns.steps
+# ---------------------------------------------------------------------------
+
+
+def test_steps_from_payload_lifts_trace():
+    """The full trace stashed on ``consult_response.data['steps']`` is lifted
+    for persistence; a missing/malformed data bag yields an empty list."""
+    steps = [{"phase": "plan", "kind": "render_prompt"}]
+    assert consult_api._steps_from_payload({"data": {"steps": steps}}) == steps
+    assert consult_api._steps_from_payload({"data": {}}) == []
+    assert consult_api._steps_from_payload({}) == []
+    assert consult_api._steps_from_payload({"data": {"steps": "nope"}}) == []
+
+
+@pytest.mark.asyncio
+async def test_persist_assistant_turn_threads_steps(monkeypatch):
+    """``_persist_assistant_turn`` forwards the ReAct ``steps`` trace to
+    ``consult_persistence.append_turn`` so ``consult_turns.steps`` is populated
+    (previously it was always empty because steps were never threaded)."""
+    captured: dict[str, Any] = {}
+
+    async def _fake_append_turn(pg, **kwargs):
+        captured.update(kwargs)
+        return "turn-1"
+
+    monkeypatch.setattr(
+        consult_api.consult_persistence, "append_turn", _fake_append_turn,
+    )
+    resp = consult_api.ConsultResponse(
+        answer="a",
+        finding_id="f-1",
+        tool_calls=[consult_api.ConsultToolCall(
+            tool="search_signals", args={}, result={"count": 1},
+        )],
+        cited_refs=[consult_api.ConsultCitedRef(kind="signal", id="ref-1")],
+    )
+    steps = [
+        {"phase": "plan", "kind": "render_prompt"},
+        {"phase": "act", "kind": "tool_call", "tool": "search_signals"},
+    ]
+    await consult_api._persist_assistant_turn(
+        object(), "sess-1", resp, steps=steps,
+    )
+    assert captured["session_id"] == "sess-1"
+    assert captured["role"] == "assistant"
+    assert captured["steps"] == steps
+    assert captured["finding_id"] == "f-1"
+
+
+@pytest.mark.asyncio
+async def test_persist_assistant_turn_no_session_is_noop(monkeypatch):
+    """No session id ⇒ no append_turn call (best-effort audit; the answer is
+    unaffected)."""
+    called = False
+
+    async def _fake_append_turn(pg, **kwargs):
+        nonlocal called
+        called = True
+        return None
+
+    monkeypatch.setattr(
+        consult_api.consult_persistence, "append_turn", _fake_append_turn,
+    )
+    resp = consult_api.ConsultResponse(answer="a")
+    await consult_api._persist_assistant_turn(object(), None, resp, steps=[{"x": 1}])
+    assert called is False
