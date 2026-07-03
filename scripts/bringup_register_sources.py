@@ -55,6 +55,9 @@ SOURCE_FILES = [
     "source_irna_english.yaml",         # Iran   — IRNA (state news agency)
     "source_presstv_english.yaml",      # Iran   — Press TV (state broadcaster)
     "source_ukrinform_english.yaml",    # Ukraine — Ukrinform (national agency)
+    # S1-T9 — UCDP GED structured conflict-event feed (kind 'ucdp', public no-auth).
+    # Landed on a parallel branch; registered here so it gets a live actor.
+    "source_ucdp_ged.yaml",             # Uppsala — UCDP Georeferenced Event Dataset
 ]
 
 
