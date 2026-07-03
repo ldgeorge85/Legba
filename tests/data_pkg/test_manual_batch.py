@@ -299,6 +299,108 @@ def test_adapter_fetch_requires_batch_dir():
 
 
 # ---------------------------------------------------------------------------
+# PURE: the signals backfill lane (S4-T4) — record→Signal + the window-read
+# exclusion predicate (no DB).
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from legba.data.nats import (  # noqa: E402
+    BACKFILL_EVENT_CLASS,
+    SIGNALS_EXCLUDE_BACKFILL_SQL,
+)
+from legba.data.seed import manual_source_id, signal_from_record  # noqa: E402
+from legba.data.seed.manual_schema import ManualSignalRecord  # noqa: E402
+
+_MANIFEST = SimpleNamespace(batch_id="Backfill 2024-Q1!", operator="legba-dev")
+
+
+def test_manual_source_id_flattens_batch_id_to_one_token():
+    # source ids are NATS subject tokens — no dots/spaces/punctuation.
+    sid = manual_source_id("Backfill 2024-Q1!")
+    assert sid == "source.manual.backfill_2024_q1"
+    assert manual_source_id("   ") == "source.manual.batch"  # empty → sentinel
+
+
+def test_signal_from_record_stamps_backfill_markers_and_preserves_inline():
+    rec = ManualSignalRecord(
+        external_id="ev-1",
+        title="Quake M7 near coast",
+        body="A strong earthquake struck offshore.",
+        canonical_url="https://example.invalid/ev-1",
+        published_at=datetime(2025, 3, 4, 9, 0, tzinfo=timezone.utc),
+        geo=["CL"],
+        entities=["USGS", "Chile"],
+        tags=["quake"],
+        source_credibility=0.9,
+    )
+    load_time = datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc)
+    sig = signal_from_record(
+        rec, manifest=_MANIFEST, source_id="source.manual.b1", fetched_at=load_time,
+    )
+    # event_class=backfill + published_at (event time) live in the payload.
+    assert sig.payload["event_class"] == BACKFILL_EVENT_CLASS == "backfill"
+    assert sig.payload["published_at"].startswith("2025-03-04T09:00")
+    # fetched_at is the LOAD time (not the event time).
+    assert sig.fetched_at == load_time
+    # inline geo → indexed column; inline entities → payload (entity-resolution).
+    assert sig.geo == ["CL"]
+    assert sig.payload["entities"] == ["USGS", "Chile"]
+    assert sig.source_id == "source.manual.b1"
+    assert sig.source_credibility == pytest.approx(0.9)
+    assert sig.content_hash  # enrichment key present
+
+
+def test_signal_id_is_deterministic_for_idempotent_rerun():
+    rec = ManualSignalRecord(
+        external_id="ev-1", title="t", published_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+    a = signal_from_record(rec, manifest=_MANIFEST, source_id="s.m.b", fetched_at=datetime.now(timezone.utc))
+    # A different LOAD time must NOT change the id — the id keys on
+    # (source_id, external_id) so a re-run collides on ON CONFLICT (id).
+    b = signal_from_record(rec, manifest=_MANIFEST, source_id="s.m.b", fetched_at=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    assert a.signal_id == b.signal_id
+    # A different source id → a different signal id.
+    c = signal_from_record(rec, manifest=_MANIFEST, source_id="s.m.other", fetched_at=datetime.now(timezone.utc))
+    assert c.signal_id != a.signal_id
+
+
+def test_exclude_backfill_predicate_semantics():
+    # NULL (a normal signal has no event_class key) IS DISTINCT FROM 'backfill'
+    # → TRUE → kept; a 'backfill' value → excluded. The predicate is exactly one
+    # WHERE fragment, keyed on the payload marker (no event_class column exists).
+    assert SIGNALS_EXCLUDE_BACKFILL_SQL == (
+        "(payload->>'event_class') IS DISTINCT FROM 'backfill'"
+    )
+
+
+def test_reactive_unit_slice_excludes_backfill():
+    # build_sql_filter is the reactive per-binding slice a UNIT reads
+    # (SubscriptionEngine.read_slice / read_target_slice + subscription backfill).
+    from legba.data.schemas.source import Subscription
+    from legba.runtime.subscription.filter import build_sql_filter
+
+    sqlf = build_sql_filter(
+        source_id="source.bbc.world",
+        owner_tenant="default",
+        subscription=Subscription(geo=["BR"]),
+    )
+    assert SIGNALS_EXCLUDE_BACKFILL_SQL in sqlf.where
+    assert "event_class" in sqlf.where
+
+
+def test_cadence_unit_slice_reader_wires_the_exclusion():
+    # The cadence substrate-slice reader (_read_substrate_slice) is inline SQL;
+    # guard that it references the shared exclusion so a refactor can't drop it.
+    import inspect
+
+    from legba.runtime import actor_substrate_slice
+
+    src = inspect.getsource(actor_substrate_slice)
+    assert "SIGNALS_EXCLUDE_BACKFILL_SQL" in src
+
+
+# ---------------------------------------------------------------------------
 # PURE: the report tally + as_dict
 # ---------------------------------------------------------------------------
 
@@ -355,6 +457,7 @@ def _write_batch(
     facts: list[dict] | None = None,
     nexuses: list[dict] | None = None,
     entities: list[dict] | None = None,
+    signals: list[dict] | None = None,
     batch_id: str | None = None,
 ) -> Path:
     """Materialize a manual-ingest batch directory and return its path."""
@@ -376,6 +479,11 @@ def _write_batch(
             "\n".join(json.dumps(x) for x in entities), encoding="utf-8"
         )
         files["entities"] = "entities.jsonl"
+    if signals is not None:
+        (d / "signals.jsonl").write_text(
+            "\n".join(json.dumps(x) for x in signals), encoding="utf-8"
+        )
+        files["signals"] = "signals.jsonl"
     manifest = {
         "schema_version": "1",
         "batch_id": batch_id or f"batch-{uuid4().hex[:8]}",
@@ -583,3 +691,167 @@ async def test_dry_run_writes_nothing_and_counts_match_wet(pg_pool, tmp_path):
     assert facts_after == 2, "wet run wrote the two facts"
     manifest = manifest if isinstance(manifest, dict) else json.loads(manifest)
     assert manifest.get("report", {}).get("facts", {}).get("create") == 2
+
+
+# ===========================================================================
+# INTEGRATION — the SIGNALS backfill lane (S4-T4). A backfilled signal rides
+# the normal contract, is EXCLUDED from a unit's fresh reactive slice, but is
+# PRESENT in the accumulation / entity-resolution (facts/grounding) input path.
+# ===========================================================================
+
+
+def _backfill_signal_batch(tmp_path: Path, *, batch_id: str, **overrides) -> Path:
+    rec = {
+        "external_id": overrides.get("external_id", "bf-ev-1"),
+        "title": overrides.get("title", "Historical border clash"),
+        "body": "A skirmish reported months ago.",
+        "published_at": overrides.get("published_at", "2025-03-04T09:00:00Z"),
+        "geo": overrides.get("geo", ["ZZ"]),
+        "entities": overrides.get("entities", ["Zedland", "Adversaria"]),
+        "tags": ["conflict"],
+        "source_credibility": 0.7,
+    }
+    return _write_batch(
+        tmp_path, mode="skip", provenance="manual", signals=[rec], batch_id=batch_id,
+    )
+
+
+def _slice_descriptor(window_hours: int):
+    return SimpleNamespace(
+        subscription=SimpleNamespace(
+            targets=SimpleNamespace(time_window=window_hours),
+        )
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_backfill_signal_written_with_markers_and_source_registered(
+    pg_pool, tmp_path,
+):
+    batch_id = f"bf-{uuid4().hex[:8]}"
+    b = _backfill_signal_batch(tmp_path, batch_id=batch_id)
+    r = await run_manual_batch(pg_pool, batch_dir=b, dry_run=False)
+
+    assert r.signals["create"] == 1 and not r.errors
+    src_id = r.manual_source_id
+    assert src_id and src_id.startswith("source.manual.")
+
+    async with pg_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT payload, geo, fetched_at, content_hash FROM signals "
+            "WHERE source_id=$1", src_id,
+        )
+        payload = row["payload"] if isinstance(row["payload"], dict) else json.loads(row["payload"])
+        # event_class=backfill + published_at (event time) in the payload.
+        assert payload["event_class"] == "backfill"
+        assert payload["published_at"].startswith("2025-03-04T09:00")
+        # fetched_at is LOAD time (2026+), not the 2025 event time.
+        assert row["fetched_at"].year >= 2026
+        # enrichment ran: inline geo on the indexed column, inline entities in
+        # the payload (the entity-resolution/facts input path), content_hash set.
+        assert list(row["geo"]) == ["ZZ"]
+        assert payload["entities"] == ["Zedland", "Adversaria"]
+        assert row["content_hash"]
+
+        # the source.manual.<batch> descriptor is registered, non-active
+        # (never polled / poll-liveness-checked).
+        sd = await conn.fetchrow(
+            "SELECT state, kind FROM source_descriptors WHERE descriptor_id=$1 "
+            "AND is_head", src_id,
+        )
+        assert sd is not None and sd["kind"] == "manual"
+        assert sd["state"] != "active"
+
+    # A re-run is an idempotent no-op (deterministic id → ON CONFLICT).
+    r2 = await run_manual_batch(pg_pool, batch_dir=b, dry_run=False)
+    assert r2.signals["skip"] == 1 and r2.signals["create"] == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_backfill_excluded_from_fresh_slice_but_in_accumulation(
+    pg_pool, tmp_path,
+):
+    from legba.runtime.actor_substrate_slice import _read_substrate_slice
+
+    batch_id = f"bf-{uuid4().hex[:8]}"
+    b = _backfill_signal_batch(tmp_path, batch_id=batch_id)
+    r = await run_manual_batch(pg_pool, batch_dir=b, dry_run=False)
+    src_id = r.manual_source_id
+
+    async with pg_pool.acquire() as conn:
+        bf_id = await conn.fetchval(
+            "SELECT id::text FROM signals WHERE source_id=$1 "
+            "AND payload->>'event_class'='backfill'", src_id,
+        )
+        # A NORMAL (non-backfill) signal from the SAME source, fetched now.
+        normal_id = uuid4()
+        await conn.execute(
+            "INSERT INTO signals (id, source_id, fetched_at, payload, geo) "
+            "VALUES ($1, $2, now(), $3::jsonb, $4::text[])",
+            normal_id, src_id, json.dumps({"title": "Fresh live update"}), ["ZZ"],
+        )
+        # A target scoped to that source (no geo → just source_id narrowing).
+        target_id = f"target.test.{uuid4().hex[:8]}"
+        await conn.execute(
+            "INSERT INTO target_descriptors "
+            "(descriptor_id, version, schema_uri, is_head, state, owner, name, body) "
+            "VALUES ($1, '1', 'legba/target/1.0.0', true, 'active', 'test', $1, $2::jsonb)",
+            target_id,
+            json.dumps({"sources": [{"source_id": src_id}], "scope": {"geo": []}}),
+        )
+
+        # The UNIT's fresh reactive slice EXCLUDES the backfill, KEEPS the normal.
+        rows = await _read_substrate_slice(
+            conn, descriptor=_slice_descriptor(72), target_filter=target_id,
+        )
+        slice_ids = {str(r_["id"]) for r_ in rows if r_.get("id")}
+        assert str(normal_id) in slice_ids, "the fresh signal IS in the slice"
+        assert bf_id not in slice_ids, "the backfill is NOT in the fresh slice"
+
+        # The ACCUMULATION / entity-resolution (facts/grounding) input path — a
+        # no-window read over payload.entities — DOES see the backfill.
+        acc = await conn.fetch(
+            "SELECT id::text AS id FROM signals "
+            "WHERE payload ? 'entities' AND source_id=$1", src_id,
+        )
+        acc_ids = {a["id"] for a in acc}
+        assert bf_id in acc_ids, "the backfill informs the facts/grounding path"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enrichment_stage_fills_geo_entities_when_not_inline(
+    pg_pool, tmp_path,
+):
+    async def _stage(signal, ctx):
+        # Stand in for the geocode/NER enrichment filters: fill the typed
+        # columns a bare (no-inline) record left empty.
+        if not signal.geo:
+            signal.geo = ["XX"]
+        if not signal.entity_classes:
+            signal.entity_classes = ["ORG", "GPE"]
+        return signal
+
+    batch_id = f"bf-{uuid4().hex[:8]}"
+    # A record carrying NO inline geo/entities → enrichment must supply them.
+    rec = {
+        "external_id": "no-inline-1",
+        "title": "Report with no pre-tagged geo",
+        "published_at": "2025-01-15T00:00:00Z",
+    }
+    b = _write_batch(tmp_path, mode="skip", signals=[rec], batch_id=batch_id)
+    r = await run_manual_batch(
+        pg_pool, batch_dir=b, dry_run=False, enrichment_stage=_stage,
+    )
+    assert r.signals["create"] == 1
+    async with pg_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT geo, entity_classes, payload FROM signals WHERE source_id=$1",
+            r.manual_source_id,
+        )
+    assert list(row["geo"]) == ["XX"]
+    assert list(row["entity_classes"]) == ["ORG", "GPE"]
+    payload = row["payload"] if isinstance(row["payload"], dict) else json.loads(row["payload"])
+    assert payload["event_class"] == "backfill"

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
+from ...data.nats import SIGNALS_EXCLUDE_BACKFILL_SQL
 from ...data.predicates import (
     SURFACE_CTX_CONTRACTS,
     PredicateBudgetExceeded,
@@ -104,6 +105,13 @@ def build_sql_filter(
         clauses.append(
             "(canonical_signal_id IS NULL OR canonical_signal_id = id)"
         )
+
+    # The reactive per-binding slice a UNIT reads (SubscriptionEngine.read_slice
+    # / read_target_slice, and the new-binding subscription backfill that reuses
+    # it) is a fresh-window read — exclude event_class=backfill (S4-T4). A
+    # backdated manual observation still lands in facts/grounding via the
+    # accumulation paths, but never in a unit's reactive slice.
+    clauses.append(SIGNALS_EXCLUDE_BACKFILL_SQL)
 
     return SqlFilter(where=" AND ".join(clauses), params=params)
 

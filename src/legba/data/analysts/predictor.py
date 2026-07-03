@@ -52,6 +52,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from ..nats import SIGNALS_EXCLUDE_BACKFILL_SQL
 from ..provenance.models import FindingPayload, PredictionPayload
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 
@@ -334,7 +335,14 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         except Exception:  # noqa: BLE001 — degrade to tenant-wide pool
             source_ids, target_geo = [], []
 
-    clauses = [f"fetched_at > NOW() - INTERVAL '{int(window_hours)} hours'"]
+    # Fresh-window daily series — exclude backfill (S4-T4). Backfilled signals
+    # all carry fetched_at=load-time, so they would pile into a single day's
+    # bucket and distort the recency series the forecaster reads; a backfill is
+    # historical accumulation, not fresh daily volume.
+    clauses = [
+        f"fetched_at > NOW() - INTERVAL '{int(window_hours)} hours'",
+        SIGNALS_EXCLUDE_BACKFILL_SQL,
+    ]
     params: list[Any] = []
     if source_ids:
         params.append(source_ids)

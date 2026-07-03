@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 import asyncpg
 
+from ..data.nats import SIGNALS_EXCLUDE_BACKFILL_SQL
 from ..data.schemas.analyst import AnalystDescriptor
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,13 @@ async def _read_substrate_slice(
             target_geo = []
             scope_predicate = None
 
-    clauses = [f"fetched_at > NOW() - INTERVAL '{window_hours} hours'"]
+    # This is a UNIT's fresh REACTIVE-window slice — exclude backfill (S4-T4).
+    # A manually-ingested, backdated observation informs facts/grounding via the
+    # accumulation paths but must NEVER appear as a "fresh" signal here.
+    clauses = [
+        f"fetched_at > NOW() - INTERVAL '{window_hours} hours'",
+        SIGNALS_EXCLUDE_BACKFILL_SQL,
+    ]
     params: list[Any] = []
     if source_ids:
         params.append(source_ids)
