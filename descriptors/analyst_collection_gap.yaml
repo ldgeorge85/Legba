@@ -1,0 +1,88 @@
+# S3-T3 — Collection-Gap analyst descriptor.
+#
+# A `deterministic`-kind META analyst (sub_handler=collection_gap) over the
+# banded SCORECARD rows (kind='scorecard', produced by scorecard_producer). On a
+# MONTHLY cadence it reads the honest `insufficient-evidence` signal the P4
+# banding already computes and turns it into a forward-looking COLLECTION
+# requirement: which desk×dimension cells are STARVED (insufficient in the
+# desk's current card), WHY (the aggregated banding `reason` over the window),
+# how PERSISTENTLY, and which SOURCE CLASSES (reporting / analysis / official /
+# state_media — the S1-T8 vocabulary) would plausibly feed them.
+#
+# Target-agnostic + META: the aggregation is an observation-level property of the
+# shared scorecard pool, not a per-target interpretation. NO `targets` selector →
+# the cadence heartbeat is a SINGLE global sweep (not a per-desk fan-out). The
+# handler reads every scorecard row in the window directly via deps.pg_pool (it
+# ignores the materialized input slice).
+#
+# Ranking: cells order so the most-starved DESKS surface first — an
+# all-insufficient desk (every one of the six dimensions insufficient) lifts all
+# its cells above a desk starved in a single dimension. So a US all-insufficient
+# desk tops the gap list.
+#
+# Honesty / idempotency (the findings-feed dedup lesson): the "collection
+# requirements" summary is a per-run RECEIPT. The handler sets
+# AnalystMethodResult.force_trace_only=True when NOTHING is starved (no gap →
+# no feed row) OR the gap set is byte-identical to the last EMITTED summary (the
+# same scorecards re-swept), so an idempotent monthly re-run never repeats a row.
+# Only a genuine collection gap reaches the feed.
+#
+# Method:
+#   * kind = deterministic — pure code, NO LLM, token usage always zero.
+#   * impl = the deterministic kind dispatcher module:run_method. The
+#     deterministic kind routes by `options.sub_handler`; the runtime injects
+#     `sub_handler: collection_gap` at fire time (dapr_actors reads
+#     descriptor.method.sub_handler, falling back to identity.id). We set it
+#     explicitly AND keep id == sub-handler name so either path resolves it.
+#
+# Cadence:
+#   * fallback_schedule = "0 6 1 * *" — 06:00 UTC on the 1st of each month. The
+#     aggregation is idempotent, so an off-schedule re-sweep of an unchanged gap
+#     set is a no-op receipt (trace-only). window_days (default 35) is >1 month
+#     so a run always sees the full prior month of cards.
+#   * cooldown_seconds = 1814400 — a 21-day floor between runs (safely below the
+#     ~28-31 day interval, so a February month never double-fires).
+#
+# Registered via scripts/bringup_register_analysts.py or the registry REST API —
+# NOT inline through a test fixture.
+
+identity:
+  id: collection_gap
+  name: Collection-Gap Analyst (monthly collection requirements)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: s3_collection_gap
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole scorecard pool. The handler reads every kind='scorecard' row in the
+  # window directly via deps.pg_pool (it ignores the materialized input slice).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: collection_gap
+  # Deterministic kinds carry no LLM block and no per-day token budget — the whole
+  # run is pure Python over the scorecard rows in analyst_outputs.
+
+cadence:
+  fallback_schedule: "0 6 1 * *"
+  cooldown_seconds: 1814400
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND
+# (FindingPayload -> analyst_outputs) writes the per-run collection-requirements
+# finding; a no-gap sweep is suppressed via force_trace_only (never a feed row).
+outputs: []
