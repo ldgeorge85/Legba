@@ -153,10 +153,11 @@ _ASSESSMENT_PRODUCER_ANALYSTS: tuple[str, ...] = (
     "energy_security",
     "escalation",
     "narrative_coordination",
-    # S1-T4/T5 units — broad (every desk), fused by country_composition + banded
-    # as fixed scorecard dimensions.
+    # S1-T4/T5/T7 units — broad (every desk), fused by country_composition +
+    # banded as fixed scorecard dimensions.
     "internal_stability",
     "military_posture",
+    "economic_coercion",
 )
 
 # Default number of recent signal mentions ``inspect_entity`` joins in.

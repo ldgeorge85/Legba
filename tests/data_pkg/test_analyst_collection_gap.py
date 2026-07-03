@@ -151,19 +151,21 @@ def test_us_all_insufficient_tops_the_list():
         ),
     ]
     gaps, stats = cg.aggregate_gaps(rows)
-    # US contributes all six dimensions; DE contributes one.
+    # US contributes ALL dimensions; DE contributes one.
     assert len(gaps) == len(scorecard_banding.DIMENSIONS) + 1
-    # Every one of the first six cells is the US desk (it tops the ranking).
+    # Every one of the US desk's cells tops the ranking.
     top = gaps[: len(scorecard_banding.DIMENSIONS)]
     assert {g["desk"] for g in top} == {"country_g20_us"}
-    assert all(g["desk_starved_dims"] == 6 for g in top)
+    assert all(
+        g["desk_starved_dims"] == len(scorecard_banding.DIMENSIONS) for g in top
+    )
     # The single DE cell trails.
     assert gaps[-1]["desk"] == "country_g20_de"
     assert gaps[-1]["dimension"] == "escalation"
-    # starved_desks summary ranks US first.
+    # starved_desks summary ranks US first (starved in every dimension).
     assert stats["starved_desks"][0] == {
         "desk": "country_g20_us",
-        "starved_dim_count": 6,
+        "starved_dim_count": len(scorecard_banding.DIMENSIONS),
     }
 
 

@@ -1,0 +1,226 @@
+# S1-T7 — bounded reasoning UNIT (inline_target): economic_coercion.
+#
+# A "unit": NOT a new Python kind module and NOT a _KIND_MODULE_NAMES entry —
+# just an inline_target DESCRIPTOR carrying its OWN method.system_prompt + scope
+# predicate + eval.rubric (the validated T1 unit-factory pattern). The
+# descriptor-supplied prompt drives synthesis; the deterministic cite-the-prose
+# [N] floor (always-on for inline_target findings) + the faithfulness VERIFY gate
+# already cover this unit's findings for free — no new code.
+#
+# TOPIC — economic coercion: the 7th PMESII dimension. Assesses the SANCTIONS /
+# TRADE / CURRENCY stress applied to (or wielded by) a country as an instrument
+# of statecraft: sanctions designations & regimes, punitive trade restrictions &
+# tariffs, currency/reserve pressure, capital controls, and energy/commodity
+# leverage used COERCIVELY. The whole point is to separate COERCIVE economic
+# pressure (the bounded question) from ordinary macro conditions — a recession, a
+# routine rate move, or normal inflation is NOT coercion and does NOT belong here.
+# ABSENCE-HONEST: a slice with only ordinary macro noise reads "no active coercion
+# / ordinary conditions", low confidence, severity:low — it never manufactures a
+# sanctions campaign the evidence does not support.
+#
+# BROAD unit: runs on the blanket g20+watch predicate (every desk), so a FIXED
+# scorecard dimension is safe. The banding keys the dimension on analyst_id, so
+# this unit MUST be wired into scorecard_banding.DIMENSIONS +
+# country_composition.other_analysts or it is INVISIBLE in the product.
+#
+# Cadence discipline: this unit fires 2×/day at the STAGGERED hours 09:00 / 21:00
+# UTC — a FRESH slot between the existing unit fires (01/13, 02/14, 04/16, 05/17,
+# 07/19, 10/22) and clear of the composition compose (11/23) so the units spread
+# across the clock instead of stacking one budget bucket.
+
+identity:
+  id: economic_coercion
+  name: Economic-Coercion / Sanctions-Trade-Currency Unit
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: s1_t7
+
+subscription:
+  targets:
+    # Scope by the `g20`/`watch` tags — one run per country desk, mirroring the
+    # other bounded units' fan-out. has_tag is valid on the subscription surface.
+    predicate: 'has_tag("g20") or has_tag("watch")'
+    data_types: [signal]
+    # 72h: the unit integrates ~3 days of raw signals, not just today.
+    time_window: 72h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# Tier-1 knowledge-grounding, ported from the retired country_assessor monolith
+# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + assessed
+# situations + graph structure as a fenced "CURRENT CONTEXT" preamble so this
+# unit integrates the multi-week substrate, not only the fresh signal slice.
+# target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
+# off from ground truth (the grounding-quality provenance gate applies).
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+method:
+  kind: llm_planner
+  # Inline, topic-scoped system prompt — the unit carries its bounded question
+  # VERBATIM in the descriptor (no Python; no prompt_module set). Drives the
+  # cited-prose JSON FindingPayload so the [N] markers + the verify gate work.
+  system_prompt: |
+    You are the ECONOMIC-COERCION unit, one bounded reasoning unit of the Legba
+    intelligence oracle. You assess ONE question for ONE country target and
+    nothing else.
+
+    BOUNDED QUESTION — economic-coercion (sanctions / trade / currency) pressure.
+    Read ONLY the target country's signals provided in context. Assess the
+    COERCIVE economic pressure this country currently faces or is itself wielding
+    — economic tools used as instruments of statecraft — across these vectors:
+      * sanctions designations & regimes — new or tightened OFAC/EU/UN/national
+        listings, sectoral or secondary sanctions, asset freezes, export-control
+        blacklists, and de-listings/relief targeting this country or its
+        entities/officials;
+      * trade restrictions & tariffs — punitive export controls, import bans,
+        quotas, licensing chokes, and tariff hikes imposed AS LEVERAGE (not
+        ordinary trade-policy housekeeping);
+      * currency & reserve pressure — FX-reserve depletion or freezes, a currency
+        crisis or defense, loss of reserve-currency/SWIFT access, sovereign
+        default or debt-distress driven by external pressure;
+      * capital controls — imposed or tightened restrictions on capital outflows,
+        convertibility, or cross-border payments;
+      * energy/commodity leverage used COERCIVELY — a supply cutoff, price weapon,
+        or commodity embargo deployed to compel a political outcome (assess only
+        the COERCION here; see the boundary below).
+    Identify the DOMINANT coercion vector and state whether this country is the
+    TARGET or the WIELDER (or both), then state the MOST PLAUSIBLE near-term
+    trajectory — easing, steady, or intensifying — and say which. Weight
+    CONFIRMED designations, imposed measures, and hard reserve/currency data far
+    above threats and announcements.
+    ABSENCE-HONEST + the CORE distinction: separate COERCIVE economic pressure
+    (the question) from ORDINARY MACRO CONDITIONS. A recession, a routine central-
+    bank rate move, normal inflation, an ordinary trade deficit, or market-driven
+    currency drift is NOT coercion and does NOT belong here. If the cited signals
+    contain only ordinary macro noise or nothing bearing on economic coercion, say
+    so PLAINLY, set a LOW confidence, and tag severity:low — do NOT manufacture a
+    sanctions campaign or coercion the evidence does not support.
+
+    BOUNDARY — stay in your lane. This unit owns economic INSTRUMENTS OF STATECRAFT
+    (sanctions, coercive trade/tariff measures, currency/reserve pressure, capital
+    controls, weaponized commodity leverage). Do NOT assess the ENERGY-SUPPLY
+    impact of a measure — a disruption, price shock, or infrastructure effect on
+    this country's energy supply is the energy_security unit's question; a
+    sanctions/embargo DESIGNATION or the coercive USE of an energy weapon is HERE.
+    When a signal is ambiguous, ask: is this an energy-supply/price/infrastructure
+    effect (energy_security, there) or the imposition/use of a coercive economic
+    instrument (here)? Do NOT assess military mobilization, diplomatic ruptures, or
+    inter-state conflict (escalation), domestic unrest or coup vulnerability
+    (internal_stability), leadership succession, force posture, or narrative
+    coordination — other units own those. Economic crisis may raise coup risk, but
+    the coup base rate is internal_stability's question; you assess the COERCION.
+
+    PRODUCE EXACTLY ONE FINDING that answers ONLY this bounded question. Every
+    key claim MUST cite the signal it rests on with a bracketed marker [N] keyed
+    to that signal's index in the provided slice. Assert nothing the cited
+    signals do not support; if the evidence is thin, LOWER your confidence rather
+    than inventing specifics.
+
+    Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
+    matching exactly this shape:
+    {
+      "title": "<concise headline naming the country + the dominant coercion vector + target/wielder>",
+      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited findings, each ending with its [N] citation(s); then a '## Assessment' paragraph naming the dominant coercion vector, whether the country is the target or the wielder, and the most plausible near-term trajectory, explicitly separating confirmed imposed measures from threats and separating coercion from ordinary macro conditions; then a '## Indicators to watch' bullet list of concrete near-term signals that would confirm intensifying or easing coercion>",
+      "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
+      "evidence": [<the signal indices / source references you cited, as strings>],
+      "tags": ["topic:economic_coercion", "severity:<low|moderate|elevated|high|critical>"],
+      "indicators": [
+        {"id": "new-sanctions-designation", "statement": "New or tightened sanctions designation naming this country or its entities", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []},
+        {"id": "reserve-or-currency-shock", "statement": "Sharp FX-reserve drawdown, reserve freeze, or a currency crisis/defense", "status": "triggered", "horizon_date": "2026-07-20", "first_seen": "2026-07-02", "citations": [3]},
+        {"id": "punitive-trade-measure", "statement": "Imposed export control, import ban, or punitive tariff used as leverage", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []}
+      ]
+    }
+
+    The "tags" array MUST contain the topic tag "topic:economic_coercion" PLUS
+    EXACTLY ONE severity tag drawn from {severity:low, severity:moderate,
+    severity:elevated, severity:high, severity:critical}, chosen to match the
+    assessed coercion intensity. The "indicators" array is the STRUCTURED,
+    machine-checkable mirror of your '## Indicators to watch' prose. It is
+    REQUIRED and MUST be NON-EMPTY: always output 3-6 entries in the EXACT SHAPE
+    of the three example objects shown in the schema above (real desk-specific
+    signposts — do NOT copy the example text, do NOT leave the array empty, do NOT
+    omit the field). Set each "status" to "not_observed" (pre-registered, not yet
+    seen), "triggered" (already firing in the slice), or "expired" (its
+    horizon_date passed). A "triggered" indicator MUST name the signal(s) that
+    fired it in "citations" as ASCII [N] signal indices; "not_observed" /
+    "expired" carry an empty "citations". Keep each id a short stable slug so it
+    can be tracked run-over-run. Output nothing but the single JSON object.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # P0: faithfulness VERIFY judge — currently the SAME core reasoning model
+    # (llm.primary.openai_compat) that writes this unit, NOT a cross-family judge
+    # (temporary: the small dedicated judge proved too weak — harsh + mis-aimed —
+    # so the strong model runs the judging to prove the flow; a dedicated
+    # reasoning judge is planned). KNOWN LIMITATION: same-model judging shares
+    # blind spots, so this signal is weaker than an independent judge. Gated by
+    # LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic citation-presence
+    # floor if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 4096
+  # Per-day token cap for this unit's fan-out — sized for the staggered
+  # twice-daily cadence (kept well under the country_assessor cap because each
+  # unit answers a single bounded question, not the full situational sweep).
+  budget_tokens_per_day: 300000
+  # On a projected per-day cap crossing, PAUSE this unit until the next UTC
+  # bucket rather than demoting to a paid fallback (the primary is the
+  # self-hosted core plane; there is no cheap fallback wired here).
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Staggered 2×/day at 09:00 and 21:00 UTC — a FRESH slot between the existing
+  # unit fires (01/13, 02/14, 04/16, 05/17, 07/19, 10/22) and clear of the compose
+  # (11/23) so the bounded units spread across the clock instead of all firing on
+  # the same tick (flood discipline).
+  fallback_schedule: "0 9,21 * * *"
+  # Per-(unit, target) cooldown. 11h (39600s) sits BELOW the 12h interval between
+  # the staggered fires — a cooldown == the interval lands past the next
+  # scheduled fire and silently halves each country's cadence, so keep a margin.
+  # Absorbs a re-trigger inside the window without a second LLM call.
+  cooldown_seconds: 39600
+
+# eval.rubric — the rubric the critic grades this unit's economic-coercion
+# findings against (REQUIRED for the critic→optimizer eval loop). Topic-scoped to
+# the economic-coercion question; dimensions weight to 1.0 on a 0.0-1.0 scale.
+
+# S3-T4 — agency grant: the escalate_finding pack. When one of THIS unit's
+# findings crosses the alert gate (effective_confidence × severity, folded
+# post-verify) the actor run path fires `escalate` through the full agency
+# pipeline. Effective capability = this grant ∩ target.allowed_action_packs ∩
+# pack.applicability (g20) — so only g20 desks actually deliver to the operator
+# channel; a watch-only desk denies with a visible governor BLOCK by design.
+action_packs:
+  - pack_id: escalate_finding
+
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "coercion_grounding",
+       "weight": 0.4,
+       "description": "Is the named dominant coercion vector (sanctions designations/regimes, punitive trade restrictions/tariffs, currency/reserve pressure, capital controls, coercive commodity leverage) grounded in the cited signals, is the target-vs-wielder call correct, and does the assessment correctly SEPARATE coercive economic pressure from ordinary macro conditions (recession, routine rate moves, normal inflation, market-driven currency drift) and from mere energy-supply effects? Penalize unsupported specifics, treating ordinary macro or energy-supply impact as coercion, and treating threats as imposed measures."},
+      {"name": "trajectory_plausibility",
+       "weight": 0.3,
+       "description": "Is the stated most-plausible near-term trajectory (easing / steady / intensifying) proportionate to and supported by the cited evidence, correctly weighting confirmed imposed measures and hard reserve/currency data above announcements, with concrete indicators-to-watch that would actually confirm or refute intensifying or easing coercion?"},
+      {"name": "severity_calibration",
+       "weight": 0.3,
+       "description": "Do the stated confidence and the single severity tag match the intensity of the cited coercion, and is the ABSENCE case handled honestly (a slice with only ordinary macro noise reads no-active-coercion / severity:low / low confidence, NOT invented sanctions)? Penalize both overconfidence on thin/announced evidence and under-confidence on strong confirmed-designation evidence."}
+    ], "scale": "0.0-1.0"}

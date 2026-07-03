@@ -202,7 +202,8 @@ def test_scorecard_dimensions_include_the_two_new_units():
     for original in ("leadership_transition", "energy_security", "escalation",
                      "narrative_coordination"):
         assert original in sb.DIMENSIONS
-    assert len(sb.DIMENSIONS) == 6
+    # >= 6: economic_coercion (S1-T7) and any future PMESII unit extend this.
+    assert len(sb.DIMENSIONS) >= 6
 
 
 def test_banding_reports_the_two_new_dimensions_end_to_end():
@@ -247,7 +248,10 @@ def test_producer_and_scorer_lists_stay_in_sync_with_dimensions():
 def test_country_composition_declares_all_six_units():
     desc = _load("analyst_country_composition.yaml")
     ids = [a.id for a in desc.subscription.other_analysts]
-    assert ids == [
+    # The six S1-era units are the first six declared, in order. Later PMESII
+    # units (economic_coercion, S1-T7) append after, so assert the prefix rather
+    # than exact equality.
+    assert ids[:6] == [
         "leadership_transition",
         "energy_security",
         "escalation",

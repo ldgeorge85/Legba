@@ -112,6 +112,10 @@ SOURCE_CLASSES_BY_DIMENSION: dict[str, tuple[str, ...]] = {
     # Force posture / procurement — official MOD data + defense analysis
     # (SIPRI-class) + wire reporting.
     "military_posture": ("official", "analysis", "reporting"),
+    # Sanctions / trade / currency coercion — official designations (Treasury/
+    # OFAC/EU/UN listings), customs + central-bank/reserve data first, then wire
+    # reporting, sanctions/trade analysis, and adversary state media as framing.
+    "economic_coercion": ("official", "reporting", "analysis", "state_media"),
 }
 
 #: Fallback classes for any dimension not in the doctrine map (defensive — every
