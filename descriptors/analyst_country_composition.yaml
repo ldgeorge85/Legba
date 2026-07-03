@@ -1,9 +1,9 @@
 # P3-T1 — per-COUNTRY composition over the P2 verified UNIT sub-claims.
 #
 # The COMPOSITION leg: a second-order finding per G20 country that
-# reads the SIX bounded P2 units for THAT country — leadership_transition,
+# reads the SEVEN bounded P2 units for THAT country — leadership_transition,
 # energy_security, escalation, narrative_coordination, internal_stability,
-# military_posture — and synthesizes ONE per-country read. It reuses the EXISTING
+# military_posture, economic_coercion — and synthesizes ONE per-country read. It reuses the EXISTING
 # meta_findings_synthesizer kind
 # (Approach A: CONFIGURE, no new Python kind); the per-country behavior is all
 # descriptor + the P3-T2 READ_SLICE change (target-scope + verify-floor).
@@ -72,6 +72,9 @@ subscription:
     - id: military_posture
       data_types: [finding]
       time_window: 24h
+    - id: economic_coercion
+      data_types: [finding]
+      time_window: 24h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 
@@ -117,10 +120,10 @@ method:
       strategy: pause_until_next_window
 
 cadence:
-  # OFFSET after all six units land. Units fire at 01/13 (leadership), 02/14
+  # OFFSET after all seven units land. Units fire at 01/13 (leadership), 02/14
   # (internal_stability), 04/16 (energy), 05/17 (military_posture), 07/19
-  # (escalation), 10/22 (narrative). Compose at :30 past 11 and 23 UTC so the
-  # freshest full set of six is present before synthesis.
+  # (escalation), 09/21 (economic_coercion), 10/22 (narrative). Compose at :30
+  # past 11 and 23 UTC so the freshest full set of seven is present before synthesis.
   fallback_schedule: "30 11,23 * * *"
   # 11h — below the 12h interval, stamped per-(analyst,target) at completion. A
   # cooldown == the 12h interval would land past the next fire and silently halve

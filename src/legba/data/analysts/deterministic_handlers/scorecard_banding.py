@@ -64,9 +64,11 @@ from typing import Any, Mapping, Optional, Sequence
 
 #: The fixed dimensions = the bounded-reasoning unit ANALYST_IDs (runtime-set,
 #: deterministic). Ordered; the verdict reports every one, always. internal_stability
-#: (S1-T4) and military_posture (S1-T5) join the original four P2 units — both are
-#: BROAD units (blanket g20+watch predicate, every desk fires them) so a FIXED
-#: dimension is safe. Keep in sync with country_composition.other_analysts,
+#: (S1-T4) and military_posture (S1-T5) join the original four P2 units, and
+#: economic_coercion (S1-T7, the 7th PMESII dimension: sanctions/trade/currency)
+#: joins them — all BROAD units (blanket g20+watch predicate, every desk fires
+#: them) so a FIXED dimension is safe. Keep in sync with
+#: country_composition.other_analysts,
 #: substrate_query_port._ASSESSMENT_PRODUCER_ANALYSTS, and
 #: unit_correctness_scorer._DEFAULT_UNITS.
 DIMENSIONS: tuple[str, ...] = (
@@ -76,6 +78,7 @@ DIMENSIONS: tuple[str, ...] = (
     "narrative_coordination",
     "internal_stability",
     "military_posture",
+    "economic_coercion",
 )
 
 #: The P3 per-country aggregate. Surfaced as its OWN node (naming its basis id),
