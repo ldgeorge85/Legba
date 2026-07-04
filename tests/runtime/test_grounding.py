@@ -530,6 +530,12 @@ def test_non_event_regex_matches_live_status_quo_shapes():
         "United States – No observable WMD proliferation activity",
         "Canada – No discernible standing military posture shift",
         "Saudi Arabia – No significant internal instability signals",
+        # DQ P6 r2: 'clear'/'evident' non-observation qualifiers (Japan/Saudi live
+        # frames the round-1 alternation missed).
+        "Japan – No clear standing military posture shift",
+        "Saudi Arabia – No clear standing military posture shift",
+        "Argentina – No evident change in standing military posture",
+        "France – No observable coercive economic pressure (neither target nor wielder)",
         "Canada – Stability maintained (no dominant instability vector)",
         "North Korea – Status quo across examined domains with thin evidence",
         "Russia – Low leadership transition risk",
@@ -556,6 +562,12 @@ def test_non_event_regex_keeps_real_event_frames():
         "Japan faces elevated energy-security pressure",
         "No-fly zone declared over the contested corridor",
         "No deal reached in the ceasefire talks",
+        # DQ P6 r2: the negation branch is ANCHORED — a real event whose post-
+        # qualifier word is a CHANGE noun ("de-escalation"), or that merely mentions
+        # "no significant" mid-sentence, must NOT be classified non-event.
+        "No significant de-escalation; airstrikes intensify along the border",
+        "Iran – No significant de-escalation; airstrikes intensify along the border",
+        "Airstrikes continue with no significant restraint reported by monitors",
         "US–Iran War",
     ]
     for name in real_frames:

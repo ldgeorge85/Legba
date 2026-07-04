@@ -46,13 +46,21 @@
 --   rows; NO row is deleted. Routed through the migration runner (ONE txn + ledger;
 --   NO inline BEGIN/COMMIT).
 --
--- MEASURED (live `legba`, 2026-07-03): 14 target-bearing active steady-state
+-- MEASURED (live `legba`, 2026-07-03): 14-17 target-bearing active steady-state
 --   frames matched at authoring time (names churn run-to-run; the predicate, not a
 --   frozen id list, is authoritative). Samples: 3c29a8cd "United States - No
 --   observable WMD proliferation activity", 41d9a783 "Russia - No observable WMD
 --   proliferation activity", d80ab64f "No coordinated narrative detected - organic
 --   heat-wave and policy coverage", 328eb202 "Iran - No observable WMD activity;
 --   trajectory holding". 0 NULL-target rows touched (those are 0072's scope).
+--
+-- DQ P6 r2: the regex above was TIGHTENED in lockstep with grounding.py — the
+--   "No <qualifier>" branch is now anchored (segment boundary + trailing static
+--   observation noun) so a real event mentioning "no significant …" mid-sentence is
+--   not retagged, and 'clear'/'evident' were added so the live "No clear standing
+--   military posture shift" frames (Japan/Saudi Arabia) are caught. Re-measured live
+--   (rolled-back txn): the whole matched set is genuine steady-state (0 real events);
+--   idempotent second pass = 0 rows; reverse restores the baseline.
 
 UPDATE situations s
 SET data = jsonb_set(
@@ -66,4 +74,12 @@ SET data = jsonb_set(
 WHERE s.status = 'active'
   AND s.target_id IS NOT NULL
   AND NOT (COALESCE(s.data, '{}'::jsonb) ? 'dq_p6_prior_status')
-  AND s.name ~* '(^\s*no\y.*(in the latest batch|[- ]specific|alerts?))|(\yno\s+(dominant|observable|discernible|significant|coordinated|credible|material|notable|meaningful|apparent)\y)|(\ystatus\s+quo\y)|(\ystability\s+maintained\y)|(\ylow\s+(near[-\s]?term|multi[-\s]?domain|overall|leadership\s+transition)\y[^.]{0,24}\yrisk\y)';
+  -- POSIX (`~*`) mirror of grounding.py `_NON_EVENT_SITUATION_RE` (keep in lockstep):
+  -- the "No <qualifier>" branch is anchored to a name-segment boundary (start or a
+  -- desk separator –/—/-/:/'(') AND requires a trailing static observation noun in
+  -- the SAME segment (stopped at '.'/';'), so a real event that merely mentions
+  -- "no significant …" mid-sentence, or "No significant de-escalation; airstrikes
+  -- intensify …" (post-qualifier word = the CHANGE noun "de-escalation"), is NOT
+  -- retagged; 'clear'/'evident' added so "No clear standing military posture shift"
+  -- (Japan/Saudi) is caught.
+  AND s.name ~* '(^\s*no\y.*(in the latest batch|[- ]specific|alerts?))|((^|[–—:(-])\s*no\s+(dominant|observable|discernible|significant|coordinated|credible|material|notable|meaningful|apparent|clear|evident)\y[^.;]*?\y(activity|activities|shift|shifts|posture|pressure|signal|signals|narrative|narratives|detected|observed|vector|vectors|instability|instabilities|movement|movements|buildup|buildups|mobilization|maneuver|maneuvers|indication|indications|deployment|deployments|incident|incidents|unrest|anomaly|anomalies)\y)|(\ystatus\s+quo\y)|(\ystability\s+maintained\y)|(\ylow\s+(near[-\s]?term|multi[-\s]?domain|overall|leadership\s+transition)\y[^.]{0,24}\yrisk\y)';

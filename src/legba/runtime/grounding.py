@@ -232,18 +232,37 @@ def world_context_min_score() -> float:
 #      platform-wide was one of these (a fold-count-driven non-event heading the
 #      global grounding block), so mid-string negation/status-quo must match too.
 #
-# STILL CONSERVATIVE — the "No <qualifier>" branch fires only on non-observation
-# qualifiers (no observable/discernible/significant/dominant/coordinated/…), so a
-# real EVENT frame "No-fly zone declared …" (no space before "-fly") or "No deal
-# reached …" ("deal" is not a qualifier) does NOT match; and the "low … risk"
-# branch is scoped to the near-term/multi-domain/overall/leadership-transition
-# risk-level qualifiers, so "Drives Escalation Risk" (no leading "low") stays a
-# real frame. Legitimate energy_security "low/elevated energy-security pressure"
-# reads are deliberately NOT matched (a low-pressure read is a real assessment).
+# STILL CONSERVATIVE — the "No <qualifier>" branch is DOUBLY anchored so it fires
+# only on a desk-name status-quo shape, never on a real event that merely mentions
+# a negated qualifier mid-sentence:
+#   (1) LEAD-IN anchor: the "No" must sit at a name-segment boundary — string start
+#       or right after a desk separator (–/—/-/:/'(') — so "Airstrikes continue with
+#       no significant activity …" (a mid-sentence "no significant") does NOT match.
+#   (2) TRAILING status-noun anchor: within the SAME segment (stopped at '.'/';') the
+#       negated qualifier must be followed by a static observation noun
+#       (activity/shift/posture/pressure/signals/narrative/…), so the real event
+#       "No significant de-escalation; airstrikes intensify along the border" — whose
+#       only post-qualifier word before the ';' is the CHANGE noun "de-escalation" —
+#       does NOT match, while "No observable WMD proliferation activity" (ends in the
+#       state noun "activity") and "No clear standing military posture shift" (Japan/
+#       Saudi live frames — 'clear'/'evident' are non-observation qualifiers too) DO.
+# "No-fly zone declared …" (no space before "-fly") and "No deal reached …" ("deal"
+# is not a qualifier) still fall through. The "low … risk" branch is scoped to the
+# near-term/multi-domain/overall/leadership-transition risk-level qualifiers, so
+# "Drives Escalation Risk" (no leading "low") stays a real frame; legitimate
+# energy_security "low/elevated energy-security pressure" reads (no "risk") are
+# deliberately NOT matched (a low-pressure read is a real assessment).
+#
+# LOCKSTEP: migration 0071 carries the POSIX (`~*`) mirror of this exact pattern —
+# change both together (tests assert each branch on the shared live shapes).
 _NON_EVENT_SITUATION_RE = re.compile(
     r"(?:^\s*no\b.*?(?:in the latest batch|[- ]specific|alerts?))"
-    r"|(?:\bno\s+(?:dominant|observable|discernible|significant|coordinated|"
-    r"credible|material|notable|meaningful|apparent)\b)"
+    r"|(?:(?:^|[–—:(-])\s*no\s+(?:dominant|observable|discernible|significant|"
+    r"coordinated|credible|material|notable|meaningful|apparent|clear|evident)\b"
+    r"[^.;]*?\b(?:activit(?:y|ies)|shifts?|posture|pressure|signals?|"
+    r"narratives?|detected|observed|vectors?|instabilit(?:y|ies)|movements?|"
+    r"buildups?|mobilization|maneuvers?|indications?|deployments?|incidents?|"
+    r"unrest|anomal(?:y|ies))\b)"
     r"|(?:\bstatus\s+quo\b)"
     r"|(?:\bstability\s+maintained\b)"
     r"|(?:\blow\s+(?:near[-\s]?term|multi[-\s]?domain|overall|"

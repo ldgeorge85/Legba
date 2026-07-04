@@ -28,12 +28,22 @@
 --   durable, not overwritten next tick).
 --
 -- THIS MIGRATION closes (status='closed'; valid_until=now(); NO delete) the
---   NULL-target ACTIVE report-receipt rows. Scope = `target_id IS NULL AND
---   status='active'` — the EXACT, reviewer-verifiable discriminator: a legitimate
---   per-desk unit frame ALWAYS carries a country target_id (situation_clustering's
---   _target_for_category populates it from a country-slug category), so every
---   per-desk frame is target_id IS NOT NULL and is NEVER in scope here. Verified
---   live: 0 of the in-scope rows have a country_* target_id.
+--   NULL-target ACTIVE report-receipt rows. Scope discriminator = PROVENANCE, not a
+--   bare `target_id IS NULL` (which over-caught two REAL, NULL-target UNIT frames —
+--   f0e07333 "Iran – Maritime/Diplomatic Tension" from the `escalation` unit, and
+--   89e6a2b4 "Iran – Low near-term leadership transition risk" from the
+--   `leadership_transition` unit; a unit desk frame can legitimately carry a NULL
+--   target when its category is not a country slug, e.g. 'severity:low'/'escalation').
+--   A situation's member findings are the `analyst_outputs` rows sharing its
+--   `situation_signature`. We close a NULL-target active frame ONLY IF:
+--     (a) at least one member was produced by a COMPOSITION/meta analyst
+--         (country_composition / region_composition / escalation_composition /
+--         world_assessor) — i.e. it is a genuine report receipt; AND
+--     (b) NO member was produced by any OTHER (unit) analyst, and none has a NULL
+--         producer — so ANY frame with a unit-analyst member is SPARED.
+--   This is the review-preferred provenance rule: a report-receipt situation's
+--   signature is minted only from composition producers, whereas a unit frame's
+--   signature is minted from its unit analyst — the two never mix in this table.
 --
 -- REVERSIBLE:
 --   UPDATE situations
@@ -46,13 +56,17 @@
 --   rows; NO row is deleted. Routed through the migration runner (ONE txn + ledger;
 --   NO inline BEGIN/COMMIT).
 --
--- MEASURED (live `legba`, 2026-07-03): 35 NULL-target active rows matched; 0 carry
---   a country_* target_id (no per-desk frame closed). Samples: 99ed6b1e-class
---   "United Kingdom - Composite Assessment", 4599f120 "China - Overall Strategic
---   Composition Assessment", 265df140 "Canada - Overall Stability Assessment",
---   0ec6e022 "Global Composition Indicates Broad Low Risk …", f0e07333 "Iran -
---   Maritime/Diplomatic Tension" (escalation_composition receipt), 89e6a2b4 "Iran -
---   Low near-term leadership transition risk" (severity:low receipt).
+-- MEASURED (live `legba`, 2026-07-03, migration head 0070): 33 NULL-target active
+--   composition receipts matched by the provenance predicate (down from the 35 the
+--   bare `target_id IS NULL` caught); the two REAL unit frames f0e07333 (escalation
+--   unit) and 89e6a2b4 (leadership_transition unit) are SPARED — each has 0
+--   composition members and >0 unit members. All 33 in-scope rows carry a
+--   `sit:composition:<producer>:<scope>` signature whose members are 100%
+--   composition/meta producers. Samples: 99ed6b1e "United Kingdom – Composite
+--   Assessment" (country_composition), 4599f120 "China – Overall Strategic
+--   Composition Assessment", 265df140 "Canada – Overall Stability Assessment",
+--   0ec6e022 "Global Composition Indicates Broad Low Risk …" (region_composition),
+--   9b98bfad "Global Near-Term Risk Landscape …" (world_assessor).
 
 UPDATE situations s
 SET data = jsonb_set(
@@ -69,4 +83,20 @@ SET data = jsonb_set(
     updated_at = now()
 WHERE s.status = 'active'
   AND s.target_id IS NULL
-  AND NOT (COALESCE(s.data, '{}'::jsonb) ? 'dq_p6_prior_status');
+  AND NOT (COALESCE(s.data, '{}'::jsonb) ? 'dq_p6_prior_status')
+  AND s.situation_signature IS NOT NULL
+  -- (a) a genuine report receipt: >=1 member from a composition/meta analyst
+  AND EXISTS (
+        SELECT 1 FROM analyst_outputs ao
+         WHERE ao.situation_signature = s.situation_signature
+           AND ao.analyst_id IN ('country_composition', 'region_composition',
+                                  'escalation_composition', 'world_assessor')
+      )
+  -- (b) SPARE any frame with a unit-analyst (or unknown-producer) member
+  AND NOT EXISTS (
+        SELECT 1 FROM analyst_outputs ao
+         WHERE ao.situation_signature = s.situation_signature
+           AND (ao.analyst_id IS NULL
+                OR ao.analyst_id NOT IN ('country_composition', 'region_composition',
+                                         'escalation_composition', 'world_assessor'))
+      );
