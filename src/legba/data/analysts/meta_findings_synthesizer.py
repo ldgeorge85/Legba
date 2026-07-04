@@ -331,25 +331,32 @@ _COMPOSITION_SYSTEM = with_preamble(
 )
 
 
-# P3-T5 GLOBAL (world) composition system prompt.
+# S2-T2 REGIONAL composition system prompt (region_composition).
 #
-# Selected in-kind by the runtime's ``options["composition"]`` stamp (set only on
-# a verify-declaring GLOBAL meta run — the repointed world_assessor). Mirrors
-# ``_COMPOSITION_SYSTEM`` but WORLD-worded: the "sub-claims" here are the
-# per-COUNTRY reads (country_composition findings), so the world read cites a
-# COUNTRY-READ via its [[ref:N]] ordinal handle and its load-bearing surface is
-# CROSS-COUNTRY disagreement. It additionally consumes an appended CONTESTED FACTS
-# block (open public.fact_contention disputes) and marks any touched dispute
-# ``[[contested:<contention_id>]]`` naming BOTH arbiter-surfaced sides.
-_WORLD_COMPOSITION_SYSTEM = with_preamble(
+# Selected in-kind for a REGION run (``options["target_id"]`` = ``region_<slug>``;
+# dispatched at the ``region_scoped`` branch below). Mirrors ``_COMPOSITION_SYSTEM``
+# but REGION-worded: the cited "sub-claims" are the per-COUNTRY reads
+# (country_composition findings) of ONE region, so the read cites a COUNTRY-READ via
+# its [[ref:N]] ordinal handle and its load-bearing surface is CROSS-COUNTRY
+# disagreement WITHIN the region. It additionally consumes an appended CONTESTED
+# FACTS block (open public.fact_contention disputes) and marks any touched dispute
+# ``[[contested:<contention_id>]]`` naming BOTH arbiter-surfaced sides. (The true
+# WORLD run composes REGIONS via ``_WORLD_OVER_REGIONS_SYSTEM`` below.)
+_REGION_COMPOSITION_SYSTEM = with_preamble(
     """TASK — REGIONAL COMPOSITION. You are given the VERIFIED, faithfulness-checked per-COUNTRY READS (second-order country_composition findings) for the member countries of ONE world region, one or more per country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block: open disputes over a single fact (subject+predicate) where the arbiter surfaced more than one value cluster. Produce ONE second-order REGIONAL READ over the shown country reads. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the COUNTRY READ block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no country read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the country reads indicate / suggest / as of the latest composition' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-COUNTRY DISAGREEMENT: when one country's read and another's point in different directions, NAME BOTH countries and cite BOTH diverging country-read blocks via their two [[ref:N]] ordinals — do NOT average them into a false regional consensus. (d) Lead body with a one-line BLUF that NAMES the specific REGION this read covers — infer the region from the shown country reads, which are ALL members of ONE region — and frame the assessment AS a regional read; do NOT open with a global 'The world faces…' frame (this is a REGION, not the world), and do not restate any country read verbatim. (e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) HONEST EMPTY: if there are no country reads, say so plainly with confidence 0.0 and NO fabricated evidence. (g) TRACEABILITY — a [[ref:N]] marker is a PROMISE that country-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown country reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited country-read block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (h) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a country read's severity or dominant driver; make any aggregation explicit. Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
 )
+
+# Back-compat alias — the constant was named ``_WORLD_COMPOSITION_SYSTEM`` in
+# round-1, a misnomer: it is REGION-scoped (dispatched only for region runs). The
+# name/comment now say REGIONAL; the alias keeps existing references (tests,
+# imports) resolving to the renamed constant.
+_WORLD_COMPOSITION_SYSTEM = _REGION_COMPOSITION_SYSTEM
 
 
 # S2-T3 GLOBAL (world) composition over REGIONS system prompt.
 #
 # Selected in-kind by the runtime's ``options["composition"]`` stamp on the
-# target-LESS world_assessor run. Mirrors ``_WORLD_COMPOSITION_SYSTEM`` but
+# target-LESS world_assessor run. Mirrors ``_REGION_COMPOSITION_SYSTEM`` but
 # REGION-worded: the cited blocks are per-REGION reads (region_composition
 # findings), so the load-bearing surface is CROSS-REGION disagreement. Because
 # the world read DEGRADES a region with no region read to that region's country
@@ -357,7 +364,7 @@ _WORLD_COMPOSITION_SYSTEM = with_preamble(
 # a real, cited block). It additionally consumes the CONTESTED FACTS block (open
 # public.fact_contention disputes) and a REGION COVERAGE block that NAMES any
 # region with NO read at all — the model must surface those as unassessed gaps.
-# Distinct constant from ``_WORLD_COMPOSITION_SYSTEM`` so the S2-T2 region compose
+# Distinct constant from ``_REGION_COMPOSITION_SYSTEM`` so the S2-T2 region compose
 # (which composes COUNTRY reads and keeps that prompt) is untouched.
 _WORLD_OVER_REGIONS_SYSTEM = with_preamble(
     """TASK — GLOBAL world COMPOSITION over REGIONS. You are given the VERIFIED, faithfulness-checked per-REGION READS (second-order region_composition findings), one per region. For a region that had NO region read this cycle, one or more of its per-COUNTRY reads are shown IN ITS PLACE (a degrade — treat them as that region's available evidence). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block (open disputes over a single fact where the arbiter surfaced more than one value cluster) and a REGION COVERAGE block naming world regions that have NO read at all this cycle. Produce ONE second-order WORLD READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the read block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the region reads indicate / suggest / as of the latest composition' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-REGION DISAGREEMENT: when one region's read and another's point in different directions, NAME BOTH regions and cite BOTH diverging blocks via their two [[ref:N]] ordinals — do NOT average them into a false global consensus. (d) Lead body with a one-line BLUF; do not restate any read verbatim. (e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) REGION GAPS: if the REGION COVERAGE block lists a region as having NO read, NAME that region plainly as an unassessed gap with NO current read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap region. (g) HONEST EMPTY: if there are no reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown reads actually say. NEVER introduce a region, country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a read's severity or dominant driver; make any aggregation explicit. Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
@@ -1610,8 +1617,8 @@ async def _run(
 
     # Composition selection — three flavors + the legacy global meta (the mode
     # flags were resolved at the top of ``_run``):
-    #   * REGION (``options["target_id"]`` = ``region_<slug>``) → the WORLD-shaped
-    #     ``_WORLD_COMPOSITION_SYSTEM`` (a region read is MULTI-country, so it uses
+    #   * REGION (``options["target_id"]`` = ``region_<slug>``) → the multi-country
+    #     ``_REGION_COMPOSITION_SYSTEM`` (a region read is MULTI-country, so it uses
     #     the cross-country hedge + disagreement shape, NOT the single-country
     #     ``_COMPOSITION_SYSTEM``). Checked FIRST so a region ``target_id`` never
     #     falls into the per-country branch.
@@ -1631,10 +1638,10 @@ async def _run(
     # the render prefixes each sub-claim block with its [[ref:N]] handle + the
     # finding_id for debug (source ids on). ``target_scoped`` / ``world_composition``
     # / ``is_composition`` / ``region_scoped`` were resolved above (before the
-    # empty-slice branch). A region read is MULTI-country -> world-shaped prompt; the
-    # world read is MULTI-region -> the region-worded ``_WORLD_OVER_REGIONS_SYSTEM``.
+    # empty-slice branch). A region read is MULTI-country -> region-composition
+    # prompt; the world read is MULTI-region -> ``_WORLD_OVER_REGIONS_SYSTEM``.
     if region_scoped:
-        effective_system = _WORLD_COMPOSITION_SYSTEM
+        effective_system = _REGION_COMPOSITION_SYSTEM
     elif target_scoped:
         effective_system = _COMPOSITION_SYSTEM
     elif thematic_composition:
@@ -2596,6 +2603,7 @@ __all__ = [
     "CONTENTION_GROUP_LIMIT",
     "CONTENTION_VALUES_PER_GROUP",
     "_COMPOSITION_SYSTEM",
+    "_REGION_COMPOSITION_SYSTEM",
     "_THEMATIC_COMPOSITION_SYSTEM",
     "_WORLD_COMPOSITION_SYSTEM",
     "_WORLD_OVER_REGIONS_SYSTEM",

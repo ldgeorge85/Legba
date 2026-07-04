@@ -74,56 +74,127 @@ _SEVERITY_WEIGHT = {
 # effective-confidence threshold — unchanged for severity-less findings.
 _SEVERITY_WEIGHT_BASELINE = 1.0
 
-# P7-F4 — ABSENCE / negative-finding title markers. A confident 'nothing is
-# happening' read must NOT page the escalations channel (the channel is for the
-# signal, not for confident boredom). These mirror the verify floor's absence
-# vocabulary (legba.data.provenance.verify._ABSENCE_MARKERS) so the alert gate
-# classifies the same low-risk reads the verify pass already recognizes. The
-# check is on the finding TITLE (the assessors lead with the verdict there — 'No
-# material escalation', 'Argentina – Low leadership transition risk'). A genuine
+# P7-F4 / P7 r2 — ABSENCE VERDICT LEADS. A confident 'nothing is happening' read
+# must NOT page the escalations channel (the channel is for the signal, not for
+# confident boredom). P7 r2 TIGHTENS the round-1 heuristic, which over-suppressed:
+# a bare ``startswith('no ')`` gagged 'No off-ramp as Iran-Israel exchange widens'
+# and 'No ceasefire despite strikes', and the broad 'routine' / 'steady state' /
+# 'no new' / 'no change' SUBSTRINGS caught 'Routine patrol ambushed' and 'Non-
+# routine mobilization near border' — all REAL escalations. The match is now
+# anchored: only a title that, after an optional '<subject> – ' prefix, OPENS with a
+# recognized absence VERDICT phrase reads as boredom. These mirror the verify floor's
+# absence vocabulary (legba.data.provenance.verify._ABSENCE_MARKERS). A genuine
 # indicator-flip escalation is unaffected: this suppression lives ONLY on the
-# confidence×severity gate leg, so a pre-registered warning signpost firing
-# (_is_indicator_activation) still escalates regardless of an absence title.
-_ABSENCE_TITLE_MARKERS = (
-    "no material",
+# confidence×severity gate leg (_is_indicator_activation does NOT call this).
+_ABSENCE_VERDICT_LEADS = (
+    "no observable",
+    "no discernible",
     "no significant",
     "no credible",
+    "no material",
     "no confirmed",
     "no evidence",
     "no indication",
     "no reports",
     "no report of",
-    "no new",
     "no notable",
     "no observed",
-    "no discernible",
-    "low risk",
-    "low near-term",
-    "low leadership transition risk",
+    "no escalation",
+    "steady-state",
+    "steady state",
+    "status quo",
     "nothing to suggest",
     "nothing indicating",
-    "steady state",
-    "steady-state",
-    "no change",
-    "no escalation",
-    "routine",
 )
+
+# Grammatical false-positives for the bare 'No <qualifier>' lead — an idiom or a
+# named escalation, NOT an absence verdict. Consulted by _is_bare_negative_lead.
+_NEGATIVE_LEAD_FALSE_POSITIVES = (
+    "no fewer",
+    "no less",
+    "no-fly",
+    "no fly",
+    "no longer",
+    "no doubt",
+    "no single",
+    "no one",
+    "no off-ramp",
+    "no ceasefire",
+)
+
+# Coarse severity ORDER (low→high) for the bare-negative severity gate: a
+# moderate-or-higher finding is NEVER suppressed by the bare 'No …' title heuristic.
+_SEVERITY_RANK = {
+    "info": 0,
+    "low": 1,
+    "moderate": 2,
+    "medium": 2,
+    "elevated": 3,
+    "high": 4,
+    "critical": 5,
+}
+_MODERATE_RANK = 2
+
+# Separators an assessor puts between a SUBJECT and its verdict ('Argentina – Low
+# leadership transition risk', 'United States – No observable WMD proliferation …').
+_SUBJECT_SEPARATORS = (" – ", " — ", " -- ", " - ", ": ")
+
+
+def _strip_subject_prefix(low: str) -> str:
+    """Drop a short leading '<subject> <sep> ' prefix so a verdict phrase that
+    follows a country/subject label can be matched at the START of the title."""
+    for sep in _SUBJECT_SEPARATORS:
+        idx = low.find(sep)
+        if 0 < idx <= 40:
+            return low[idx + len(sep):].strip()
+    return low
 
 
 def is_absence_or_negative_title(title: str | None) -> bool:
-    """True when a finding TITLE reads as an absence / low-risk 'nothing is
-    happening' verdict (P7-F4). Conservative: keyed on the leading verdict phrase
-    or an explicit absence marker, so a real event title never trips it."""
+    """True when a finding TITLE is a WHOLE-title absence / low-risk / steady-state
+    VERDICT (P7-F4, tightened P7 r2).
+
+    Anchored on the leading verdict phrase — after an optional '<subject> – ' prefix
+    — NOT a bare ``startswith('no ')`` and NOT a mid-title substring, so a real
+    escalation title ('No off-ramp as … widens', 'Routine patrol ambushed', 'Non-
+    routine mobilization near border') never trips it. Severity-independent: a
+    genuine 'nothing happening' verdict is boredom at any severity. The WEAKER bare
+    'No <qualifier>' catch-all lives in :func:`escalation_gate_decision`, gated on
+    sub-moderate severity so a severe finding is never suppressed by a heuristic.
+    """
     if not title:
         return False
-    low = str(title).strip().lower()
+    low = _strip_subject_prefix(str(title).strip().lower())
     if not low:
         return False
-    if low.startswith("no ") and not low.startswith(
-        ("no fewer", "no less", "no-fly", "no fly")
+    if any(low.startswith(lead) for lead in _ABSENCE_VERDICT_LEADS):
+        return True
+    # A 'Low … risk / likelihood / near-term …' verdict lead.
+    if low.startswith("low ") and any(
+        w in low for w in ("risk", "likelihood", "probability", "near-term", "prospect")
     ):
         return True
-    return any(marker in low for marker in _ABSENCE_TITLE_MARKERS)
+    return False
+
+
+def _is_bare_negative_lead(title: str | None) -> bool:
+    """A weaker 'No <qualifier> …' title lead that is NOT a recognized absence
+    verdict. Consulted ONLY by :func:`escalation_gate_decision`, and only for a
+    sub-moderate finding (P7 r2) — a moderate+/high finding is never gagged by it."""
+    if not title:
+        return False
+    low = _strip_subject_prefix(str(title).strip().lower())
+    if not low:
+        return False
+    return low.startswith("no ") and not low.startswith(_NEGATIVE_LEAD_FALSE_POSITIVES)
+
+
+def _severity_rank(severity: str | None) -> int:
+    """Coarse rank for the bare-negative severity gate. An unknown / absent severity
+    is treated as MODERATE — the safe direction (do NOT gag it)."""
+    if severity is None:
+        return _MODERATE_RANK
+    return _SEVERITY_RANK.get(str(severity).lower(), _MODERATE_RANK)
 
 
 @dataclass
@@ -289,6 +360,12 @@ def escalation_gate_decision(
     # escalations channel on the confidence×severity leg (a genuine indicator
     # flip escalates via _is_indicator_activation, which does NOT call this).
     if is_absence_or_negative_title(title):
+        return False
+    # P7 r2: a WEAKER bare 'No <qualifier> …' lead that is NOT a recognized verdict
+    # ('No major developments …') is treated as absence ONLY for a sub-moderate
+    # finding — a moderate+/high finding with such a title describes an ongoing
+    # situation and MUST still page (a title heuristic never gags a severe finding).
+    if _severity_rank(severity) < _MODERATE_RANK and _is_bare_negative_lead(title):
         return False
     weight = (
         _SEVERITY_WEIGHT.get(str(severity).lower(), _SEVERITY_WEIGHT_BASELINE)

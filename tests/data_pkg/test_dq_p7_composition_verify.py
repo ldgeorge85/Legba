@@ -318,3 +318,170 @@ def test_migration_0074_is_world_scoped_and_non_destructive():
     assert "_dq0074_prior_superseded_by" in sql
     # close/null/annotate only — no row delete
     assert "DELETE FROM analyst_outputs" not in sql.upper()
+
+
+# ===========================================================================
+# P7 r2 — BLOCKING: forward-looking / bold exemption is FLOOR-anchored, the
+# JUDGE still grades every PRESENT-FACT clause (H1 invariant restored)
+# ===========================================================================
+
+
+def test_present_fact_with_conditional_tail_is_judge_graded():
+    # 'Tehran resumed enrichment, which would confirm a breakout' — a PRESENT-FACT
+    # main clause + a conditional TAIL. The round-1 unanchored substring match
+    # ('would confirm') wrongly hid it from the judge; anchored, it is NOT forward-
+    # looking, so BOTH the floor counts it and the judge grades it (H1).
+    clause = (
+        "Tehran resumed uranium enrichment at Fordow, which would confirm a "
+        "breakout posture."
+    )
+    assert _is_fact_asserting(clause) is True       # floor counts it
+    assert _is_judgeable_claim(clause) is True       # judge grades it
+
+
+def test_present_fact_with_conditional_tail_uncited_scores_no_citation_both_floors():
+    body = (
+        "Tehran resumed uranium enrichment at Fordow, which would confirm a "
+        "breakout posture.\n"
+    )
+    # unit floor
+    rep_u = _deterministic_floor(body, [_unit_citation(1, str(uuid4()))])
+    assert rep_u.faithfulness_score == 0.0
+    assert any(s.reason == "no_citation" for s in rep_u.unsupported_spans)
+    # composition (sub-claim) floor
+    rep_c = _deterministic_floor_subclaim(body, [_comp_citation(1, eff=0.6, derived=["s1"])])
+    assert rep_c.faithfulness_score == 0.0
+    assert any(s.reason == "no_citation" for s in rep_c.unsupported_spans)
+
+
+def test_pure_watch_bullet_would_signal_exempt_both():
+    # A PURE forward-looking signpost (bare 'X would signal Y', no present fact) is
+    # exempt from BOTH the floor and the judge — nothing exists to cite.
+    line = "Official announcements of fuel rationing would signal escalation"
+    assert _is_fact_asserting(line) is False
+    assert _is_judgeable_claim(line) is False
+
+
+def test_watch_section_list_item_dropped_before_gates():
+    # A bullet UNDER an 'Indicators to watch' heading is a pre-registered indicator:
+    # _segment_claims drops the whole section, so it never reaches either gate.
+    body = (
+        "**Indicators to watch**\n"
+        "- Border troop concentrations exceed two divisions.\n"
+    )
+    segs = _segment_claims(body)
+    assert not any("Border troop" in s for s in segs)
+    rep = _deterministic_floor_subclaim(body, [_comp_citation(1, eff=0.6, derived=["s1"])])
+    # No checkable claim survives the section drop -> vacuously faithful.
+    assert rep.checkable_claims == 0
+    assert rep.faithfulness_score == 1.0
+
+
+def test_bold_factual_sentence_is_not_a_heading():
+    # A whole-line bold that ASSERTS a fact is NOT a heading — the judge grades it
+    # and the floor counts it (only a short titley bold LABEL is exempt).
+    from legba.data.provenance.verify import _is_bold_heading
+
+    assert _is_bold_heading("**Key points**") is True
+    assert _is_bold_heading("**Indicators to watch**") is True
+    assert _is_bold_heading("**Tehran resumed enrichment**") is False
+    assert _is_fact_asserting("**Tehran resumed enrichment**") is True
+    assert _is_judgeable_claim("**Tehran resumed enrichment**") is True
+
+
+def test_plain_uncited_fact_still_caught_after_anchor():
+    # The anchor must not over-exempt: a plain uncited fact is still flagged.
+    body = "Government forces shelled the eastern district overnight.\n"
+    rep = _deterministic_floor_subclaim(body, [_comp_citation(1, eff=0.6, derived=["s1"])])
+    assert rep.faithfulness_score == 0.0
+    assert any(s.reason == "no_citation" for s in rep.unsupported_spans)
+
+
+# ===========================================================================
+# P7 r2 — MAJOR: alert absence-title suppression no longer silences real
+# escalations, and a moderate+/high finding is never gagged by a heuristic
+# ===========================================================================
+
+
+def test_alert_gate_pages_real_escalations_with_negative_titles():
+    from legba.data.analysts.agency.binding import (
+        escalation_gate_decision,
+        is_absence_or_negative_title,
+    )
+
+    # These read as escalation, not boredom — the round-1 heuristic wrongly gagged
+    # them (bare 'no ' / 'routine' substring). They must NOT be absence titles ...
+    for t in (
+        "No off-ramp as Iran-Israel exchange widens",
+        "Routine patrol ambushed; 12 soldiers killed",
+        "Non-routine mobilization near border",
+        "No ceasefire despite strikes",
+    ):
+        assert is_absence_or_negative_title(t) is False, t
+    # ... and a high-severity finding with such a title PAGES.
+    for t in (
+        "No off-ramp as Iran-Israel exchange widens",
+        "Routine patrol ambushed; 12 soldiers killed",
+        "Non-routine mobilization near border",
+    ):
+        assert escalation_gate_decision(severity="high", confidence=0.9, title=t) is True, t
+
+
+def test_alert_gate_still_suppresses_genuine_absence_verdicts():
+    from legba.data.analysts.agency.binding import (
+        escalation_gate_decision,
+        is_absence_or_negative_title,
+    )
+
+    # A whole-title absence / low-risk verdict (even behind a '<subject> – ' prefix)
+    # is boredom at ANY severity — suppressed.
+    assert is_absence_or_negative_title("Argentina – Low leadership transition risk") is True
+    assert is_absence_or_negative_title(
+        "United States – No observable WMD proliferation activity"
+    ) is True
+    assert escalation_gate_decision(
+        severity="low", confidence=0.9, title="Argentina – Low leadership transition risk"
+    ) is False
+    assert escalation_gate_decision(
+        severity="info", confidence=0.99,
+        title="United States – No observable WMD proliferation activity",
+    ) is False
+
+
+def test_alert_gate_bare_negative_lead_gated_on_severity():
+    from legba.data.analysts.agency.binding import escalation_gate_decision
+
+    # A bare 'No <qualifier>' lead that is NOT a recognized verdict is treated as
+    # absence ONLY for a sub-moderate finding; a moderate+/high finding still pages.
+    title = "No major developments this week"
+    assert escalation_gate_decision(severity="low", confidence=0.99, title=title) is False
+    assert escalation_gate_decision(severity="high", confidence=0.9, title=title) is True
+    assert escalation_gate_decision(severity="moderate", confidence=0.9, title=title) is True
+
+
+# ===========================================================================
+# P7 r2 — MAJOR: cadence cooldown is stamped on EVERY organic trigger (incl.
+# the reactive 'coalesced_fire'), NOT the manual/forced 'method' run
+# ===========================================================================
+
+
+def test_organic_trigger_includes_coalesced_fire_excludes_method():
+    from legba.runtime.dapr_actors import _FORCED_TRIGGERS, _is_organic_trigger
+
+    # The production reactive per-target dispatch stamps the cooldown ...
+    assert _is_organic_trigger("coalesced_fire") is True
+    assert _is_organic_trigger("cadence") is True
+    assert _is_organic_trigger("reminder") is True
+    # ... a manual/forced 'method' run does NOT (can't steal the next organic tick).
+    assert _is_organic_trigger("method") is False
+    assert "method" in _FORCED_TRIGGERS
+    assert "coalesced_fire" not in _FORCED_TRIGGERS
+
+
+def test_region_composition_alias_preserved():
+    from legba.data.analysts import meta_findings_synthesizer as synth
+
+    # The constant was renamed REGIONAL; the back-compat alias stays identical so
+    # the region-run dispatch and existing references resolve to the same prompt.
+    assert synth._REGION_COMPOSITION_SYSTEM is synth._WORLD_COMPOSITION_SYSTEM
+    assert "REGIONAL COMPOSITION" in synth._REGION_COMPOSITION_SYSTEM

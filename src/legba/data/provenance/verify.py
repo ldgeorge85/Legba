@@ -334,13 +334,57 @@ _HEDGE_EPSILON: float = 1e-6
 # Everything else splits on a sentence terminator + whitespace, or a newline.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<!\.[A-Z]\.)(?<=[.!?])\s+|\n+")
 
-# C1 (2026-07-03) — a whole-line BOLD heading (``**Indicators to watch**`` or
+# C1 (2026-07-03) — a whole-line BOLD run (``**Indicators to watch**`` or
 # ``- **Indicators to watch:**``): a line that is ONLY a bold run + optional
-# leading bullets + optional trailing colon. A ``**Severity:** High`` scaffold line
-# (content AFTER the bold close) deliberately does NOT match — it stays a
-# label:value scaffold, not a section heading. Used so _segment_claims skips the
-# forward-looking watch section under the bold heading style, not just ``#``.
-_BOLD_HEADING_RE = re.compile(r"^\s*(?:[-*>]\s+)*\*\*[^*\n]+\*\*\s*:?\s*$")
+# leading bullets + optional trailing colon. The inner text is CAPTURED so the
+# gate-side heading test (:func:`_is_bold_heading`) can tell a short section LABEL
+# from a bold factual SENTENCE. A ``**Severity:** High`` scaffold line (content
+# AFTER the bold close) deliberately does NOT match — it stays a label:value
+# scaffold, not a section heading. Used so _segment_claims skips the forward-
+# looking watch section under the bold heading style, not just ``#``.
+_BOLD_HEADING_RE = re.compile(r"^\s*(?:[-*>]\s+)*\*\*([^*\n]+)\*\*\s*:?\s*$")
+
+# P7 r2 — an independent FINITE verb (a copula / auxiliary, or a clearly-verbal
+# past tense) signals a present-fact MAIN clause. Two uses: (1) keep a bold FACTUAL
+# sentence (``**Tehran resumed enrichment**``) OUT of the heading exemption, and
+# (2) anchor :func:`_is_forward_looking` so a ``present-fact, which would …`` clause
+# is NOT mistaken for a pure prediction. Biased to unambiguous verbs (few noun
+# homographs) — the PRIMARY forward-looking anchor is the comma; this is the
+# secondary no-comma guard.
+_PRESENT_FACT_VERB_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|being|has|have|had|"
+    r"remains?|appears?|continues?|holds?|maintains?|stands?|"
+    r"resumed|seized|deployed|launched|killed|announced|began|fired|"
+    r"mobili[sz]ed|halted|suspended|restored|captured|invaded|shelled|"
+    r"bombed|declared|imposed|signed|breached|assassinated|detained|"
+    r"arrested|ousted|toppled|erupted|escalated)\b"
+)
+
+
+def _is_bold_heading(line: str) -> bool:
+    """A whole-line bold run that is HEADING-SHAPED — a short section LABEL
+    (``**Key points**``, ``**Indicators to watch**``), NOT a bold factual SENTENCE
+    (``**Tehran resumed enrichment**``).
+
+    A genuine heading is judge-exempt AND floor-exempt (pure structure); a bold
+    factual sentence is exempt from NEITHER — the judge must grade it and the floor
+    must count it (H1: an exemption must not hide a present fact from the judge).
+    """
+    m = _BOLD_HEADING_RE.match(line)
+    if not m:
+        return False
+    content = m.group(1).strip()
+    if not content:
+        return False
+    # A heading is short + titley: no sentence-terminal punctuation and no
+    # independent finite verb (which would make it a factual assertion).
+    if len(content) > 48 or len(content.split()) > 7:
+        return False
+    if content.endswith((".", "!", "?")):
+        return False
+    if _PRESENT_FACT_VERB_RE.search(content.lower()):
+        return False
+    return True
 
 # C1 (2026-07-03) — a span that is ONLY citation markers (``[21][26]`` or
 # ``[[ref:3]]``), the orphan the sentence splitter severs off a claim whose
@@ -501,8 +545,33 @@ _FORWARD_LOOKING_MARKERS = (
 
 
 def _is_forward_looking(low: str) -> bool:
-    """True when a claim is a future-conditional watch/indicator bullet (P7-F1(5))."""
-    return any(marker in low for marker in _FORWARD_LOOKING_MARKERS)
+    """True when a clause is a PURE future-conditional watch/indicator bullet.
+
+    ANCHORED (P7 r2, H1): the conditional idiom must GOVERN THE WHOLE clause — the
+    clause OPENS with the idiom, or is a bare ``X would/could Y`` whose subject (the
+    text before the modal) carries NO independent present-fact assertion. A clause
+    that leads with a present-fact main clause and only trails a conditional
+    (``Tehran resumed enrichment, which would confirm a breakout``) is NOT
+    forward-looking — the floor must count and the judge must grade the present
+    fact. The round-1 unanchored substring match wrongly swallowed such facts.
+    """
+    marker_pos = min(
+        (low.find(m) for m in _FORWARD_LOOKING_MARKERS if m in low),
+        default=-1,
+    )
+    if marker_pos < 0:
+        return False
+    prefix = low[:marker_pos].strip()
+    # Opens with the conditional idiom -> whole-clause prediction.
+    if not prefix:
+        return True
+    # A comma-joined lead clause -> present-fact main clause + conditional tail.
+    if "," in prefix:
+        return False
+    # An independent finite verb in the subject -> a present-fact main clause.
+    if _PRESENT_FACT_VERB_RE.search(prefix):
+        return False
+    return True
 
 
 # Advisory span reasons (#3): NOT unsupported claims — they are structural
@@ -963,13 +1032,15 @@ def _is_fact_asserting(claim: str) -> bool:
     # A markdown heading line is structure, not an assertion.
     if s.lstrip().startswith("#"):
         return False
-    # P7-F1(1): a whole-line BOLD heading (``**Key points**``, ``- **Drivers**``)
+    # P7-F1(1): a whole-line BOLD HEADING (``**Key points**``, ``- **Drivers**``)
     # is a section label, not a fact — extend the ``#`` heading drop to the bold
     # style the composition assessors emit (the AU energy finding floored 0/4 with
-    # ``**Key points**`` itself counted as an uncited claim). A ``**Severity:**
-    # High`` scaffold line does NOT match (_BOLD_HEADING_RE requires the line be
-    # ONLY the bold run) — it stays handled by _LABELED_SCAFFOLD_RE below.
-    if _BOLD_HEADING_RE.match(s):
+    # ``**Key points**`` itself counted as an uncited claim). P7 r2: only a
+    # HEADING-SHAPED bold line drops — a bold FACTUAL sentence
+    # (``**Tehran resumed enrichment**``) is a real claim, still counted. A
+    # ``**Severity:** High`` scaffold line does NOT match (_BOLD_HEADING_RE requires
+    # the line be ONLY the bold run) — it stays handled by _LABELED_SCAFFOLD_RE.
+    if _is_bold_heading(s):
         return False
     # P7-F1(5): a forward-looking watch/indicator bullet ('… would confirm …') is
     # a future non-occurrence the read is watching FOR — nothing exists to cite.
@@ -1031,11 +1102,13 @@ def _is_judgeable_claim(claim: str) -> bool:
     low = stripped.lower()
     if s.lstrip().startswith("#"):
         return False
-    # P7-F1(1): a whole-line BOLD heading is structure for the JUDGE too — a bold
-    # section label carries no fact for the judge to grade. (Unlike the floor's
-    # BLUF/synthesis/absence exemptions, this is a genuine NON-claim, so exempting
-    # it from the judge does not risk hiding a fabricated fact — H1 preserved.)
-    if _BOLD_HEADING_RE.match(s):
+    # P7-F1(1): a whole-line BOLD HEADING is structure for the JUDGE too — a bold
+    # section label carries no fact for the judge to grade. P7 r2: only a genuine
+    # HEADING-SHAPED bold line is exempt — a bold FACTUAL sentence
+    # (``**Tehran resumed enrichment**``) is a real claim the judge MUST grade
+    # (H1). (Unlike the floor's BLUF/synthesis/absence exemptions, a genuine bold
+    # heading is a true NON-claim, so exempting it does not hide a fabricated fact.)
+    if _is_bold_heading(s):
         return False
     # Still skip the explicitly forward-looking watch section (not a present
     # claim by construction); _segment_claims already section-skips it, this
@@ -1043,12 +1116,14 @@ def _is_judgeable_claim(claim: str) -> bool:
     for head in _NON_FACTUAL_HEADINGS:
         if low.startswith(head):
             return False
-    # P7-F1(5): exempt the JUDGE (as the floor now is) from grading a forward-
-    # looking watch/indicator bullet that leaked outside a recognized heading — a
-    # future conditional ('… would confirm …') is not a present fact and cannot
-    # cite an existing signal. This does NOT exempt a present-tense absence read
-    # ('No evidence of X'), which the judge still grades to catch a fabricated
-    # absence (H1).
+    # P7 r2 (H1): the JUDGE is exempt ONLY from a PURE forward-looking prediction —
+    # one whose conditional idiom governs the WHOLE clause (a bare 'X would confirm
+    # Y' signpost that leaked outside a recognized watch heading). _is_forward_looking
+    # is now ANCHORED, so a present-fact main clause carrying a conditional TAIL
+    # ('Tehran resumed enrichment, which would confirm a breakout') is NOT forward-
+    # looking and the judge STILL grades it — the round-1 unanchored substring match
+    # wrongly hid such present facts. A present-tense absence read ('No evidence of
+    # X') is likewise judge-graded (the floor exempts absence, the judge does not).
     if _is_forward_looking(low):
         return False
     if len(re.findall(r"[A-Za-z]{2,}", stripped)) < 2:

@@ -121,6 +121,22 @@ class ActorRunOutcome(str, Enum):
     NOOP = "noop"  # nothing to do (no new signals, etc.)
 
 
+# P7-F3 / P7 r2 — trigger classes that are MANUAL/FORCED (a consult_api /
+# deep_consult_api / ad-hoc proxy.run() default), i.e. NOT an organic schedule
+# fire. Everything else — 'cadence', 'reminder', and the PRODUCTION reactive
+# per-target dispatch 'coalesced_fire' (source_first_runtime._work) — is ORGANIC
+# and stamps the per-(analyst, target) cadence cooldown at completion. Round-1
+# wrongly used an INCLUDE set that omitted 'coalesced_fire', so reactive fires
+# never stamped the cooldown and re-ran redundantly on the same output.
+_FORCED_TRIGGERS = frozenset({"method"})
+
+
+def _is_organic_trigger(trigger_kind: str) -> bool:
+    """True when a run is an ORGANIC schedule/reactive fire (stamps the cadence
+    cooldown), False only for the manual/forced 'method' path."""
+    return trigger_kind not in _FORCED_TRIGGERS
+
+
 _FACTORY_KEY_HINTS = (
     "regex", "max_length", "minimum", "maximum", "options",
     "fetcher", "expected_family", "schema_fetcher",
@@ -1657,14 +1673,17 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
     async def run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
         target_filter = payload.get("target_filter")
-        # P7-F3 — the run's trigger class. Organic cadence ticks pass 'cadence'
-        # (_on_reminder / _fanout_to_workers) or 'reminder'; a manual/forced/ad-hoc
-        # proxy.run() defaults to 'method'. Only an ORGANIC tick stamps the cadence
-        # cooldown at completion, so a forced run never steals the next scheduled
-        # organic fire (the escalation_composition 08:30Z-tick-suppressed-by-01:04Z-
-        # force symptom).
+        # P7-F3 / P7 r2 — the run's trigger class. EVERY trigger is organic EXCEPT
+        # the manual/forced 'method' path (consult_api / deep_consult_api / an ad-hoc
+        # proxy.run() default); see :func:`_is_organic_trigger`. Round-1 used an
+        # INCLUDE list {'cadence','reminder'} that OMITTED the PRODUCTION reactive
+        # per-target dispatch (trigger_kind='coalesced_fire') — so a reactive fire
+        # never stamped the per-(analyst,target) cooldown and re-fired redundantly on
+        # the same output. The exclude set keeps the round-1 intent (a forced run
+        # never steals the next scheduled organic tick) AND restores cooldown stamping
+        # on 'coalesced_fire' + 'cadence' + 'reminder'.
         trigger_kind = str(payload.get("trigger_kind", "method"))
-        _is_organic_tick = trigger_kind in ("cadence", "reminder")
+        _is_organic_tick = _is_organic_trigger(trigger_kind)
         actor_id = self.id.id
         # Durable scoping (review 2026-07-03). The production fan-out ALWAYS passes
         # target_filter (source_first_runtime._work → proxy.run), but an AD-HOC
@@ -2694,9 +2713,11 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # Per-(analyst, target) cooldown — keyed by target_filter so
                     # each target throttles independently (a busy country can't
                     # starve a quiet one). "_global" for the meta/global run.
-                    # P7-F3(a): stamped ONLY on an organic cadence/reminder tick —
-                    # a manual/forced 'method' run no longer writes the cooldown, so
-                    # a debug force can't consume the next scheduled organic fire.
+                    # P7-F3(a) / r2: stamped on every ORGANIC tick — cadence,
+                    # reminder, AND the reactive 'coalesced_fire' — but NOT the
+                    # manual/forced 'method' run (so a debug force can't consume the
+                    # next scheduled organic fire, and a reactive fire still throttles
+                    # its own redundant re-runs).
                     cd_key = str(target_filter) if target_filter else "_global"
                     cd_map = rec.get("cooldown_by_target")
                     if not isinstance(cd_map, dict):

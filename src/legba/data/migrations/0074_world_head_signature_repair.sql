@@ -59,10 +59,11 @@
 -- MEASURED (live `legba`, 2026-07-04, migration head 0073):
 --   (a) 3 ':world'-signature rows carry target_id='region_africa'
 --       (eaf83da3 head + f6505ff0, b8969357 in-chain) -> target_id NULL.
---   (b) 6 stale world heads closed -> superseded_by the live head 3f290d75
---       (2026-07-04 12:00Z, target_id NULL): eaf83da3 (:world, region_africa),
---       47617d52 (country_g20_us), 3de5648e (country_watch_ir),
---       723f1e33 (country_g20_in), 51ccaba9 (country_g20_tr),
+--   (b) >=6 stale world heads closed (count RESOLVED LIVE at apply — a world run
+--       that lands between this measurement and apply adds one) -> superseded_by
+--       the live head 3f290d75 (2026-07-04 12:00Z, target_id NULL): eaf83da3
+--       (:world, region_africa), 47617d52 (country_g20_us), 3de5648e
+--       (country_watch_ir), 723f1e33 (country_g20_in), 51ccaba9 (country_g20_tr),
 --       d6638380 (legacy sig:americas). Result: ONE world head, target_id NULL.
 
 -- (a) NULL the target_id on the ':world'-signature rows (stash prior target_id).
