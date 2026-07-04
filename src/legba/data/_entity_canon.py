@@ -132,6 +132,40 @@ _POSSESSIVE_RE = re.compile(r"\s*['’ʼ‘]s\Z", re.IGNORECASE)
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
+#: Zero-width / invisible characters NER drags into a span (U+200B ZWSP, U+200C
+#: ZWNJ, U+200D ZWJ, U+2060 WORD JOINER, U+FEFF BOM). Left in place they fork a
+#: cluster ("​World Cup" vs "World Cup") and slip past the strip/whitespace
+#: passes, so they are removed BEFORE any normalization (DQ P4 — zero-width leak).
+_ZERO_WIDTH_CHARS = "​‌‍⁠﻿"
+_ZERO_WIDTH_RE = re.compile(f"[{_ZERO_WIDTH_CHARS}]")
+
+#: Leading article the/a/an (case-insensitive) — stripped for the class-agnostic
+#: identity fold + map lookups so "the United Kingdom" folds onto "United
+#: Kingdom" and "The Costa Rican" reaches the demonym map. A word-boundary guards
+#: "theater"/"another" from a spurious strip.
+_ARTICLE_RE = re.compile(r"^(?:the|a|an)\b\s*", re.IGNORECASE)
+
+#: All non-alphanumeric runs — collapsed to nothing to build the identity fold
+#: key ("U.S. Navy" and "US Navy" collapse to the same key once aliased).
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _strip_leading_article(s: str) -> str:
+    """Drop a single leading article (the/a/an). Guarded: never blanks a name.
+
+    Returns ``s`` unchanged when there is no leading article OR the remainder
+    would be empty / < 2 chars (so "The" alone, or "A B", is left intact).
+    """
+    if not s:
+        return s
+    m = _ARTICLE_RE.match(s)
+    if not m:
+        return s
+    rest = s[m.end():].strip()
+    if len(rest) < 2:
+        return s
+    return rest
+
 
 def _strip_name(name: str) -> str:
     """STRIP pass: HTML-unescape, drop possessive, peel punctuation, collapse WS.
@@ -145,6 +179,9 @@ def _strip_name(name: str) -> str:
     # HTML entities first — ``Cape Verde&#039;s`` -> ``Cape Verde's`` so the
     # possessive strip below can then fire, and ``&amp;`` -> ``&``.
     s = html.unescape(name)
+    # Drop zero-width / invisible chars so they never fork a cluster or survive
+    # into the surface form (they slip past .strip() + the whitespace collapse).
+    s = _ZERO_WIDTH_RE.sub("", s)
     s = _WHITESPACE_RE.sub(" ", s).strip()
     # Peel a trailing possessive BEFORE the punctuation strip — otherwise the
     # punctuation strip would eat the apostrophe and leave a dangling ``s``.
@@ -243,7 +280,9 @@ _DEMONYM_MAP: dict[str, str] = {
     "iranian": "Iran",
     "iraqi": "Iraq",
     "israeli": "Israel",
-    "palestinian": "Palestine, State of",
+    # Resolve to the bare "Palestine" (now in the country gazetteer) so the
+    # demonym, the bare name, and the plural all fold to ONE country referent.
+    "palestinian": "Palestine",
     "syrian": "Syria",
     "lebanese": "Lebanon",
     "yemeni": "Yemen",
@@ -398,6 +437,56 @@ _DEMONYM_MAP: dict[str, str] = {
     "trinidadian": "Trinidad and Tobago",
 }
 
+# ---------------------------------------------------------------------------
+# REGION-ADJECTIVE MAP — multi-country / continental adjectives (DQ P4, the
+# operator's Africa/African/Africans case). The DEMONYM map deliberately
+# EXCLUDES these (a continent is not a single country), so they leaked as
+# distinct nodes ("African" person + "Africa" location + "Africans"). This is a
+# SEPARATE, tight, unambiguous curated map: each value is a CONTINENT (a
+# LOCATION, never a country). Deliberately conservative — "arab", "latin",
+# "western", "eastern", "scandinavian" are ambiguous and are NOT here.
+# ---------------------------------------------------------------------------
+_REGION_ADJECTIVE_MAP: dict[str, str] = {
+    "african": "Africa",
+    "european": "Europe",
+    "europe": "Europe",
+    "asian": "Asia",
+    "north american": "North America",
+    "south american": "South America",
+    "oceanian": "Oceania",
+    "antarctic": "Antarctica",
+}
+
+
+def _collapse_target(low: str) -> str | None:
+    """Map a demonym / region-adjective / alias key → its canonical referent.
+
+    Pure + deterministic. ``low`` is an already-stripped, lower-cased surface
+    form. Returns the canonical name a collapse should land on, else ``None``
+    (pass-through). Order: region adjective (continent) → national demonym
+    (country) → alias (country/org). A GUARDED de-pluralization then retries the
+    singular ONLY when the singular is itself a demonym / region adjective
+    ("Africans"→"African"→Africa, "Americans"→"American"→United States) — never
+    blind stemming, so an arbitrary plural name is left untouched.
+    """
+    if low in _REGION_ADJECTIVE_MAP:
+        return _REGION_ADJECTIVE_MAP[low]
+    if low in _DEMONYM_MAP:
+        return _DEMONYM_MAP[low]
+    if low in _ALIAS_MAP:
+        return _ALIAS_MAP[low]
+    # Guarded de-pluralization: strip a single trailing 's' and retry, but ONLY
+    # when the singular is a known demonym / region adjective (len(singular) > 3).
+    if len(low) > 4 and low.endswith("s"):
+        singular = low[:-1]
+        if len(singular) > 3:
+            if singular in _REGION_ADJECTIVE_MAP:
+                return _REGION_ADJECTIVE_MAP[singular]
+            if singular in _DEMONYM_MAP:
+                return _DEMONYM_MAP[singular]
+    return None
+
+
 #: Short / junk tokens NER mis-emits as entities (DQ-H4). The original TINY base
 #: set, kept verbatim. Predicate-based junk classes (clock-times, quantifiers,
 #: numerics, length≤2, residual HTML, bare demonyms) are layered ON TOP in
@@ -433,6 +522,7 @@ _QUANTIFIER_RE = re.compile(
             (?:more|less|fewer|greater)\s+than\b
           | at\s+(?:least|most)\b
           | up\s+to\b
+          | (?:an\s+)?estimated\b
           | (?:about|around|nearly|approximately|over|under|roughly)\b
           | (?:tens|hundreds|thousands|millions|billions)\s+of\b
           | (?:dozens|scores)\s+of\b
@@ -460,8 +550,38 @@ _NUMERIC_RE = re.compile(
 
 #: Residual HTML: the span still carries a tag (<img …>, </p>) or an unescaped
 #: entity (&nbsp;, &#039;). After a clean strip these are gone; their presence
-#: means a malformed span the NER never should have emitted.
+#: means a malformed span the NER never should have emitted. The original pattern
+#: required a COMPLETE tag with a closing ``>`` — truncated NER spans
+#: ("Iran</p", "/>Iranian", "the Middle East.</p", "… < a") slipped through. The
+#: junk gate now ALSO rejects any span still carrying a bare ``<`` or ``>`` (see
+#: :func:`is_junk_entity`), which catches every partial-tag residue class; the
+#: residue-stripped fold (:func:`_strip_residue_for_fold`) still folds
+#: "Iran</p" onto "Iran" so the historical merge migration re-points it.
 _HTML_RESIDUE_RE = re.compile(r"</?[a-z][^>]*>|&[a-z]+;|&#\d+;", re.IGNORECASE)
+
+
+def _strip_residue_for_fold(s: str) -> str:
+    """Return ``s`` with HTML tags / entities / partial-tag residue removed.
+
+    Used ONLY to build the identity fold (NOT the forward surface form — a
+    residue-bearing span stays junk-rejected at write time). Turns "Iran</p" ->
+    "Iran", "/>Iranian" -> "Iranian", "the Middle East.</p" -> "the Middle East.",
+    "State's < a" -> "State's", so a junk-shaped historical row folds onto its
+    clean survivor. Pure + deterministic + idempotent.
+    """
+    if not s:
+        return ""
+    s = html.unescape(s)
+    s = _ZERO_WIDTH_RE.sub("", s)
+    # Complete tags first (<img …>, </p>).
+    s = re.sub(r"<[^>]*>", " ", s)
+    # A trailing partial tag: a '<' with no closing '>' to end-of-string.
+    s = re.sub(r"<[^>]*$", " ", s)
+    # A leading partial tag END fragment ('/>' or bare '>').
+    s = re.sub(r"^\s*/?>\s*", " ", s)
+    # Any HTML entity that survived the unescape (defensive).
+    s = re.sub(r"&[a-z]+;|&#\d+;", " ", s, flags=re.IGNORECASE)
+    return _WHITESPACE_RE.sub(" ", s).strip()
 
 #: Money / currency tokens the live review found leaking as entities:
 #: "S$2,500", "US$ 525 million", "$3.2bn", "€12 billion", "Rs. 1,000 crore".
@@ -565,7 +685,9 @@ def is_junk_entity(name: str) -> bool:
     raw = str(name or "")
     # Residual-HTML check on the RAW form (a strip would remove the residue, so
     # test before stripping; html.unescape inside _strip_name would also eat it).
-    if _HTML_RESIDUE_RE.search(raw):
+    # A COMPLETE tag / entity, OR any bare '<'/'>' left over from a truncated
+    # partial tag ("Iran</p", "/>Iranian", "… < a") — both are malformed spans.
+    if _HTML_RESIDUE_RE.search(raw) or "<" in raw or ">" in raw:
         return True
 
     stripped = _strip_name(raw)
@@ -643,6 +765,11 @@ def _country_name_set() -> frozenset[str]:
         # them or the collapse would land short of a country.
         "turkey",
         "kosovo",
+        # pycountry stores PS as "Palestine, State of" with no common_name, so
+        # bare "Palestine" (the dominant live surface form) never typed as a
+        # country and kept leaking as entity/location/person (DQ P4). Add the
+        # bare form; the "palestinian" demonym resolves to it too (below).
+        "palestine",
     })
     return frozenset(names)
 
@@ -705,6 +832,12 @@ _ORG_SUFFIX_TOKENS: frozenset[str] = frozenset({
     "university", "college", "institute", "institution", "academy",
     "foundation", "association", "federation", "union", "league",
     "organization", "organisation", "society", "syndicate", "consortium",
+    # Military / paramilitary / mission org suffixes — the live review (DQ P4)
+    # found these mis-typed PERSON ("225th Separate Assault Regiment", "United
+    # Cajun Navy", "Frasers Centrepoint Trust"). A multi-token surface ending in
+    # one of these names a formation / body, never a person.
+    "trust", "regiment", "brigade", "battalion", "corps", "navy", "army",
+    "force", "forces", "guard", "mission", "project",
 })
 
 #: Multi-word org suffix phrases (trailing). "Hyundai Motor Group" → "Motor
@@ -861,7 +994,21 @@ _PLACE_SUFFIX_TOKENS: frozenset[str] = frozenset({
     "crossing", "highlands", "lowlands", "delta", "strait", "gulf", "sea",
     "channel", "reef", "atoll", "village", "town", "city", "metro",
     "boulevard", "avenue", "street", "road", "highway", "junction",
+    # Built-environment / religious-site heads that also appear TRAILING
+    # ("Blue Mosque", "Diriyah Fort", "St Paul's Cathedral", "Ramstein Air
+    # Base") — the live review (DQ P4) found "Temple of Apollo" / "Mount
+    # Erciyes" mis-typed PERSON. The leading forms are handled by
+    # :data:`_PLACE_HEAD_RE`; these cover the trailing forms.
+    "temple", "mount", "fort", "palace", "mosque", "cathedral", "base",
 })
+
+#: Place HEADS — a surface LEADING with one of these + a following token is a
+#: geographic / built-environment place ("Temple of Apollo", "Mount Erciyes",
+#: "Fort Bragg", "Palace of Westminster"), never a person.
+_PLACE_HEAD_RE = re.compile(
+    r"^\s*(?:temple|mount|mt|fort|palace|mosque|cathedral|basilica|shrine)\b\s+\S",
+    re.IGNORECASE,
+)
 
 #: Multi-word place suffix phrases (trailing).
 _PLACE_SUFFIX_PHRASES: tuple[str, ...] = (
@@ -875,6 +1022,7 @@ _PLACE_SUFFIX_PHRASES: tuple[str, ...] = (
 _KNOWN_PLACES: frozenset[str] = frozenset({
     # planetary / landmass
     "earth", "moon", "mars", "europe", "asia", "africa", "antarctica",
+    "north america", "south america",
     "eurasia", "oceania", "arctic", "scandinavia", "balkans", "caucasus",
     "patagonia", "siberia", "kashmir", "tibet", "sahara", "amazon",
     # world cities NER mis-types (curated, non-exhaustive)
@@ -923,6 +1071,10 @@ def is_place_surface(name: str) -> bool:
     lo = stripped.lower()
 
     if lo in _KNOWN_PLACES:
+        return True
+
+    # Leading place head ("Temple of Apollo", "Mount Erciyes", "Fort Bragg").
+    if _PLACE_HEAD_RE.match(stripped):
         return True
 
     for phrase in _PLACE_SUFFIX_PHRASES:
@@ -974,10 +1126,20 @@ def canonicalize_entity(name: str, ner_class: str) -> tuple[str, str]:
     if low in _JUNK_ENTITIES:
         return "", cls
 
-    # DEMONYM collapse (DQ-H4) then ALIAS MAP — case-insensitive on the stripped
-    # surface form. A national demonym ("Iranian") becomes its country ("Iran")
-    # so the two stop being distinct graph nodes.
-    canonical = _DEMONYM_MAP.get(low) or _ALIAS_MAP.get(low, stripped)
+    # DEMONYM / REGION-ADJECTIVE / ALIAS collapse (DQ-H4 + P4) — a national
+    # demonym ("Iranian"→"Iran"), a continental adjective ("African"→"Africa"),
+    # a plural ("Africans"/"Americans"), or an alias ("US") collapses to its
+    # canonical referent so the surface forms stop being distinct graph nodes.
+    # The lookup runs on the stripped surface AND on an article-stripped variant
+    # ("the United Kingdom"→"United Kingdom", "The Costa Rican"→"Costa Rica").
+    # A map hit REPLACES the display; with NO hit the display keeps its article
+    # ("The Trump administration" stays a person phrase, unchanged).
+    collapsed = _collapse_target(low)
+    if collapsed is None:
+        article_stripped = _strip_leading_article(stripped)
+        if article_stripped.lower() != low:
+            collapsed = _collapse_target(article_stripped.lower())
+    canonical = collapsed if collapsed is not None else stripped
     # Re-strip in case an alias value introduced anything (defensive; values are
     # already clean) and to guarantee the idempotency fixed point.
     canonical = _strip_name(canonical)
@@ -1000,8 +1162,44 @@ def canonicalize_entity(name: str, ner_class: str) -> tuple[str, str]:
     return canonical, cls
 
 
+def identity_fold(name: str) -> str:
+    """Class-agnostic dedup key for an entity surface form (DQ P4).
+
+    Pure + deterministic + idempotent. Two surface forms that name the same
+    referent under all the canon's rules (alias / demonym / region-adjective /
+    plural collapse, article strip, residue strip, zero-width removal, case +
+    punctuation normalization) fold to the SAME key, so the de-fragmentation
+    merge can cluster them WITHOUT the entity_class. The key is lower-case,
+    alphanumeric-only (no spaces / punctuation), and never contains an article
+    or markup residue.
+
+    Pipeline:
+      1. strip HTML/partial-tag residue + zero-width chars (so "Iran</p" folds
+         onto "Iran" — a junk-SHAPED historical row still re-points to its clean
+         survivor);
+      2. run :func:`canonicalize_entity` (alias / demonym / region / plural
+         collapse + strip) with the generic class;
+      3. strip a leading article;
+      4. lower-case, drop zero-width, collapse every non-alphanumeric run.
+
+    Stability: ``identity_fold(x)`` re-folds to itself — the key is already
+    article-free, residue-free, and alphanumeric, so a second pass is a no-op.
+    An empty / fully-stripped-away input yields ``""`` (the caller treats an
+    empty fold as "no identity" and skips it).
+    """
+    de_residue = _strip_residue_for_fold(str(name or ""))
+    canon, _cls = canonicalize_entity(de_residue, DEFAULT_CLASS)
+    # Fall back to the de-residued raw if the canon dropped it as literal junk,
+    # so a junk-literal cluster still gets a stable non-empty key of its own.
+    canon = canon or de_residue
+    canon = _strip_leading_article(canon.strip())
+    low = _ZERO_WIDTH_RE.sub("", canon.lower())
+    return _NON_ALNUM_RE.sub("", low)
+
+
 __all__ = [
     "canonicalize_entity",
+    "identity_fold",
     "is_demonym",
     "is_junk_entity",
     "is_org_surface",
@@ -1012,4 +1210,5 @@ __all__ = [
     "DEFAULT_CLASS",
     "_JUNK_ENTITIES",
     "_DEMONYM_MAP",
+    "_REGION_ADJECTIVE_MAP",
 ]

@@ -28,6 +28,7 @@ from legba.data._entity_canon import (  # noqa: F401
     _DEMONYM_MAP,
     _JUNK_ENTITIES,
     canonicalize_entity,
+    identity_fold,
     is_demonym,
     is_junk_entity,
     is_org_surface,

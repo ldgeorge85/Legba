@@ -12,10 +12,16 @@ next batch of un-resolved signals into the graph, so new signals auto-link.
 Per processed signal (mirrors the backfill's logic exactly, so the two are
 interchangeable / re-runnable against each other):
 
-  * ``entity_profiles`` — one node per distinct mention, deduped by the
-    COMPOSITE key ``(lower(canonical_name), entity_class)`` (migration 0035) so
-    a name shared across classes (Georgia/country vs Georgia/location) resolves
-    to TWO rows, never a false merge. The geo of a ``location``/``country``
+  * ``entity_profiles`` — one node per distinct referent, deduped by the
+    CLASS-AGNOSTIC identity fold (DQ P4): the mention is folded with
+    ``identity_fold`` (alias/demonym/region/plural + article/residue/case/punct)
+    and an any-class PRE-LOOKUP reuses the highest-priority existing row for that
+    name (promoting its class UP the priority ladder when a stronger signal
+    arrives), so a name NER types inconsistently across articles no longer forks
+    a new row per class. The composite unique index
+    ``idx_entity_profiles_name_class`` (migration 0035) stays intact — a
+    genuinely-distinct same-name referent (Georgia/country vs a Georgia/location)
+    still resolves to a separate row. The geo of a ``location``/``country``
     entity is resolved by its OWN NAME (``_entity_geo.resolve_entity_geo`` —
     an injected geocoder when available, else an offline pycountry name check),
     NOT by inheriting the mentioning signal's geocode. Signal-geo is demoted to
@@ -60,6 +66,7 @@ from ....runtime.analyst_method import AnalystMethodResult
 # normalizes a span; is_junk_entity drops true junk; is_org_surface types orgs.
 from ..._entity_canon import (
     canonicalize_entity,
+    identity_fold,
     is_junk_entity,
     is_org_surface,
 )
@@ -115,27 +122,61 @@ def _alias_marker(surface_form: str) -> uuid.UUID:
 # class deterministically at write time so every mention of the same surface
 # form converges onto the SAME (name, class) row going forward.
 #
-# Priority (highest wins): country > organization > person > location > entity.
+# Priority (highest wins): country > organization > location > person > entity.
 #  * country  — canonicalize_entity already forces the gazetteer/alias country
 #    class; we honour it first so "Turkey" (the nation) never loses to a stray
 #    "turkey"/entity NER guess.
 #  * organization — is_org_surface (the W1 org-suffix/head gazetteer) types
 #    corporate/institutional surfaces ("Bank of England", "Nippon Steel",
 #    "Hyundai Motor Group") as organization, NEVER person.
-#  * person / location / entity — fall back to the (canonicalized) NER class,
+#  * location > person > entity — fall back to the (canonicalized) NER class,
 #    floored to the generic "entity" bucket for anything outside the taxonomy.
+#
+# DQ P4 RECONCILIATION: the original tuple ranked person ABOVE location. The DQ
+# review's merge plan (and the offline merge generator that pairs with this fix)
+# both specify country > organization > LOCATION > PERSON > entity, so a
+# geographic surface out-ranks a person mistype when a name is fragmented across
+# the two (a place is more reliably a place than a title-case span is a person).
+# Reconciled to location-above-person here so the WRITE-path any-class election
+# and the one-shot migration's survivor election agree byte-for-byte.
 # ---------------------------------------------------------------------------
 
 #: Deterministic priority order — index 0 is highest. Two competing class
-#: signals for the same name resolve to the EARLIER member.
+#: signals for the same name resolve to the EARLIER member. ``corporation`` maps
+#: into the organization tier; classes outside this tuple (event/treaty) fall to
+#: the lowest priority via the ``.get(c, len)`` default.
 _CLASS_PRIORITY: tuple[str, ...] = (
     "country",
     "organization",
-    "person",
     "location",
+    "person",
     "entity",
 )
 _CLASS_RANK: dict[str, int] = {c: i for i, c in enumerate(_CLASS_PRIORITY)}
+#: ``corporation`` is an organization sub-type — rank it with organization so a
+#: corporation row and an organization row of the same name do not fight.
+_CLASS_RANK.setdefault("corporation", _CLASS_RANK["organization"])
+
+
+def _class_rank(cls: str | None) -> int:
+    """Priority rank for a class string (lower = higher priority)."""
+    return _CLASS_RANK.get((cls or "entity"), len(_CLASS_PRIORITY))
+
+
+#: SQL ``ORDER BY`` fragment mirroring :data:`_CLASS_RANK` — used by the
+#: any-class PRE-LOOKUP so the highest-priority existing row is elected
+#: deterministically (tie broken by oldest ``created_at``). Kept in sync with
+#: the tuple above; corporation shares the organization rank.
+_CLASS_PRIORITY_SQL = (
+    "CASE entity_class "
+    "WHEN 'country' THEN 0 "
+    "WHEN 'organization' THEN 1 "
+    "WHEN 'corporation' THEN 1 "
+    "WHEN 'location' THEN 2 "
+    "WHEN 'person' THEN 3 "
+    "WHEN 'entity' THEN 4 "
+    "ELSE 5 END"
+)
 
 
 def resolve_entity_class(name: str, canonical_class: str) -> str:
@@ -348,10 +389,16 @@ async def _resolve_batch(
     links_created = 0
     edges_upserted = 0
     # Per-run cache so two signals mentioning the same entity reuse the id
-    # without a second upsert round-trip. Keyed by the COMPOSITE identity
-    # (lower(name), class) to match the entity_profiles composite key (0035) —
-    # a bare name would re-merge Georgia/country with Georgia/location.
-    name_to_id: dict[tuple[str, str], str] = {}
+    # without a second upsert round-trip. Keyed by the CLASS-AGNOSTIC identity
+    # fold (DQ P4) so every surface form of one referent — across classes —
+    # converges on the SAME row. (The old (lower(name), class) key let a name
+    # NER typed inconsistently across articles fork a new row per class, which
+    # is the fragmentation this fix stops.)
+    #
+    # Value is (entity_id, resolved_class): the class is retained so a
+    # country/location genuine-ambiguity mention doesn't reuse the wrong cached
+    # row (see the per-mention cache check below).
+    name_to_id: dict[str, tuple[str, str]] = {}
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -388,18 +435,20 @@ async def _resolve_batch(
             # correction) BEFORE the dedup key, so fragmented surface forms
             # ({US, U.S., USA, ...}) converge onto ONE canonical identity and
             # mistypes (country-as-person, NWS-office-as-person) are corrected
-            # at write. Then dedup by the COMPOSITE canonical identity
-            # (lower(canonical_name), canonical_class) — mirroring the
-            # entity_profiles composite unique key (migration 0035). Two
-            # mentions sharing a name across classes (Georgia/country vs
-            # Georgia/location) are DISTINCT entities and must not collapse.
+            # at write. Then dedup by the CLASS-AGNOSTIC identity FOLD (DQ P4) —
+            # ``identity_fold`` collapses alias/demonym/region/plural + article +
+            # residue + case + punctuation, so two mentions of one referent typed
+            # differently across articles (Palestine as country vs person) fold
+            # to ONE key. Genuinely-distinct same-name referents (Georgia the
+            # country vs a Georgia location) still resolve to different rows at
+            # the DB layer: the composite unique index stays intact and the
+            # any-class PRE-LOOKUP elects the highest-priority existing row.
             #
-            # ``aliases`` collects, per canonical key, the set of ORIGINAL
-            # surface forms whose surface-or-class changed under
-            # canonicalization — the merge provenance recorded into the
-            # profile's ``derived_from`` below.
-            seen: dict[tuple[str, str], tuple[str, str]] = {}
-            aliases: dict[tuple[str, str], set[str]] = {}
+            # ``aliases`` collects, per fold key, the set of ORIGINAL surface
+            # forms whose surface-or-class changed under canonicalization — the
+            # merge provenance recorded into the profile's ``derived_from`` below.
+            seen: dict[str, tuple[str, str]] = {}
+            aliases: dict[str, set[str]] = {}
             for e in ents:
                 if not isinstance(e, dict):
                     continue
@@ -417,26 +466,104 @@ async def _resolve_batch(
                     continue
                 # D8 class-agnostic identity: resolve ONE deterministic class so
                 # the same surface form ("turkey", "Bank of England") converges
-                # on a SINGLE (name, class) row going forward instead of
-                # fragmenting across country/entity/location/person.
+                # on a SINGLE row going forward instead of fragmenting across
+                # country/entity/location/person.
                 cls = resolve_entity_class(text, cls)
-                key = (text.lower(), cls)
-                seen.setdefault(key, (text, cls))
+                fold = identity_fold(text)
+                if not fold:
+                    continue  # no stable identity (fully stripped away) — skip
+                prev = seen.get(fold)
+                if prev is None:
+                    seen[fold] = (text, cls)
+                elif _class_rank(cls) < _class_rank(prev[1]):
+                    # Two classes for one referent in this signal: keep the
+                    # higher-priority class (and its surface form).
+                    seen[fold] = (text, cls)
                 # Record the original surface form as provenance only when
                 # canonicalization actually changed the surface OR the class.
                 if raw_text != text or raw_cls != cls:
-                    aliases.setdefault(key, set()).add(raw_text)
+                    aliases.setdefault(fold, set()).add(raw_text)
 
             signal_names: list[str] = []
-            for key, (text, cls) in seen.items():
-                key_aliases = aliases.get(key, set())
-                eid = name_to_id.get(key)
+            for fold, (text, cls) in seen.items():
+                key_aliases = aliases.get(fold, set())
+                # Per-batch cache: reuse an id already resolved this run, EXCEPT
+                # across the country/location genuine ambiguity — a location
+                # mention must not reuse a country row cached earlier in the
+                # batch (and vice versa); fall through to the pre-lookup, which
+                # keeps the two distinct.
+                cached = name_to_id.get(fold)
+                eid: str | None = None
+                if cached is not None:
+                    cached_id, cached_cls = cached
+                    if {cached_cls, cls} != {"country", "location"}:
+                        eid = cached_id
                 if eid is None:
+                    # ANY-CLASS PRE-LOOKUP (DQ P4): before inserting, find the
+                    # highest-priority existing row for this name (under ANY
+                    # class) and converge onto it, so a name typed inconsistently
+                    # across articles stops forking a new (name, class) row per
+                    # NER guess. Class resolution:
+                    #   * COUNTRY↔LOCATION genuine ambiguity (Georgia the country
+                    #     vs the US state) is NOT force-merged — the mention keeps
+                    #     its own class so the composite key preserves two rows.
+                    #     This mirrors the offline merge generator's ambiguity
+                    #     guard (a bare gazetteer country like Palestine/Turkey is
+                    #     unaffected: the canon types EVERY mention of it 'country'
+                    #     so both the stored and incoming class are 'country', not
+                    #     a country/location split).
+                    #   * else if the incoming class out-ranks the stored top row,
+                    #     UPGRADE the stored row's class upward and converge under
+                    #     it (guarded so the composite unique index
+                    #     idx_entity_profiles_name_class is never violated).
+                    #   * else converge onto the stored row, keeping its (>= )
+                    #     class — never a downgrade.
+                    upsert_cls = cls
+                    pre = await conn.fetchrow(
+                        f"""
+                        SELECT id, entity_class
+                          FROM entity_profiles
+                         WHERE lower(canonical_name) = lower($1)
+                         ORDER BY {_CLASS_PRIORITY_SQL}, created_at ASC
+                         LIMIT 1
+                        """,
+                        text,
+                    )
+                    if pre is not None:
+                        stored_cls = str(pre["entity_class"])
+                        if {stored_cls, cls} == {"country", "location"}:
+                            # Genuine country/location ambiguity — keep the
+                            # mention's own class (distinct row), do not merge.
+                            upsert_cls = cls
+                        elif _class_rank(cls) < _class_rank(stored_cls):
+                            # Incoming class out-ranks the stored top row: converge
+                            # under `cls`. Promote the stored row's class UP only
+                            # when nothing ELSE already holds (name, cls) — else the
+                            # upsert below lands on that existing higher-class row
+                            # and the promote would violate the unique index.
+                            upsert_cls = cls
+                            collide = await conn.fetchval(
+                                "SELECT 1 FROM entity_profiles "
+                                "WHERE lower(canonical_name) = lower($1) "
+                                "  AND entity_class = $2 AND id <> $3::uuid LIMIT 1",
+                                text, cls, str(pre["id"]),
+                            )
+                            if collide is None:
+                                await conn.execute(
+                                    "UPDATE entity_profiles "
+                                    "SET entity_class = $2, entity_type = $2, "
+                                    "    updated_at = now() WHERE id = $1::uuid",
+                                    str(pre["id"]), cls,
+                                )
+                        else:
+                            # Stored row is same-or-higher priority: keep its class
+                            # (never downgrade) and converge the mention onto it.
+                            upsert_cls = stored_cls
                     # Geo by the entity's OWN NAME (not the signal's geocode).
                     # Signal-geo is at most a consistency-checked fallback.
                     egeo = await resolve_entity_geo(
                         name=text,
-                        entity_class=cls,
+                        entity_class=upsert_cls,
                         signal_geo=geo,
                         geocoder=geocoder,
                     )
@@ -446,7 +573,7 @@ async def _resolve_batch(
                     # evidence; the geo + non-generic class lift it.
                     completeness = compute_completeness(
                         name=text,
-                        entity_class=cls,
+                        entity_class=upsert_cls,
                         geo_country=country,
                         geo_lat=lat,
                         geo_lon=lon,
@@ -515,14 +642,15 @@ async def _resolve_batch(
                                 geo_country = COALESCE(entity_profiles.geo_country, EXCLUDED.geo_country)
                         RETURNING id, version, (xmax = 0) AS inserted
                         """,
-                        text, cls, cls, json.dumps({"source": "entity_resolution"}),
+                        text, upsert_cls, upsert_cls,
+                        json.dumps({"source": "entity_resolution"}),
                         lat, lon, country, completeness,
                         analyst_id, analyst_version,
                         str(run_id) if run_id is not None else None,
                         derived_arr,
                     )
                     eid = str(prof["id"])
-                    name_to_id[key] = eid
+                    name_to_id[fold] = (eid, upsert_cls)
                     # Merge provenance: fold the ORIGINAL surface form(s) into
                     # derived_from (content-addressed, deduped) + data, and write
                     # an entity_profile_versions row. On creation we still write a

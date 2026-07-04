@@ -364,6 +364,90 @@ async def test_georgia_country_and_state_do_not_merge(composite_pool):
                 name)
 
 
+async def test_any_class_prelookup_reuses_and_upgrades_upward_not_downward(
+    composite_pool,
+):
+    """DQ P4: the any-class PRE-LOOKUP reuses the highest-priority existing row
+    for a name typed differently across articles, promoting the row's class UP
+    the priority ladder (entity -> person) but NEVER down (organization stays
+    organization when a later 'person' mention of the same name arrives)."""
+    from datetime import datetime, timezone
+
+    from legba.runtime.deps import StandardDeps
+
+    tenant = f"er_p4_{uuid4().hex[:8]}"
+    nonce = uuid4().hex[:8]
+    up_name = f"Acmewidget_{nonce}"     # pre-seeded as entity, mention as person
+    down_name = f"Globex_{nonce}"       # pre-seeded as organization, mention as person
+    t0 = datetime(2026, 6, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with composite_pool.acquire() as conn:
+        up_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_type, entity_class, "
+            "data, completeness_score) VALUES ($1,'entity','entity','{}'::jsonb,0.5) "
+            "RETURNING id",
+            up_name,
+        )
+        down_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_type, entity_class, "
+            "data, completeness_score) VALUES ($1,'organization','organization','{}'::jsonb,0.5) "
+            "RETURNING id",
+            down_name,
+        )
+        sig = uuid4()
+        await conn.execute(
+            "INSERT INTO signals (id, source_id, owner_tenant, modality, payload, fetched_at) "
+            "VALUES ($1,'src',$2,'text',$3::jsonb,$4)",
+            sig, tenant,
+            json.dumps({
+                "title": f"{up_name} and {down_name} in the news",
+                # Both mentions typed 'person' by NER — the pre-lookup decides.
+                "entities": [
+                    {"text": up_name, "class": "person"},
+                    {"text": down_name, "class": "person"},
+                ],
+            }),
+            t0,
+        )
+
+    deps = StandardDeps(pg_pool=composite_pool)
+    big = {"sub_handler": SUB, "analyst_id": "entity_resolution",
+           "run_id": uuid4(), "batch_limit": 1_000_000}
+    try:
+        await run_method([], big, deps)
+        async with composite_pool.acquire() as conn:
+            # UPGRADE upward: entity -> person, SAME row reused (no new row).
+            up_rows = await conn.fetch(
+                "SELECT id, entity_class, entity_type FROM entity_profiles "
+                "WHERE lower(canonical_name)=lower($1)", up_name)
+            assert len(up_rows) == 1, f"upgrade forked a row: {up_rows}"
+            assert str(up_rows[0]["id"]) == str(up_id), "did not reuse the existing id"
+            assert up_rows[0]["entity_class"] == "person"
+            assert up_rows[0]["entity_type"] == "person"  # kept in lockstep
+
+            # NO downgrade: organization stays organization, SAME row reused.
+            down_rows = await conn.fetch(
+                "SELECT id, entity_class FROM entity_profiles "
+                "WHERE lower(canonical_name)=lower($1)", down_name)
+            assert len(down_rows) == 1, f"downgrade forked a row: {down_rows}"
+            assert str(down_rows[0]["id"]) == str(down_id)
+            assert down_rows[0]["entity_class"] == "organization", "class was downgraded"
+
+            # Both mentions linked onto the reused rows.
+            n_links = await conn.fetchval(
+                "SELECT count(*) FROM signal_entity_links WHERE signal_id=$1", sig)
+            assert n_links == 2, n_links
+    finally:
+        async with composite_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM signal_entity_links WHERE entity_id = ANY($1::uuid[])",
+                [up_id, down_id])
+            await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)
+            await conn.execute(
+                "DELETE FROM entity_profiles WHERE id = ANY($1::uuid[])",
+                [up_id, down_id])
+
+
 async def test_canonicalization_merges_fragments_with_derived_from(composite_pool):
     """Phase C acceptance: two fragmented surface forms of the SAME entity
     ({US-variant-1} as a *person*, {US-variant-2} as a *country*) converge to
