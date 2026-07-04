@@ -69,11 +69,12 @@ def test_geo_copied_from_geo_bearing_loser_to_null_geo_survivor():
 
 
 def test_geo_never_copied_across_a_country_mismatch():
+    # survivor NAME resolves to a country (Iran -> IR); the only geo-bearing loser
+    # is a DIFFERENT country (US) -> NEVER donated. r4: the survivor's own name is
+    # authoritative, so a donor whose country disagrees is refused.
     rows = [
-        # survivor has a country (GE) but no coordinates
-        _row("s", "Zormania", "entity", 50, country="GE"),
-        # loser carries coordinates for a DIFFERENT country (US)
-        _row("l", "Zormania", "person", 5, lat=1.0, lon=1.0, country="US"),
+        _row("s", "Iran", "entity", 50),
+        _row("l", "Iran", "person", 5, lat=1.0, lon=1.0, country="US"),
     ]
     plan = gm.build_plan(rows)
     # the cluster still merges (survivor = most links) ...
@@ -95,23 +96,31 @@ def test_iso2_vs_full_country_name_is_not_a_mismatch():
     assert (sg["s"][1], sg["s"][2]) == (14.0, 108.0)
 
 
-def test_geo_donor_is_deterministic_smallest_id_when_survivor_has_no_country():
+def test_geo_donor_is_deterministic_smallest_id_among_matching_donors():
+    # survivor NAME resolves to a country (Iran -> IR) but the row has no stored
+    # geo; TWO same-country geo-bearing losers (ISO-2 'IR' + full-name 'Iran',
+    # both == IR) -> the smallest id wins deterministically. r4: only donors whose
+    # country matches the survivor NAME are eligible; ties break on id.
     rows = [
-        _row("surv", "Springfield", "entity", 20),  # no country, no geo
-        _row("l-b", "Springfield", "location", 5, lat=2.0, lon=2.0, country="X"),
-        _row("l-a", "Springfield", "person", 4, lat=1.0, lon=1.0, country="Y"),
+        _row("surv", "Iran", "entity", 20),  # name -> IR, no stored geo
+        _row("l-b", "Iran", "location", 5, lat=2.0, lon=2.0, country="IR"),
+        _row("l-a", "Iran", "person", 4, lat=1.0, lon=1.0, country="Iran"),
     ]
     plan = gm.build_plan(rows)
     sg = {t[0]: t for t in plan.survivor_geo}
     assert "surv" in sg
     # smallest id ('l-a') wins deterministically
     assert (sg["surv"][1], sg["surv"][2]) == (1.0, 1.0)
+    # the stamped country is the survivor NAME's own ISO-2 (authoritative)
+    assert sg["surv"][3] == "IR"
 
 
 def test_geo_not_touched_when_survivor_already_has_coordinates():
+    # survivor NAME resolves to a country AND already carries coordinates -> a
+    # same-country donor backfills NOTHING (idempotent; coords never overwritten).
     rows = [
-        _row("s", "Paris", "location", 30, lat=48.8, lon=2.3, country="FR"),
-        _row("l", "Paris", "person", 5, lat=1.0, lon=1.0, country="FR"),
+        _row("s", "France", "country", 30, lat=48.8, lon=2.3, country="FR"),
+        _row("l", "France", "person", 5, lat=1.0, lon=1.0, country="FR"),
     ]
     plan = gm.build_plan(rows)
     # survivor already has geo -> nothing to backfill

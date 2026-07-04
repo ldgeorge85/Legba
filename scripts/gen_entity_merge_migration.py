@@ -48,8 +48,11 @@ Pipeline:
   2. PROTECT the country/location homonym rows; elect + merge the rest.
   3. SURVIVOR ELECTION (most-links) among the mergeable members.
   4. LOSERS = mergeable minus survivor -> merge_map(loser, survivor). A NULL-geo
-     survivor inherits geo from a deterministic, country-consistent geo-bearing
-     loser (C1) so a hard-deleted loser's coordinates are not lost.
+     survivor inherits geo from a geo-bearing loser ONLY when that loser's country
+     AGREES with the country the survivor's own NAME resolves to offline (C1 / r4)
+     — so a hard-deleted loser's coordinates are preserved without ever stamping a
+     country that disagrees with the survivor name. A non-country survivor name
+     (Evian / The Hague) inherits NOTHING (stays honest-NULL).
   5. JUNK: a content-spam SINGLETON, or a cluster whose EVERY mergeable member is
      content-spam -> junk (hard-DELETEd). A junk-SHAPED row that folds ONTO a real
      survivor ("Iran</p" -> Iran) is a NORMAL loser (re-point + hard-delete).
@@ -88,6 +91,11 @@ from legba.data._entity_canon import (
     identity_fold,
     is_junk_entity,
 )
+# Offline (pycountry) country-from-NAME resolver — the SAME index the live
+# entity-geo path uses. The geo backfill gates the donor on the survivor's OWN
+# name so it can never stamp a country/coords that disagree with the name
+# (mirrors _entity_geo.resolve_entity_geo_offline). Pure: regex + pycountry.
+from legba.data.filters.geocode import extract_country_iso2_from_text
 
 
 def _country_iso2(c: str | None) -> str | None:
@@ -110,6 +118,25 @@ def _country_iso2(c: str | None) -> str | None:
         return pycountry.countries.lookup(s).alpha_2
     except LookupError:
         return s.lower()
+
+
+def _name_country_iso2(name: str) -> str | None:
+    """ISO-2 country iff the entity NAME itself denotes a country, else None.
+
+    Mirrors ``_entity_geo._offline_country_from_name`` /
+    ``resolve_entity_geo_offline`` (the live entity-geo rule): the survivor's
+    OWN name is authoritative for its country. Runs the geocode filter's offline
+    pycountry sweep over the name and normalises the hit to a canonical ISO-2.
+    A non-country place name ('Evian', 'The Hague') or a person/org name yields
+    ``None`` — so the geo backfill stays honest-NULL rather than inheriting a
+    mentioning donor's country (the Evian->India bug class). No network."""
+    if not name:
+        return None
+    try:
+        return _country_iso2(extract_country_iso2_from_text(name))
+    except Exception:  # pragma: no cover - pycountry is pure
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Ambiguity thresholds.
@@ -250,29 +277,42 @@ def _survivor_is_junk(survivor_name: str) -> bool:
     return False
 
 
-def _pick_geo_donor(survivor: Row, losers: list[Row]) -> Row | None:
-    """Deterministically pick a geo-bearing loser to backfill the survivor's geo.
+def _pick_geo_donor(expected_iso: str | None, losers: list[Row]) -> Row | None:
+    """Pick the geo-bearing loser to backfill the survivor's geo, gated on the
+    survivor's NAME-derived country (DQ P4 r4).
 
     A hard-deleted loser can carry the referent's coordinates that the most-links
-    survivor lacks (DQ P4 r3 / C1). Only a loser with BOTH ``geo_lat`` and
-    ``geo_lon`` qualifies as a donor (coordinates copied as a pair, never mixed).
+    survivor lacks (DQ P4 r3 / C1) — but we must NEVER stamp a country/coords that
+    disagree with the survivor's OWN NAME (the round-3 defect: 'the Democratic
+    Republic of Congo' inherited Congo-Brazzaville, 'Evian' inherited India).
+    ``expected_iso`` is the ISO-2 the survivor's canonical name resolves to
+    offline (via :func:`_name_country_iso2`), or ``None`` when the name does NOT
+    denote a country. A loser qualifies as a donor ONLY when it carries BOTH
+    coordinates (copied as a pair, never mixed) AND a ``geo_country`` that
+    normalises to ``expected_iso`` — so the coordinates we copy can never
+    disagree with the survivor's own name. This mirrors the live
+    ``_entity_geo.resolve_entity_geo_offline`` rule (name is authoritative;
+    signal/donor geo inherited only when its country agrees).
 
-    Cross-country guard — mirrors ``entity_resolution``'s ON-CONFLICT geo rule: if
-    the survivor already has a ``geo_country``, a donor whose ``geo_country``
-    DISAGREES is NEVER eligible (a country mismatch must not overwrite). Country
-    strings are normalised to ISO-2 first, so 'AE' and 'United Arab Emirates' are
-    recognised as the SAME country (not a spurious mismatch). Among the eligible
-    donors, prefer one whose country MATCHES the survivor's, then the smallest id
-    — stable + deterministic."""
-    sc = _country_iso2(survivor.geo_country)
-    cands = [m for m in losers if m.geo_lat is not None and m.geo_lon is not None]
-    if sc:
-        cands = [m for m in cands if _country_iso2(m.geo_country) in (None, sc)]
+      * ``expected_iso is None`` (a non-country place like 'Evian'/'The Hague',
+        or a person/org survivor) -> NO donor: geo stays honest-NULL (a real
+        geocoder would be needed to place a non-country name offline).
+      * no loser's country matches ``expected_iso`` -> NO donor: never fall back
+        to a mismatched loser.
+
+    Country strings are normalised to ISO-2 first, so 'AE' == 'United Arab
+    Emirates' and 'Vietnam' == 'VN' still backfill. Among the matching donors the
+    smallest id wins — stable + deterministic."""
+    if expected_iso is None:
+        return None
+    cands = [
+        m for m in losers
+        if m.geo_lat is not None
+        and m.geo_lon is not None
+        and _country_iso2(m.geo_country) == expected_iso
+    ]
     if not cands:
         return None
-    if sc:
-        return min(cands, key=lambda m: (
-            0 if _country_iso2(m.geo_country) == sc else 1, m.id))
     return min(cands, key=lambda m: m.id)
 
 
@@ -508,30 +548,33 @@ def build_plan(rows: list[Row]) -> Plan:
             losers_seen.add(m.id)
             loser_links += m.links
 
-        # (C1) GEO BACKFILL — hard-deleting a geo-bearing loser blanks the
-        # referent's coordinates when the most-links survivor has NULL geo. Pick a
-        # deterministic, country-consistent geo-bearing loser and record its geo so
-        # the emitted SQL can COALESCE the survivor's NULL geo BEFORE the delete.
-        donor = _pick_geo_donor(survivor, losers)
+        # (C1 / r4) GEO BACKFILL — NAME-derived country gate. Hard-deleting a
+        # geo-bearing loser blanks the referent's coordinates when the most-links
+        # survivor has NULL geo, but we must NEVER stamp a country/coords that
+        # disagree with the survivor's OWN NAME. expected_iso = the ISO-2 the
+        # survivor's canonical name resolves to offline (None for a non-country
+        # name); a loser donates ONLY when its country matches expected_iso, and
+        # the backfilled country is expected_iso itself (name-derived,
+        # authoritative). Mirrors _entity_geo.resolve_entity_geo_offline.
+        expected_iso = _name_country_iso2(survivor_name)
+        donor = _pick_geo_donor(expected_iso, losers)
         if donor is not None:
             fills_geo = (
                 (survivor.geo_lat is None and survivor.geo_lon is None
                  and donor.geo_lat is not None and donor.geo_lon is not None)
-                or (survivor.geo_country is None and bool(donor.geo_country))
+                or survivor.geo_country is None
                 or (survivor.geo_region is None and bool(donor.geo_region))
             )
             if fills_geo:
-                # Emit the survivor's OWN snapshot country as the guard sentinel
-                # when it has one (the donor is already ISO-2-consistent with it),
-                # so the emitted SQL's string-equality cross-country CASE passes
-                # for this verified-consistent donor AND still blocks a live
-                # country DRIFT between snapshot and apply. When the survivor has
-                # NO country, emit the donor's country so the COALESCE backfills
-                # it. The lat/lon/region/completeness are always the donor's.
-                emit_country = survivor.geo_country or donor.geo_country
+                # The stamped country is the survivor NAME's own country
+                # (expected_iso), NOT the donor's string — the donor is only a
+                # coordinate/region source, verified country-consistent with the
+                # name. The emitted SQL step-2b cross-country CASE guard then
+                # stays as defense-in-depth against a live country DRIFT between
+                # snapshot and apply. lat/lon/region/completeness are the donor's.
                 survivor_geo.append((
                     survivor.id, donor.geo_lat, donor.geo_lon,
-                    emit_country, donor.geo_region, donor.completeness,
+                    expected_iso, donor.geo_region, donor.completeness,
                 ))
 
         # survivor rewrite only when the display name OR the class changes.
@@ -841,13 +884,18 @@ UPDATE entity_profiles s
 -- (2b) SURVIVOR GEO BACKFILL — a hard-deleted geo-bearing loser can carry the
 --     referent's coordinates the most-links survivor lacks, so blanking it would
 --     lose the geo. COALESCE the survivor's NULL geo from the frozen donor row
---     (a deterministic, country-consistent geo-bearing member of the same fold),
---     BEFORE the loser DELETE in step 4. Cross-country guard mirrors the
---     entity_resolution ON-CONFLICT geo rule: lat/lon/region are inherited ONLY
---     when the countries are consistent (a mismatch never overwrites). lat+lon
---     are copied TOGETHER (both from the same donor, only when BOTH are NULL) so
---     they can never be mixed across donors. completeness_score = GREATEST (never
---     regressed). Idempotent: COALESCE fills only a still-NULL value.
+--     BEFORE the loser DELETE in step 4. The generator already gated the donor on
+--     the survivor's OWN NAME (the frozen geo_country here is the country the
+--     survivor NAME resolves to offline, and the donor's coords were accepted only
+--     because the donor's country agreed with it) — so a non-country name or a
+--     country mismatch produced NO row here at all. The cross-country CASE guard
+--     below stays as defense-in-depth (mirrors the entity_resolution ON-CONFLICT
+--     geo rule): lat/lon/region are inherited ONLY when s.geo_country agrees with
+--     the frozen country, so a live country DRIFT between snapshot and apply never
+--     overwrites. lat+lon are copied TOGETHER (both from the same donor, only when
+--     BOTH are NULL) so they can never be mixed across donors. completeness_score
+--     = GREATEST (never regressed). Idempotent: COALESCE fills only a still-NULL
+--     value.
 -- ==========================================================================
 UPDATE entity_profiles s
    SET geo_lat = CASE
@@ -998,15 +1046,19 @@ def emit_report(plan: Plan, *, total_rows: int) -> str:
       "signal to a loser that the CASCADE then deletes (a self-healing transient).")
     A("")
 
-    A("## Survivor geo backfill (C1 — a hard-deleted loser's geo preserved)")
+    A("## Survivor geo backfill (C1 / r4 — a hard-deleted loser's geo preserved, "
+      "gated on the survivor NAME)")
     A("")
     if not plan.survivor_geo:
-        A("_None — no NULL-geo survivor had a country-consistent geo-bearing loser "
-          "in this snapshot._")
+        A("_None — no NULL-geo survivor had a geo-bearing loser whose country "
+          "agrees with the survivor's own name-derived country in this snapshot._")
     else:
         A(f"{len(plan.survivor_geo)} survivor(s) inherit geo from a geo-bearing "
-          "loser (lat+lon copied together from one donor; never across a country "
-          "mismatch; completeness_score = GREATEST):")
+          "loser. The stamped country is the survivor NAME's own offline-resolved "
+          "country (authoritative); the donor is accepted only when ITS country "
+          "agrees, so a non-country name (Evian / The Hague) or a country mismatch "
+          "(DR Congo vs a Congo-Brazzaville donor) inherits NOTHING (honest-NULL). "
+          "lat+lon copied together from one donor; completeness_score = GREATEST:")
         A("")
         for sid, lat, lon, country, region, comp in plan.survivor_geo:
             latlon = f"{lat},{lon}" if lat is not None and lon is not None else "—"

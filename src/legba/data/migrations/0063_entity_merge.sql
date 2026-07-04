@@ -32,7 +32,7 @@
 -- BLAST RADIUS (this snapshot): 1965 loser rows re-pointed then HARD-DELETED,
 --   588 pure-junk rows HARD-DELETED (of which 6 folds were routed
 --   to junk because their elected survivor NAME was itself junk), 125
---   survivor name/class rewrites, 13 survivors geo-backfilled from a
+--   survivor name/class rewrites, 8 survivors geo-backfilled from a
 --   geo-bearing loser, 1483 fold clusters merged,
 --   1 country/location homonyms + 5
 --   bare-token homonyms held for review (NOT merged). Net entity_profiles row
@@ -2786,19 +2786,14 @@ CREATE TEMP TABLE _survivor_geo (
 ) ON COMMIT DROP;
 INSERT INTO _survivor_geo
     (survivor_id, geo_lat, geo_lon, geo_country, geo_region, completeness_score) VALUES
-    ('2e09f9b7-4cd2-413b-84ec-29d11c5677a0'::uuid, -0.7264327, 15.6419155, 'Congo-Brazzaville', NULL, 0.9),
-    ('2f3c10b2-4f07-456b-a343-9bd323f8680c'::uuid, 39.3174071, -76.6636475, 'United States', NULL, 0.9),
-    ('4a96970e-40ed-469a-981f-2813cde6be32'::uuid, -0.7264327, 15.6419155, 'Congo-Brazzaville', NULL, 0.7),
-    ('5d2882f4-17b3-4c79-a26a-47dac82cc86d'::uuid, 39.7837304, -100.445882, 'United States', NULL, 0.3),
-    ('7539888f-5cb2-4cad-bff9-9a8df07c5bb0'::uuid, 52.2434979, 5.6343227, 'Netherlands', NULL, 0.3),
-    ('844a5590-554c-45a3-a98f-922005302de9'::uuid, 21.0000287, 57.0036901, 'Oman', NULL, 0.3),
-    ('af3bfb51-6fe9-43c7-9711-8f0dc70f2a05'::uuid, 14.5844444, 29.4917691, 'Sudan', NULL, 0.3),
-    ('b6af5f7d-da55-404d-9c94-cb07b2a8d8dd'::uuid, 22.3511148, 78.6677428, 'India', NULL, 0.3),
-    ('cb21af0b-e7db-491b-ab3d-6963f3205ee6'::uuid, -2.9814344, 23.8222636, 'Democratic Republic of the Congo', NULL, 0.9),
+    ('2f3c10b2-4f07-456b-a343-9bd323f8680c'::uuid, 39.3174071, -76.6636475, 'US', NULL, 0.9),
+    ('5d2882f4-17b3-4c79-a26a-47dac82cc86d'::uuid, 39.7837304, -100.445882, 'US', NULL, 0.3),
+    ('844a5590-554c-45a3-a98f-922005302de9'::uuid, 21.0000287, 57.0036901, 'OM', NULL, 0.3),
+    ('af3bfb51-6fe9-43c7-9711-8f0dc70f2a05'::uuid, 14.5844444, 29.4917691, 'SD', NULL, 0.3),
     ('ddeda4ad-33c8-4b73-af15-2b2e8590f44d'::uuid, 24.0002488, 53.9994829, 'AE', NULL, 0.3),
-    ('dedc9755-3942-4418-9caf-f14926e977ff'::uuid, 23.9739374, 120.9820179, 'Taiwan', NULL, 1.0),
+    ('dedc9755-3942-4418-9caf-f14926e977ff'::uuid, 23.9739374, 120.9820179, 'TW', NULL, 1.0),
     ('ea344bf3-bf4e-4513-9b8b-80f718f238b8'::uuid, 15.9266657, 107.9650855, 'VN', NULL, 1.0),
-    ('ee8a7edc-5afd-4866-bda0-49229780b644'::uuid, 36.2665119, 59.5999861, 'Iran', NULL, 1.0);
+    ('ee8a7edc-5afd-4866-bda0-49229780b644'::uuid, 36.2665119, 59.5999861, 'IR', NULL, 1.0);
 
 CREATE INDEX ON _merge_map (loser_id);
 CREATE INDEX ON _merge_map (survivor_id);
@@ -2859,13 +2854,18 @@ UPDATE entity_profiles s
 -- (2b) SURVIVOR GEO BACKFILL — a hard-deleted geo-bearing loser can carry the
 --     referent's coordinates the most-links survivor lacks, so blanking it would
 --     lose the geo. COALESCE the survivor's NULL geo from the frozen donor row
---     (a deterministic, country-consistent geo-bearing member of the same fold),
---     BEFORE the loser DELETE in step 4. Cross-country guard mirrors the
---     entity_resolution ON-CONFLICT geo rule: lat/lon/region are inherited ONLY
---     when the countries are consistent (a mismatch never overwrites). lat+lon
---     are copied TOGETHER (both from the same donor, only when BOTH are NULL) so
---     they can never be mixed across donors. completeness_score = GREATEST (never
---     regressed). Idempotent: COALESCE fills only a still-NULL value.
+--     BEFORE the loser DELETE in step 4. The generator already gated the donor on
+--     the survivor's OWN NAME (the frozen geo_country here is the country the
+--     survivor NAME resolves to offline, and the donor's coords were accepted only
+--     because the donor's country agreed with it) — so a non-country name or a
+--     country mismatch produced NO row here at all. The cross-country CASE guard
+--     below stays as defense-in-depth (mirrors the entity_resolution ON-CONFLICT
+--     geo rule): lat/lon/region are inherited ONLY when s.geo_country agrees with
+--     the frozen country, so a live country DRIFT between snapshot and apply never
+--     overwrites. lat+lon are copied TOGETHER (both from the same donor, only when
+--     BOTH are NULL) so they can never be mixed across donors. completeness_score
+--     = GREATEST (never regressed). Idempotent: COALESCE fills only a still-NULL
+--     value.
 -- ==========================================================================
 UPDATE entity_profiles s
    SET geo_lat = CASE
