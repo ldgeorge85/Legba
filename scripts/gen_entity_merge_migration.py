@@ -47,10 +47,15 @@ Pipeline:
   1. CLUSTER every row by ``identity_fold(canonical_name)`` (class-agnostic).
   2. PROTECT the country/location homonym rows; elect + merge the rest.
   3. SURVIVOR ELECTION (most-links) among the mergeable members.
-  4. LOSERS = mergeable minus survivor -> merge_map(loser, survivor).
+  4. LOSERS = mergeable minus survivor -> merge_map(loser, survivor). A NULL-geo
+     survivor inherits geo from a deterministic, country-consistent geo-bearing
+     loser (C1) so a hard-deleted loser's coordinates are not lost.
   5. JUNK: a content-spam SINGLETON, or a cluster whose EVERY mergeable member is
      content-spam -> junk (hard-DELETEd). A junk-SHAPED row that folds ONTO a real
      survivor ("Iran</p" -> Iran) is a NORMAL loser (re-point + hard-delete).
+     A fold whose ELECTED survivor NAME is itself junk (sports scaffolding /
+     number-word; article variants defeat the all-junk gate) routes the WHOLE fold
+     to junk rather than keep a junk survivor with consolidated links (B1).
   6. PARTITION INTEGRITY asserts (no id both survivor+loser, both merge+junk).
   7. EMIT the migration SQL + the report.
 
@@ -70,13 +75,41 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+try:  # pycountry is already a canon dependency; used to normalise geo_country.
+    import pycountry
+except Exception:  # pragma: no cover - defensive; canon import would fail first
+    pycountry = None
+
 from legba.data._entity_canon import (
     DEFAULT_CLASS,
+    _strip_leading_article,
     _strip_name,
     canonicalize_entity,
     identity_fold,
     is_junk_entity,
 )
+
+
+def _country_iso2(c: str | None) -> str | None:
+    """Normalise a geo_country value (ISO-2 code OR full/common name) to an ISO-2
+    code so 'AE' and 'United Arab Emirates' compare EQUAL. Returns None for an
+    empty value, and a lowercased passthrough when pycountry cannot resolve the
+    string (e.g. 'Congo-Brazzaville') — a conservative fallback that only ever
+    causes a country check to REFUSE (never a wrong match)."""
+    if not c:
+        return None
+    s = str(c).strip()
+    if not s:
+        return None
+    if pycountry is None:
+        return s.lower()
+    try:
+        if len(s) == 2:
+            rec = pycountry.countries.get(alpha_2=s.upper())
+            return rec.alpha_2 if rec else s.upper()
+        return pycountry.countries.lookup(s).alpha_2
+    except LookupError:
+        return s.lower()
 
 # ---------------------------------------------------------------------------
 # Ambiguity thresholds.
@@ -123,6 +156,28 @@ class Row:
     source: str
     created_at: str  # ISO string — sorts lexicographically (oldest = smallest)
     links: int
+    # Geo carried so a hard-deleted geo-bearing loser can backfill a NULL-geo
+    # survivor (DQ P4 r3 / C1). All optional — absent columns parse to None.
+    geo_lat: float | None = None
+    geo_lon: float | None = None
+    geo_country: str | None = None
+    geo_region: str | None = None
+    completeness: float | None = None
+
+
+def _opt_float(v: str | None) -> float | None:
+    v = (v or "").strip()
+    if not v:
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def _opt_text(v: str | None) -> str | None:
+    v = (v or "").strip()
+    return v or None
 
 
 def _read_csv(path: Path) -> list[Row]:
@@ -138,6 +193,11 @@ def _read_csv(path: Path) -> list[Row]:
                     source=(r.get("source") or "").strip(),
                     created_at=(r.get("created_at") or "").strip(),
                     links=int(r.get("link_count") or 0),
+                    geo_lat=_opt_float(r.get("geo_lat")),
+                    geo_lon=_opt_float(r.get("geo_lon")),
+                    geo_country=_opt_text(r.get("geo_country")),
+                    geo_region=_opt_text(r.get("geo_region")),
+                    completeness=_opt_float(r.get("completeness_score")),
                 )
             )
     return rows
@@ -156,6 +216,64 @@ def _elect_survivor(members: list[Row]) -> Row:
     of the reference edges onto a minority stub (the round-1 16k-link bloat).
     """
     return min(members, key=lambda m: (-m.links, m.created_at, m.id))
+
+
+def _survivor_is_junk(survivor_name: str) -> bool:
+    """True when the ELECTED survivor's display name is INHERENT non-referent junk
+    (sports scaffolding / quantifier / clock / numeral / bare number-word /
+    stopword), so the whole fold must route to JUNK rather than keep a junk
+    survivor with consolidated links (DQ P4 r3 / B1). Article variants ("The World
+    Cup" / "A World Cup") defeat the pre-election all-junk gate, so a leading
+    article is stripped and the check re-run.
+
+    Deliberately EXCLUDES two ``is_junk_entity`` classes that must NEVER sweep a
+    whole fold (they would delete a LEGIT entity, violating the B1 guard):
+
+      * length <= 2 abbreviations (``LA`` / ``DC`` / ``Xi`` / ``G7`` / ``DW``) —
+        real, often high-reference entities the length rule flags; and
+      * HTML-residue surfaces (``"Daniel Noboa.</p"`` / ``"Jeanne Shaheen</a"``) —
+        a DIRTY surface of a real referent, which round-2 keeps (re-pointed), not a
+        whole-fold junk.
+
+    Legit short forms (US/UK/EU/UN/WHO) are additionally exempted INSIDE
+    ``is_junk_entity`` (alias / demonym / country / org), so they are never junk."""
+    cand = (survivor_name or "").strip()
+    if not cand:
+        return False
+    for probe in (cand, _strip_leading_article(cand)):
+        if not probe or "<" in probe or ">" in probe:
+            continue                        # residue: a real referent's dirty surface
+        if len(_strip_name(probe)) <= 2:
+            continue                        # length<=2 abbreviation: a real entity
+        if is_junk_entity(probe):
+            return True
+    return False
+
+
+def _pick_geo_donor(survivor: Row, losers: list[Row]) -> Row | None:
+    """Deterministically pick a geo-bearing loser to backfill the survivor's geo.
+
+    A hard-deleted loser can carry the referent's coordinates that the most-links
+    survivor lacks (DQ P4 r3 / C1). Only a loser with BOTH ``geo_lat`` and
+    ``geo_lon`` qualifies as a donor (coordinates copied as a pair, never mixed).
+
+    Cross-country guard — mirrors ``entity_resolution``'s ON-CONFLICT geo rule: if
+    the survivor already has a ``geo_country``, a donor whose ``geo_country``
+    DISAGREES is NEVER eligible (a country mismatch must not overwrite). Country
+    strings are normalised to ISO-2 first, so 'AE' and 'United Arab Emirates' are
+    recognised as the SAME country (not a spurious mismatch). Among the eligible
+    donors, prefer one whose country MATCHES the survivor's, then the smallest id
+    — stable + deterministic."""
+    sc = _country_iso2(survivor.geo_country)
+    cands = [m for m in losers if m.geo_lat is not None and m.geo_lon is not None]
+    if sc:
+        cands = [m for m in cands if _country_iso2(m.geo_country) in (None, sc)]
+    if not cands:
+        return None
+    if sc:
+        return min(cands, key=lambda m: (
+            0 if _country_iso2(m.geo_country) == sc else 1, m.id))
+    return min(cands, key=lambda m: m.id)
 
 
 def _survivor_name(survivor: Row) -> str:
@@ -270,6 +388,12 @@ class Plan:
     ambiguous_token: list[dict]                   # bare-token surname homonyms
     fold_clusters: int
     loser_links: int
+    # (survivor_id, geo_lat, geo_lon, geo_country, geo_region, completeness) —
+    # geo COALESCE'd onto a NULL-geo survivor from a geo-bearing loser (C1).
+    survivor_geo: list[tuple] = field(default_factory=list)
+    # folds whose elected survivor NAME was itself junk -> routed wholly to junk
+    # instead of keeping a junk survivor (B1).
+    junk_from_survivor: int = 0
     samples: list[dict] = field(default_factory=list)
 
 
@@ -286,8 +410,10 @@ def build_plan(rows: list[Row]) -> Plan:
     junk: list[str] = []
     ambiguous_geo: list[dict] = []
     ambiguous_token: list[dict] = []
+    survivor_geo: list[tuple] = []
     loser_links = 0
     fold_clusters = 0
+    junk_from_survivor = 0
     samples: list[dict] = []
 
     survivors_seen: set[str] = set()
@@ -343,6 +469,19 @@ def build_plan(rows: list[Row]) -> Plan:
         survivor_name = _survivor_name(survivor)
         _cn, cc = canonicalize_entity(survivor_name, DEFAULT_CLASS)
 
+        # (2c) JUNK-NAMED SURVIVOR — the highest-link fragment's own display name
+        # is itself content junk (World Cup / Group F / a bare number-word), so
+        # article/quantifier variants defeated the pre-election all-junk gate and
+        # a junk survivor would otherwise be KEPT with the fold's consolidated
+        # links. Route the ENTIRE fold to junk (hard-delete all members + links);
+        # do NOT elect a junk survivor. Gated on is_junk_entity, so US/UK/EU/UN
+        # and real names are never swept.
+        if _survivor_is_junk(survivor_name):
+            for m in mergeable:
+                junk.append(m.id)
+            junk_from_survivor += 1
+            continue
+
         # (2b) BARE-TOKEN surname homonym -> manual review, do NOT merge.
         if _is_manual_homonym(survivor_name, cc, mergeable):
             ambiguous_token.append({
@@ -368,6 +507,32 @@ def build_plan(rows: list[Row]) -> Plan:
             merge_map.append((m.id, survivor.id))
             losers_seen.add(m.id)
             loser_links += m.links
+
+        # (C1) GEO BACKFILL — hard-deleting a geo-bearing loser blanks the
+        # referent's coordinates when the most-links survivor has NULL geo. Pick a
+        # deterministic, country-consistent geo-bearing loser and record its geo so
+        # the emitted SQL can COALESCE the survivor's NULL geo BEFORE the delete.
+        donor = _pick_geo_donor(survivor, losers)
+        if donor is not None:
+            fills_geo = (
+                (survivor.geo_lat is None and survivor.geo_lon is None
+                 and donor.geo_lat is not None and donor.geo_lon is not None)
+                or (survivor.geo_country is None and bool(donor.geo_country))
+                or (survivor.geo_region is None and bool(donor.geo_region))
+            )
+            if fills_geo:
+                # Emit the survivor's OWN snapshot country as the guard sentinel
+                # when it has one (the donor is already ISO-2-consistent with it),
+                # so the emitted SQL's string-equality cross-country CASE passes
+                # for this verified-consistent donor AND still blocks a live
+                # country DRIFT between snapshot and apply. When the survivor has
+                # NO country, emit the donor's country so the COALESCE backfills
+                # it. The lat/lon/region/completeness are always the donor's.
+                emit_country = survivor.geo_country or donor.geo_country
+                survivor_geo.append((
+                    survivor.id, donor.geo_lat, donor.geo_lon,
+                    emit_country, donor.geo_region, donor.completeness,
+                ))
 
         # survivor rewrite only when the display name OR the class changes.
         if survivor_name != survivor.name or survivor_class != survivor.cls:
@@ -398,6 +563,16 @@ def build_plan(rows: list[Row]) -> Plan:
         raise SystemExit("PARTITION VIOLATION: duplicate id in junk list")
     if len({lid for lid, _ in merge_map}) != len(merge_map):
         raise SystemExit("PARTITION VIOLATION: duplicate loser in merge_map")
+    # Geo backfill only ever targets an elected merge survivor (never a loser or
+    # junk row), and at most once per survivor.
+    geo_ids = [sid for sid, *_ in survivor_geo]
+    if len(set(geo_ids)) != len(geo_ids):
+        raise SystemExit("PARTITION VIOLATION: duplicate survivor in survivor_geo")
+    bad_geo = (set(geo_ids) - survivors_seen) | (set(geo_ids) & junk_set)
+    if bad_geo:
+        raise SystemExit(
+            f"PARTITION VIOLATION: survivor_geo id not a live survivor: {sorted(bad_geo)[:5]}"
+        )
 
     # Two survivors must never rewrite to the same (lower(name), class).
     rw_targets: dict[tuple[str, str], str] = {}
@@ -418,6 +593,8 @@ def build_plan(rows: list[Row]) -> Plan:
         ambiguous_token=sorted(ambiguous_token, key=lambda a: a["fold"]),
         fold_clusters=fold_clusters,
         loser_links=loser_links,
+        survivor_geo=sorted(survivor_geo, key=lambda t: t[0]),
+        junk_from_survivor=junk_from_survivor,
         samples=samples,
     )
 
@@ -430,6 +607,16 @@ def build_plan(rows: list[Row]) -> Plan:
 def _sql_str(s: str) -> str:
     """Single-quote a text literal for SQL (double any embedded quote)."""
     return "'" + s.replace("'", "''") + "'"
+
+
+def _sql_num(v: float | None) -> str:
+    """Emit a NULL or a deterministic float literal for a numeric column."""
+    return "NULL" if v is None else repr(float(v))
+
+
+def _sql_txt(v: str | None) -> str:
+    """Emit a NULL or a quoted text literal (None / empty -> NULL)."""
+    return "NULL" if v is None or str(v).strip() == "" else _sql_str(str(v))
 
 
 def _values_block(rows: list[str]) -> str:
@@ -454,6 +641,13 @@ def emit_sql(plan: Plan) -> str:
     junk_values = _values_block(
         [f"    ('{eid}'::uuid)" for eid in plan.junk]
     ) or "    (NULL::uuid)"
+    geo_values = _values_block(
+        [
+            f"    ('{sid}'::uuid, {_sql_num(lat)}, {_sql_num(lon)}, "
+            f"{_sql_txt(country)}, {_sql_txt(region)}, {_sql_num(comp)})"
+            for sid, lat, lon, country, region, comp in plan.survivor_geo
+        ]
+    ) or "    (NULL::uuid, NULL::double precision, NULL::double precision, NULL::text, NULL::text, NULL::real)"
 
     rewrite_insert = (
         f"INSERT INTO _survivor_rewrite (survivor_id, canonical_name, entity_class) VALUES\n{rewrite_values};"
@@ -465,6 +659,15 @@ def emit_sql(plan: Plan) -> str:
         if plan.junk
         else "-- (no pure-junk rows in this snapshot)"
     )
+    geo_insert = (
+        "INSERT INTO _survivor_geo\n"
+        "    (survivor_id, geo_lat, geo_lon, geo_country, geo_region, completeness_score) VALUES\n"
+        f"{geo_values};"
+        if plan.survivor_geo
+        else "-- (no NULL-geo survivors with a geo-bearing loser in this snapshot)"
+    )
+    n_geo = len(plan.survivor_geo)
+    n_junk_surv = plan.junk_from_survivor
 
     header = f"""-- SPDX-FileCopyrightText: 2026 Lewis George
 -- SPDX-License-Identifier: AGPL-3.0-or-later
@@ -498,8 +701,10 @@ def emit_sql(plan: Plan) -> str:
 --   survivor (no re-divergence). See the generator docstring.
 --
 -- BLAST RADIUS (this snapshot): {n_merge} loser rows re-pointed then HARD-DELETED,
---   {n_junk} pure-junk rows HARD-DELETED, {n_rewrite} survivor name/class
---   rewrites, {plan.fold_clusters} fold clusters merged,
+--   {n_junk} pure-junk rows HARD-DELETED (of which {n_junk_surv} folds were routed
+--   to junk because their elected survivor NAME was itself junk), {n_rewrite}
+--   survivor name/class rewrites, {n_geo} survivors geo-backfilled from a
+--   geo-bearing loser, {plan.fold_clusters} fold clusters merged,
 --   {len(plan.ambiguous_geo)} country/location homonyms + {len(plan.ambiguous_token)}
 --   bare-token homonyms held for review (NOT merged). Net entity_profiles row
 --   delta: -{n_deleted}.
@@ -521,11 +726,23 @@ def emit_sql(plan: Plan) -> str:
 --   so a deleted loser's name simply orphans its proposed_edges — entity_gc
 --   quarantines those on its next tick; acceptable dup/variant cleanup.)
 --
+-- APPLY-WINDOW QUIESCENCE (recommended): applying is a SINGLE sub-second
+--   transaction, but a concurrent entity_resolution write DURING that window
+--   could insert a signal_entity_link pointing at a loser row that step (4) then
+--   CASCADE-deletes — a one-time, self-healing transient (the next resolution
+--   tick re-links the signal to the surviving row by name). To avoid it entirely,
+--   apply during a quiet window OR briefly pause the entity_resolution cadence
+--   for the (sub-second) apply. This is a recommendation, not a correctness
+--   requirement — the transaction is atomic and no live row is left dangling.
+--
 -- IDEMPOTENT: re-running is a no-op — the link re-point is INSERT..ON CONFLICT
 --   DO NOTHING, the loser/junk DELETEs find nothing on a second pass, the
---   survivor rewrite sets identical values, and the provenance appends are
---   NOT-EXISTS-guarded. The migrate runner also skips already-applied files via
---   the legba_data_migrations ledger.
+--   survivor rewrite sets identical values, the geo backfill COALESCEs only a
+--   still-NULL survivor geo (GREATEST never regresses completeness), the version
+--   append is NOT-EXISTS-guarded on event='merge_0063', and the version bump is
+--   guarded to fire only while the survivor still sits below its merge-version
+--   number. The migrate runner also skips already-applied files via the
+--   legba_data_migrations ledger.
 --
 -- HOUSE RULE: routed through legba.data.migrate (raw mass-DELETE trips the
 --   safety classifier). The runner wraps this file in ONE transaction + records
@@ -533,12 +750,14 @@ def emit_sql(plan: Plan) -> str:
 --   TEMP TABLEs are ON COMMIT DROP inside that single wrapping transaction.
 --
 -- ORDER IS LOAD-BEARING:
---   (1) re-point loser links onto the survivor,
---   (2) copy loser aliases/derived_from onto the survivor  -- BEFORE the losers
---   (3) append the survivor merge-version row               -- are deleted,
---   (4) DELETE the loser rows (CASCADE takes their leftover links + versions),
---   (5) rewrite the survivor name/class NOW that the loser slots are freed,
---   (6) DELETE the junk rows (CASCADE takes their links + versions).
+--   (1)  re-point loser links onto the survivor,
+--   (2)  copy loser aliases/derived_from onto the survivor  -- BEFORE the losers
+--   (2b) backfill NULL survivor geo from a geo-bearing loser -- are deleted,
+--   (3)  append the survivor merge-version row (at version+1),
+--   (3b) bump the survivor's entity_profiles.version to that number,
+--   (4)  DELETE the loser rows (CASCADE takes their leftover links + versions),
+--   (5)  rewrite the survivor name/class NOW that the loser slots are freed,
+--   (6)  DELETE the junk rows (CASCADE takes their links + versions).
 """
 
     body = f"""
@@ -556,6 +775,12 @@ CREATE TEMP TABLE _survivor_rewrite (
 
 CREATE TEMP TABLE _junk (entity_id uuid) ON COMMIT DROP;
 {junk_insert}
+
+CREATE TEMP TABLE _survivor_geo (
+    survivor_id uuid, geo_lat double precision, geo_lon double precision,
+    geo_country text, geo_region text, completeness_score real
+) ON COMMIT DROP;
+{geo_insert}
 
 CREATE INDEX ON _merge_map (loser_id);
 CREATE INDEX ON _merge_map (survivor_id);
@@ -613,15 +838,51 @@ UPDATE entity_profiles s
  WHERE s.id = agg.sid;
 
 -- ==========================================================================
--- (3) SURVIVOR MERGE-VERSION ROW in entity_profile_versions (append-only). This
---     preserves the merge record even though the losers' own version rows cascade
---     away in step 4. NOT-EXISTS-guarded on (entity_id, event='merge_0063') for
---     idempotency. Captured at the pre-rewrite version (the rewrite in step 5
---     bumps it).
+-- (2b) SURVIVOR GEO BACKFILL — a hard-deleted geo-bearing loser can carry the
+--     referent's coordinates the most-links survivor lacks, so blanking it would
+--     lose the geo. COALESCE the survivor's NULL geo from the frozen donor row
+--     (a deterministic, country-consistent geo-bearing member of the same fold),
+--     BEFORE the loser DELETE in step 4. Cross-country guard mirrors the
+--     entity_resolution ON-CONFLICT geo rule: lat/lon/region are inherited ONLY
+--     when the countries are consistent (a mismatch never overwrites). lat+lon
+--     are copied TOGETHER (both from the same donor, only when BOTH are NULL) so
+--     they can never be mixed across donors. completeness_score = GREATEST (never
+--     regressed). Idempotent: COALESCE fills only a still-NULL value.
+-- ==========================================================================
+UPDATE entity_profiles s
+   SET geo_lat = CASE
+                     WHEN (s.geo_country IS NULL OR g.geo_country IS NULL
+                           OR lower(s.geo_country) = lower(g.geo_country))
+                          AND s.geo_lat IS NULL AND s.geo_lon IS NULL
+                     THEN g.geo_lat ELSE s.geo_lat END,
+       geo_lon = CASE
+                     WHEN (s.geo_country IS NULL OR g.geo_country IS NULL
+                           OR lower(s.geo_country) = lower(g.geo_country))
+                          AND s.geo_lat IS NULL AND s.geo_lon IS NULL
+                     THEN g.geo_lon ELSE s.geo_lon END,
+       geo_country = COALESCE(s.geo_country, g.geo_country),
+       geo_region = CASE
+                     WHEN s.geo_country IS NULL OR g.geo_country IS NULL
+                          OR lower(s.geo_country) = lower(g.geo_country)
+                     THEN COALESCE(s.geo_region, g.geo_region) ELSE s.geo_region END,
+       completeness_score = GREATEST(
+                                COALESCE(s.completeness_score, 0),
+                                COALESCE(g.completeness_score, 0)),
+       updated_at = now()
+  FROM _survivor_geo g
+ WHERE s.id = g.survivor_id;
+
+-- ==========================================================================
+-- (3) SURVIVOR MERGE-VERSION ROW in entity_profile_versions (append-only) at
+--     version+1. This preserves the merge record even though the losers' own
+--     version rows cascade away in step 4, and — inserting ABOVE the survivor's
+--     current version rather than duplicating it — keeps (entity_id, version)
+--     monotonic + unique. NOT-EXISTS-guarded on (entity_id, event='merge_0063')
+--     for idempotency. Step 3b then advances entity_profiles.version to match.
 -- ==========================================================================
 INSERT INTO entity_profile_versions
     (entity_id, version, data, analyst_id, analyst_version, run_id)
-SELECT s.id, s.version,
+SELECT s.id, s.version + 1,
        jsonb_build_object(
            'canonical_name', s.canonical_name,
            'entity_class',   s.entity_class,
@@ -635,6 +896,25 @@ SELECT s.id, s.version,
  WHERE s.id IN (SELECT DISTINCT survivor_id FROM _merge_map)
    AND NOT EXISTS (
        SELECT 1 FROM entity_profile_versions v
+        WHERE v.entity_id = s.id
+          AND v.data->>'event' = 'merge_0063'
+   );
+
+-- ==========================================================================
+-- (3b) VERSION BUMP — advance EVERY merged survivor's entity_profiles.version to
+--     the merge-version row's number (step 3 appended it at version+1) so
+--     (entity_id, version) stays monotonic + unique. Guarded to fire exactly
+--     once: only a survivor still sitting BELOW its merge_0063 version is bumped,
+--     so a forced re-run is a no-op (version already == the merge-version number).
+--     The step-5 rewrite no longer touches version (this owns it, for ALL merged
+--     survivors, not only the renamed ones).
+-- ==========================================================================
+UPDATE entity_profiles s
+   SET version    = s.version + 1,
+       updated_at = now()
+ WHERE s.id IN (SELECT DISTINCT survivor_id FROM _merge_map)
+   AND s.version < (
+       SELECT v.version FROM entity_profile_versions v
         WHERE v.entity_id = s.id
           AND v.data->>'event' = 'merge_0063'
    );
@@ -657,7 +937,6 @@ UPDATE entity_profiles s
    SET canonical_name = r.canonical_name,
        entity_class   = r.entity_class,
        entity_type    = r.entity_class,
-       version        = s.version + 1,
        updated_at     = now()
   FROM _survivor_rewrite r
  WHERE s.id = r.survivor_id
@@ -704,6 +983,8 @@ def emit_report(plan: Plan, *, total_rows: int) -> str:
     A(f"| loser links (approx, from snapshot link_count) | {plan.loser_links} |")
     A(f"| survivor name/class rewrites | {len(plan.survivor_rewrite)} |")
     A(f"| pure-junk rows (HARD-DELETED) | {len(plan.junk)} |")
+    A(f"| &nbsp;&nbsp;↳ folds routed to junk (elected survivor NAME was junk) | {plan.junk_from_survivor} |")
+    A(f"| survivors geo-backfilled from a geo-bearing loser | {len(plan.survivor_geo)} |")
     A(f"| country/location homonyms held (NOT merged) | {len(plan.ambiguous_geo)} |")
     A(f"| bare-token homonyms held (NOT merged) | {len(plan.ambiguous_token)} |")
     A(f"| **net entity_profiles row delta** | **-{n_deleted}** |")
@@ -711,7 +992,25 @@ def emit_report(plan: Plan, *, total_rows: int) -> str:
     A("Reversibility: **HARD-DELETE** — loser + junk rows are removed from "
       "`entity_profiles` (links + version rows cascade). The operator MUST "
       "`pg_dump` `entity_profiles` + `signal_entity_links` + "
-      "`entity_profile_versions` BEFORE applying; restore is the undo path.")
+      "`entity_profile_versions` BEFORE applying; restore is the undo path. "
+      "Apply during a quiet window (or briefly pause the entity_resolution "
+      "cadence) — a concurrent write during the sub-second apply could link a "
+      "signal to a loser that the CASCADE then deletes (a self-healing transient).")
+    A("")
+
+    A("## Survivor geo backfill (C1 — a hard-deleted loser's geo preserved)")
+    A("")
+    if not plan.survivor_geo:
+        A("_None — no NULL-geo survivor had a country-consistent geo-bearing loser "
+          "in this snapshot._")
+    else:
+        A(f"{len(plan.survivor_geo)} survivor(s) inherit geo from a geo-bearing "
+          "loser (lat+lon copied together from one donor; never across a country "
+          "mismatch; completeness_score = GREATEST):")
+        A("")
+        for sid, lat, lon, country, region, comp in plan.survivor_geo:
+            latlon = f"{lat},{lon}" if lat is not None and lon is not None else "—"
+            A(f"    - `{sid}` <- geo=({latlon}) country={country!r} region={region!r}")
     A("")
 
     A("## Country/location homonyms (protected rows NOT merged; the rest of the "
@@ -801,12 +1100,16 @@ def main(argv: list[str] | None = None) -> int:
     args.out_sql.write_text(sql, encoding="utf-8")
     args.out_report.write_text(report, encoding="utf-8")
 
+    n_deleted = len(plan.merge_map) + len(plan.junk)
     print(
         f"rows={len(rows)} fold_clusters={plan.fold_clusters} "
         f"losers={len(plan.merge_map)} loser_links={plan.loser_links} "
         f"rewrites={len(plan.survivor_rewrite)} junk={len(plan.junk)} "
+        f"junk_from_survivor={plan.junk_from_survivor} "
+        f"survivors_geo_backfilled={len(plan.survivor_geo)} "
         f"ambiguous_geo={len(plan.ambiguous_geo)} "
-        f"ambiguous_token={len(plan.ambiguous_token)}",
+        f"ambiguous_token={len(plan.ambiguous_token)} "
+        f"net_row_delta=-{n_deleted}",
         file=sys.stderr,
     )
     return 0

@@ -508,6 +508,29 @@ _STOPWORD_ENTITIES: frozenset[str] = frozenset({
     "into", "onto", "off", "out", "up", "down",
 })
 
+#: Bare spelled-out cardinal / ordinal number-words NER emits as a standalone
+#: "entity" ("Two", "first"). Like the stopword set, these are a closed class
+#: that is NEVER a real referent on its own, yet they slip past the numeric
+#: predicate (which only matches DIGITS) and the length rule (>2 chars), so the
+#: DQ P4 merge review found "Two" (295 links) and "first" (326 links) elected as
+#: fold survivors. Mirrors ``legba.data.filters.fact_extractor._NUMBER_WORDS`` /
+#: ``_ORDINAL_WORDS`` but is kept self-contained here (the canon is a leaf module
+#: — importing fact_extractor would be circular). Checked AFTER the alias /
+#: demonym / country exemption, so a real short form (US/UK/EU/UN) is unaffected.
+#: ``last`` / ``next`` are deliberately excluded (positional adverbs, not numbers).
+_NUMBER_WORD_ENTITIES: frozenset[str] = frozenset({
+    # cardinals
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "thirty",
+    "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred",
+    "thousand", "million", "billion", "trillion", "dozen", "couple",
+    # ordinals
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+    "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth",
+    "twentieth", "thirtieth",
+})
+
 
 # ---------------------------------------------------------------------------
 # JUNK PREDICATES — the live junk classes the review confirmed. Each matches on
@@ -720,6 +743,10 @@ def is_junk_entity(name: str) -> bool:
     # Pure article / function word ("the", "and", "of") — never a referent, so
     # it can never be elected a merge survivor (DQ P4 §E).
     if low in _STOPWORD_ENTITIES:
+        return True
+    # Bare spelled-out number-word / ordinal ("Two", "first") — a closed class
+    # that slips past the DIGIT-only numeric predicate; never a referent (DQ P4).
+    if low in _NUMBER_WORD_ENTITIES:
         return True
     if _CLOCK_RE.match(stripped):
         return True

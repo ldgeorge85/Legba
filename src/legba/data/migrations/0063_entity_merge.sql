@@ -29,12 +29,14 @@
 --   are canon-authoritative so the row the forward code converges on IS the
 --   survivor (no re-divergence). See the generator docstring.
 --
--- BLAST RADIUS (this snapshot): 2002 loser rows re-pointed then HARD-DELETED,
---   518 pure-junk rows HARD-DELETED, 125 survivor name/class
---   rewrites, 1505 fold clusters merged,
+-- BLAST RADIUS (this snapshot): 1965 loser rows re-pointed then HARD-DELETED,
+--   588 pure-junk rows HARD-DELETED (of which 6 folds were routed
+--   to junk because their elected survivor NAME was itself junk), 125
+--   survivor name/class rewrites, 13 survivors geo-backfilled from a
+--   geo-bearing loser, 1483 fold clusters merged,
 --   1 country/location homonyms + 5
 --   bare-token homonyms held for review (NOT merged). Net entity_profiles row
---   delta: -2520.
+--   delta: -2553.
 --
 -- ==========================================================================
 -- HARD-DELETE — REVERSIBILITY IS AN OPERATOR PRE-APPLY BACKUP, NOT A TOMBSTONE.
@@ -53,11 +55,23 @@
 --   so a deleted loser's name simply orphans its proposed_edges — entity_gc
 --   quarantines those on its next tick; acceptable dup/variant cleanup.)
 --
+-- APPLY-WINDOW QUIESCENCE (recommended): applying is a SINGLE sub-second
+--   transaction, but a concurrent entity_resolution write DURING that window
+--   could insert a signal_entity_link pointing at a loser row that step (4) then
+--   CASCADE-deletes — a one-time, self-healing transient (the next resolution
+--   tick re-links the signal to the surviving row by name). To avoid it entirely,
+--   apply during a quiet window OR briefly pause the entity_resolution cadence
+--   for the (sub-second) apply. This is a recommendation, not a correctness
+--   requirement — the transaction is atomic and no live row is left dangling.
+--
 -- IDEMPOTENT: re-running is a no-op — the link re-point is INSERT..ON CONFLICT
 --   DO NOTHING, the loser/junk DELETEs find nothing on a second pass, the
---   survivor rewrite sets identical values, and the provenance appends are
---   NOT-EXISTS-guarded. The migrate runner also skips already-applied files via
---   the legba_data_migrations ledger.
+--   survivor rewrite sets identical values, the geo backfill COALESCEs only a
+--   still-NULL survivor geo (GREATEST never regresses completeness), the version
+--   append is NOT-EXISTS-guarded on event='merge_0063', and the version bump is
+--   guarded to fire only while the survivor still sits below its merge-version
+--   number. The migrate runner also skips already-applied files via the
+--   legba_data_migrations ledger.
 --
 -- HOUSE RULE: routed through legba.data.migrate (raw mass-DELETE trips the
 --   safety classifier). The runner wraps this file in ONE transaction + records
@@ -65,12 +79,14 @@
 --   TEMP TABLEs are ON COMMIT DROP inside that single wrapping transaction.
 --
 -- ORDER IS LOAD-BEARING:
---   (1) re-point loser links onto the survivor,
---   (2) copy loser aliases/derived_from onto the survivor  -- BEFORE the losers
---   (3) append the survivor merge-version row               -- are deleted,
---   (4) DELETE the loser rows (CASCADE takes their leftover links + versions),
---   (5) rewrite the survivor name/class NOW that the loser slots are freed,
---   (6) DELETE the junk rows (CASCADE takes their links + versions).
+--   (1)  re-point loser links onto the survivor,
+--   (2)  copy loser aliases/derived_from onto the survivor  -- BEFORE the losers
+--   (2b) backfill NULL survivor geo from a geo-bearing loser -- are deleted,
+--   (3)  append the survivor merge-version row (at version+1),
+--   (3b) bump the survivor's entity_profiles.version to that number,
+--   (4)  DELETE the loser rows (CASCADE takes their leftover links + versions),
+--   (5)  rewrite the survivor name/class NOW that the loser slots are freed,
+--   (6)  DELETE the junk rows (CASCADE takes their links + versions).
 
 -- ==========================================================================
 -- FROZEN DECISIONS (VALUES temp tables — dropped at COMMIT)
@@ -107,7 +123,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('03041f21-92a6-4c00-957f-1adfad1b84aa'::uuid, 'f2ed4b31-0617-4c87-999c-d2261e204d97'::uuid),
     ('03132968-4cf4-4708-9f76-94229b31ab22'::uuid, 'db6c7899-074a-4887-861f-edde4d5c40ae'::uuid),
     ('0346ae80-3650-4e04-b711-f9a6883e4d37'::uuid, '3eb7aef8-eb61-4398-9a4d-4f96b58892c2'::uuid),
-    ('0347da98-7c68-481a-a7cd-69069031bf2e'::uuid, '9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
     ('035bf5e4-08d3-423e-9e3e-b486c3d25e80'::uuid, '566f4030-2b4b-40e7-a0bd-095f722a8981'::uuid),
     ('03b86a50-5cb2-4a9f-8e4a-d10810ad6f7d'::uuid, '276084fb-2fc5-4a2e-87bf-743752b7ed48'::uuid),
     ('03cbec64-e079-4d01-8a8c-4313bf39860e'::uuid, '3b8c438e-5340-4a0d-8ede-d9f2b867b49f'::uuid),
@@ -199,7 +214,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('0f4274ac-c0c1-4c37-97dc-54c699da4d55'::uuid, 'f7c3fcc4-ac4e-453a-a370-2fe4abeb030b'::uuid),
     ('0f44ab06-1f4e-4310-8a99-12213d137f41'::uuid, 'b960bb48-4dab-48fb-b3b0-e426b08f3546'::uuid),
     ('0f67bd1a-687b-4a6e-88ec-586fdda9cf9d'::uuid, '5b0a5972-02f5-445b-af3a-141da8651a03'::uuid),
-    ('0f69f111-e760-4805-ac7d-b518b4d26943'::uuid, '004e0132-f825-4e7e-ba65-aabfd2fce2b2'::uuid),
     ('0f6c9de9-feae-4c0d-8bd3-e55f679ea607'::uuid, 'e9d4fa33-81ba-4a0a-89d0-3679ccff4606'::uuid),
     ('0f75d04f-6fe9-4be3-ab3e-17dd68ef5316'::uuid, '106e5ee4-9530-4f63-abb7-adfdf8dcff71'::uuid),
     ('0f790a74-5a9e-4bcb-b720-660440736d73'::uuid, 'a2eb6884-e605-4145-85f9-f6dd249a5a39'::uuid),
@@ -233,7 +247,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('13130f36-6aca-48d0-b525-b870963d5a6c'::uuid, 'bfe7fde1-94b5-47a8-840f-5385d4ca4c03'::uuid),
     ('1314cb17-4313-4e2c-981d-9bdcf705ce72'::uuid, '9dd04330-205f-41d8-915e-31a3cf8b47ca'::uuid),
     ('131c8da2-d0f2-4a37-8355-8756dcd372d3'::uuid, '4d493c0e-f780-436e-8263-5cadada84099'::uuid),
-    ('132e73d6-4801-48ff-b1ee-11804017fa4d'::uuid, '3db3eb78-32f4-4eee-98d5-2754c8b1c156'::uuid),
     ('134bfd51-06fa-4f12-b6f9-2982cd89eb46'::uuid, '85dd47e6-d376-4a0a-b9e2-fff6485538bc'::uuid),
     ('134c6f2f-2957-41ca-a0c4-9248bc4b64b0'::uuid, '2449035e-b198-468c-8b57-f71aef0a4f1d'::uuid),
     ('135733de-8f25-4865-ae21-891ac0ec254e'::uuid, '2dfa388a-cd6e-4754-ac15-3690b22e77d6'::uuid),
@@ -248,7 +261,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('1448711a-bf5c-4dfd-915f-413645047d28'::uuid, '75a5b8a3-c7d5-4f36-be62-0d89686e9af8'::uuid),
     ('1451c4c8-3991-4236-9921-35c50fed1f1c'::uuid, '3e7a7363-766e-47ff-89bf-b2b0c122f3d9'::uuid),
     ('1467e873-56b1-461b-bf03-79517aec6a6e'::uuid, 'd684cb1c-c2c6-4885-9565-58d26e803f58'::uuid),
-    ('147219d4-bdab-4637-a027-901c5f618fc5'::uuid, 'f2bd9e9a-166d-478a-9e94-892048ca5656'::uuid),
     ('14a49d15-19d6-4ddc-b154-185b6306541e'::uuid, 'a33a3857-e16e-4c79-9cbb-148e41dfe5fb'::uuid),
     ('14f76287-5048-46a0-8592-045721985c25'::uuid, 'd63f91d6-7d57-4597-8094-9d59973e3c98'::uuid),
     ('150ea58c-3936-4180-b2d1-6a89349d0c81'::uuid, 'b60ff03d-4479-4374-954a-18a766d9f3fe'::uuid),
@@ -324,7 +336,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('1faa113d-4f48-4e29-ba5e-c01351c61e74'::uuid, '69564940-3759-401d-b35c-05db66327590'::uuid),
     ('1fcb634e-ddba-42ea-b0d3-83bcaf0d27c2'::uuid, '6773c8a7-631d-4267-86ff-fb5baac5d861'::uuid),
     ('1fccf611-b622-4857-9b9c-e58a6f004085'::uuid, '2a49e8ab-2512-40ea-92bf-d96c9f6c30b3'::uuid),
-    ('1fe91243-5a8f-435a-966b-e808836fa270'::uuid, '8ea116c9-2f3b-4b7a-a7f1-4144f720aa0f'::uuid),
     ('205963a4-c7f2-4d24-b564-2b83b1506ab0'::uuid, '9d3cc2c9-0eea-4c19-b68f-a8e3dd2dad55'::uuid),
     ('206f629c-1c09-4b1c-a935-8e750f8d5c6f'::uuid, '379a0150-2bbd-479b-9da5-b461567cc099'::uuid),
     ('20839a45-d123-466a-bb83-b174b865b7c1'::uuid, '93aea78c-3df6-41f8-806d-702fa4d56b30'::uuid),
@@ -377,7 +388,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('259f9a19-9943-4221-9b5d-e0ae5cf325d5'::uuid, '8e7c0a9e-4950-40af-8ced-06c55c4923ae'::uuid),
     ('25c7ef81-6895-4c9f-9d72-c2acbb3ee595'::uuid, '85b83506-4a0a-4add-b8fe-ad6319130812'::uuid),
     ('26263a21-d88f-4265-a7d9-7039b0e70dad'::uuid, '4ee75017-d0ad-46e5-b786-d817ef5facce'::uuid),
-    ('2663172a-8800-4d9d-afba-99ff44ac2b5f'::uuid, 'd569e192-3988-43ee-af00-034b2100c142'::uuid),
     ('269fd7eb-8cc2-4fd4-8d45-9518a7aaf34b'::uuid, 'e9b8bfed-64b6-4a23-a5fb-4f95b9065ffa'::uuid),
     ('26a6d699-2267-472e-acf7-db9fe98fe510'::uuid, 'e23b2b86-0735-4f00-a02e-4a6766a7413a'::uuid),
     ('272aaa4a-52c9-4893-b5e0-9cd13559fa3d'::uuid, 'ffb29336-b973-4bbf-9b62-33d2283a17ac'::uuid),
@@ -390,7 +400,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('27873926-47c0-4c30-af19-68d67734416d'::uuid, '47890d1e-73ac-4723-9b7e-4a979e83636d'::uuid),
     ('278cc8f0-ba3c-4454-a3b2-b2d07d7d6040'::uuid, '1e9b653c-c6a2-47de-be65-3b2e3c926837'::uuid),
     ('27b34c3a-edf6-4900-9666-ca5716b5a373'::uuid, '6e3144fb-f00d-499c-b08e-e2369791de3f'::uuid),
-    ('27e6906f-9370-4bfd-8e4b-845b683afee4'::uuid, '2b254bc3-7a2d-4bd9-b21d-5accea151b5f'::uuid),
     ('27fc889a-4ace-4477-92c1-629e8de75042'::uuid, '3d7e263a-8a5a-4657-8f93-0253c96e86d5'::uuid),
     ('28016172-4aeb-44d9-bca3-14053600c78c'::uuid, '46a7425c-a040-45a9-a9ca-91f30b100b25'::uuid),
     ('28516a8b-c0ef-4eeb-83a0-55307aa1b558'::uuid, '9b3b53a0-9dfe-405f-b441-413d8e4f3797'::uuid),
@@ -413,9 +422,7 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('2ad633d0-d736-49d0-868f-bdfc62f9f07b'::uuid, 'b854557d-b3b7-4752-8bb9-73b0a7126443'::uuid),
     ('2aeb6c58-8082-4bc7-becb-546bafa1b70c'::uuid, '28b4af7d-06f4-4c51-ba29-6bface66cd34'::uuid),
     ('2b04e2b0-1f40-4740-a47b-9e8a76d2dde5'::uuid, '685aae03-9aa5-440f-87a1-a21ae97e7adc'::uuid),
-    ('2b094d07-ae59-4184-b708-807223e521af'::uuid, '5e21b654-a789-4b60-9ad4-a668baa01916'::uuid),
     ('2b1ad8f5-0a19-47fb-8390-ca4f7ffa2b3e'::uuid, '2f3bc801-c6fd-4990-8bdc-b4ddc3515e67'::uuid),
-    ('2b47d656-9e8c-48c7-9ea9-fe6b1269a13b'::uuid, '9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
     ('2b5563cd-5037-426b-a153-5d50a35ff82c'::uuid, '018d49dd-75dd-4f41-97a0-6d6248557c23'::uuid),
     ('2b92cbfb-6180-4290-b007-039a9ce00ec4'::uuid, 'e6db451e-b57c-4b0e-9da0-e5c32bd70cb9'::uuid),
     ('2b952ff5-e30a-4d19-95fc-b09cb30b5d2c'::uuid, '0aa64ac3-5554-4d10-acd4-bc012d1c91d9'::uuid),
@@ -431,7 +438,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('2c8a2754-2b41-4533-8872-cbecdab6c792'::uuid, 'a838a91b-f66b-4b6f-96a1-7675ce0b456d'::uuid),
     ('2c9034ba-6963-4fc1-8a01-f93dcbb61cd9'::uuid, '844a5590-554c-45a3-a98f-922005302de9'::uuid),
     ('2ca94cef-6b62-4eeb-bf49-78654e30a589'::uuid, '36287bdf-bc39-49eb-abbc-1c431fe52f9c'::uuid),
-    ('2d1ced8c-3829-42ef-b018-e86bf474aa2a'::uuid, '9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
     ('2d3dbecc-eca6-45b4-813e-104b325d873e'::uuid, '04755ec4-2d8e-4da0-bc85-27c9eed5bda1'::uuid),
     ('2d42f01b-0e32-4c9e-bda6-a3e50bfa0bf1'::uuid, '147f2760-edc8-4dde-825d-cbac496fe676'::uuid),
     ('2d4a4163-72e0-4ee1-8ed5-f57ea991ea07'::uuid, '34cd0083-732c-416c-b759-bbfc2ef4683c'::uuid),
@@ -473,7 +479,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('330d8ed9-6123-4c5f-b237-2ba5c98c1219'::uuid, '1e620702-3e71-4f06-aefc-0c84d488141c'::uuid),
     ('33342a45-ec0a-469c-8138-c914aa9c8ccd'::uuid, '5c36feaf-e90b-40e0-9df0-caed6769cb7a'::uuid),
     ('333f0347-6412-4997-bca1-8a39996b6c47'::uuid, 'be2c9e0b-4bc9-42dd-86ee-1312d65cc57e'::uuid),
-    ('335f4179-ad10-4e64-90c3-2a0b49a024dc'::uuid, 'e7e9f094-7f38-48be-9bec-ded548902fb6'::uuid),
     ('338a2340-d306-494c-b666-171e5f06c311'::uuid, '156462fd-f24b-4197-bbbe-567205976cd5'::uuid),
     ('33909db2-42fa-4885-87c7-ded3b72e5e82'::uuid, '8e7c0a9e-4950-40af-8ced-06c55c4923ae'::uuid),
     ('3394a246-0e0f-4454-b77e-2e5071435fa2'::uuid, 'aa5e94e1-d641-41cd-ae19-af32075e9df9'::uuid),
@@ -499,7 +504,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('36725946-7752-4400-875a-156efcb5306b'::uuid, '64692a9c-0537-4765-8816-0ae862ef6d3c'::uuid),
     ('368f6edb-1358-439a-ae01-42721f05bc61'::uuid, '166f873a-a3c7-4734-adea-8a26a64acc8b'::uuid),
     ('36921879-0b06-4b0e-9cbe-1ddc53d2da92'::uuid, 'd988a783-5fe3-4ce0-b18e-0edc1707a6aa'::uuid),
-    ('36977b60-b24f-47ac-b44d-edc30e2b0ae9'::uuid, '39bd8f10-ed97-431b-800c-fbae394c9d59'::uuid),
     ('3699f70e-c7b4-4d26-a434-fddba947e80a'::uuid, '16aff6ee-11c0-404f-9734-df6b1c53f8b0'::uuid),
     ('3720c359-f14b-4e2d-9837-7df793c34e41'::uuid, '6dc1fd27-525a-4a7a-9b73-938b2a9ba019'::uuid),
     ('372e83d3-3bef-47f7-9fe2-c663908e113d'::uuid, '48592ddd-0a43-4648-9b6a-636e352fa3e7'::uuid),
@@ -595,7 +599,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('4330b994-46dd-4219-9ebd-44eefd1fa6d7'::uuid, 'eac48e64-79d0-420b-a7d8-11b000bc207b'::uuid),
     ('434bf228-d2c9-463c-a5d0-8ea8c9bbeb9e'::uuid, '238160af-a301-40c6-839c-aab33b4a45d0'::uuid),
     ('435e8834-03a4-4a96-ade0-e13a1be26e99'::uuid, 'f5a706ca-8516-4243-aa24-5d946cd10c9e'::uuid),
-    ('43888ac0-43bf-424d-af45-b8f1b85b2adb'::uuid, '3322cc41-05bd-4e0d-86f6-e8412a977876'::uuid),
     ('4394a40e-ccb5-45be-bd1e-8ee2759afb76'::uuid, 'a7216b55-043f-4c26-a5e8-e8c8046c5ee8'::uuid),
     ('439e2dfe-1312-4732-ae27-fa73805fa937'::uuid, 'd5c95aeb-d2db-43ce-8250-d1887717839a'::uuid),
     ('43d6a5e9-f02d-47b0-a0ad-75106da63a70'::uuid, '5d4ffe97-e831-4b31-b217-08c19438b606'::uuid),
@@ -688,7 +691,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('4ec03263-6b92-4128-a13c-6bd6c02206b8'::uuid, '6d09ebc0-f7dd-43da-bae7-44a24b1574ba'::uuid),
     ('4f176fa2-237c-4873-8d1f-92676c7600bd'::uuid, 'c9c53ecd-9154-4d86-a5c3-5ff3cfa97fea'::uuid),
     ('4f214e66-2e26-439a-a831-68149d904b69'::uuid, 'abfc10c1-eaf2-4938-adad-e01a9f41bba1'::uuid),
-    ('500913ff-1ec8-48cc-a038-ce8f9382b77e'::uuid, '8b6026b3-650d-4c92-b791-41a12d7fdada'::uuid),
     ('509c4e02-d6dc-4c79-be1e-1beb8171b6de'::uuid, 'd35e036d-4e7d-495d-b16a-5793d4afe484'::uuid),
     ('50ae6995-f021-4dcb-b4c1-61f7daad12f9'::uuid, 'bdba6fbd-8c94-44cd-b49e-ad0f83d75823'::uuid),
     ('50f0e808-5eb7-4820-8278-8e337c99e26d'::uuid, 'd47e9879-8587-4d85-b036-ccb417d5096f'::uuid),
@@ -809,7 +811,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('5e5c549b-13f0-446d-88ca-de48e6aba0a8'::uuid, 'a1824df7-1d4e-4d21-8559-52ae4998279d'::uuid),
     ('5e7340cc-e336-4429-8cdf-5ad2484bd6cf'::uuid, '0d4fb900-3093-48e3-9810-0a0849d71efe'::uuid),
     ('5e74a03d-df8a-4673-ba57-db417e2f015c'::uuid, 'cd92f805-234a-4ff6-bb90-62e829592700'::uuid),
-    ('5e974d86-e59c-4c08-864f-7290c211fe03'::uuid, 'f73a9d19-f80a-44e0-803b-d74c93a7078e'::uuid),
     ('5eb640fc-acc6-4c2b-bad2-e5091f44d1f9'::uuid, 'a8dda426-4c33-4caa-8f51-c15536ad6a21'::uuid),
     ('5ec4be3b-06af-4320-ad59-7b3256cee80f'::uuid, '6d716f2d-40e0-4ec2-bac2-cb59af9ab35a'::uuid),
     ('5ecf5c8f-323f-4c4b-a055-7ef25e78acd7'::uuid, '5fe987af-8c08-474b-8338-a35ccc430923'::uuid),
@@ -837,7 +838,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('62327b00-d4ad-40a6-9dd8-b94c56f8cb9c'::uuid, '920ece22-defa-498c-9516-523e913a3941'::uuid),
     ('623df114-2384-455e-8005-b92eccda5f90'::uuid, '7de43267-6030-4898-b3b4-283a75f68650'::uuid),
     ('6287bb16-9e3b-48fa-b097-49b40b4690dd'::uuid, 'df7f0bb6-9563-43ad-92a5-651dbcf51d82'::uuid),
-    ('628eed71-7494-4cce-a87b-c341dddaa798'::uuid, 'd928ab99-cc0c-4ae4-8eba-b80e9939e3c2'::uuid),
     ('62cb5249-3727-44f4-8fe3-2a9caa7075d0'::uuid, 'ef88a94e-f562-4fd3-b748-393af37308d0'::uuid),
     ('633b0c71-c875-4483-810d-207f90a108c3'::uuid, 'dcb99c5c-eb1f-4cf7-b521-f15f72bfd9d5'::uuid),
     ('6353cd6d-bce7-4a01-bd67-ee3a00fdd401'::uuid, '2dfa388a-cd6e-4754-ac15-3690b22e77d6'::uuid),
@@ -867,13 +867,11 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('66aea1d3-1145-43cf-b17f-aa3b8622f6ad'::uuid, 'c2fc2594-927a-4466-836d-848ca9518a00'::uuid),
     ('66b59908-d5ab-4948-9cb8-dbb997617b52'::uuid, '8a68f7ac-fd27-4238-b96b-dc90449b79eb'::uuid),
     ('66b97c7d-8ae1-4804-bb2b-ca779f988648'::uuid, '82d948b0-68f9-470c-b2be-c0bfdc7f9934'::uuid),
-    ('66de3fa8-ffd3-4915-8fbb-d77b70b4e7a6'::uuid, '39bd8f10-ed97-431b-800c-fbae394c9d59'::uuid),
     ('66f671d0-7ec7-4463-a65b-d7f9ac9c4695'::uuid, '1255ce5d-3e31-4c1c-8a57-390a99430ea2'::uuid),
     ('671f39e6-a73c-476d-83c6-1652c813d180'::uuid, 'a6334cb9-6b46-4885-9720-c0ed2f51b5f3'::uuid),
     ('6727063d-2592-4a6d-94c7-b5433cbd3cf1'::uuid, '507b07aa-41ec-4626-9fcd-85a43d52d642'::uuid),
     ('67ad073e-be76-4384-aaaa-b7209054ec71'::uuid, '5037cc53-9679-42ed-90d2-8fb386bbf971'::uuid),
     ('67b42743-39d2-4656-b5f0-50918b40b55a'::uuid, '2fb0330e-d830-4d33-bf6f-4b83af1c606e'::uuid),
-    ('67d5e238-42fa-47ab-b242-73b54dd8399f'::uuid, '9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
     ('67f23345-82ee-463c-91cc-a964ddf35baf'::uuid, 'bc545459-3527-4db8-83ce-abdae0d20d45'::uuid),
     ('67f53ab7-20a4-4287-a11a-ef537335ece7'::uuid, '58f1db4d-b7b8-4cd5-b7fe-b66fb5bd0d04'::uuid),
     ('693c73c7-5618-4280-86f8-e720259acd73'::uuid, '07d610f1-f9b5-4698-b989-e58fce802096'::uuid),
@@ -898,7 +896,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('6c40d3e0-3327-4eb3-b665-769a8a4ce898'::uuid, '3b569046-73ea-4a73-a6d1-00e7e2b72b12'::uuid),
     ('6c5b556e-68de-472c-ae88-5c3b1f0f36c3'::uuid, 'f83c83c4-1dae-469b-a98d-6d72056b6d80'::uuid),
     ('6c783582-9286-4d0d-9eb6-b8b90f4f1bf0'::uuid, 'bf075a43-7eb2-4c09-9e2a-c539defacfe0'::uuid),
-    ('6c8ab19b-db27-4497-b313-08fda912fcfb'::uuid, 'd569e192-3988-43ee-af00-034b2100c142'::uuid),
     ('6c959e82-d067-449b-a82b-2cc88e2d7195'::uuid, 'fdeda022-e983-4a90-be17-ed12a284cffd'::uuid),
     ('6c96466b-717c-45fa-822f-656cd43b6cf0'::uuid, '68887310-fd80-4561-bfd5-c7ca09bd3a2b'::uuid),
     ('6ce61e37-67e1-477c-80b1-836117542ce9'::uuid, 'fdf04027-d967-4de2-a7a7-fa65f807c68c'::uuid),
@@ -977,7 +974,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('753464dc-0349-4e62-bf3b-802ec2f8a97f'::uuid, '7adc8887-1c48-45dd-98aa-fee06168688d'::uuid),
     ('7552ea31-41bb-404c-a662-36b61eae161f'::uuid, 'a807249e-e50e-4f63-83fc-fbf927208a2c'::uuid),
     ('7571e0db-1f12-4ece-bcd4-a05ceee1e2a5'::uuid, 'f8d3a139-37f6-4533-a7b0-ae8a1ca22208'::uuid),
-    ('757721b0-4981-4d12-b4f6-574bd8b6420a'::uuid, '29d79c0e-9b68-4982-af4a-a73e24cb3a9f'::uuid),
     ('7584a946-f14e-4248-b364-b7ca791aaf94'::uuid, '9d0e091c-cebc-4a95-8e9a-6a614409cc2e'::uuid),
     ('75961a00-ec8a-4bba-b61a-866d1406f0a0'::uuid, '92bbfe50-028f-480b-ba08-4483b95fe6cb'::uuid),
     ('75c395cf-e214-4780-bb8c-c63bc1ce09fc'::uuid, 'c155b516-d900-46e5-b41e-30ad9513a05e'::uuid),
@@ -992,7 +988,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('76da485e-f8e7-4f2e-b77a-81ee28c6f960'::uuid, '6059beed-ccd9-42c1-97f6-8358739d65a1'::uuid),
     ('76e057ae-656e-4aec-bc60-52f22da5af7d'::uuid, '3525517d-a369-4a3b-ab15-5169d709a5e6'::uuid),
     ('77b1e570-df4b-4517-9ca3-089bbadec949'::uuid, 'a861ec6c-8dc2-4c36-a9f2-84e8c835c486'::uuid),
-    ('77cf5c83-aad3-43b5-9fdc-02073367a11c'::uuid, 'd569e192-3988-43ee-af00-034b2100c142'::uuid),
     ('77ec63a6-9701-440d-a953-2f876346e1bb'::uuid, '300ee59c-c398-4bc8-bd9f-d07600abb921'::uuid),
     ('77ef60ea-e8ab-45d7-a5ac-5a56cb686c40'::uuid, '195a7ddc-3814-4482-ac7a-b2718af77420'::uuid),
     ('7812289d-5149-452b-b86a-0e8a67c5c84d'::uuid, 'ac93e1f5-abb1-4020-848e-ae104b0cab66'::uuid),
@@ -1135,7 +1130,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('8abcc1c0-e20f-45e6-9a27-4ae5cab3ddf3'::uuid, '26d745d9-56c5-4576-8ec5-956d3cda8595'::uuid),
     ('8b267e7e-520b-46d5-a047-117ba9a27c14'::uuid, '8d024767-10b4-4955-bbeb-41de2d9c7878'::uuid),
     ('8b280592-3acd-4b64-ad70-fb920119105a'::uuid, '2acae1e5-14b5-481d-8676-569882b61f77'::uuid),
-    ('8b34a510-0e91-4227-b57b-380a976f6ab7'::uuid, '9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
     ('8b4f723e-f52b-4ee9-bb2f-d1b5c709212c'::uuid, 'aee01761-1428-440f-8593-22e5b854a505'::uuid),
     ('8b4fc970-5b3c-4c59-8833-7a9979bffd1e'::uuid, '6653a8c3-46b1-433c-9e9f-772d4667dbf0'::uuid),
     ('8b704d3f-6641-4fa9-aace-7fc70274b79c'::uuid, 'c106543d-a6f7-4dc4-ab74-e1a27ef46629'::uuid),
@@ -1231,7 +1225,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('94f3a0d7-68ba-4b3f-a887-c5bbda75c1da'::uuid, '5efdd622-1573-4c7a-8aa7-dbd68c075457'::uuid),
     ('9517e98a-7b95-49a9-a89c-0c7e57779755'::uuid, '610694d4-0f5c-47cd-b0ef-b84cc89b82de'::uuid),
     ('955f6b55-9563-4b00-b025-0c14f68f5651'::uuid, '2e866962-e337-40e9-a0f7-66e2e04c1941'::uuid),
-    ('957a81cb-25b8-4c12-bf72-798c403597f3'::uuid, '7c80e7ea-2faa-440c-a1e1-3de7d7eaf94a'::uuid),
     ('959611e8-f944-4df4-ad8f-1c26235211b3'::uuid, '6fafd5c5-70da-44f6-afa9-3af4de98f057'::uuid),
     ('95f7a080-f020-475e-a647-760b39ce6e46'::uuid, 'c19c8e2f-5077-4b5b-85ff-f68ea873088c'::uuid),
     ('96016c91-d30f-4450-b867-3f6d3bbc90f4'::uuid, '8e8b85ae-921b-4ca7-b8b4-71e8186edcb5'::uuid),
@@ -1306,7 +1299,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('9ef07371-d08e-4def-8f56-2369fb48cd16'::uuid, '2d9104f1-4c04-4a0a-ae7c-7adab2446f69'::uuid),
     ('9f1a58fb-d83a-4927-9875-d8ff49c63a88'::uuid, '5322aa73-80a1-4da0-b409-2c10eea8ff5b'::uuid),
     ('9f260e6f-e60a-4606-9792-73b30bc4d643'::uuid, '1e214688-af9c-4548-8275-55029d729e3f'::uuid),
-    ('9f6adf39-9e49-41ac-8ea1-c8d98e0faff5'::uuid, 'a7e87ab3-e528-488d-aea6-150ffac5d9a3'::uuid),
     ('9f9b608b-42ef-4753-93c1-2558da70cf62'::uuid, 'fc920f6d-3096-4bb0-81f4-286e16ae2cb7'::uuid),
     ('9fac72f1-8ab0-4a0b-b5f6-71fa2d6da0cd'::uuid, '65c83b51-ea5c-430c-b81a-0774cfefcdf1'::uuid),
     ('9fdaba9f-d2a4-4fb8-a767-c8b27b6ac131'::uuid, '263f02e2-afc9-4157-b03c-13da49211a32'::uuid),
@@ -1323,7 +1315,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('a1605b31-6449-401c-99bf-37720cb6ee68'::uuid, 'a042e607-30dc-448f-bb52-471ac38b491a'::uuid),
     ('a1803585-342e-4914-a519-e210754e0b8c'::uuid, 'da6ca21c-5820-4665-9681-b123ce2b590e'::uuid),
     ('a1903725-2923-469a-bdc2-9f3cbea88de7'::uuid, '68c084c8-a0e6-41ea-8e57-857602dd5f2e'::uuid),
-    ('a19796dc-c34d-41b2-b447-3de92707a1b2'::uuid, '9db0830e-3f66-49fa-be79-03426bd2dd13'::uuid),
     ('a1a4e87b-4bcb-413d-b5cb-2beeb1dabc21'::uuid, '6eb76eb4-401b-4c52-91c8-ee09ee3134f1'::uuid),
     ('a1ace008-81a7-4f03-b449-d8ebbbd609c5'::uuid, 'f5b94998-2ea5-4ce6-aac2-e982a057501b'::uuid),
     ('a1b86a81-5a0d-429b-ad10-be2e99bde58a'::uuid, 'd94edfbb-1043-43c4-acbc-0e751e79a6b3'::uuid),
@@ -1354,7 +1345,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('a4c541db-a150-4742-8849-8bb586c36263'::uuid, '126c4063-37f6-497e-b911-0d64c1363526'::uuid),
     ('a4ed1839-6f1b-4476-a64a-28913af9c7c2'::uuid, 'c144b821-6426-4bd4-8737-a493229d0621'::uuid),
     ('a5142ac9-7241-4f91-8b9e-657524f605e1'::uuid, 'ded058a3-9bad-473e-99bf-8e3ab1cfd678'::uuid),
-    ('a522426d-8724-41d1-bbf0-8b550a57d082'::uuid, '3db3eb78-32f4-4eee-98d5-2754c8b1c156'::uuid),
     ('a543fb2e-b74c-4318-82c6-23012839e977'::uuid, '809fbe9e-b778-431c-a88b-1134d66fb242'::uuid),
     ('a589e032-5fdb-4d30-a611-d68cd1872773'::uuid, '2acae1e5-14b5-481d-8676-569882b61f77'::uuid),
     ('a59c52e6-dd14-43e6-8785-0c6a3e097bfc'::uuid, 'cb0f4275-0465-41b4-af6f-b1f95e1cda57'::uuid),
@@ -1369,7 +1359,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('a70f9284-81f6-40e3-85e5-131cdf2da310'::uuid, '17365709-4e9a-4719-a9f0-3472146c7348'::uuid),
     ('a7133bd4-c009-4b27-8f1f-ea63a6a7c5ee'::uuid, '1acdbdda-3224-46a2-87b3-fcc5d495c8bc'::uuid),
     ('a7304796-0fbf-442d-b040-7ab5121081e4'::uuid, '1b307dbc-fa2b-4644-815d-3601cec8a8cd'::uuid),
-    ('a75d8843-7ed1-419a-8781-31775eaa1ef0'::uuid, 'dab53413-616c-4860-8c07-5681b8985cf7'::uuid),
     ('a781f59d-e080-4317-a5d2-d9df7758d467'::uuid, '8a68f7ac-fd27-4238-b96b-dc90449b79eb'::uuid),
     ('a786f9d3-02c0-4f90-8c82-56e10e65f5df'::uuid, 'b333f4ca-22f5-42c4-8224-812768f83689'::uuid),
     ('a7dff14a-986d-41b8-9c6d-a9b9c6d2d590'::uuid, '08c9cda6-976d-4ee5-b3fc-02072ce7ecbf'::uuid),
@@ -1377,7 +1366,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('a7e7371c-25a3-4f10-862b-4ef803f05541'::uuid, 'c9c53ecd-9154-4d86-a5c3-5ff3cfa97fea'::uuid),
     ('a80a4c81-37d6-4ba2-807a-f693c80ffd24'::uuid, 'b560a10a-9403-47cf-bf74-cb8ef34a9d2c'::uuid),
     ('a834175e-c8b9-4298-be2d-4a34c172c81e'::uuid, '5e8c054a-f6f7-4408-beaa-277d2af47a0c'::uuid),
-    ('a85e77f7-b777-41bb-99ff-942ab59671db'::uuid, '0e2e5208-0bca-4ea2-b124-ab9876ef137a'::uuid),
     ('a86141dd-bb13-4c2a-a7ab-b626b06b3475'::uuid, 'df38d61f-0736-4b0e-8193-31ee384612aa'::uuid),
     ('a868eed0-d8ea-44cc-bc33-239e55aa890c'::uuid, '01e9c9ba-e47a-4cac-a5b5-2f6aca560178'::uuid),
     ('a86bb6c4-fd84-4af4-ad18-8cec2f755a54'::uuid, '2acae1e5-14b5-481d-8676-569882b61f77'::uuid),
@@ -1404,7 +1392,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('abd26bbc-0064-4bef-a840-470bcb54b593'::uuid, '40d91890-b918-422a-b56e-5205d816dfd3'::uuid),
     ('abe3051d-3cee-4489-91ea-be8aab6f7e69'::uuid, '368cbdc8-1e6d-42e6-a641-efc541af8f50'::uuid),
     ('ac0ad4fb-7ee4-4e23-a454-45500621c9c1'::uuid, 'dce26b9d-ce54-48b9-9847-0f1b0930ac6e'::uuid),
-    ('ac0d9781-621d-49c5-a862-25d715c9b961'::uuid, 'f73a9d19-f80a-44e0-803b-d74c93a7078e'::uuid),
     ('ac35b405-7a00-4236-9212-f77aad3455b3'::uuid, 'd8c7b38c-c738-4f7a-b177-4ddbdc7ff744'::uuid),
     ('ac6b287e-f1a0-4086-8fa5-48c4082606ea'::uuid, 'c19c8e2f-5077-4b5b-85ff-f68ea873088c'::uuid),
     ('ac89c426-7193-48d0-86f4-e836813eaf57'::uuid, 'c6793c94-b40c-439e-8f8a-835e7ee5cbb8'::uuid),
@@ -1647,7 +1634,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('ca915841-571d-451c-978e-5b4a6ed78af9'::uuid, '6088e4d6-e63e-48e8-970c-b0a5e00d132a'::uuid),
     ('cad565fd-2250-451e-90aa-d29436fd030f'::uuid, 'dce26b9d-ce54-48b9-9847-0f1b0930ac6e'::uuid),
     ('cada3376-7575-40f8-b7ea-cbc88eed4bbd'::uuid, '3c60109a-d705-4b42-acc5-6d84e650fc24'::uuid),
-    ('cae645d3-419c-4ccf-b571-8ab3adcf84f0'::uuid, 'a45e8ccf-f98e-46bb-a2f3-ce47ce37fe7b'::uuid),
     ('caf0f109-5ed3-4a75-bee4-3fd45fd857c3'::uuid, 'a163a8fb-fe52-43df-a2df-1b47b86cfe96'::uuid),
     ('cb06bdfa-9d31-4fd9-ae2e-b5f53a8f6395'::uuid, 'e22e2ff0-a428-42ef-868e-69cb49c75150'::uuid),
     ('cb413c25-9119-4c2e-af76-be821cdf021a'::uuid, 'b6f98e6e-e60a-446c-834c-304d1270c347'::uuid),
@@ -1657,7 +1643,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('cbbdc495-040d-4acc-92e9-18be44cfdff0'::uuid, '43b75dc8-f4cf-4580-83d9-4f844f62cdf7'::uuid),
     ('cbf299d8-b4e0-4b6f-831a-78d219e5f7f3'::uuid, '682b1995-ead0-412f-a253-b0cfafb473d9'::uuid),
     ('cc12ab77-0f5c-4a0f-b4b8-ceb82f9e38ed'::uuid, '42a27e4d-8a8d-4c49-9337-28e7cecc0b9e'::uuid),
-    ('cc4c2c73-6904-4070-8e94-ca8391a87462'::uuid, '29d79c0e-9b68-4982-af4a-a73e24cb3a9f'::uuid),
     ('cc60c0a7-4eb3-4374-bf81-6b28e26cd28c'::uuid, '9a72d752-74bf-450b-b91f-ee5c63c98587'::uuid),
     ('cc6dd2f6-2cb6-4f35-a755-0d0b22175cd8'::uuid, '588adf19-9c33-4241-918b-601b9aad448c'::uuid),
     ('cc75df4b-1cf1-4e64-93a9-f2f54fdf2530'::uuid, '86c38dd3-7b67-4c57-93a3-3df49ee25d92'::uuid),
@@ -1711,7 +1696,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('d3ce96c5-790f-4cd2-b651-2cb0ba2dbe70'::uuid, '50c22841-890f-4bed-87d9-9aee277a64db'::uuid),
     ('d3cf3876-635a-4b99-8eee-78a1bb4131be'::uuid, 'd3ad8b41-6a86-4103-b487-dec0d006406d'::uuid),
     ('d3e800ed-b4c1-4a68-85c3-0d797d44fec3'::uuid, '7ab83a51-dbcf-43c6-acf3-3f3712bf50e4'::uuid),
-    ('d3ee74c1-6a66-460f-a23e-e8619c0fea29'::uuid, '7182586f-b8af-47f7-b8d4-8d66388c4691'::uuid),
     ('d40b5b79-22b8-416d-bd4e-db1a77b7cb4a'::uuid, '99fa46a5-dc5f-44d8-bae5-d71968bd77c7'::uuid),
     ('d4250847-e0fd-4770-9405-03ee398ff3ce'::uuid, '3c88e05a-cf0d-4af1-b158-19eedceec450'::uuid),
     ('d442ff8c-2bb8-421f-bece-83ed03fc1c03'::uuid, 'f73abfe8-da2a-4a89-82e5-b344a20f3500'::uuid),
@@ -1733,7 +1717,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('d6255dcb-4130-4959-bcaf-c4b6ff70226a'::uuid, '9ff96713-c674-4459-bd66-970780b4a772'::uuid),
     ('d6380563-860c-4433-833e-31adb0849d09'::uuid, '1f64f392-0751-45cf-96e4-a8d9d94762dd'::uuid),
     ('d63d2a6d-ca1c-4adb-84fc-7c84cf851fcc'::uuid, 'f496f0ec-83fe-476c-ac57-0183a97c2858'::uuid),
-    ('d64461bb-131a-4933-8a6c-eee7fb72f29c'::uuid, '2b254bc3-7a2d-4bd9-b21d-5accea151b5f'::uuid),
     ('d67cc413-670e-4ebc-93d4-5d94be27fae6'::uuid, '5e163802-b978-4f68-b247-b2828e6768ea'::uuid),
     ('d695c93b-60f8-4840-babc-0fe2a84b0340'::uuid, '9a3dd48b-90fe-4eea-b977-37280cf7b9cc'::uuid),
     ('d69e1575-58ad-411b-bafa-c59327f2d4e9'::uuid, '844a5590-554c-45a3-a98f-922005302de9'::uuid),
@@ -1755,7 +1738,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('d908dfc7-59c7-4cb2-9ef4-84565cf23259'::uuid, '0db078d3-af47-406c-8eea-e12181d68dbf'::uuid),
     ('d92bd90a-1b1a-489e-a707-a6e1287d7390'::uuid, 'bc400ead-a889-45c1-a553-fdf2ada3947c'::uuid),
     ('d98a8bbf-20dc-4a64-80a2-61bb73b79959'::uuid, 'fa102cd0-5fa7-44cd-a687-4d9bad2fab6e'::uuid),
-    ('d9aaed8f-3db6-4b3c-9747-f40d3e2b7865'::uuid, '3322cc41-05bd-4e0d-86f6-e8412a977876'::uuid),
     ('da07ec73-5618-4479-a85d-5f9759276d2d'::uuid, 'd0a03d56-ad26-4da9-9ddf-742bddbf8ac3'::uuid),
     ('da0dd712-6bc1-4aa7-8cac-4fe5bc167f10'::uuid, '8ed4590a-32e6-4fc1-97af-2a27a8a9ceb9'::uuid),
     ('da4aec21-6c73-462b-a8e0-a55430e07ab6'::uuid, '17b5128f-677e-4bdf-8d6c-e81712e83e74'::uuid),
@@ -1894,7 +1876,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('ea2af2fa-e05a-4bf9-b50f-e4c44597728a'::uuid, '70511dcd-5984-403b-bbc4-06dcc56c60b0'::uuid),
     ('ea3abe42-6248-40d7-b490-f51b98769fa9'::uuid, '1e3fc149-502b-497a-87dc-39dd3b90473e'::uuid),
     ('ea5b335b-690b-4269-b008-c6477b7c7a42'::uuid, 'c488511e-59af-410b-9976-318509c0c290'::uuid),
-    ('ea62360b-2d97-4454-be0b-9b4941a7d97a'::uuid, 'f73a9d19-f80a-44e0-803b-d74c93a7078e'::uuid),
     ('ea7c4eaa-9bec-4220-8a54-3d9e1b77492c'::uuid, 'fed8a527-1fba-4c3a-8709-55e6ec2cc585'::uuid),
     ('ea9372fe-8e3a-4969-9fbc-954e5a219a07'::uuid, 'c3255061-9400-4346-af4f-71557c3ca5d3'::uuid),
     ('eab8d7d1-efc4-4278-80d6-45c0756d0e6e'::uuid, '610bd183-53aa-46a6-b4ce-eddf10b55cb1'::uuid),
@@ -1958,7 +1939,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('f1ee767c-1e88-41cb-8ae1-8c2a7f67edd8'::uuid, '36a2dd35-efb9-4091-8c90-2cc633ae03e2'::uuid),
     ('f2366145-9361-4620-a8b5-ad87ca409871'::uuid, '5c0bb158-a426-4334-9a0c-ecb1cb0b187d'::uuid),
     ('f25512a6-fac0-47a9-81f6-16a2f8627ebf'::uuid, 'b8f2f631-a1c4-48d6-9c70-cbf8ac5dddf4'::uuid),
-    ('f275c736-2806-48c1-9133-81f859d213ae'::uuid, '9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
     ('f27f7055-0e36-4519-9a54-435849b403bc'::uuid, 'a35bedb2-0cb4-4be6-8f22-906c559facd3'::uuid),
     ('f29e0991-9010-493c-9224-02e1a3d3fca2'::uuid, '11b68609-519e-4f35-809f-15188627741a'::uuid),
     ('f2b3bb5f-e37d-4faa-973d-b1c565311b9c'::uuid, '7b64cf33-ce80-4053-b0b7-71a5ff48b650'::uuid),
@@ -2042,7 +2022,6 @@ INSERT INTO _merge_map (loser_id, survivor_id) VALUES
     ('fbcbfa2d-f8d7-43d3-85bf-10dfe40db064'::uuid, 'cf8ab08e-5579-4b33-88f9-cd3c3b265e38'::uuid),
     ('fbe10ced-af8c-4271-9081-8bc82e55b28d'::uuid, '551416e0-8943-41c1-b6c9-b2e15199267a'::uuid),
     ('fbeff213-3832-47a8-ac47-d3e3ac05aafa'::uuid, '6a81835c-f2cc-4a63-a0a7-36236722a0a9'::uuid),
-    ('fc0f9d31-e15b-4b10-afb0-7e09aab67687'::uuid, '9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
     ('fc1ed4d5-bdd0-46de-a0ec-5866252dfa8a'::uuid, '05b83535-35fe-4421-9cf4-a08ecaa1629c'::uuid),
     ('fc2e5079-ad98-4158-bbc6-45d09383fb25'::uuid, 'c4036c00-12c0-4163-8c0d-d6c38120e571'::uuid),
     ('fc497433-3dc4-4ce3-be19-4d8b5c43df70'::uuid, '60478d4a-cf6c-44f1-be77-e40a37afe6d1'::uuid),
@@ -2212,12 +2191,15 @@ INSERT INTO _survivor_rewrite (survivor_id, canonical_name, entity_class) VALUES
 
 CREATE TEMP TABLE _junk (entity_id uuid) ON COMMIT DROP;
 INSERT INTO _junk (entity_id) VALUES
+    ('004e0132-f825-4e7e-ba65-aabfd2fce2b2'::uuid),
     ('009724ae-9986-4d90-b488-b0ac28496c36'::uuid),
+    ('00aac5f9-3adc-40c7-a4ba-75f1b91b5174'::uuid),
     ('011d62bf-0cfb-4898-8725-3252708f5718'::uuid),
     ('01dc8e5b-dc1c-4d44-bf4f-d8e62aeca8cf'::uuid),
     ('025e354f-c92c-4bda-83bf-b687466d8d17'::uuid),
     ('02a0abc6-b654-40c1-af52-772fcc444e18'::uuid),
     ('02b40018-99fb-444f-ad36-092eee655d67'::uuid),
+    ('0347da98-7c68-481a-a7cd-69069031bf2e'::uuid),
     ('0357eebc-0353-4954-bd0d-ae4f12a87be0'::uuid),
     ('03b48f66-5b31-4f00-8b76-48bece6188c0'::uuid),
     ('041fb472-beb9-4843-b35a-bd6e6a9fdb5f'::uuid),
@@ -2237,7 +2219,9 @@ INSERT INTO _junk (entity_id) VALUES
     ('0db0522c-4566-4b40-8a8c-b364ba736c9b'::uuid),
     ('0defd71d-af9f-43e2-bb9a-87ec5cf0fdef'::uuid),
     ('0df851e5-c54a-44df-b10f-0f31793c617b'::uuid),
+    ('0e2e5208-0bca-4ea2-b124-ab9876ef137a'::uuid),
     ('0ef68fae-7e6e-49cc-a3f8-84c6c24a4269'::uuid),
+    ('0f69f111-e760-4805-ac7d-b518b4d26943'::uuid),
     ('10977d53-44b1-4022-9b1d-2ebe71064e74'::uuid),
     ('10a0d03a-08fd-4770-b0c5-3b28fae71ea3'::uuid),
     ('10dd97ac-c8d6-4fef-b3ca-aaf25ad5b93f'::uuid),
@@ -2246,7 +2230,9 @@ INSERT INTO _junk (entity_id) VALUES
     ('1140eeee-f621-450d-8e43-0c6b2097f4c6'::uuid),
     ('124b5d6b-61e9-4280-b757-9c70fbdd871c'::uuid),
     ('131e3715-457d-49d5-98da-e817f9bea785'::uuid),
+    ('132e73d6-4801-48ff-b1ee-11804017fa4d'::uuid),
     ('13398415-56bd-4ce3-b80a-1fced7e64133'::uuid),
+    ('147219d4-bdab-4637-a027-901c5f618fc5'::uuid),
     ('14968260-5ed6-49f7-bb21-2d5bf188c823'::uuid),
     ('14e30bb7-d6ac-4765-a894-9aaa98bfccab'::uuid),
     ('1511ecff-707e-4c3c-83cc-d4d7ac6b4414'::uuid),
@@ -2276,6 +2262,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('1f1c9c92-8610-4f2b-bb04-e8d1eea90c5d'::uuid),
     ('1f6ac25f-33bd-419d-ba9b-3e93bc42747e'::uuid),
     ('1fca1061-883c-4b01-802e-3e0716f76ad9'::uuid),
+    ('1fe91243-5a8f-435a-966b-e808836fa270'::uuid),
     ('2014614c-a52c-46c9-a325-21fb93a783c0'::uuid),
     ('20396e5b-420b-4c9d-b13f-26409bbf2e25'::uuid),
     ('2073708e-4926-4dd6-85e8-dd31f06ab5f6'::uuid),
@@ -2287,22 +2274,30 @@ INSERT INTO _junk (entity_id) VALUES
     ('24e4c115-7a87-4a14-9ce8-a28e19528e88'::uuid),
     ('24f1e531-5313-4c7e-95cb-5faa575ef655'::uuid),
     ('2559f1fd-4684-48ac-8636-864392b78d03'::uuid),
+    ('25845523-6622-4ece-a428-8113e3685fb7'::uuid),
     ('25d0f190-c114-4a78-81de-41788cf69ee8'::uuid),
+    ('2663172a-8800-4d9d-afba-99ff44ac2b5f'::uuid),
+    ('27e6906f-9370-4bfd-8e4b-845b683afee4'::uuid),
     ('286cb871-46d1-4d4d-89cb-f54ecd721855'::uuid),
     ('2950d254-9ad0-419c-acc3-20d95315e0fc'::uuid),
     ('29697405-ec16-40d0-9177-b93c56b3654e'::uuid),
+    ('29d79c0e-9b68-4982-af4a-a73e24cb3a9f'::uuid),
     ('2a6e1c16-af1a-410e-b2d8-58d59d88aee6'::uuid),
     ('2a876880-b8b4-4ee3-910d-fad13f1b949c'::uuid),
     ('2aa6360b-4133-48f5-b9bc-5e40e2818f79'::uuid),
     ('2adb3c41-de67-4a60-bc12-303520d1efda'::uuid),
     ('2aed7700-33fb-4a97-926b-00d52f7bca1f'::uuid),
+    ('2b094d07-ae59-4184-b708-807223e521af'::uuid),
+    ('2b254bc3-7a2d-4bd9-b21d-5accea151b5f'::uuid),
     ('2b3315cf-1c13-419d-b5c4-b343c6fca7ab'::uuid),
+    ('2b47d656-9e8c-48c7-9ea9-fe6b1269a13b'::uuid),
     ('2b5f45aa-b102-4615-901b-5665e65749c7'::uuid),
     ('2bd0c943-4ced-4e4b-b24b-127ddcf0cc74'::uuid),
     ('2c2f3038-0061-44de-a284-d297dfbf5ace'::uuid),
     ('2c786deb-3488-4def-9b53-c22f191f0a2a'::uuid),
     ('2cc52944-311d-43a3-8911-907e70bd5736'::uuid),
     ('2ce0c872-5ef5-4ff1-b3b1-bd9e2d9c4c40'::uuid),
+    ('2d1ced8c-3829-42ef-b018-e86bf474aa2a'::uuid),
     ('2d428052-32ac-43ea-b03c-c439b4dfe46a'::uuid),
     ('2dcc0983-272f-48c2-8279-79613e64d586'::uuid),
     ('2dd0b491-ef7f-469f-acb7-f64aafb0435b'::uuid),
@@ -2314,8 +2309,11 @@ INSERT INTO _junk (entity_id) VALUES
     ('30e94282-ec6f-48e3-9545-a1ec7531a14d'::uuid),
     ('30f474e8-b37b-471c-b342-ffa0269feb7a'::uuid),
     ('31171c7c-103a-4202-a235-d585a03ec34c'::uuid),
+    ('31bd1304-2767-4c25-8797-6c5d21b6cfb4'::uuid),
     ('3281f996-36f3-4a29-8468-cee8d89e60de'::uuid),
     ('328f6b56-85a8-4413-ae3f-ffdedba6db3c'::uuid),
+    ('3322cc41-05bd-4e0d-86f6-e8412a977876'::uuid),
+    ('335f4179-ad10-4e64-90c3-2a0b49a024dc'::uuid),
     ('33b31bc0-81e8-4280-b459-6ae34458a9f1'::uuid),
     ('33cd3ff1-c46e-4a9e-ac4f-a03d015ff243'::uuid),
     ('34970472-45ff-4442-9c08-2c6e7962f64e'::uuid),
@@ -2324,11 +2322,13 @@ INSERT INTO _junk (entity_id) VALUES
     ('3565fbf6-563b-492b-97d9-0932a1572829'::uuid),
     ('357f53ac-e2d6-42e1-a1c4-05d268baaf4e'::uuid),
     ('35d32616-fc78-488c-864b-920d172dfd2e'::uuid),
+    ('36977b60-b24f-47ac-b44d-edc30e2b0ae9'::uuid),
     ('36b33538-b4eb-4a14-92f4-f8441b20f74a'::uuid),
     ('374a2264-d791-4212-be74-fd6b8a568b3a'::uuid),
     ('37a16be2-9f27-44ed-8389-edfe261e4409'::uuid),
     ('38556b45-b450-45ad-aa32-d894caf8382d'::uuid),
     ('396ab428-0209-4733-8953-2f4facb8587c'::uuid),
+    ('39bd8f10-ed97-431b-800c-fbae394c9d59'::uuid),
     ('3a389138-9764-4e7b-a787-bf7dfa054494'::uuid),
     ('3a704bd9-52a7-40da-b1f9-6a3b4822fb8d'::uuid),
     ('3b293999-b76a-4cc6-b2fe-882074a8e08c'::uuid),
@@ -2342,6 +2342,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('3d03882d-d949-4f39-b246-4ede8004526e'::uuid),
     ('3d71e75b-a171-4175-8ebf-96896d1644dc'::uuid),
     ('3d99a996-e1eb-424c-b540-fd019154746b'::uuid),
+    ('3db3eb78-32f4-4eee-98d5-2754c8b1c156'::uuid),
     ('3de93e20-fa8b-447d-aa62-381f5cea29ce'::uuid),
     ('3e498f76-e70b-46d0-8d65-57da4aa9eca4'::uuid),
     ('3fc88b4f-62a7-4946-a642-fcd302e1df50'::uuid),
@@ -2351,6 +2352,8 @@ INSERT INTO _junk (entity_id) VALUES
     ('415e9c63-516e-45d8-908e-823f9655b1ea'::uuid),
     ('4198d47d-b66b-46af-a08d-be3ed96d35e4'::uuid),
     ('422c0adf-6d54-4581-8c0c-2bc04c5a54a5'::uuid),
+    ('42648d55-bc93-438e-8a52-e89beb525a3b'::uuid),
+    ('43888ac0-43bf-424d-af45-b8f1b85b2adb'::uuid),
     ('43d6eaa5-adf3-4d79-874f-0fc748a057b7'::uuid),
     ('446ed4d6-982b-4ece-8adc-edc67cd0a7e0'::uuid),
     ('4487abbb-fe7d-4caa-867b-e7a830d44574'::uuid),
@@ -2361,6 +2364,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('463fea2c-9acf-4789-af37-e6423680fcca'::uuid),
     ('477409e4-e250-4625-8ccb-d8465ac72ca2'::uuid),
     ('48152487-eabb-42b2-b405-26cfc6cb4f7e'::uuid),
+    ('48ead7ad-879a-4e4d-9fd4-8d55c6832fa0'::uuid),
     ('49219086-3c9b-4e44-a3d5-2f69d91d3e64'::uuid),
     ('496872e3-fc37-43c2-a0e6-282e604d7e62'::uuid),
     ('4a0994d7-97a0-4757-b4d9-d81b6c2b907c'::uuid),
@@ -2369,9 +2373,11 @@ INSERT INTO _junk (entity_id) VALUES
     ('4a9b97a1-a37f-42ca-986a-691c5888fbd5'::uuid),
     ('4b46a583-9db0-4ba7-897c-585259843373'::uuid),
     ('4c2a9934-2f67-4515-9ac6-b2fc4b4b8212'::uuid),
+    ('4e2b7c0e-7de4-4f88-8132-ab14a6b567b8'::uuid),
     ('4e38c27c-f3fc-43e2-a61d-04f63b716de6'::uuid),
     ('4e9f3c35-bc71-498e-97ae-c7bf7708c0c8'::uuid),
     ('4f7c7af0-af32-44d7-87ce-9ed7781c6720'::uuid),
+    ('500913ff-1ec8-48cc-a038-ce8f9382b77e'::uuid),
     ('50aecc1b-ad52-45e8-a61c-e38c0a42a6bb'::uuid),
     ('513104cc-1aad-410e-b768-e2846adf680a'::uuid),
     ('5211a403-4813-4d90-8730-5e8d67a3e562'::uuid),
@@ -2397,15 +2403,19 @@ INSERT INTO _junk (entity_id) VALUES
     ('5d963957-0b6b-4242-acf9-ff1e7d305a81'::uuid),
     ('5dfb6064-7a8d-4796-91e2-a63da8b307d0'::uuid),
     ('5e12f7e4-513c-4be3-8755-cb4f89666810'::uuid),
+    ('5e21b654-a789-4b60-9ad4-a668baa01916'::uuid),
+    ('5e974d86-e59c-4c08-864f-7290c211fe03'::uuid),
     ('5f1a3d79-9c01-4987-a92a-dd07af5322de'::uuid),
     ('5f6fa2b9-3b44-48ee-afec-ac169314f812'::uuid),
     ('5fc5c501-2a4a-49ca-8670-de3fa005b98c'::uuid),
     ('60e9fc6d-c9ba-4082-838f-bc302abe6f60'::uuid),
     ('60f243fa-8082-4809-8437-0e7d5a328e2b'::uuid),
+    ('61023d41-16e3-4968-87ee-a6e661780fe8'::uuid),
     ('6115558a-b767-4bde-a7dd-40120e9b2895'::uuid),
     ('61d6e8a9-2c88-493c-85a2-3333c0afbe14'::uuid),
     ('61f36614-f9a0-4e58-acb1-80f76f6ff871'::uuid),
     ('620aaff5-5576-4e58-8c60-10283530499f'::uuid),
+    ('628eed71-7494-4cce-a87b-c341dddaa798'::uuid),
     ('63785976-d90d-4a9d-b035-9702972156d3'::uuid),
     ('63bcf213-47ee-4c09-bcdc-2e7075fe8a1a'::uuid),
     ('63f76dbf-095d-4517-b223-c11ef76f705d'::uuid),
@@ -2413,6 +2423,8 @@ INSERT INTO _junk (entity_id) VALUES
     ('6529ad3f-d4f4-4562-900a-b5eab99d644e'::uuid),
     ('655e88d9-6eb1-4035-9e46-2121a58c1826'::uuid),
     ('663b3a4c-c3b7-43f3-a5e3-bb1b30c59713'::uuid),
+    ('66de3fa8-ffd3-4915-8fbb-d77b70b4e7a6'::uuid),
+    ('67d5e238-42fa-47ab-b242-73b54dd8399f'::uuid),
     ('6800d62d-23b7-4cda-be49-63082e6eb758'::uuid),
     ('6805184e-77e5-48b1-9f07-9c66aa08df99'::uuid),
     ('69e55d3c-241a-44e1-aa55-f8dd6a94907b'::uuid),
@@ -2421,12 +2433,14 @@ INSERT INTO _junk (entity_id) VALUES
     ('6aaf5d66-5c1b-4132-b324-b12c6352f8ca'::uuid),
     ('6ac22a8d-d89a-4a84-b160-b642ebf38441'::uuid),
     ('6b6976b2-b485-4e16-b64f-e0284b8f2308'::uuid),
+    ('6c8ab19b-db27-4497-b313-08fda912fcfb'::uuid),
     ('6d580aac-7d80-4faa-8efe-0423450c666e'::uuid),
     ('6d9c1464-56a4-4eba-b7c2-0ca19cc8aa05'::uuid),
     ('6d9dcb2b-3993-49e0-ae45-db8e93ac98bb'::uuid),
     ('6ddeff9b-5ded-49ab-bc93-000d637389b5'::uuid),
     ('707d1424-9b69-48cf-92ef-3cd8ea38de91'::uuid),
     ('7105eb07-1423-4170-95a2-c4b64cfc783b'::uuid),
+    ('7182586f-b8af-47f7-b8d4-8d66388c4691'::uuid),
     ('71e50acc-7e7a-40c8-8e88-708fd43285c6'::uuid),
     ('725102af-d0d5-4930-902b-11c10a039168'::uuid),
     ('728b194b-e0a9-4146-9d35-12f2b91e16a8'::uuid),
@@ -2435,11 +2449,13 @@ INSERT INTO _junk (entity_id) VALUES
     ('73fb25ad-cfe7-4007-952d-014c9194a4cc'::uuid),
     ('749191e9-f8b2-440f-b816-cabcb504a630'::uuid),
     ('7562302c-bea6-4ead-94bf-0fa1ed29cc17'::uuid),
+    ('757721b0-4981-4d12-b4f6-574bd8b6420a'::uuid),
     ('75dd9749-78bd-4aa1-81fb-bc38c1e51dc4'::uuid),
     ('76385f91-4e4f-48f4-a414-d35a8385e34d'::uuid),
     ('7665bd2c-4906-4b38-9d6a-7a979e215b60'::uuid),
     ('76861397-e65b-4ea4-8bd2-f2852ca0471a'::uuid),
     ('771f8a4a-7f0c-4f48-860e-df8d13715d8f'::uuid),
+    ('77cf5c83-aad3-43b5-9fdc-02073367a11c'::uuid),
     ('7876a6af-0fa4-42a6-8610-4ae4afcb75b3'::uuid),
     ('795f6814-64b3-4587-8279-94574c395c2b'::uuid),
     ('7a024f77-8e3e-4268-a21b-4ec551d4fe21'::uuid),
@@ -2447,6 +2463,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('7aec362d-b75b-428b-8b5f-8213ece77e23'::uuid),
     ('7b29eb9c-8f02-47bf-b20b-6d6d3ced6d72'::uuid),
     ('7bc35e19-4a38-4175-ac01-b0589827e0a7'::uuid),
+    ('7c80e7ea-2faa-440c-a1e1-3de7d7eaf94a'::uuid),
     ('7cd82671-af93-42b4-a6e0-118a30d98993'::uuid),
     ('7ce1b137-106e-4fc5-94c1-bdaabfeba854'::uuid),
     ('7d19e9cf-60f5-4b38-9105-97349808cec6'::uuid),
@@ -2481,10 +2498,13 @@ INSERT INTO _junk (entity_id) VALUES
     ('87fcd285-12d1-4f94-84c1-a44e03f46d0d'::uuid),
     ('88197f5d-5f02-4ff1-9db6-707359ce69ea'::uuid),
     ('886cdd1d-9066-488a-a6a7-7c364e9dd2df'::uuid),
+    ('88d3336f-76f4-45d6-b3c6-16db452b2b40'::uuid),
     ('88f61908-d120-4582-acdc-30b6a1a05139'::uuid),
     ('88f93c72-e949-4299-93b2-f590dcf1c9c2'::uuid),
     ('894678a0-f4a1-4e60-917e-1950031aedc2'::uuid),
     ('8a20527a-d620-4b2e-89a8-e6ee2dc539ad'::uuid),
+    ('8b34a510-0e91-4227-b57b-380a976f6ab7'::uuid),
+    ('8b6026b3-650d-4c92-b791-41a12d7fdada'::uuid),
     ('8c2a7f56-8ea9-48ed-a011-f012e4fd1385'::uuid),
     ('8c5e70f4-2093-4394-8ff6-4512a083ad48'::uuid),
     ('8c8e9dbf-885d-424d-af61-e2befc45c443'::uuid),
@@ -2495,6 +2515,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('8da0d57c-17f7-476c-baa7-71d53177d80d'::uuid),
     ('8de08f94-a2e9-457a-b16f-a8de53d76411'::uuid),
     ('8e414ad8-7ab7-4ee2-9966-1ee79f5a4acb'::uuid),
+    ('8ea116c9-2f3b-4b7a-a7f1-4144f720aa0f'::uuid),
     ('9066a67b-8327-4634-9e3e-850a805e34b6'::uuid),
     ('91516667-ded9-4170-a4d3-60e6ec895175'::uuid),
     ('91b04dc5-31b7-463a-8ad4-21b5a5fa85b3'::uuid),
@@ -2503,6 +2524,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('94fe5afe-b128-46ba-97cb-942991d9a4eb'::uuid),
     ('9509a1b0-c837-4de0-b14e-a0bf7ccc7d1a'::uuid),
     ('953b8855-fb26-4356-9604-35cfd808a6c3'::uuid),
+    ('957a81cb-25b8-4c12-bf72-798c403597f3'::uuid),
     ('96022aff-4381-42c5-bf99-7654d6705a4a'::uuid),
     ('9603e24b-7cd3-409f-8b3d-4973afde742f'::uuid),
     ('962f01c0-2c29-48df-9014-992beb1ed3e9'::uuid),
@@ -2521,15 +2543,21 @@ INSERT INTO _junk (entity_id) VALUES
     ('9ad222be-2be5-419c-bcb0-f42701e8d68b'::uuid),
     ('9b73260d-da54-4223-80ae-5d2c64da15fb'::uuid),
     ('9bb6565d-6a1d-48f1-9d0e-6002f2f777fe'::uuid),
+    ('9c03f7c9-7480-4e88-9b93-5cff4218f014'::uuid),
     ('9c2e4d51-a399-47ac-b410-8e5803f72dee'::uuid),
     ('9cf1ca09-8570-4fe5-854b-4820e3169fe7'::uuid),
     ('9d8e3069-3bfc-480f-9561-a6d6e50b284f'::uuid),
+    ('9db0830e-3f66-49fa-be79-03426bd2dd13'::uuid),
     ('9e27cd5a-4c6a-4a44-87a2-eddc16495b3a'::uuid),
+    ('9ea179b6-6824-44b8-8d21-c7217f31c0d6'::uuid),
+    ('9ecd17cd-8cb4-4789-839d-85618225d459'::uuid),
+    ('9f6adf39-9e49-41ac-8ea1-c8d98e0faff5'::uuid),
     ('9f76ad2e-b239-436e-9e3c-b68b6fc714e0'::uuid),
     ('9fe5d598-ab7f-4dac-bd6d-40d14e05fd12'::uuid),
     ('a0820430-2b3b-428f-85c4-07a99acb0a61'::uuid),
     ('a0c220c9-5971-4934-935b-8d76e0f94516'::uuid),
     ('a174f06e-3e65-4970-8f33-1525f9b38067'::uuid),
+    ('a19796dc-c34d-41b2-b447-3de92707a1b2'::uuid),
     ('a1b871ff-def4-47cc-b353-6ba5788179b9'::uuid),
     ('a1da1da3-1f3b-475d-aaf2-7c912a1372b6'::uuid),
     ('a1f23be5-d69f-4c5e-b367-215840a753e8'::uuid),
@@ -2537,18 +2565,24 @@ INSERT INTO _junk (entity_id) VALUES
     ('a2be8530-e771-4c8f-8d0c-744911c0fc09'::uuid),
     ('a3b507cd-e8dd-4f33-ad32-492049a9cd89'::uuid),
     ('a4479abb-fc01-4880-bb1c-364555ed62b0'::uuid),
+    ('a45e8ccf-f98e-46bb-a2f3-ce47ce37fe7b'::uuid),
+    ('a522426d-8724-41d1-bbf0-8b550a57d082'::uuid),
     ('a550ae7e-f855-48a9-b503-deac3573035a'::uuid),
     ('a650b054-ab0a-4237-bc40-735a9d2cf4a3'::uuid),
     ('a67cb1a6-0c3d-490b-8ca9-6f31e205f98f'::uuid),
     ('a6af9ee2-da92-422c-b657-5b3dbc22ed4e'::uuid),
     ('a7021893-2be6-4d7b-a95f-f1f379e01fb5'::uuid),
+    ('a75d8843-7ed1-419a-8781-31775eaa1ef0'::uuid),
+    ('a7e87ab3-e528-488d-aea6-150ffac5d9a3'::uuid),
     ('a83f1069-9c8d-408a-8ae1-1127d1b5dee3'::uuid),
+    ('a85e77f7-b777-41bb-99ff-942ab59671db'::uuid),
     ('a8873b2a-ca2f-416d-98ad-c32b5e375c94'::uuid),
     ('a8a78a86-951a-4321-bd98-d1b754c700dc'::uuid),
     ('a92be115-6e84-4236-90e9-586cff9788de'::uuid),
     ('a9af0475-08c1-4822-a46b-c31229f6dc8d'::uuid),
     ('aae01522-8a7d-4074-8ddd-7eecdaad6e57'::uuid),
     ('abe5b1b1-26f3-4f7b-b787-8e017e608864'::uuid),
+    ('ac0d9781-621d-49c5-a862-25d715c9b961'::uuid),
     ('ac374de3-4f2d-4b3a-be05-677f9654f34b'::uuid),
     ('aca6abd6-ba44-4efb-ae25-372dcfe5b99b'::uuid),
     ('ad252d4a-4770-434d-9406-223cc1a021f1'::uuid),
@@ -2587,6 +2621,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('bcf7129d-e8a2-4900-afa9-d2b89a40ca6f'::uuid),
     ('bd07760e-96a1-419c-a712-51e4c62bc058'::uuid),
     ('bd282a08-3f28-48aa-bc61-719720d5e3dc'::uuid),
+    ('bd5052fc-a2f7-4a00-a0be-39771cc7211b'::uuid),
     ('bdf05cec-80b4-4170-92cf-cabfc087097c'::uuid),
     ('bec6792b-d158-40fb-8177-e5b6cc96b3d6'::uuid),
     ('bf2991a4-9154-4947-8dea-530449e74899'::uuid),
@@ -2616,8 +2651,10 @@ INSERT INTO _junk (entity_id) VALUES
     ('c9c0f257-2d4a-4458-9c31-daf5b40a051a'::uuid),
     ('c9e4b644-42a3-4543-ab61-fbf4cf841203'::uuid),
     ('ca402082-0d87-4075-a9a8-77321d227e6e'::uuid),
+    ('cae645d3-419c-4ccf-b571-8ab3adcf84f0'::uuid),
     ('cb0a754e-0cf0-4b48-a299-07d42aab22b8'::uuid),
     ('cb0fe048-2d9f-4708-bb2a-e035b3c94a80'::uuid),
+    ('cc4c2c73-6904-4070-8e94-ca8391a87462'::uuid),
     ('cdd21786-46dd-43b4-bf7e-f838bce80f73'::uuid),
     ('cde9f885-ff68-4195-bc91-c270180b3934'::uuid),
     ('ceb67d27-2d08-4198-a9d9-2cd3d1e15679'::uuid),
@@ -2630,9 +2667,12 @@ INSERT INTO _junk (entity_id) VALUES
     ('d2e2bbbe-d706-4b35-9e0b-f6aae4c453a1'::uuid),
     ('d3306e51-5f5c-4983-9097-83da9a86fab9'::uuid),
     ('d365c729-44ef-48cc-b740-8b05d549a754'::uuid),
+    ('d3ee74c1-6a66-460f-a23e-e8619c0fea29'::uuid),
     ('d528a318-457b-489a-89ed-db69e9379106'::uuid),
+    ('d569e192-3988-43ee-af00-034b2100c142'::uuid),
     ('d5b4a573-4f81-4516-9f8e-2e666643f8fb'::uuid),
     ('d5dcb9ba-c176-4e82-a271-943894126300'::uuid),
+    ('d64461bb-131a-4933-8a6c-eee7fb72f29c'::uuid),
     ('d6a065ef-740c-433f-85fe-7f20febcd2d7'::uuid),
     ('d6e9c16c-f8f8-4ac0-87e2-449b5f4ba446'::uuid),
     ('d71ea015-b134-4315-a7c4-eace711fed32'::uuid),
@@ -2640,7 +2680,10 @@ INSERT INTO _junk (entity_id) VALUES
     ('d7baea94-7d9a-48e8-9e9d-4d9295015528'::uuid),
     ('d8ac7701-76d8-4d2e-88ad-56bc3e3f8495'::uuid),
     ('d8dc9ea9-23c5-43fe-b3cf-d1994df2d489'::uuid),
+    ('d928ab99-cc0c-4ae4-8eba-b80e9939e3c2'::uuid),
+    ('d9aaed8f-3db6-4b3c-9747-f40d3e2b7865'::uuid),
     ('d9e92d2d-d899-4041-99be-2687d2f552c6'::uuid),
+    ('dab53413-616c-4860-8c07-5681b8985cf7'::uuid),
     ('daf02e26-65b6-4d24-8a3c-dfd6e95972b7'::uuid),
     ('db76bead-d60b-44f6-adca-ca655d78327d'::uuid),
     ('dbbff4d9-87d1-4a08-8dfc-c94ae3f22c69'::uuid),
@@ -2671,12 +2714,14 @@ INSERT INTO _junk (entity_id) VALUES
     ('e7b97405-0b62-4724-ba29-592943e68006'::uuid),
     ('e7ba5ddf-41f3-4708-8ba9-99007a34ed1b'::uuid),
     ('e7d8a5cf-5532-452c-bc25-2149fb9a3ce9'::uuid),
+    ('e7e9f094-7f38-48be-9bec-ded548902fb6'::uuid),
     ('e877e666-b315-4d6e-92a3-a5b28c4ee37c'::uuid),
     ('e8b34610-ab59-4242-9d33-6c7327f9c1d0'::uuid),
     ('e9d9310d-a8f6-484f-a461-e4b5d82a1640'::uuid),
     ('ea06dbbc-e16a-4807-862c-4fbde2c8a249'::uuid),
     ('ea206327-608e-4a5d-963f-93ad1796f1a2'::uuid),
     ('ea420d8e-6c58-442e-a39f-0283765c2791'::uuid),
+    ('ea62360b-2d97-4454-be0b-9b4941a7d97a'::uuid),
     ('ea680824-bd84-47ca-9270-a48a6cccaeeb'::uuid),
     ('ea8a1933-0d5d-40c5-b87b-c514ef85c014'::uuid),
     ('ead88abf-0970-4401-b600-fa8ab06e2c6e'::uuid),
@@ -2703,11 +2748,14 @@ INSERT INTO _junk (entity_id) VALUES
     ('f13b70e2-8022-48d2-a371-cba127ffde4b'::uuid),
     ('f1b07e0d-d777-4482-b649-2796a0e20f33'::uuid),
     ('f1ede4f1-6cb3-4d55-983c-26d14f5b9d69'::uuid),
+    ('f275c736-2806-48c1-9133-81f859d213ae'::uuid),
+    ('f2bd9e9a-166d-478a-9e94-892048ca5656'::uuid),
     ('f3629610-d608-4509-b43e-71e01d45e53a'::uuid),
     ('f382da5f-02cf-4362-ac2b-6f475e96ce54'::uuid),
     ('f5b6e813-7445-49c0-99ce-6586d0400981'::uuid),
     ('f62d3cf8-0380-46fd-bf83-29e03d1fe3d0'::uuid),
     ('f696abc7-30f9-43c1-aaa7-22a56c393596'::uuid),
+    ('f73a9d19-f80a-44e0-803b-d74c93a7078e'::uuid),
     ('f8f24dac-452b-4ca0-aa56-491e199a71e8'::uuid),
     ('f90a6453-bbb9-4de2-8add-a2bb1e808150'::uuid),
     ('f9518c11-ba9a-4b6a-b18d-506d67eaaa2a'::uuid),
@@ -2717,6 +2765,7 @@ INSERT INTO _junk (entity_id) VALUES
     ('fb63a86b-debe-4ddc-ad43-2db32fddef09'::uuid),
     ('fb6b819d-ed16-428d-973e-a4cacfec145b'::uuid),
     ('fb7d564a-83bf-4cae-9866-9594e5426187'::uuid),
+    ('fc0f9d31-e15b-4b10-afb0-7e09aab67687'::uuid),
     ('fd03d6a4-1b67-434a-99ee-b4c2439bc8fa'::uuid),
     ('fd41913b-b70f-4264-854a-390defb780c3'::uuid),
     ('fd5da81e-6b3d-48dc-8f80-fde776ef27c9'::uuid),
@@ -2730,6 +2779,26 @@ INSERT INTO _junk (entity_id) VALUES
     ('ffc48c36-19b9-430d-b8b8-bfe958a41bff'::uuid),
     ('ffd06b34-01c4-4f63-bc8f-6f9a66116a51'::uuid),
     ('ffdb2d14-5df6-4d63-a160-0fa26733f386'::uuid);
+
+CREATE TEMP TABLE _survivor_geo (
+    survivor_id uuid, geo_lat double precision, geo_lon double precision,
+    geo_country text, geo_region text, completeness_score real
+) ON COMMIT DROP;
+INSERT INTO _survivor_geo
+    (survivor_id, geo_lat, geo_lon, geo_country, geo_region, completeness_score) VALUES
+    ('2e09f9b7-4cd2-413b-84ec-29d11c5677a0'::uuid, -0.7264327, 15.6419155, 'Congo-Brazzaville', NULL, 0.9),
+    ('2f3c10b2-4f07-456b-a343-9bd323f8680c'::uuid, 39.3174071, -76.6636475, 'United States', NULL, 0.9),
+    ('4a96970e-40ed-469a-981f-2813cde6be32'::uuid, -0.7264327, 15.6419155, 'Congo-Brazzaville', NULL, 0.7),
+    ('5d2882f4-17b3-4c79-a26a-47dac82cc86d'::uuid, 39.7837304, -100.445882, 'United States', NULL, 0.3),
+    ('7539888f-5cb2-4cad-bff9-9a8df07c5bb0'::uuid, 52.2434979, 5.6343227, 'Netherlands', NULL, 0.3),
+    ('844a5590-554c-45a3-a98f-922005302de9'::uuid, 21.0000287, 57.0036901, 'Oman', NULL, 0.3),
+    ('af3bfb51-6fe9-43c7-9711-8f0dc70f2a05'::uuid, 14.5844444, 29.4917691, 'Sudan', NULL, 0.3),
+    ('b6af5f7d-da55-404d-9c94-cb07b2a8d8dd'::uuid, 22.3511148, 78.6677428, 'India', NULL, 0.3),
+    ('cb21af0b-e7db-491b-ab3d-6963f3205ee6'::uuid, -2.9814344, 23.8222636, 'Democratic Republic of the Congo', NULL, 0.9),
+    ('ddeda4ad-33c8-4b73-af15-2b2e8590f44d'::uuid, 24.0002488, 53.9994829, 'AE', NULL, 0.3),
+    ('dedc9755-3942-4418-9caf-f14926e977ff'::uuid, 23.9739374, 120.9820179, 'Taiwan', NULL, 1.0),
+    ('ea344bf3-bf4e-4513-9b8b-80f718f238b8'::uuid, 15.9266657, 107.9650855, 'VN', NULL, 1.0),
+    ('ee8a7edc-5afd-4866-bda0-49229780b644'::uuid, 36.2665119, 59.5999861, 'Iran', NULL, 1.0);
 
 CREATE INDEX ON _merge_map (loser_id);
 CREATE INDEX ON _merge_map (survivor_id);
@@ -2787,15 +2856,51 @@ UPDATE entity_profiles s
  WHERE s.id = agg.sid;
 
 -- ==========================================================================
--- (3) SURVIVOR MERGE-VERSION ROW in entity_profile_versions (append-only). This
---     preserves the merge record even though the losers' own version rows cascade
---     away in step 4. NOT-EXISTS-guarded on (entity_id, event='merge_0063') for
---     idempotency. Captured at the pre-rewrite version (the rewrite in step 5
---     bumps it).
+-- (2b) SURVIVOR GEO BACKFILL — a hard-deleted geo-bearing loser can carry the
+--     referent's coordinates the most-links survivor lacks, so blanking it would
+--     lose the geo. COALESCE the survivor's NULL geo from the frozen donor row
+--     (a deterministic, country-consistent geo-bearing member of the same fold),
+--     BEFORE the loser DELETE in step 4. Cross-country guard mirrors the
+--     entity_resolution ON-CONFLICT geo rule: lat/lon/region are inherited ONLY
+--     when the countries are consistent (a mismatch never overwrites). lat+lon
+--     are copied TOGETHER (both from the same donor, only when BOTH are NULL) so
+--     they can never be mixed across donors. completeness_score = GREATEST (never
+--     regressed). Idempotent: COALESCE fills only a still-NULL value.
+-- ==========================================================================
+UPDATE entity_profiles s
+   SET geo_lat = CASE
+                     WHEN (s.geo_country IS NULL OR g.geo_country IS NULL
+                           OR lower(s.geo_country) = lower(g.geo_country))
+                          AND s.geo_lat IS NULL AND s.geo_lon IS NULL
+                     THEN g.geo_lat ELSE s.geo_lat END,
+       geo_lon = CASE
+                     WHEN (s.geo_country IS NULL OR g.geo_country IS NULL
+                           OR lower(s.geo_country) = lower(g.geo_country))
+                          AND s.geo_lat IS NULL AND s.geo_lon IS NULL
+                     THEN g.geo_lon ELSE s.geo_lon END,
+       geo_country = COALESCE(s.geo_country, g.geo_country),
+       geo_region = CASE
+                     WHEN s.geo_country IS NULL OR g.geo_country IS NULL
+                          OR lower(s.geo_country) = lower(g.geo_country)
+                     THEN COALESCE(s.geo_region, g.geo_region) ELSE s.geo_region END,
+       completeness_score = GREATEST(
+                                COALESCE(s.completeness_score, 0),
+                                COALESCE(g.completeness_score, 0)),
+       updated_at = now()
+  FROM _survivor_geo g
+ WHERE s.id = g.survivor_id;
+
+-- ==========================================================================
+-- (3) SURVIVOR MERGE-VERSION ROW in entity_profile_versions (append-only) at
+--     version+1. This preserves the merge record even though the losers' own
+--     version rows cascade away in step 4, and — inserting ABOVE the survivor's
+--     current version rather than duplicating it — keeps (entity_id, version)
+--     monotonic + unique. NOT-EXISTS-guarded on (entity_id, event='merge_0063')
+--     for idempotency. Step 3b then advances entity_profiles.version to match.
 -- ==========================================================================
 INSERT INTO entity_profile_versions
     (entity_id, version, data, analyst_id, analyst_version, run_id)
-SELECT s.id, s.version,
+SELECT s.id, s.version + 1,
        jsonb_build_object(
            'canonical_name', s.canonical_name,
            'entity_class',   s.entity_class,
@@ -2809,6 +2914,25 @@ SELECT s.id, s.version,
  WHERE s.id IN (SELECT DISTINCT survivor_id FROM _merge_map)
    AND NOT EXISTS (
        SELECT 1 FROM entity_profile_versions v
+        WHERE v.entity_id = s.id
+          AND v.data->>'event' = 'merge_0063'
+   );
+
+-- ==========================================================================
+-- (3b) VERSION BUMP — advance EVERY merged survivor's entity_profiles.version to
+--     the merge-version row's number (step 3 appended it at version+1) so
+--     (entity_id, version) stays monotonic + unique. Guarded to fire exactly
+--     once: only a survivor still sitting BELOW its merge_0063 version is bumped,
+--     so a forced re-run is a no-op (version already == the merge-version number).
+--     The step-5 rewrite no longer touches version (this owns it, for ALL merged
+--     survivors, not only the renamed ones).
+-- ==========================================================================
+UPDATE entity_profiles s
+   SET version    = s.version + 1,
+       updated_at = now()
+ WHERE s.id IN (SELECT DISTINCT survivor_id FROM _merge_map)
+   AND s.version < (
+       SELECT v.version FROM entity_profile_versions v
         WHERE v.entity_id = s.id
           AND v.data->>'event' = 'merge_0063'
    );
@@ -2831,7 +2955,6 @@ UPDATE entity_profiles s
    SET canonical_name = r.canonical_name,
        entity_class   = r.entity_class,
        entity_type    = r.entity_class,
-       version        = s.version + 1,
        updated_at     = now()
   FROM _survivor_rewrite r
  WHERE s.id = r.survivor_id
