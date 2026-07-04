@@ -294,12 +294,12 @@ import re as _re  # noqa: E402
 #: "group <letter>"/"group stage"). Conservative: a real military "match"/"draw"
 #: in a war report is rare and the floor is co-occurrence not hostility anyway.
 _SPORTS_CONTEXT_RE = _re.compile(
-    r"\b(?:"
+    r"(?:\b(?:"
     r"world\s+cup|"
     r"group\s+(?:stage|[a-h])\b|"
     r"qualifier|qualifiers|qualifying|"
     r"friendly\s+match|"
-    r"kick[\s-]?off|"
+    r"kick[\s-]?off|kick\b|"
     r"football|soccer|"
     r"la\s+liga|premier\s+league|bundesliga|serie\s+a\b|ligue\s+1|"
     r"champions\s+league|europa\s+league|"
@@ -309,10 +309,49 @@ _SPORTS_CONTEXT_RE = _re.compile(
     r"tournament|fixture|fixtures|"
     r"cricket|rugby|tennis|basketball|"
     r"match\s+(?:report|preview|day)|"
-    r"goalkeeper|midfielder|striker|penalty\s+kick"
-    r")\b",
+    r"goalkeeper|midfielder|striker|penalty\s+kick|"
+    # DQ Phase 5 — match coverage without an explicit token leaked hostile dyads
+    # ("DR Congo face England", "Ukraine hostile to Monaco"). Extended
+    # match-report vocabulary: knockout, squad, coach, stadium, fullback, winger,
+    # derail(ed), and the "clash" framing.
+    r"knockout|fullback|full[\s-]?back|winger|squad|"
+    r"head\s+coach|coach\b|stadium|derail(?:ed|s)?|clash(?:es|ed)?"
+    r")\b)"
+    # DQ Phase 5 — a football scoreline framed as a result ("beat Morocco 2-1",
+    # "won 3–0", "lost 0-2 on penalties"). Guarded by a result verb (a team name
+    # may sit between the verb and the score) so a bare numeric range never trips
+    # it; the score halves are 1–2 digits so a 4-digit year cannot match.
+    r"|\b(?:beat|beats|won|win|lost|draw|drew|thrash(?:ed|es)?|defeat(?:ed|s)?)"
+    r"\b[\w\s.,'-]{0,24}?\b\d{1,2}\s*[-–:]\s*\d{1,2}\b",
     _re.IGNORECASE,
 )
+
+
+#: DQ Phase 5 (nexuses / endpoint hygiene) — citation-marker residue NER dragged
+#: into an entity surface: '/*[1]*/', '[1]', '[1' (unclosed), '【1】', '［1］'.
+#: A real entity name never contains a citation bracket, so stripping it before
+#: the endpoint is canonicalized/written prevents 'Masoud Pezeshkian /*[1]*/' and
+#: 'Donald Trump[1' from ever landing as nexus endpoints again.
+_CITATION_COMMENT_RE = _re.compile(r"/\*.*?\*/")
+_CITATION_BRACKET_RE = _re.compile(r"[【［〔〖\[]\s*\d*\s*[】］〕〗\]]?")
+_CITATION_STRAY_CLOSE_RE = _re.compile(r"[】］〕〗\]]")
+
+
+def _strip_citation_residue(surface: str) -> str:
+    """Remove '[N]' / '【N】' / '/*[N]*/' citation residue from an entity surface
+    before it is canonicalized and written. Idempotent on clean surfaces (a name
+    with no bracket is returned unchanged, whitespace-collapsed)."""
+    s = str(surface or "")
+    s = _CITATION_COMMENT_RE.sub(" ", s)
+    s = _CITATION_BRACKET_RE.sub(" ", s)
+    s = _CITATION_STRAY_CLOSE_RE.sub(" ", s)
+    return _re.sub(r"\s+", " ", s).strip()
+
+
+#: DQ Phase 5 (confidence semantics) — an exact-1.0 reified-nexus confidence is
+#: the "no real score" sentinel (mirrors the facts relation-backend floor); a
+#: reified relationship is never certain. Floored to this documented value.
+_NEXUS_SENTINEL_FLOOR: float = 0.5
 
 
 def _is_sports_context(evidence_text: str) -> bool:
@@ -373,8 +412,16 @@ def _coerce_typing(
         # Off-list label — the consumers can't sign it; skip rather than write a
         # neutral nexus that adds no signal.
         return None
-    raw_subject = str(obj.get("subject") or fallback_subject).strip()
-    raw_object = str(obj.get("object") or fallback_object).strip()
+    # DQ Phase 5 — strip citation-marker residue ('[1]' / '/*[2]*/' / '【3】')
+    # from the endpoint surfaces BEFORE the junk check + canonicalization, so a
+    # contaminated name ('Masoud Pezeshkian /*[1]*/', 'Donald Trump[1') can never
+    # land as a nexus endpoint (and its clean form supersedes correctly).
+    raw_subject = _strip_citation_residue(
+        str(obj.get("subject") or fallback_subject).strip()
+    )
+    raw_object = _strip_citation_residue(
+        str(obj.get("object") or fallback_object).strip()
+    )
     if not raw_subject or not raw_object:
         return None
     # D3 — DROP true junk endpoints, then CANONICALIZE (demonym → country, HTML
@@ -451,6 +498,11 @@ def _coerce_typing(
     except (TypeError, ValueError):
         confidence = 0.6
     confidence = max(0.0, min(1.0, confidence))
+    # DQ Phase 5 — an exact 1.0 is the "no real score" sentinel (mirrors the
+    # facts relation-backend floor): a reified relationship is never certain.
+    # Floor it so a syndicated co-mention can't manufacture a 1.0 nexus.
+    if confidence >= 1.0:
+        confidence = _NEXUS_SENTINEL_FLOOR
     try:
         return NexusPayload(
             subject=subject[:2048],

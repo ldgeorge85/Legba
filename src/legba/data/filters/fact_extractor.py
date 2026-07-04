@@ -119,7 +119,18 @@ _QUANTITY_QUALIFIERS: frozenset[str] = frozenset({
     "of", "and", "or", "the", "a", "an", "some", "several", "many", "few",
     "multiple", "numerous", "minimum", "maximum",
 })
-_QUANTITY_NONNOMINAL = _NUMBER_WORDS | _ORDINAL_WORDS | _QUANTITY_QUALIFIERS
+#: DQ Phase 5 (facts/extraction quality) — bare PLURAL quantity nouns and
+#: "half" that the singular ``_NUMBER_WORDS`` set missed, so a fragment subject/
+#: value like "Thousands", "hundreds", "half" (live junk: "Thousands located in
+#: South Africa", "half employed by Russian") is caught by ``_is_quantity_phrase``
+#: exactly like "at least five". A single nominal token still keeps the endpoint.
+_QUANTITY_NOUNS: frozenset[str] = frozenset({
+    "half", "halves", "thousands", "hundreds", "dozens", "millions",
+    "billions", "trillions", "scores", "loads", "tons", "lots", "plenty",
+})
+_QUANTITY_NONNOMINAL = (
+    _NUMBER_WORDS | _ORDINAL_WORDS | _QUANTITY_QUALIFIERS | _QUANTITY_NOUNS
+)
 _QUANTITY_STRIP = " \t\n\r\"'`.,;:!?()[]{}<>«»“”‘’%-"
 
 
@@ -604,6 +615,42 @@ def _is_roster_triple(subject: str, predicate: str, value: str) -> bool:
     if val_cls == "person":
         return True  # "Harry Kane member of Jude Bellingham" — person/person
     return False
+
+
+#: DQ Phase 5 — a tokenizer possessive artifact: an entity surface that ends in
+#: a SPACE followed by an apostrophe-s ("FRANCE 24 's", "Timor - Leste 's",
+#: "Donald Trump 's"). NER split a possessive into a separate, malformed entity
+#: surface. A legitimate name NEVER ends in " 's" (the SPACE before the clitic is
+#: the artifact), so this is a mechanical, zero-false-positive drop.
+_POSSESSIVE_FRAGMENT_RE = re.compile(r"\s['’]s$")
+
+
+def _is_possessive_fragment(surface: str) -> bool:
+    """True when ``surface`` is a trailing spaced-possessive tokenizer artifact
+    (" 's" at the end). Conservative: requires the SPACE before the clitic, so a
+    legitimate possessive glued to the name ("South Korea's") is NOT flagged."""
+    return bool(_POSSESSIVE_FRAGMENT_RE.search(str(surface or "")))
+
+
+#: DQ Phase 5 — employment relations whose SUBJECT must be a person/org, never a
+#: sovereign state. A COUNTRY subject under one of these is an inverted / nonsense
+#: relation ("Germany employed by Nagelsmann", "Venezuela employed by <byline>").
+#: Uses the reliable gazetteer country test (NOT the noisy NER class).
+_EMPLOYMENT_PREDICATES: frozenset[str] = frozenset({
+    "employed by", "spokesperson for",
+})
+
+
+def _is_employment_country_subject(subject: str, predicate: str) -> bool:
+    """True when an employment-relation subject canonicalizes to a COUNTRY — a
+    state is not "employed by" / a "spokesperson for" anyone (the inverted
+    employment artifact). Gazetteer-backed so a person/org subject flows
+    through."""
+    pred = normalize_predicate((predicate or "").strip().lower())
+    if pred not in _EMPLOYMENT_PREDICATES:
+        return False
+    _, subj_cls = canonicalize_entity(subject, "entity")
+    return subj_cls == "country"
 
 
 def _text_is_sports_dominated(text: str) -> bool:
@@ -1227,6 +1274,16 @@ class FactExtractorHandler:
         # person) even when the text topic gate let a mixed signal through.
         if _is_roster_triple(subject, predicate, value):
             return "sports_roster_triple"
+        # DQ Phase 5 — trailing spaced-possessive tokenizer artifact on either
+        # endpoint ("FRANCE 24 's", "Donald Trump 's"): a malformed surface, not
+        # an entity. Always-on (mechanical, zero false positives).
+        if _is_possessive_fragment(subject) or _is_possessive_fragment(value):
+            return "possessive_fragment"
+        # DQ Phase 5 — NER-class inversion: a COUNTRY subject under an employment
+        # relation ("Germany employed by Nagelsmann") is the inverted-employment
+        # artifact. Gazetteer-backed (reliable country test).
+        if _is_employment_country_subject(subject, predicate):
+            return "employment_country_subject"
         return None
 
     # ----------------------------------------------------------- facts write
@@ -1552,11 +1609,16 @@ async def _insert_ingestion_fact(
         """
         UPDATE facts
            -- A2: same-triple re-assert is CORROBORATION — combine confidences
-           -- with a bounded noisy-OR (capped 0.99) so N agreeing sources raise
-           -- belief above any single one (was GREATEST/max; now matches the
-           -- analyst collapse_open_triple path so both producers agree).
+           -- with a bounded noisy-OR so N agreeing sources raise belief above
+           -- any single one (was GREATEST/max; now matches the analyst
+           -- collapse_open_triple path so both producers agree).
+           -- DQ Phase 5: the ceiling is 0.75 when the INCOMING observation is at
+           -- or below the heuristic floor (0.5) — floor-only corroboration (the
+           -- relation backend emits no real per-triple score) must NOT manufacture
+           -- near-certainty ("Thousands located in South Africa" reached 0.99). A
+           -- genuine sub-1.0 extractor score (> 0.5) keeps the 0.99 ceiling.
            SET confidence   = LEAST(
-                                0.99,
+                                CASE WHEN $4 <= 0.5 THEN 0.75 ELSE 0.99 END,
                                 1.0 - (1.0 - facts.confidence) * (1.0 - $4)
                               ),
                derived_from = (SELECT array_agg(DISTINCT e)
@@ -1605,10 +1667,13 @@ async def _insert_ingestion_fact(
                      COALESCE(valid_from, '1970-01-01 00:00:00+00'::timestamptz))
                  WHERE valid_until IS NULL AND superseded_by IS NULL
         DO UPDATE SET
-            -- A2: corroboration combines via bounded noisy-OR (capped 0.99),
-            -- matching the analyst ON CONFLICT path (was GREATEST/max).
+            -- A2: corroboration combines via bounded noisy-OR, matching the
+            -- analyst ON CONFLICT path (was GREATEST/max). DQ Phase 5: ceiling is
+            -- 0.75 when the incoming observation is at/below the heuristic floor
+            -- (0.5) so floor-only corroboration cannot manufacture near-certainty;
+            -- a genuine extractor score (> 0.5) keeps the 0.99 ceiling.
             confidence   = LEAST(
-                             0.99,
+                             CASE WHEN EXCLUDED.confidence <= 0.5 THEN 0.75 ELSE 0.99 END,
                              1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)
                            ),
             derived_from = (SELECT array_agg(DISTINCT e)
