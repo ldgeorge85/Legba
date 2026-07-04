@@ -208,3 +208,40 @@ def test_place_head_surfaces_type_location(place):
 )
 def test_estimated_quantifier_rejected(junk):
     assert is_junk_entity(junk) is True, junk
+
+
+# ---------------------------------------------------------------------------
+# articles / stopwords are junk (DQ P4 §E — "the" must never be a fold survivor)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["the", "The", "THE", "a", "an", "and", "or", "but", "of", "for",
+     "from", "with", "into", "onto"],
+)
+def test_articles_and_stopwords_are_junk(word):
+    assert is_junk_entity(word) is True, word
+
+
+def test_stopword_folds_are_content_junk_not_survivors():
+    # A bare "the" folds to a stable key but is content-junk (len 3 dodges the
+    # length<=2 rule) — so the generator junks it and never elects it a survivor.
+    from legba.data._entity_canon import _strip_name
+    assert identity_fold("the") == identity_fold("The")
+    for w in ("the", "and", "from"):
+        assert is_junk_entity(w) is True
+        # content-junk shape: a CONTENT rule fired (not just length<=2).
+        assert len(_strip_name(w)) > 2 or w in ("a", "an", "of")
+
+
+def test_world_cup_stays_junk_sports_gate():
+    # E: confirm the sports gate still holds after the stopword add.
+    assert is_junk_entity("World Cup") is True
+    assert is_junk_entity("​World Cup") is True  # zero-width variant too
+
+
+def test_legit_short_forms_still_survive_stopword_gate():
+    # The stopword add must not swallow real short forms exempted FIRST.
+    for legit in ("US", "UK", "EU", "UN", "WHO", "NATO"):
+        assert is_junk_entity(legit) is False, legit

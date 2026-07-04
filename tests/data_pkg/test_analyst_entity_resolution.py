@@ -580,6 +580,136 @@ async def test_canonicalization_merges_fragments_with_derived_from(composite_poo
                     "DELETE FROM entity_profiles WHERE id = $1", entity_id)
 
 
+async def test_merged_fold_forward_reuses_survivor_no_new_row(composite_pool):
+    """DQ P4 round-2: after the one-shot merge HARD-DELETES the losers, a forward
+    mention of the fold must REUSE the sole surviving row (by name) and upgrade its
+    class upward — never INSERT a fresh row (the only path that could hit a freed
+    slot). Seeds a lone survivor (class entity) and mentions it typed 'location'.
+    """
+    from datetime import datetime, timezone
+
+    from legba.runtime.deps import StandardDeps
+
+    tenant = f"er_reuse_{uuid4().hex[:8]}"
+    nonce = uuid4().hex[:8]
+    name = f"Zephyrus_{nonce}"        # non-gazetteer bare token -> class from NER
+    t0 = datetime(2026, 6, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with composite_pool.acquire() as conn:
+        surv_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_type, entity_class, "
+            "data, completeness_score) VALUES ($1,'entity','entity','{}'::jsonb,0.5) "
+            "RETURNING id",
+            name,
+        )
+        sig = uuid4()
+        await conn.execute(
+            "INSERT INTO signals (id, source_id, owner_tenant, modality, payload, fetched_at) "
+            "VALUES ($1,'src',$2,'text',$3::jsonb,$4)",
+            sig, tenant,
+            json.dumps({"title": f"{name} in the news",
+                        "entities": [{"text": name, "class": "location"}]}),
+            t0,
+        )
+
+    deps = StandardDeps(pg_pool=composite_pool)
+    big = {"sub_handler": SUB, "analyst_id": "entity_resolution",
+           "run_id": uuid4(), "batch_limit": 1_000_000}
+    try:
+        await run_method([], big, deps)
+        async with composite_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, entity_class FROM entity_profiles "
+                "WHERE lower(canonical_name)=lower($1)", name)
+            # Exactly ONE row — the survivor was reused, no fresh INSERT.
+            assert len(rows) == 1, f"forward write forked a row: {rows}"
+            assert str(rows[0]["id"]) == str(surv_id), "did not reuse the survivor id"
+            # location out-ranks entity -> upgraded upward.
+            assert rows[0]["entity_class"] == "location", rows[0]
+            n = await conn.fetchval(
+                "SELECT count(*) FROM signal_entity_links WHERE entity_id=$1", surv_id)
+            assert n == 1, n
+    finally:
+        async with composite_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM signal_entity_links WHERE entity_id=$1", surv_id)
+            await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)
+            await conn.execute("DELETE FROM entity_profiles WHERE id=$1", surv_id)
+
+
+async def test_gc_merged_row_is_not_reanimated_by_forward_write(composite_pool):
+    """DQ P4 round-2 (defect #1 fix): a forward write must NEVER re-attach a live
+    signal to a gc_status IN ('merged','junk') row — even when that dead row has a
+    HIGHER class priority than the active survivor. The any-class pre-lookup filters
+    the dead row out, so the mention lands on the ACTIVE survivor and the dead row
+    keeps its zero links + its gc_status.
+    """
+    from datetime import datetime, timezone
+
+    from legba.runtime.deps import StandardDeps
+
+    tenant = f"er_gc_{uuid4().hex[:8]}"
+    nonce = uuid4().hex[:8]
+    name = f"Ghostium_{nonce}"
+    t0 = datetime(2026, 6, 4, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with composite_pool.acquire() as conn:
+        # ACTIVE survivor (person) + a DEAD higher-priority (country) tombstone.
+        active_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_type, entity_class, "
+            "data, completeness_score) VALUES ($1,'person','person','{}'::jsonb,0.5) "
+            "RETURNING id",
+            name,
+        )
+        ghost_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_type, entity_class, "
+            "data, completeness_score) "
+            "VALUES ($1,'country','country',$2::jsonb,0.5) RETURNING id",
+            name, json.dumps({"gc_status": "merged"}),
+        )
+        sig = uuid4()
+        await conn.execute(
+            "INSERT INTO signals (id, source_id, owner_tenant, modality, payload, fetched_at) "
+            "VALUES ($1,'src',$2,'text',$3::jsonb,$4)",
+            sig, tenant,
+            json.dumps({"title": f"{name} today",
+                        "entities": [{"text": name, "class": "person"}]}),
+            t0,
+        )
+
+    deps = StandardDeps(pg_pool=composite_pool)
+    big = {"sub_handler": SUB, "analyst_id": "entity_resolution",
+           "run_id": uuid4(), "batch_limit": 1_000_000}
+    try:
+        await run_method([], big, deps)
+        async with composite_pool.acquire() as conn:
+            # No new row; still exactly the active + ghost.
+            total = await conn.fetchval(
+                "SELECT count(*) FROM entity_profiles "
+                "WHERE lower(canonical_name)=lower($1)", name)
+            assert total == 2, total
+            # The live link landed on the ACTIVE survivor, NOT the tombstone.
+            act_links = await conn.fetchval(
+                "SELECT count(*) FROM signal_entity_links WHERE entity_id=$1", active_id)
+            ghost_links = await conn.fetchval(
+                "SELECT count(*) FROM signal_entity_links WHERE entity_id=$1", ghost_id)
+            assert act_links == 1, act_links
+            assert ghost_links == 0, "forward write re-animated the merged tombstone"
+            # The tombstone keeps its gc_status (never resurrected).
+            gc = await conn.fetchval(
+                "SELECT data->>'gc_status' FROM entity_profiles WHERE id=$1", ghost_id)
+            assert gc == "merged", gc
+    finally:
+        async with composite_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM signal_entity_links WHERE entity_id = ANY($1::uuid[])",
+                [active_id, ghost_id])
+            await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)
+            await conn.execute(
+                "DELETE FROM entity_profiles WHERE id = ANY($1::uuid[])",
+                [active_id, ghost_id])
+
+
 async def test_same_class_geo_not_cross_country_inherited(composite_pool):
     """Within ONE class, an incoming geo whose COUNTRY disagrees with the stored
     one is not inherited — the ON-CONFLICT COALESCE is country-gated. A stub

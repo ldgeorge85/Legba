@@ -493,6 +493,21 @@ def _collapse_target(low: str) -> str | None:
 #: :func:`is_junk_entity` — this frozenset stays the literal-token base.
 _JUNK_ENTITIES: frozenset[str] = frozenset({"tv", "radio", "online"})
 
+#: Pure articles / closed-class function words NER occasionally emits as a bare
+#: "entity" ("the", "and", "of"). These are NEVER a referent, so they must be
+#: junk-rejected — the DQ P4 merge review found a bare "the" (len 3, so the
+#: length≤2 rule missed it) being ELECTED as a fold survivor. Curated + tight:
+#: only articles / conjunctions / prepositions (a closed class), never a content
+#: word, and only checked AFTER the alias/demonym/country exemption so a real
+#: short form (US/UK/EU/UN) is unaffected. The ≤2-char members ("a", "an", "of",
+#: "to", …) are already caught by the length rule; the ≥3-char members ("the",
+#: "and", "but", "for", "from", "with", "into", "onto") are the ones this adds.
+_STOPWORD_ENTITIES: frozenset[str] = frozenset({
+    "the", "a", "an", "and", "or", "but", "nor",
+    "of", "to", "in", "on", "at", "by", "for", "from", "with", "as",
+    "into", "onto", "off", "out", "up", "down",
+})
+
 
 # ---------------------------------------------------------------------------
 # JUNK PREDICATES — the live junk classes the review confirmed. Each matches on
@@ -673,6 +688,7 @@ def is_junk_entity(name: str) -> bool:
         ``US$ 525 million``);
       * age / time-span tokens (``51 - year - old``, ``centuries``);
       * sports / competition-structure noise (``World Cup``, ``Group F``);
+      * pure article / function word (``the`` / ``and`` / ``of``);
       * length ≤ 2 (``F1`` / ``Xi`` / ``Co``).
 
     NOT junk-dropped (the canon's strip handles them so the referent survives):
@@ -700,6 +716,10 @@ def is_junk_entity(name: str) -> bool:
         return False
 
     if low in _JUNK_ENTITIES:
+        return True
+    # Pure article / function word ("the", "and", "of") — never a referent, so
+    # it can never be elected a merge survivor (DQ P4 §E).
+    if low in _STOPWORD_ENTITIES:
         return True
     if _CLOCK_RE.match(stripped):
         return True

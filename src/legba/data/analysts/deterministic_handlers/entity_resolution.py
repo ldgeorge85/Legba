@@ -519,11 +519,19 @@ async def _resolve_batch(
                     #   * else converge onto the stored row, keeping its (>= )
                     #     class — never a downgrade.
                     upsert_cls = cls
+                    # DQ P4 (forward re-animation guard): NEVER reuse a row the
+                    # GC / one-shot merge has retired — a gc_status in
+                    # ('merged','junk') means the row is a de-fragmentation loser
+                    # (its links were re-pointed onto the ACTIVE survivor). Reusing
+                    # it here would re-attach live signals to a dead node that the
+                    # next entity_gc tick strips again. Filter it out so the
+                    # pre-lookup only ever elects the ACTIVE survivor for the name.
                     pre = await conn.fetchrow(
                         f"""
                         SELECT id, entity_class
                           FROM entity_profiles
                          WHERE lower(canonical_name) = lower($1)
+                           AND COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')
                          ORDER BY {_CLASS_PRIORITY_SQL}, created_at ASC
                          LIMIT 1
                         """,
