@@ -108,12 +108,10 @@ method:
        severity:low | severity:moderate | severity:elevated | severity:high |
        severity:critical>, "energy_security"],
      "indicators": [
-       {"id": "<short stable slug, e.g. lng-terminal-outage>",
-        "statement": "<one concrete, resolvable near-term energy-security signpost>",
-        "status": "not_observed",
-        "horizon_date": "<YYYY-MM-DD by which this should resolve>",
-        "first_seen": "<YYYY-MM-DD, today>",
-        "citations": []}
+       {"id": "lng-terminal-outage", "statement": "Unplanned outage, damage, or shutdown at an LNG import/export terminal serving this country", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []},
+       {"id": "pipeline-disruption", "statement": "Disruption, sabotage, or cutoff of a major oil/gas pipeline supplying this country", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []},
+       {"id": "grid-blackout-or-shortfall", "statement": "Widespread grid blackout or a mandated load-shedding / supply shortfall", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []},
+       {"id": "supply-route-chokepoint-risk", "statement": "Escalated interdiction risk on a maritime chokepoint carrying this country's energy imports", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []}
      ]}
 
     RULES:
@@ -126,7 +124,12 @@ method:
         in the slice), or "expired" (its horizon_date passed). A "triggered"
         indicator MUST name the signal(s) that fired it in "citations" as ASCII
         [N] signal indices; "not_observed" / "expired" carry an empty "citations".
-        Keep each id a short stable slug so it can be tracked run-over-run.
+      - CANONICAL IDS — REUSE, do NOT re-mint: the id slugs above are this unit's
+        FIXED vocabulary. Every run, REUSE these exact id slugs verbatim (only
+        change "status" / "citations" / "first_seen" as the situation evolves) so
+        the tracker can diff the SAME indicator run-over-run; a re-minted slug is
+        invisible to the diff. Introduce a NEW id ONLY for a genuinely novel
+        signpost none of the canonical ids cover.
       - If NO signal bears on energy security, return a finding that states so,
         tagged severity:low, with confidence <= 0.3.
       - Severity reflects CITED pressure, not speculation; confidence reflects

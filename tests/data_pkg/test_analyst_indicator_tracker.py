@@ -106,6 +106,55 @@ def test_flip_detected_joining_by_id():
     assert f["source_analyst_id"] == "escalation"
 
 
+def test_id_join_reports_id_match_tag():
+    """When ids are stable (present in both runs) the flip is joined by id."""
+    rows = [
+        _run(target="t", analyst="a", produced_at=1, indicators=[_ind("x", "not_observed")]),
+        _run(target="t", analyst="a", produced_at=2, indicators=[_ind("x", "triggered", citations=[2])]),
+    ]
+    flips, _ = it.collect_flips(rows)
+    assert len(flips) == 1
+    assert flips[0]["match"] == "id"
+
+
+def test_fuzzy_statement_join_when_ids_re_minted():
+    """DQ P6 — when the two runs share NO ids (the LLM re-minted every slug), the
+    tracker falls back to joining on the normalized STATEMENT text, so a status
+    flip on a re-slugged-but-same signpost is still caught (it used to be
+    invisible: a re-minted id has no prior status to diff)."""
+    stmt = "Reservist call-up or mobilization orders issued by the target state"
+    rows = [
+        _run(target="country_g20_de", analyst="escalation", produced_at=1,
+             indicators=[_ind("reservist-mobilization", "not_observed", statement=stmt)]),
+        _run(target="country_g20_de", analyst="escalation", produced_at=2,
+             indicators=[_ind("mobilization-order-issued", "triggered",
+                              statement=stmt.upper() + " .", citations=[2])]),
+    ]
+    flips, groups = it.collect_flips(rows)
+    assert groups == 1
+    assert len(flips) == 1
+    f = flips[0]
+    # matched by statement text despite the id change; reports the CURRENT slug
+    assert f["match"] == "statement"
+    assert f["indicator_id"] == "mobilization-order-issued"
+    assert f["from_status"] == "not_observed"
+    assert f["to_status"] == "triggered"
+    assert f["activation"] is True
+
+
+def test_no_flip_when_ids_and_statements_both_differ():
+    """Distinct signposts (different id AND different statement) are NOT a flip —
+    the fuzzy fallback only matches genuinely-corresponding statements."""
+    rows = [
+        _run(target="t", analyst="a", produced_at=1,
+             indicators=[_ind("aaa", "not_observed", statement="alpha signpost")]),
+        _run(target="t", analyst="a", produced_at=2,
+             indicators=[_ind("bbb", "triggered", statement="beta signpost")]),
+    ]
+    flips, _ = it.collect_flips(rows)
+    assert flips == []
+
+
 def test_unchanged_status_is_not_a_flip():
     rows = [
         _run(target="t", analyst="a", produced_at=1, indicators=[_ind("x", "not_observed")]),

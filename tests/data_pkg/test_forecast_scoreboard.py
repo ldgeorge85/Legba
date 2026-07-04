@@ -108,8 +108,10 @@ class _Deps:
 async def test_handle_reports_writer_counts_verbatim(monkeypatch):
     seen: list[str] = []
 
-    async def _issue(deps, options):
+    async def _issue(deps, options, *, receipt=None):
         seen.append("issue")
+        if receipt is not None:
+            receipt["reason"] = "issued"
         return 4
 
     async def _resolve(deps, options):
@@ -145,7 +147,7 @@ async def test_handle_reports_writer_counts_verbatim(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_leg_failure_is_isolated(monkeypatch):
-    async def _issue_boom(deps, options):
+    async def _issue_boom(deps, options, *, receipt=None):
         raise RuntimeError("issue exploded")
 
     async def _resolve(deps, options):
@@ -249,3 +251,46 @@ async def test_geography_dominated_vector_abstains_no_rows_minted():
     assert result.finding.data["issued"] == 0
     assert result.finding.data["resolved"] == 0
     assert result.finding.data["resolved_total"] == 0
+    # DQ P6 — the receipt now ATTRIBUTES the issued=0 to a D9 degeneracy abstain
+    # (distinct from a window-already-issued no-op) via a real receipt roundtrip.
+    assert any(
+        "abstained_degenerate_p" in w for w in result.finding.data["warnings"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# DQ P6 — issued=0 is ATTRIBUTED: abstain vs already-issued vs no-targets each
+# emit a DISTINCT warnings[] entry (they used to be indistinguishable).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason,expect",
+    [
+        ("abstained_degenerate", "forecast_scoreboard.abstained_degenerate_p"),
+        ("window_already_issued", "forecast_scoreboard.window_already_issued"),
+        ("no_regions", "forecast_scoreboard.issued_0_no_targets"),
+    ],
+)
+async def test_issued_zero_reason_maps_to_distinct_warning(monkeypatch, reason, expect):
+    async def _issue(deps, options, *, receipt=None):
+        if receipt is not None:
+            receipt["reason"] = reason
+            receipt["staged"] = 19
+            receipt["uncertain"] = 0
+        return 0
+
+    async def _noop_resolve(deps, options):
+        return 0
+
+    async def _noop_pull(deps, options):
+        return []
+
+    monkeypatch.setattr(fa, "issue_weekly_forecasts", _issue)
+    monkeypatch.setattr(fa, "resolve_open_acute_forecasts", _noop_resolve)
+    monkeypatch.setattr(fa, "pull_resolved_acute_forecasts", _noop_pull)
+
+    result = await fs.handle([], {"sub_handler": "forecast_scoreboard"}, _Deps(object()))
+    warnings = result.finding.data["warnings"]
+    assert any(w.startswith(expect) for w in warnings), (reason, warnings)

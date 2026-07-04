@@ -82,6 +82,24 @@ _REASON_DERIVED = "signature_match"
 # Exact signature matches are certain → score 1.0.
 _EXACT_SCORE = 1.0
 
+# DQ P6 (2026-07-03) — the COMPOSITION / META analyst-kind gate. These analysts
+# emit second-order ASSESSMENT REPORTS (a country/region/world executive read),
+# NOT evolving situation findings. Stamping them with a situation_signature made
+# situation_clustering mint a "situation" per report stream named after the
+# report title (e.g. "United Kingdom – Composite Assessment", and one row whose
+# name was a raw JSON-envelope fragment) — report receipts masquerading as
+# frames that never ground per-country yet compete in the global intensity
+# ranking. A report is not a situation: exclude these producers from clustering /
+# signature stamping entirely. (Their supersession is handled by the dedicated
+# composition-supersession fold, migration 0058/0060 — not this finding-level
+# situation clusterer.)
+_COMPOSITION_ANALYST_IDS = frozenset({
+    "country_composition",
+    "region_composition",
+    "escalation_composition",
+    "world_assessor",
+})
+
 # Only findings produced no earlier than this many days ago are considered for
 # clustering on the live path — old findings are settled history, not an
 # evolving situation. Generous default; override via options['lookback_days'].
@@ -253,6 +271,11 @@ def _cluster(
     # (For the single-analyst-per-signature monolith this is a no-op.)
     groups: dict[tuple[str, Any], list[dict[str, Any]]] = defaultdict(list)
     for f in findings:
+        # DQ P6 defense-in-depth (also covers the synthetic deps=None path where
+        # the live SQL gate did not run): a COMPOSITION / META producer's report
+        # never clusters into a situation.
+        if str(f.get("analyst_id") or "") in _COMPOSITION_ANALYST_IDS:
+            continue
         sig = f.get("situation_signature")
         if not sig:
             sig = derive_signature(
@@ -344,6 +367,12 @@ async def _fetch_findings(
         f"produced_at > NOW() - INTERVAL '{int(lookback_days)} days'",
     ]
     params: list[Any] = []
+    # DQ P6 — never cluster COMPOSITION / META report findings (they are
+    # assessment receipts, not evolving-situation findings). Excluding them here
+    # is the primary gate: an excluded producer's rows never enter the cluster,
+    # so situation_clustering never mints a "situation" for a report stream.
+    params.append(list(_COMPOSITION_ANALYST_IDS))
+    clauses.append(f"analyst_id <> ALL(${len(params)}::text[])")
     if analyst_id:
         params.append(analyst_id)
         clauses.append(f"analyst_id = ${len(params)}")

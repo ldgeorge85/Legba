@@ -118,3 +118,51 @@ async def test_no_new_situations_run_is_trace_only():
     result = await sc.handle([], {"analyst_id": "situation_clustering"}, None)
     assert result.force_trace_only is True
     assert "0 new" in result.finding.title
+
+
+# ---------------------------------------------------------------------------
+# DQ P6 — snapshot/JSON name reject + steady_state tag + composition exclusion
+# ---------------------------------------------------------------------------
+
+
+def test_situation_name_rejects_dated_snapshot_and_json_titles():
+    """A dated-snapshot title ('… — YYYY-MM-DD') or a leaked JSON-envelope
+    fragment ('"title": …') must NOT name a frame — it falls back to the
+    signature's topic label so a report receipt never mints a JSON/date name."""
+    dated = [_row("a", "sig:world", "World situational assessment — 2026-06-30", 1)]
+    assert sc._situation_name(dated, "sig:world") == "Situation: world"
+    jsonleak = [_row("b", "sig:world",
+                     '"title": "World situational assessment — 2026-06-30",', 2)]
+    assert sc._situation_name(jsonleak, "sig:world") == "Situation: world"
+    # a normal event title is kept verbatim
+    ok = [_row("c", "sig:x", "Russia – Energy-weapon coercion", 3)]
+    assert sc._situation_name(ok, "sig:x") == "Russia – Energy-weapon coercion"
+
+
+def test_situation_fields_marks_steady_state():
+    """A non-event / status-quo frame is authoritatively tagged steady_state at
+    materialization (the same shared predicate the grounding read uses); a real
+    event frame is not."""
+    steady = [_row("a", "sig:country_g20_us",
+                   "United States – No observable WMD proliferation activity", 5)]
+    fs = sc._situation_fields("sig:country_g20_us", steady,
+                              now=datetime(2026, 6, 5, tzinfo=timezone.utc))
+    assert fs["steady_state"] is True
+    real = [_row("b", "sig:country_watch_ua",
+                 "Ukraine – Energy-weapon coercion escalates", 5)]
+    fr = sc._situation_fields("sig:country_watch_ua", real,
+                              now=datetime(2026, 6, 5, tzinfo=timezone.utc))
+    assert fr["steady_state"] is False
+
+
+def test_group_by_signature_excludes_composition_analysts():
+    """A composition/meta producer's already-stamped row is excluded from
+    re-materialization (defense-in-depth for the synthetic path)."""
+    unit = {**_row("u", "sig:country_g20_us", "US read", 2),
+            "analyst_id": "internal_stability"}
+    comp = {**_row("c", "sig:country_g20_us", "US – Composite Assessment", 3),
+            "analyst_id": "country_composition"}
+    groups = sc._group_by_signature([unit, comp])
+    assert set(groups) == {"sig:country_g20_us"}
+    members = {str(r["id"]) for r in groups["sig:country_g20_us"]}
+    assert members == {"u"}  # the country_composition row is dropped

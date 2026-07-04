@@ -252,6 +252,10 @@ _MAX_SNIPPET_CHARS = 1500       # fuller per-article context (was 400)
 _CITATION_SNIPPET_CHARS = 300
 _DEFAULT_INPUT_TOKEN_BUDGET = 32000
 _CHARS_PER_TOKEN = 4            # rough estimate; we don't tokenize on the hot path
+# DQ P6 — cap on the grounding-preamble text persisted into the trace's
+# ``inject_preamble`` step (a live preamble is ~3.8k chars; 16k covers the tail
+# without letting a pathological preamble bloat the analyst_traces row).
+_PREAMBLE_TRACE_CHAR_CAP = 16000
 
 
 def _input_token_budget() -> int:
@@ -1877,6 +1881,13 @@ async def run_method(
                 "phase": "ground",
                 "kind": "inject_preamble",
                 "preamble_chars": len(preamble),
+                # DQ P6 — persist the ACTUAL injected preamble text (bounded) into
+                # the trace (analyst_traces.intermediate_steps) so the grounding
+                # block a run saw is AUDITABLE after the fact. Previously only the
+                # char count was logged (prompt_rendered is NULL on every trace),
+                # so which situations/facts grounded a finding could not be
+                # reviewed. Bounded so a large preamble never bloats the trace row.
+                "preamble_text": preamble[:_PREAMBLE_TRACE_CHAR_CAP],
             }
             # Auditable retrieval provenance: the retrieved world_context chunk
             # ids that made it into the BACKGROUND PRIORS block (empty for a

@@ -28,13 +28,17 @@ Two responsibilities in one idempotent, forward-progressing sweep (NEVER deletes
      standing row's intensity snapshot rather than inserting a duplicate.
 
   2. TEST standing hypotheses against LATER evidence.
-     For each ``active`` hypothesis, fetch findings produced AFTER the
-     hypothesis ``produced_at`` that link to its situation, classify each as
-     supporting (situation intensity rose further) or refuting (it fell),
-     recompute ``evidence_balance = len(supporting) - len(refuting)``, and walk
-     ``active -> confirmed`` (balance >= +K) / ``active -> refuted``
-     (balance <= -K). Forward-claim semantics: evidence produced BEFORE the
-     hypothesis is never counted (only LATER evidence tests it).
+     For each WORKING (active / supported / weakened, resolved_outcome IS NULL)
+     hypothesis, fetch findings produced AFTER the hypothesis ``produced_at``
+     that link to its situation, classify each as supporting (situation intensity
+     rose further) or refuting (it fell), recompute
+     ``evidence_balance = len(supporting) - len(refuting)``, and walk the WORKING
+     states ``-> supported`` (balance >= +K) / ``-> weakened`` (balance <= -K).
+     DQ P6: intensity drift is a SELF-CONSISTENCY proxy, so it NEVER reaches a
+     TERMINAL confirmed/refuted — that is reserved for the exogenous
+     subsequent_facts resolver / operator. Forward-claim semantics: evidence
+     produced BEFORE the hypothesis is never counted (only LATER evidence tests
+     it).
 
 Output ``data`` keys (the per-run summary FindingPayload):
     hypotheses_created   int — new forward-claim rows written
@@ -77,6 +81,21 @@ _REFUTE_K = 2
 # situation's intensity has risen by at least this delta since the hypothesis
 # snapshot, refute when it has fallen by at least this delta.
 _INTENSITY_MOVE_EPS = 0.25
+
+# DQ P6 (2026-07-03) — RESOLUTION-CIRCULARITY CAP. Intensity drift is a
+# SELF-CONSISTENCY proxy (the same situation-intensity that spawned the claim
+# also "confirms" it), so this handler must NEVER walk a hypothesis to a TERMINAL
+# confirmed/refuted state on drift alone — that minted 619 endogenous
+# resolutions (89% future-dated "will" claims confirmed months before their
+# horizon). It caps drift moves at the WORKING states 'supported' / 'weakened';
+# a TERMINAL confirmed/refuted is reserved for the EXOGENOUS subsequent_facts
+# resolver (grades against facts produced AFTER the claim) or an operator. The
+# working states stay in the re-test pool so a hypothesis can move between them
+# as evidence accumulates, but the circular terminal is closed off.
+_WORKING_SUPPORTED = "supported"
+_WORKING_WEAKENED = "weakened"
+# Statuses this handler continues to RE-TEST each sweep (working, non-terminal).
+_TESTABLE_STATUSES = ("active", _WORKING_SUPPORTED, _WORKING_WEAKENED)
 
 
 def _now() -> datetime:
@@ -249,9 +268,11 @@ async def _test_standing_hypotheses(pool: Any, *, analyst_id: str) -> tuple[int,
             SELECT id, situation_id, diagnostic_evidence, supporting_signals,
                    refuting_signals, produced_at
             FROM hypotheses
-            WHERE analyst_id = $1 AND status = 'active' AND situation_id IS NOT NULL
+            WHERE analyst_id = $1 AND status = ANY($2::text[])
+              AND situation_id IS NOT NULL
+              AND resolved_outcome IS NULL
             """,
-            analyst_id,
+            analyst_id, list(_TESTABLE_STATUSES),
         )
         for h in rows:
             sit_id = h["situation_id"]
@@ -307,11 +328,15 @@ async def _test_standing_hypotheses(pool: Any, *, analyst_id: str) -> tuple[int,
                 continue
 
             balance = len(supporting) - len(refuting)
+            # DQ P6 — cap at WORKING states; NEVER terminal from drift alone. A
+            # crossed threshold marks the claim 'supported'/'weakened' (still
+            # re-tested next sweep); the EXOGENOUS subsequent_facts resolver /
+            # operator owns the terminal confirmed/refuted (and resolved_outcome).
             new_status = "active"
             if balance >= _CONFIRM_K:
-                new_status = "confirmed"
+                new_status = _WORKING_SUPPORTED
             elif balance <= -_REFUTE_K:
-                new_status = "refuted"
+                new_status = _WORKING_WEAKENED
 
             audit = _as_list(h["diagnostic_evidence"])
             audit.append({
@@ -339,8 +364,8 @@ async def _test_standing_hypotheses(pool: Any, *, analyst_id: str) -> tuple[int,
                 json.dumps(audit),
             )
             updated += 1
-            confirmed += new_status == "confirmed"
-            refuted += new_status == "refuted"
+            confirmed += new_status == _WORKING_SUPPORTED
+            refuted += new_status == _WORKING_WEAKENED
     return updated, confirmed, refuted
 
 
@@ -350,20 +375,24 @@ async def _test_standing_hypotheses(pool: Any, *, analyst_id: str) -> tuple[int,
 
 
 def _build_finding(
-    *, created: int, refreshed: int, tested: int, confirmed: int, refuted: int,
+    *, created: int, refreshed: int, tested: int, supported: int, weakened: int,
     target_id: str | None,
 ) -> FindingPayload:
+    # DQ P6 — the receipt reports WORKING-state moves (supported/weakened), NOT
+    # terminal confirmations: this handler never confirms/refutes from intensity
+    # drift (that would be self-consistency). Terminal resolution is the
+    # exogenous subsequent_facts resolver's job.
     title = (
         f"Hypothesis lifecycle: {created} created, "
-        f"{confirmed} confirmed, {refuted} refuted"
+        f"{supported} supported, {weakened} weakened"
     )
     if target_id:
         title = f"{title} for {target_id}"
     body = "\n".join([
         f"hypotheses_created={created}",
         f"hypotheses_updated={refreshed + tested}",
-        f"confirmed={confirmed}",
-        f"refuted={refuted}",
+        f"supported={supported}",
+        f"weakened={weakened}",
     ])
     return FindingPayload(
         title=title[:2048],
@@ -375,8 +404,8 @@ def _build_finding(
             "sub_handler": SUB_HANDLER_NAME,
             "hypotheses_created": created,
             "hypotheses_updated": refreshed + tested,
-            "confirmed": confirmed,
-            "refuted": refuted,
+            "supported": supported,
+            "weakened": weakened,
         },
     )
 
@@ -421,7 +450,7 @@ async def handle(
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     publish_fn = getattr(deps, "nats_publish", None) if deps is not None else None
 
-    created = refreshed = tested = confirmed = refuted = 0
+    created = refreshed = tested = supported = weakened = 0
     if pool is not None:
         try:
             created, refreshed = await _emit_forward_claims(
@@ -433,7 +462,7 @@ async def handle(
         except Exception as exc:  # noqa: BLE001
             logger.warning("hypothesis_lifecycle.emit_failed err=%s", exc)
         try:
-            tested, confirmed, refuted = await _test_standing_hypotheses(
+            tested, supported, weakened = await _test_standing_hypotheses(
                 pool, analyst_id=analyst_id,
             )
         except Exception as exc:  # noqa: BLE001
@@ -441,7 +470,7 @@ async def handle(
 
     finding = _build_finding(
         created=created, refreshed=refreshed, tested=tested,
-        confirmed=confirmed, refuted=refuted, target_id=target_id,
+        supported=supported, weakened=weakened, target_id=target_id,
     )
     return AnalystMethodResult(
         finding=finding,

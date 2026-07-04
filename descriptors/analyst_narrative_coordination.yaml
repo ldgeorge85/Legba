@@ -112,12 +112,10 @@ method:
      "evidence": [<the signal [N] references / source identifiers you relied on>],
      "tags": [<ALWAYS exactly one severity tag scaled to how active/threatening the coordinated narrative is: "severity:low" | "severity:moderate" | "severity:elevated" | "severity:high" | "severity:critical">, "topic:narrative_coordination"],
      "indicators": [
-       {"id": "<short stable slug, e.g. synchronized-hashtag-surge>",
-        "statement": "<one concrete, resolvable near-term coordination signpost>",
-        "status": "not_observed",
-        "horizon_date": "<YYYY-MM-DD by which this should resolve>",
-        "first_seen": "<YYYY-MM-DD, today>",
-        "citations": []}
+       {"id": "synchronized-hashtag-surge", "statement": "Coordinated surge of an identical hashtag/slogan across many accounts in a short window", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []},
+       {"id": "cross-platform-message-cloning", "statement": "Near-identical framing appearing simultaneously across two or more platforms/outlets", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []},
+       {"id": "state-media-amplification", "statement": "State or state-linked media amplifies the narrative in lockstep with the online push", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []},
+       {"id": "inauthentic-account-cluster", "statement": "A cluster of new/low-history/bot-like accounts drives a measurable share of the volume", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []}
      ]}
 
     The "indicators" array is the STRUCTURED, machine-checkable mirror of your
@@ -126,8 +124,13 @@ method:
     (pre-registered, not yet seen), "triggered" (already firing in the slice), or
     "expired" (its horizon_date passed). A "triggered" indicator MUST name the
     converging signal(s) that fired it in "citations" as ASCII [N] signal indices;
-    "not_observed" / "expired" carry an empty "citations". Keep each id a short
-    stable slug so it can be tracked run-over-run. Emit the single JSON object only.
+    "not_observed" / "expired" carry an empty "citations".
+    CANONICAL IDS — REUSE, do NOT re-mint: the id slugs above are this unit's
+    FIXED vocabulary. Every run, REUSE these exact id slugs verbatim (only change
+    "status" / "citations" / "first_seen" as the situation evolves) so the tracker
+    can diff the SAME indicator run-over-run; a re-minted slug is invisible to the
+    run-over-run diff. Introduce a NEW id ONLY for a genuinely novel signpost this
+    desk needs that none of the canonical ids cover. Emit the single JSON object only.
   llm:
     primary:
       factory_kind: stack_ref

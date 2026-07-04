@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from math import exp, log
 from typing import Any, Mapping
@@ -39,6 +40,8 @@ from uuid import UUID, uuid4
 
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
+from ....runtime.grounding import is_non_event_situation_name
+from .finding_supersession import _COMPOSITION_ANALYST_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -98,10 +101,32 @@ def _latest(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return max(rows, key=_key)
 
 
+# DQ P6 — reject a situation NAME that is a REPORT-SNAPSHOT receipt rather than a
+# frame label: a dated world snapshot ("World situational assessment — 2026-06-30")
+# or a leaked JSON-envelope fragment ('"title": "World situational assessment …",'
+# — the #125 parse-fallback class). A frame is a durable object; a dated snapshot
+# is a point-in-time receipt whose name churns every run and pollutes /situations.
+_SNAPSHOT_NAME_RE = re.compile(
+    r"[-–—]\s*\d{4}-\d{2}-\d{2}\b"        # "... — YYYY-MM-DD"
+    r"|^\s*[\"']?title[\"']?\s*:",        # leaked JSON '"title":' fragment
+    re.IGNORECASE,
+)
+
+
+def _is_report_snapshot_name(title: Any) -> bool:
+    """True for a dated-snapshot / leaked-JSON title that must not name a frame."""
+    return isinstance(title, str) and _SNAPSHOT_NAME_RE.search(title) is not None
+
+
 def _situation_name(rows: list[dict[str, Any]], sig: str) -> str:
-    """Human label — the latest member finding's title (the freshest framing)."""
+    """Human label — the latest member finding's title (the freshest framing).
+
+    DQ P6: a dated-snapshot or leaked-JSON title (the #125 parse-fallback class)
+    is REJECTED — fall back to the signature's topic label so a report receipt
+    never mints a situation named after a raw JSON fragment or a churning date.
+    """
     title = str(_latest(rows).get("title") or "").strip()
-    if title:
+    if title and not _is_report_snapshot_name(title):
         return title[:512]
     topic = _topic_from_signature(sig)
     return (f"Situation: {topic}" if topic else f"Situation {sig}")[:512]
@@ -157,10 +182,17 @@ def _situation_fields(
     produced = [p for p in (_aware(r.get("produced_at")) for r in rows) if p is not None]
     last_event_at = max(produced, default=None)
     status = _situation_status(last_event_at, now)
+    name = _situation_name(rows, sig)
     return {
         "situation_signature": sig,
-        "name": _situation_name(rows, sig),
+        "name": name,
         "category": _topic_from_signature(sig),
+        # DQ P6 — mark a steady-state / non-event frame authoritatively at
+        # MATERIALIZATION (not only name-filtered on read) using the SAME shared
+        # predicate the grounding read uses, so the two never drift. Stored in the
+        # situation ``data`` payload; a steady-state frame is a "nothing to
+        # report" / status-quo read and must not head the intensity ranking.
+        "steady_state": is_non_event_situation_name(name),
         "event_count": len(rows),
         # Recency-weighted intensity (exp half-life) — fades as the situation
         # goes quiet, rises as fresh findings land. Falls back to the raw count
@@ -185,6 +217,12 @@ def _situation_fields(
 def _group_by_signature(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
+        # DQ P6 — a COMPOSITION / META producer's report never materializes as a
+        # situation (the live SQL fetch already excludes them; this also covers
+        # the synthetic deps=None path). ``analyst_id`` is absent on some legacy
+        # synthetic rows → treated as non-composition (unchanged behavior).
+        if str(r.get("analyst_id") or "") in _COMPOSITION_ANALYST_IDS:
+            continue
         sig = r.get("situation_signature")
         if not sig:
             continue
@@ -232,6 +270,8 @@ async def _upsert_situation(
         "situation_signature": sig,
         "member_finding_ids": fields["member_finding_ids"],
         "sub_handler": SUB_HANDLER_NAME,
+        # DQ P6 — authoritative steady-state marker (see _situation_fields).
+        "steady_state": bool(fields.get("steady_state")),
     }
     run_uuid = None
     if run_id:
@@ -294,12 +334,14 @@ async def _resolve_pool(
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT id, title, produced_at, situation_signature
+            SELECT id, title, produced_at, situation_signature, analyst_id
             FROM analyst_outputs
             WHERE kind = 'finding' AND situation_signature IS NOT NULL
               AND produced_at > NOW() - INTERVAL '{int(lookback_days)} days'
+              AND analyst_id <> ALL($1::text[])
             ORDER BY produced_at ASC, id ASC
             """,
+            list(_COMPOSITION_ANALYST_IDS),
         )
         groups = _group_by_signature([dict(r) for r in rows])
         for sig, members in groups.items():

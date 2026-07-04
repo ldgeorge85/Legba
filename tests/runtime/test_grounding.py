@@ -44,6 +44,7 @@ from legba.runtime.grounding import (
     build_grounding_preamble,
     build_situations_block,
     collect_grounding_candidates,
+    is_non_event_situation_name,
     situation_scope_for_target,
 )
 from legba.runtime.grounding import (
@@ -519,6 +520,46 @@ async def test_resolve_situations_drops_non_event_frames():
     names = {s.name for s in sits}
     assert "US–Iran War" in names
     assert not any(n.startswith("No France-specific") for n in names)
+
+
+def test_non_event_regex_matches_live_status_quo_shapes():
+    """DQ P6 — the broadened non-event filter catches the MID-STRING status-quo
+    frames the legacy 'starts-with-No' anchor missed (the live pollution class),
+    while still catching the legacy 'No … alerts … in the latest batch' shape."""
+    steady_state = [
+        "United States – No observable WMD proliferation activity",
+        "Canada – No discernible standing military posture shift",
+        "Saudi Arabia – No significant internal instability signals",
+        "Canada – Stability maintained (no dominant instability vector)",
+        "North Korea – Status quo across examined domains with thin evidence",
+        "Russia – Low leadership transition risk",
+        "Taiwan – Overall Stability with Low Near-Term Escalation Risk",
+        "No coordinated narrative detected – organic heat-wave coverage",
+        # legacy shape must still match
+        "No France-specific weather alerts in the latest batch of signals",
+    ]
+    for name in steady_state:
+        assert is_non_event_situation_name(name), f"should be non-event: {name!r}"
+
+
+def test_non_event_regex_keeps_real_event_frames():
+    """The filter must NOT swallow real EVENT frames — including 'No-fly'/'No
+    deal' events (not status-quo qualifiers) and legitimate energy_security
+    'low/elevated energy-security pressure' reads (a low read is a real
+    assessment, not a non-event)."""
+    real_frames = [
+        "South Korea – Border Island Live-Fire Drills Drive Escalation Risk",
+        "UK – Naval Drone Demonstration Drives Escalation Risk",
+        "India – Emerging social-media-driven unrest",
+        "Argentina – Elite/Regime Fracture",
+        "Germany faces low current energy-security pressure",
+        "Japan faces elevated energy-security pressure",
+        "No-fly zone declared over the contested corridor",
+        "No deal reached in the ceasefire talks",
+        "US–Iran War",
+    ]
+    for name in real_frames:
+        assert not is_non_event_situation_name(name), f"should be real: {name!r}"
 
 
 def test_situation_grounding_min_intensity_env(monkeypatch):

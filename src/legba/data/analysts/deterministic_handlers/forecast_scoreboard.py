@@ -133,13 +133,33 @@ async def handle(
     # ISSUE — one binary forecast per G20 country for the NEXT weekly window.
     # Idempotent ON CONFLICT; forecast_acute internally ABSTAINS (issues 0) on a
     # degenerate / geography-dominated p-vector (D9). This producer NEVER pre-
-    # checks or bypasses that guard — an issued=0 receipt is the honest abstain.
+    # checks or bypasses that guard. DQ P6 — pass a receipt sink so an issued=0
+    # tick is ATTRIBUTED: a D9 degeneracy abstain, an idempotent window-already-
+    # issued no-op, and a genuine no-targets case each emit a DISTINCT warnings[]
+    # entry (they used to be indistinguishable as "issued=0 warnings=[]").
     issued = 0
+    issue_receipt: dict[str, Any] = {}
     try:
-        issued = await forecast_acute.issue_weekly_forecasts(deps, options)
+        issued = await forecast_acute.issue_weekly_forecasts(
+            deps, options, receipt=issue_receipt
+        )
     except Exception as exc:  # noqa: BLE001 — one leg never aborts the other
         logger.warning("forecast_scoreboard.issue_failed err=%s", exc)
         warnings.append("forecast_scoreboard.issue_failed")
+    _reason = str(issue_receipt.get("reason") or "")
+    if issued == 0:
+        if _reason == "abstained_degenerate":
+            warnings.append(
+                "forecast_scoreboard.abstained_degenerate_p"
+                f"(staged={issue_receipt.get('staged')},"
+                f"uncertain={issue_receipt.get('uncertain')})"
+            )
+        elif _reason == "window_already_issued":
+            warnings.append("forecast_scoreboard.window_already_issued")
+        elif _reason == "no_regions":
+            warnings.append("forecast_scoreboard.issued_0_no_targets")
+        elif _reason not in ("", "issue_failed"):
+            warnings.append(f"forecast_scoreboard.issued_0_{_reason}")
 
     # RESOLVE — grade every forecast whose forward window has closed + settled,
     # exogenously (UPSTREAM event time). Never overwrites an already-resolved row.

@@ -1947,12 +1947,21 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     "analyst_version": deps_bundle.descriptor.identity.version,
                     "run_id": run_id,
                 }
+                # DQ P6 — a target-LESS verify-declaring COMPOSITION (world_assessor
+                # / escalation_composition): a GLOBAL/thematic META run whose
+                # second-order finding describes the whole world (or a cross-desk
+                # theme), NOT the desk that happens to sit at inputs[0]. Computed
+                # once here (the same predicate that turns on the WORLD composition
+                # prompt below) and REUSED at target_id resolution so the finding's
+                # scope stays GLOBAL rather than inheriting a stray inputs[0] region.
+                is_global_meta_composition = (
+                    not target_filter
+                    and deps_bundle.descriptor.identity.kind == "meta_findings_synthesizer"
+                    and _descriptor_declares_verify(deps_bundle.descriptor)
+                )
                 if target_filter:
                     options["target_id"] = target_filter
-                elif (
-                    deps_bundle.descriptor.identity.kind == "meta_findings_synthesizer"
-                    and _descriptor_declares_verify(deps_bundle.descriptor)
-                ):
+                elif is_global_meta_composition:
                     # P3-T5 GLOBAL/world composition: no target_id, so the kind
                     # needs an explicit flag to turn on the WORLD composition
                     # prompt + the [[ref:uuid]] CITE block (else it falls back to
@@ -2291,11 +2300,24 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         "derived_from": [str(d) for d in derived_ids],
                     }
 
-                target_id = (
-                    target_filter
-                    or (inputs[0].get("target_id") if inputs else None)
+                # DQ P6 — resolve the finding's target_id. A per-target run uses
+                # its target_filter; a legacy no-filter per-target run falls back
+                # to inputs[0]. But a GLOBAL/thematic META composition
+                # (world_assessor / escalation_composition) must NOT inherit a
+                # stray inputs[0] region (the ':world' vs region incoherence that
+                # stamped the world read with the first region head's target and
+                # mis-scoped its grounding + downstream reads) — it stays GLOBAL.
+                if target_filter:
+                    target_id = target_filter
+                elif is_global_meta_composition:
+                    target_id = None
+                else:
+                    target_id = inputs[0].get("target_id") if inputs else None
+                target_version = (
+                    None
+                    if is_global_meta_composition
+                    else (inputs[0].get("target_version") if inputs else None)
                 )
-                target_version = inputs[0].get("target_version") if inputs else None
                 analyst_ctx = AnalystContext(
                     analyst_id=deps_bundle.descriptor.identity.id,
                     analyst_version=deps_bundle.descriptor.identity.version,

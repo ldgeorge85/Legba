@@ -296,14 +296,30 @@ async def _total_observed_weeks(conn: Any, now: datetime) -> int:
     return int(row["wk"]) if row and row["wk"] is not None else 0
 
 
-async def issue_weekly_forecasts(deps: Any, options: Mapping[str, Any]) -> int:
+async def issue_weekly_forecasts(
+    deps: Any, options: Mapping[str, Any], *, receipt: dict[str, Any] | None = None,
+) -> int:
     """Issue one acute-binary forecast per G20 country for the NEXT weekly window.
 
     Idempotent: ``ON CONFLICT (region, event_class, window_start) DO NOTHING`` so
     the first daily tick of the week pins p (from pre-window data) and later ticks
-    are no-ops. Best-effort; returns the count issued."""
+    are no-ops. Best-effort; returns the count issued.
+
+    DQ P6 — an optional ``receipt`` out-dict is populated with an observable
+    ``reason`` so the scoreboard receipt can DISTINGUISH an ``issued=0`` that was
+    a D9 degeneracy ABSTAIN from an idempotent window-already-issued no-op from a
+    genuine no-targets/no-pool case (all three used to read identically as
+    ``issued=0 warnings=[]``). One of: ``no_pool`` / ``no_regions`` /
+    ``abstained_degenerate`` / ``window_already_issued`` / ``issued``. The int
+    return contract is UNCHANGED (calibration_tracking passes no ``receipt``)."""
+    def _stamp(reason: str, **extra: Any) -> None:
+        if receipt is not None:
+            receipt["reason"] = reason
+            receipt.update(extra)
+
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is None:
+        _stamp("no_pool")
         return 0
     now = datetime.now(timezone.utc)
     window_start, window_end = _next_window(now)
@@ -317,6 +333,7 @@ async def issue_weekly_forecasts(deps: Any, options: Mapping[str, Any]) -> int:
         async with pool.acquire() as conn:
             regions = await _g20_regions(conn)
             if not regions:
+                _stamp("no_regions")
                 return 0
             total_weeks = await _total_observed_weeks(conn, now)
             # PHASE 1 — compute the full cross-country forecast vector WITHOUT
@@ -356,6 +373,12 @@ async def issue_weekly_forecasts(deps: Any, options: Mapping[str, Any]) -> int:
                     window_start.date().isoformat(),
                     window_end.date().isoformat(), EVENT_CLASS,
                 )
+                _stamp(
+                    "abstained_degenerate",
+                    staged=len(p_vec),
+                    uncertain=uncertain,
+                    window_start=window_start.date().isoformat(),
+                )
                 return 0
 
             for s in staged:
@@ -379,12 +402,19 @@ async def issue_weekly_forecasts(deps: Any, options: Mapping[str, Any]) -> int:
                     logger.debug("forecast_acute.issue_one_failed region=%s err=%s", s["region"], exc)
     except Exception as exc:  # noqa: BLE001 — never break the calibration tick
         logger.warning("forecast_acute.issue_failed err=%s", exc)
+        _stamp("issue_failed")
     if issued:
         logger.info(
             "forecast_acute.issued n=%d window=%s..%s class=%s",
             issued, window_start.date().isoformat(), window_end.date().isoformat(),
             EVENT_CLASS,
         )
+        _stamp("issued", issued=issued, window_start=window_start.date().isoformat())
+    elif receipt is not None and "reason" not in receipt:
+        # Staged a non-degenerate vector but every row hit ON CONFLICT DO
+        # NOTHING — the window was already issued earlier this week (idempotent
+        # no-op), distinct from an honest degeneracy abstain.
+        _stamp("window_already_issued", window_start=window_start.date().isoformat())
     return issued
 
 

@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict
 from typing import Any, Mapping
 
@@ -142,6 +143,35 @@ def _index_by_id(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return idx
 
 
+# DQ P6 — normalized-statement fuzzy-join fallback. Most units re-mint their
+# indicator id slugs run-over-run (56% of consecutive-run pairs share ZERO ids),
+# so the id-join is structurally blind to ~74% of indicators. When TWO runs of a
+# unit-stream share NO ids at all, fall back to joining on the normalized
+# STATEMENT text — the human-readable signpost is far more stable than the slug —
+# so a status flip on a re-slugged-but-same signpost is still caught. The
+# descriptor-side canonical-vocabulary fix makes ids stable going forward; this
+# is the code safety net for the streams that still churn.
+_WS_RE = re.compile(r"\s+")
+_NONWORD_RE = re.compile(r"[^a-z0-9 ]+")
+
+
+def _normalize_statement(statement: Any) -> str:
+    """Lowercased, punctuation-stripped, whitespace-collapsed statement key."""
+    s = str(statement or "").strip().lower()
+    s = _NONWORD_RE.sub(" ", s)
+    return _WS_RE.sub(" ", s).strip()
+
+
+def _index_by_statement(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Map normalized-statement key → entry (last wins), dropping blank keys."""
+    idx: dict[str, dict[str, Any]] = {}
+    for e in entries:
+        key = _normalize_statement(e.get("statement"))
+        if key:
+            idx[key] = e
+    return idx
+
+
 # ---------------------------------------------------------------------------
 # Diff core
 # ---------------------------------------------------------------------------
@@ -167,9 +197,18 @@ def _flips_between(
     """
     p = _index_by_id(prev)
     c = _index_by_id(curr)
+    # DQ P6 — join on the STABLE key. Prefer the id slug; but when the two runs
+    # share NO ids at all (the id-join is empty — the re-slugging churn), fall
+    # back to the normalized STATEMENT text so a flip on a re-slugged-but-same
+    # signpost is still caught. ``match`` records which join produced each flip.
+    if set(p) & set(c):
+        pj, cj, match = p, c, "id"
+    else:
+        pj, cj, match = _index_by_statement(prev), _index_by_statement(curr), "statement"
+
     flips: list[dict[str, Any]] = []
-    for eid, ce in c.items():
-        pe = p.get(eid)
+    for key, ce in cj.items():
+        pe = pj.get(key)
         if pe is None:
             continue
         from_status = str(pe.get("status"))
@@ -179,11 +218,14 @@ def _flips_between(
         flips.append({
             "target_id": target_id,
             "source_analyst_id": analyst_id,
-            "indicator_id": eid,
+            # Report the CURRENT run's id slug (stable when matched by id; the
+            # freshest slug when matched by statement).
+            "indicator_id": str(ce.get("id")),
             "statement": str(ce.get("statement") or pe.get("statement") or "")[:2048],
             "from_status": from_status,
             "to_status": to_status,
             "activation": _is_activation(from_status, to_status),
+            "match": match,
             "citations": ce.get("citations") if isinstance(ce.get("citations"), list) else [],
         })
     return flips

@@ -78,6 +78,21 @@ subscription:
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 
+# ── DQ P6 DECISION: situations as a grounding source (2026-07-03) ────────────
+# world_assessor grounds ['substrate'] only — it does NOT declare 'situations',
+# so the P3 world composition never reads the situations frames. This omission is
+# now DELIBERATE, not accidental: the global situations surface was polluted (P6)
+# by ~35 NULL-target composition/snapshot report-receipts and status-quo
+# non-event frames that headed the intensity ranking. Wiring situations into the
+# world read BEFORE that surface is clean would inject those receipts into the
+# crown composition. DECISION: DEFER declaring 'situations' here until (a) the P6
+# grounding-read regex + clustering steady-state tag are live and (b) the
+# migrations that CLOSE the NULL-target snapshot rows + retag steady-state frames
+# have run and the global top-8 situations read is verified clean — THEN add
+# 'situations' as a measured follow-up (A/B the world composition faithfulness).
+# The P6 dapr_actors fix (world_assessor target_id stays GLOBAL, not a stray
+# inputs[0] region) and the finding_supersession/clustering gate (world_assessor
+# findings no longer MINT situations) are the prerequisites landed now.
 mapping:
   fields: []
   schema_drift_policy: warn_and_continue

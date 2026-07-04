@@ -149,14 +149,21 @@ method:
     assessed coercion intensity. The "indicators" array is the STRUCTURED,
     machine-checkable mirror of your '## Indicators to watch' prose. It is
     REQUIRED and MUST be NON-EMPTY: always output 3-6 entries in the EXACT SHAPE
-    of the three example objects shown in the schema above (real desk-specific
-    signposts — do NOT copy the example text, do NOT leave the array empty, do NOT
-    omit the field). Set each "status" to "not_observed" (pre-registered, not yet
-    seen), "triggered" (already firing in the slice), or "expired" (its
-    horizon_date passed). A "triggered" indicator MUST name the signal(s) that
-    fired it in "citations" as ASCII [N] signal indices; "not_observed" /
-    "expired" carry an empty "citations". Keep each id a short stable slug so it
-    can be tracked run-over-run. Output nothing but the single JSON object.
+    of the three example objects shown in the schema above (do NOT leave the array
+    empty, do NOT omit the field). Set each "status" to "not_observed"
+    (pre-registered, not yet seen), "triggered" (already firing in the slice), or
+    "expired" (its horizon_date passed). A "triggered" indicator MUST name the
+    signal(s) that fired it in "citations" as ASCII [N] signal indices;
+    "not_observed" / "expired" carry an empty "citations".
+    CANONICAL IDS — REUSE, do NOT re-mint: the id slugs in the schema example
+    (new-sanctions-designation, reserve-or-currency-shock, punitive-trade-measure,
+    …) are this unit's FIXED coercion vocabulary. REUSE these exact id slugs
+    verbatim every run (only change "status" / "citations" / "first_seen" as the
+    situation evolves) so the tracker can diff the SAME indicator run-over-run; a
+    re-minted slug is invisible to the diff. You MAY keep each statement
+    desk-specific, but the id must be reused. Introduce a NEW id ONLY for a
+    genuinely novel coercion signpost none of the canonical ids cover. Output
+    nothing but the single JSON object.
   llm:
     primary:
       factory_kind: stack_ref

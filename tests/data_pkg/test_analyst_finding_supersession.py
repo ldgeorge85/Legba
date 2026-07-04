@@ -164,6 +164,38 @@ async def test_synthetic_supersedes_near_dup_for_same_situation():
     }
 
 
+def test_composition_analyst_findings_are_not_clustered():
+    """DQ P6 — a COMPOSITION / META producer's report is a receipt, not an
+    evolving-situation finding: it must be EXCLUDED from clustering (and thus
+    never gets a situation_signature stamped / never mints a situation), while a
+    real unit finding for the same topic IS clustered."""
+    t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    unit_a, unit_b = uuid4(), uuid4()
+    comp_a, comp_b = uuid4(), uuid4()
+    findings = [
+        # two near-dup UNIT findings (same analyst) — SHOULD cluster
+        {"id": str(unit_a), "produced_at": t0, "analyst_id": "internal_stability",
+         "data": {"category": "country_g20_us", "actors": ["us"]}},
+        {"id": str(unit_b), "produced_at": t0 + timedelta(hours=1),
+         "analyst_id": "internal_stability",
+         "data": {"category": "country_g20_us", "actors": ["us"]}},
+        # two near-dup COMPOSITION findings — must be EXCLUDED entirely
+        {"id": str(comp_a), "produced_at": t0, "analyst_id": "country_composition",
+         "data": {"category": "country_g20_us", "actors": ["us"]}},
+        {"id": str(comp_b), "produced_at": t0 + timedelta(hours=1),
+         "analyst_id": "country_composition",
+         "data": {"category": "country_g20_us", "actors": ["us"]}},
+    ]
+    groups = finding_supersession._cluster(findings, sub_handler_fallback=None)
+    # exactly one cluster, and it is the UNIT one — no country_composition cluster
+    assert len(groups) == 1
+    clustered_ids = {str(r["id"]) for rows in groups.values() for r in rows}
+    assert clustered_ids == {str(unit_a), str(unit_b)}
+    assert str(comp_a) not in clustered_ids and str(comp_b) not in clustered_ids
+    assert "country_composition" in finding_supersession._COMPOSITION_ANALYST_IDS
+    assert "world_assessor" in finding_supersession._COMPOSITION_ANALYST_IDS
+
+
 async def test_synthetic_explicit_situation_id_clusters():
     t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
     f1, f2 = uuid4(), uuid4()

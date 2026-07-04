@@ -116,14 +116,10 @@ method:
       "evidence": ["<the signal reference id/url for each [N] you cited>"],
       "tags": ["severity:low", "topic:leadership_transition"],
       "indicators": [
-        {
-          "id": "<short stable slug, e.g. cabinet-mass-resignation>",
-          "statement": "<one concrete, resolvable near-term transition signpost>",
-          "status": "not_observed",
-          "horizon_date": "<YYYY-MM-DD by which this should resolve>",
-          "first_seen": "<YYYY-MM-DD, today>",
-          "citations": []
-        }
+        {"id": "cabinet-mass-resignation", "statement": "Mass or serial resignation from the cabinet or senior leadership", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []},
+        {"id": "snap-election-or-vote-of-confidence", "statement": "Snap election called or a no-confidence / impeachment vote scheduled", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []},
+        {"id": "incapacity-or-succession-signal", "statement": "Credible report of leader ill-health, incapacity, or an activated succession plan", "status": "not_observed", "horizon_date": "2026-07-30", "first_seen": "2026-07-02", "citations": []},
+        {"id": "ruling-coalition-fracture", "statement": "A coalition partner or faction publicly withdraws support from the leadership", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-02", "citations": []}
       ]
     }
     The "indicators" array is the STRUCTURED, machine-checkable mirror of your
@@ -133,8 +129,13 @@ method:
     in the signal slice), or "expired" (its horizon_date has passed). A
     "triggered" indicator MUST name the signal(s) that fired it in "citations" as
     ASCII [N] signal indices (e.g. [2] -> [2]); "not_observed" and "expired" carry
-    an empty "citations". Keep the array bounded and each id a short stable slug so
-    the indicator can be tracked run-over-run.
+    an empty "citations".
+    CANONICAL IDS — REUSE, do NOT re-mint: the id slugs above are this unit's
+    FIXED vocabulary. Every run, REUSE these exact id slugs verbatim (only change
+    "status" / "citations" / "first_seen" as the situation evolves) so the tracker
+    can diff the SAME indicator run-over-run; a re-minted slug is invisible to the
+    diff. Introduce a NEW id ONLY for a genuinely novel signpost none of the
+    canonical ids cover. Keep the array bounded.
     The "confidence" is your calibrated 0.0-1.0 confidence in the assessed
     likelihood. "tags" MUST contain EXACTLY ONE severity tag from
     severity:low | severity:moderate | severity:elevated | severity:high |

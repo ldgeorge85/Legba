@@ -1239,15 +1239,27 @@ async def _resolve_hypotheses_against_subsequent_facts(
                 # D16 — stamped with the WEAK/LEXICAL label
                 # (`_RESOLVED_BY_SUBSEQUENT_FACTS`) so calibration_tracking
                 # DEMOTES it out of the headline exogenous Brier.
+                # DQ P6 — ALSO transition ``status`` to the TERMINAL state that
+                # matches the outcome (1 -> confirmed, 0 -> refuted) in the SAME
+                # write. The exogenous resolver is the ONLY producer allowed to
+                # reach a terminal status (hypothesis_lifecycle caps drift at the
+                # working states supported/weakened), so a resolved row leaves the
+                # active/working test pool and never double-counts in both the
+                # active AND resolved pools (the 87-row inconsistency this fixes).
+                # The terminal status is computed in Python and passed as its own
+                # ($5) param — reusing $2 in a CASE made Postgres deduce it as both
+                # smallint (the column) and integer (the literal compare).
                 """
                 UPDATE hypotheses
                    SET resolved_outcome = $2,
                        resolved_at = $3,
                        resolved_by = $4,
+                       status = $5,
                        updated_at = $3
                  WHERE id = $1 AND resolved_outcome IS NULL
                 """,
                 hyp["id"], int(outcome), now, _RESOLVED_BY_SUBSEQUENT_FACTS,
+                "confirmed" if int(outcome) == 1 else "refuted",
             )
             resolved += 1
             resolved_true += int(outcome)

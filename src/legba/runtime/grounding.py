@@ -90,6 +90,7 @@ __all__ = [
     "build_world_context_block",
     "collect_grounding_candidates",
     "finding_is_off_target",
+    "is_non_event_situation_name",
     "situation_grounding_min_intensity",
     "situation_scope_for_target",
     "target_scope_names",
@@ -215,16 +216,38 @@ def world_context_min_score() -> float:
         return _WORLD_CONTEXT_MIN_SCORE
 
 
-# Quality guard for the situations grounding block (review M2). Clustered
-# "nothing to report" findings get a signature + materialise as situations (e.g.
-# "No France-specific weather alerts in the latest batch of signals"); they are
-# NON-events and must never be injected as an ongoing situation. The name filter
-# is ALWAYS on; the intensity floor is OFF by default (operators raise it via env
-# to trim faded dormant frames). Conservative: only the explicit "No … (alerts /
-# -specific / in the latest batch)" non-event shapes match — a real "No-fly zone
-# declared …" or "No deal reached …" does NOT.
+# Quality guard for the situations grounding block (review M2 + DQ P6). Clustered
+# "nothing to report" / status-quo findings get a signature + materialise as
+# situations; they are NON-events and must never be injected as an ongoing
+# situation NOR head the intensity ranking. Two shape families match:
+#
+#   1. LEGACY "No … (alerts / -specific / in the latest batch)" — the extinct
+#      weather-alert non-event ("No France-specific weather alerts in the latest
+#      batch of signals").
+#   2. DQ P6 MID-STRING status-quo shapes — the live pollution the legacy anchor
+#      missed: "United States – No observable WMD proliferation activity",
+#      "Canada – Stability maintained (no dominant instability vector)",
+#      "North Korea – Status quo across examined domains", "Russia – Low
+#      leadership transition risk". The single highest-intensity open frame
+#      platform-wide was one of these (a fold-count-driven non-event heading the
+#      global grounding block), so mid-string negation/status-quo must match too.
+#
+# STILL CONSERVATIVE — the "No <qualifier>" branch fires only on non-observation
+# qualifiers (no observable/discernible/significant/dominant/coordinated/…), so a
+# real EVENT frame "No-fly zone declared …" (no space before "-fly") or "No deal
+# reached …" ("deal" is not a qualifier) does NOT match; and the "low … risk"
+# branch is scoped to the near-term/multi-domain/overall/leadership-transition
+# risk-level qualifiers, so "Drives Escalation Risk" (no leading "low") stays a
+# real frame. Legitimate energy_security "low/elevated energy-security pressure"
+# reads are deliberately NOT matched (a low-pressure read is a real assessment).
 _NON_EVENT_SITUATION_RE = re.compile(
-    r"^\s*no\b.*(in the latest batch|[- ]specific|alerts?)",
+    r"(?:^\s*no\b.*?(?:in the latest batch|[- ]specific|alerts?))"
+    r"|(?:\bno\s+(?:dominant|observable|discernible|significant|coordinated|"
+    r"credible|material|notable|meaningful|apparent)\b)"
+    r"|(?:\bstatus\s+quo\b)"
+    r"|(?:\bstability\s+maintained\b)"
+    r"|(?:\blow\s+(?:near[-\s]?term|multi[-\s]?domain|overall|"
+    r"leadership\s+transition)\b[^.]{0,24}\brisk\b)",
     re.IGNORECASE,
 )
 
@@ -244,9 +267,20 @@ def situation_grounding_min_intensity() -> float:
         return 0.0
 
 
-def _is_non_event_situation(name: Any) -> bool:
-    """True for a clustered 'nothing to report' non-event frame (must not ground)."""
+def is_non_event_situation_name(name: Any) -> bool:
+    """True for a clustered 'nothing to report' / status-quo non-event frame.
+
+    Shared, dependency-light predicate: the grounding READ uses it to drop these
+    frames from the injected block, and :mod:`situation_clustering` reuses it at
+    MATERIALIZATION time (DQ P6) to stamp ``data.steady_state`` so a steady-state
+    frame is authoritatively marked at write time, not only name-filtered on read.
+    Keep the two call sites on the SAME regex so the tag and the read never drift.
+    """
     return isinstance(name, str) and _NON_EVENT_SITUATION_RE.search(name) is not None
+
+
+# Back-compat private alias (existing call sites in this module).
+_is_non_event_situation = is_non_event_situation_name
 
 
 class GroundingFact:
