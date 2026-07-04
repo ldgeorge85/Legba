@@ -321,9 +321,28 @@ async def main() -> None:
         return
 
     # ---- WET: append a fresh critique per head --------------------------
+    # SAFETY: never DEMOTE a healthy head via the deterministic FLOOR fallback. The
+    # floor alone is a lower bound (it strips the judge's authoritative credit), so
+    # a head the production judge scored 0.88 would drop to its floor if we wrote a
+    # floor-only verdict. Persist a floor-only (judge_status != 'llm') result ONLY
+    # when it does NOT lower the head's current overall (a recovery or no prior
+    # score); a real judge verdict ('llm') is authoritative and always written.
     written = 0
     dlq = 0
+    skipped = 0
     for r in results:
+        old = r["old_overall"]
+        if (
+            r["judge_status"] != "llm"
+            and old is not None
+            and r["new_overall"] < old - 1e-9
+        ):
+            skipped += 1
+            log.info(
+                "  skip (floor-only would demote) %s old=%.2f -> new=%.2f",
+                str(r["id"])[:8], old, r["new_overall"],
+            )
+            continue
         ctx = AnalystContext(
             analyst_id=r["analyst_id"],
             analyst_version=r["analyst_version"],
@@ -345,7 +364,8 @@ async def main() -> None:
                 written += 1
         except Exception as exc:  # noqa: BLE001
             log.warning("write failed for %s: %s", r["id"], exc)
-    log.info("WROTE %d fresh critiques (%d DLQ) over %d heads", written, dlq, len(results))
+    log.info("WROTE %d fresh critiques (%d DLQ, %d skipped to avoid floor-only demote) "
+             "over %d heads", written, dlq, skipped, len(results))
     await store.close()
 
 
