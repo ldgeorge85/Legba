@@ -12,10 +12,13 @@
 --   Monaco' (a parcel bomb injuring a Ukrainian oligarch IN Monaco — nationality
 --   adjective + venue conflated into state hostility).
 --
--- PAIRED CODE FIX (keeps it out): relationship_reifier.py D14 gate —
---   _SPORTS_CONTEXT_RE extended (clash, knockout, fullback, derail, squad,
---   coach, stadium, N-N scorelines) so match coverage without an explicit token
---   is still gated to co-occurrence.
+-- PAIRED CODE FIX (keeps it out): relationship_reifier.py D14 gate — a two-tier
+--   sports gate. UNAMBIGUOUS sports vocabulary (world cup, knockout, fullback,
+--   winger, N-N scorelines, "<team> face <Team> with …") gates on its own;
+--   DUAL-USE words (clash/derail/squad/coach) gate ONLY when an explicit sports
+--   ANCHOR (world cup/match/league/tournament/…) co-occurs — so match coverage
+--   is downgraded to co-occurrence WITHOUT suppressing genuine interstate
+--   hostility ("225 clashes on the front line" stays a signed hostile edge).
 --
 -- THIS MIGRATION closes (valid_until=now(); NO delete) exactly the 11 frozen
 --   rows below, addressed BY PRIMARY KEY. Each is a sports fixture or a crime

@@ -213,34 +213,49 @@ def test_coerce_typing_keeps_genuine_subone_confidence() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P4 — extended sports gate over match-report vocabulary
+# P4 — two-tier sports gate (r2): UNAMBIGUOUS alone, DUAL-USE only with an anchor
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        "DR Congo face England in the knockout round",
-        "the two squads clash on Saturday",
-        "the head coach named his starting lineup",
-        "a stadium packed for the qualifier",
-        "they beat Morocco 2-1 to reach the final",
-        "won 3-0 on the night",
+        # UNAMBIGUOUS — a hit alone marks a sports frame.
+        "DR Congo face England in the knockout round",   # knockout
+        "a stadium packed for the qualifier",            # qualifier
+        "they beat Morocco 2-1 to reach the final",      # scoreline
+        "won 3-0 on the night",                          # scoreline
+        "DR Congo face England with nothing to lose",    # "<team> face <Team> with"
+        "the winger set up the striker",                 # winger / striker
+        # DUAL-USE + an explicit sports ANCHOR present → sports.
+        "the two squads clash in the World Cup on Saturday",   # squad/clash + world cup
+        "the head coach named his squad for the tournament",   # coach/squad + tournament
     ],
 )
-def test_extended_sports_context_matches(text: str) -> None:
+def test_sports_context_matches(text: str) -> None:
     assert _is_sports_context(text) is True
 
 
 @pytest.mark.parametrize(
     "text",
     [
+        # BLOCKING regression fixtures — genuine interstate hostility / diplomacy
+        # that carries a DUAL-USE word (clash/squad) but NO sports anchor MUST
+        # NOT be gated as sports (a real hostile edge must still reify).
+        "War update: 225 clashes on front line, heaviest fighting in "
+        "Sloviansk and Kostiantynivka sectors",
+        "Some UN Security Council members clash over child protection report "
+        "as US defends Israel",
+        "US targeting Germany drug industry in a long-running clash",
+        # a dual-use word with no anchor is not sports on its own.
+        "the two squads clash on Saturday",
+        # pure geopolitics — no sports vocabulary at all.
         "Russia launched missiles at Kyiv overnight",
         "the central bank raised interest rates by 2 points",
         "sanctions imposed after the 2022 invasion",
     ],
 )
-def test_geopolitics_text_not_sports(text: str) -> None:
+def test_geopolitics_and_dualuse_without_anchor_not_sports(text: str) -> None:
     assert _is_sports_context(text) is False
 
 
@@ -256,6 +271,95 @@ def test_coerce_typing_sports_downgrade_over_match_report() -> None:
     )
     assert isinstance(p, NexusPayload)
     assert p.polarity == 0
+
+
+def test_coerce_typing_sports_downgrade_over_face_with_fixture() -> None:
+    # The original P4 World-Cup leak ("DR Congo face England with nothing to
+    # lose") — the "<team> face <Team> with …" framing IS still gated to a
+    # neutral co-occurrence (downgraded, not a signed -1 hostility).
+    p = _coerce_typing(
+        {"related": True, "rel_type": "HostileTo", "subject": "DR Congo",
+         "object": "England", "intent": "hostile"},
+        fallback_subject="DR Congo", fallback_object="England",
+        evidence_text="DR Congo face England with nothing to lose. "
+                      "They beat Morocco 2-1 in the group stage.",
+    )
+    assert isinstance(p, NexusPayload)
+    assert p.polarity == 0
+    assert p.intent == "neutral"
+
+
+@pytest.mark.parametrize(
+    "subject,object_,evidence",
+    [
+        # The live proposed-edge evidence that MUST still reify as hostile.
+        ("Russia", "Ukraine",
+         "War update: 225 clashes on front line, heaviest fighting in Sloviansk"),
+        ("United States", "Israel",
+         "Some UN Security Council members clash over child protection report "
+         "as US defends Israel"),
+        ("United States", "Germany",
+         "US targeting Germany drug industry in a long-running clash"),
+    ],
+)
+def test_coerce_typing_real_hostility_not_downgraded(subject, object_, evidence) -> None:
+    # A DUAL-USE conflict word ("clash") with NO sports anchor is genuine
+    # hostility — the signed -1 edge MUST survive (the blocking round-1 defect
+    # was the extension gating these as sports).
+    p = _coerce_typing(
+        {"related": True, "rel_type": "HostileTo", "subject": subject,
+         "object": object_, "intent": "hostile"},
+        fallback_subject=subject, fallback_object=object_,
+        evidence_text=evidence,
+    )
+    assert isinstance(p, NexusPayload)
+    assert p.polarity == -1
+    assert p.intent == "hostile"
+    assert p.rel_type == "HostileTo"
+
+
+# ---------------------------------------------------------------------------
+# P7 — ingestion noisy-OR ceiling never LOWERS an already-higher genuine fact
+# ---------------------------------------------------------------------------
+
+
+def _noisy_or_combine(existing: float, incoming: float) -> float:
+    """Pure mirror of the fact_extractor `_insert_ingestion_fact` confidence
+    expression (BOTH the UPDATE and the ON CONFLICT DO UPDATE):
+
+        GREATEST(existing, LEAST(ceiling, 1 - (1-existing)*(1-incoming)))
+
+    where the ceiling is 0.75 when the INCOMING observation is at/below the
+    heuristic floor (<=0.5), else 0.99. Kept in lockstep with the SQL — the
+    ceiling caps NEW belief but the GREATEST(existing, …) wrapper guarantees a
+    floor observation can never DRAG DOWN an already-higher genuine confidence.
+    """
+    ceiling = 0.75 if incoming <= 0.5 else 0.99
+    noisy_or = 1.0 - (1.0 - existing) * (1.0 - incoming)
+    return max(existing, min(ceiling, noisy_or))
+
+
+def test_noisy_or_floor_does_not_lower_genuine_fact() -> None:
+    # A genuine 0.9 fact corroborated by a floor (0.5) observation STAYS >= 0.9 —
+    # the 0.75 ceiling must not drag it down (the P7 nit).
+    assert _noisy_or_combine(0.9, 0.5) == pytest.approx(0.9)
+    assert _noisy_or_combine(0.99, 0.5) == pytest.approx(0.99)
+
+
+def test_noisy_or_floor_plus_floor_capped_at_ceiling() -> None:
+    # Floor + floor corroboration still tops out at the 0.75 ceiling (the
+    # intended behavior is preserved), even repeated.
+    once = _noisy_or_combine(0.5, 0.5)
+    assert once <= 0.75 + 1e-9
+    assert once == pytest.approx(0.75)
+    twice = _noisy_or_combine(once, 0.5)
+    assert twice <= 0.75 + 1e-9
+
+
+def test_noisy_or_genuine_corroboration_still_raises() -> None:
+    # Two genuine sub-1.0 scores (> 0.5) corroborate UP under the 0.99 ceiling —
+    # the fix does not disable corroboration, only the floor-drag.
+    assert _noisy_or_combine(0.9, 0.8) == pytest.approx(0.98)
 
 
 # ---------------------------------------------------------------------------

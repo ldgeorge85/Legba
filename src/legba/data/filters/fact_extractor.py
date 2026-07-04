@@ -1617,9 +1617,16 @@ async def _insert_ingestion_fact(
            -- relation backend emits no real per-triple score) must NOT manufacture
            -- near-certainty ("Thousands located in South Africa" reached 0.99). A
            -- genuine sub-1.0 extractor score (> 0.5) keeps the 0.99 ceiling.
-           SET confidence   = LEAST(
-                                CASE WHEN $4 <= 0.5 THEN 0.75 ELSE 0.99 END,
-                                1.0 - (1.0 - facts.confidence) * (1.0 - $4)
+           -- DQ P5 r2: the ceiling caps NEW belief but must NEVER LOWER an
+           -- already-higher genuine confidence — GREATEST(existing, capped) so a
+           -- floor observation can't drag a real 0.9 fact down to 0.75.
+           -- Corroboration only ever raises; floor+floor still tops out at 0.75.
+           SET confidence   = GREATEST(
+                                facts.confidence,
+                                LEAST(
+                                  CASE WHEN $4 <= 0.5 THEN 0.75 ELSE 0.99 END,
+                                  1.0 - (1.0 - facts.confidence) * (1.0 - $4)
+                                )
                               ),
                derived_from = (SELECT array_agg(DISTINCT e)
                                FROM unnest(facts.derived_from || $5::uuid[]) e),
@@ -1672,9 +1679,16 @@ async def _insert_ingestion_fact(
             -- 0.75 when the incoming observation is at/below the heuristic floor
             -- (0.5) so floor-only corroboration cannot manufacture near-certainty;
             -- a genuine extractor score (> 0.5) keeps the 0.99 ceiling.
-            confidence   = LEAST(
-                             CASE WHEN EXCLUDED.confidence <= 0.5 THEN 0.75 ELSE 0.99 END,
-                             1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)
+            -- DQ P5 r2: GREATEST(existing, capped) so the 0.75 ceiling can cap
+            -- new belief but never LOWER an already-higher genuine confidence (a
+            -- floor observation can't drag a real 0.9 fact to 0.75); floor+floor
+            -- corroboration still tops out at 0.75.
+            confidence   = GREATEST(
+                             facts.confidence,
+                             LEAST(
+                               CASE WHEN EXCLUDED.confidence <= 0.5 THEN 0.75 ELSE 0.99 END,
+                               1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)
+                             )
                            ),
             derived_from = (SELECT array_agg(DISTINCT e)
                             FROM unnest(facts.derived_from || EXCLUDED.derived_from) e),

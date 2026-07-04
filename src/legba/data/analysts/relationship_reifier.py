@@ -288,41 +288,85 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
 
 import re as _re  # noqa: E402
 
-#: Whole-word sports / fixture context tokens. Matched case-insensitively over
-#: the co-mention evidence text. Deliberately match-report vocabulary, NOT bare
-#: words that recur in geopolitics (so "group" alone does not trigger — only
-#: "group <letter>"/"group stage"). Conservative: a real military "match"/"draw"
-#: in a war report is rare and the floor is co-occurrence not hostility anyway.
-_SPORTS_CONTEXT_RE = _re.compile(
+# DQ Phase 5 r2 — the sports gate is SPLIT into two tiers so it can NEVER
+# suppress genuine interstate hostility. The round-1 extension folded DUAL-USE
+# conflict words (clash / derail / squad / coach) straight into the trigger, so
+# real war / diplomacy reporting was misread as a football fixture (live
+# proposed-edge evidence: "225 clashes on the front line", "UN Security Council
+# members clash over ...", "long-running clash" over a trade dispute).
+#
+# Two tiers, both matched case-insensitively over the co-mention evidence text:
+#   (1) UNAMBIGUOUS — vocabulary that marks a sports frame ON ITS OWN ("world
+#       cup", "knockout", "winger", a scoreline "beat X 2-1", the "<team> face
+#       <Team> with …" fixture framing). A bare "league"/"final" is NOT here
+#       (they recur in geopolitics — "Arab League", "final round of talks"); the
+#       NAMED leagues (premier/champions/la liga…) are.
+#   (2) DUAL-USE — words that ALSO recur in conflict/diplomacy reporting
+#       (clash/derail/squad/coach/kick/goal). A dual-use word counts as sports
+#       ONLY when an explicit sports ANCHOR (world cup / match / league /
+#       tournament / cup / fixture / group stage / final / penalty / goalkeeper
+#       / stadium / score…) co-occurs in the SAME text.
+#
+# _is_sports_context is True iff (1) matches OR ((2) matches AND an anchor
+# matches). So "clash" alone (Russia/Ukraine front line) is NOT sports; "clash"
+# + "World Cup" IS — a hostile edge still reifies, a fixture is downgraded.
+
+#: (1) UNAMBIGUOUS sports vocabulary — a hit here alone marks a sports frame.
+_SPORTS_UNAMBIGUOUS_RE = _re.compile(
     r"(?:\b(?:"
     r"world\s+cup|"
     r"group\s+(?:stage|[a-h])\b|"
     r"qualifier|qualifiers|qualifying|"
     r"friendly\s+match|"
-    r"kick[\s-]?off|kick\b|"
+    r"kick[\s-]?off|"
     r"football|soccer|"
     r"la\s+liga|premier\s+league|bundesliga|serie\s+a\b|ligue\s+1|"
     r"champions\s+league|europa\s+league|"
     r"fifa|uefa|"
-    r"semi[\s-]?final|quarter[\s-]?final|"
+    r"semi[\s-]?finals?|quarter[\s-]?finals?|penalty\s+shootout|"
     r"olympic|olympics|"
-    r"tournament|fixture|fixtures|"
+    r"knockout|fullback|full[\s-]?back|winger|"
+    r"midfielder|striker|goalkeeper|penalty\s+kick|"
     r"cricket|rugby|tennis|basketball|"
     r"match\s+(?:report|preview|day)|"
-    r"goalkeeper|midfielder|striker|penalty\s+kick|"
-    # DQ Phase 5 — match coverage without an explicit token leaked hostile dyads
-    # ("DR Congo face England", "Ukraine hostile to Monaco"). Extended
-    # match-report vocabulary: knockout, squad, coach, stadium, fullback, winger,
-    # derail(ed), and the "clash" framing.
-    r"knockout|fullback|full[\s-]?back|winger|squad|"
-    r"head\s+coach|coach\b|stadium|derail(?:ed|s)?|clash(?:es|ed)?"
+    r"fixtures?"
     r")\b)"
-    # DQ Phase 5 — a football scoreline framed as a result ("beat Morocco 2-1",
-    # "won 3–0", "lost 0-2 on penalties"). Guarded by a result verb (a team name
-    # may sit between the verb and the score) so a bare numeric range never trips
-    # it; the score halves are 1–2 digits so a 4-digit year cannot match.
+    # a football scoreline framed as a result ("beat Morocco 2-1", "won 3–0",
+    # "lost 0-2 on penalties"). Guarded by a result verb (a team name may sit
+    # between the verb and the score) so a bare numeric range never trips it; the
+    # score halves are 1–2 digits so a 4-digit year cannot match.
     r"|\b(?:beat|beats|won|win|lost|draw|drew|thrash(?:ed|es)?|defeat(?:ed|s)?)"
-    r"\b[\w\s.,'-]{0,24}?\b\d{1,2}\s*[-–:]\s*\d{1,2}\b",
+    r"\b[\w\s.,'-]{0,24}?\b\d{1,2}\s*[-–:]\s*\d{1,2}\b"
+    # the World-Cup fixture framing "<team> face <Team> with …" ("DR Congo face
+    # England with nothing to lose"). Scoped case-SENSITIVE (?-i:) so the object
+    # must be a capitalised proper noun (a team/country) — "face them with force"
+    # is not a fixture.
+    r"|(?-i:\b[Ff]aces?\s+[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,2}\s+[Ww]ith\b)",
+    _re.IGNORECASE,
+)
+
+#: (2) DUAL-USE tokens — sports OR conflict/diplomacy. Only count as sports when
+#: an anchor (below) co-occurs. clash/derail/squad/coach/kick/goal (+ inflections).
+_SPORTS_DUAL_USE_RE = _re.compile(
+    r"\b(?:"
+    r"clash(?:es|ed|ing)?|derail(?:ed|s|ing)?|squads?|"
+    r"coach(?:es|ed|ing)?|kicks?|goals?"
+    r")\b",
+    _re.IGNORECASE,
+)
+
+#: Explicit sports ANCHORS that promote a co-occurring DUAL-USE word to a sports
+#: frame. Curated to strongly-sports contexts; a bare dual-use word without one
+#: of these reads as conflict/diplomacy, not sports. NOTE: bare "score"/"scores"
+#: is deliberately EXCLUDED (only "scoreline") — "scores of civilians killed in
+#: the clash" is a casualty count, not a football score, and must stay hostile.
+_SPORTS_ANCHOR_RE = _re.compile(
+    r"\b(?:"
+    r"world\s+cup|match(?:es|day)?|leagues?|tournaments?|cups?|fixtures?|"
+    r"group\s+stage|finals?|penalt(?:y|ies)|goalkeeper|stadiums?|"
+    r"scoreline|kick[\s-]?off|"
+    r"football|soccer|fifa|uefa|olympics?"
+    r")\b",
     _re.IGNORECASE,
 )
 
@@ -359,8 +403,20 @@ def _is_sports_context(evidence_text: str) -> bool:
 
     Pure. A hostile typing over a sports co-mention is a false antagonism — the
     caller downgrades it to a neutral co-occurrence so the signed graph is not
-    poisoned with "<country> hostile to <country>" from a match report."""
-    return bool(_SPORTS_CONTEXT_RE.search(str(evidence_text or "")))
+    poisoned with "<country> hostile to <country>" from a match report.
+
+    Two-tier (DQ P5 r2): an UNAMBIGUOUS sports hit alone qualifies; a DUAL-USE
+    word (clash/derail/squad/coach/…) qualifies ONLY when an explicit sports
+    ANCHOR co-occurs — so genuine interstate hostility ("225 clashes on the
+    front line") is never mis-gated as a fixture."""
+    text = str(evidence_text or "")
+    if not text:
+        return False
+    if _SPORTS_UNAMBIGUOUS_RE.search(text):
+        return True
+    return bool(
+        _SPORTS_DUAL_USE_RE.search(text) and _SPORTS_ANCHOR_RE.search(text)
+    )
 
 
 def _canonical_polarity(rel_type: str, intent: Any) -> int:

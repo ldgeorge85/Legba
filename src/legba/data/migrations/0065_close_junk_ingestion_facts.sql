@@ -9,7 +9,9 @@
 --   ('half', 'Thousands', 'hundreds', 'first', 'one') and tokenizer
 --   possessive artifacts (a surface ending in a SPACE + "'s", e.g. "FRANCE 24
 --   's", "Timor - Leste 's", "Donald Trump 's"). These are MECHANICALLY
---   malformed entity surfaces, not real facts.
+--   malformed entity surfaces, not real facts. The possessive clitic is written
+--   with EITHER a straight ASCII apostrophe (U+0027) or a curly right single
+--   quote (U+2019, "FRANCE 24 ’s located in Bogota") — both are matched.
 --
 -- PAIRED CODE FIX (keeps it out): src/legba/data/filters/fact_extractor.py —
 --   the quantity-endpoint gate now covers the plural quantity nouns
@@ -22,7 +24,9 @@
 --         equals one of a curated list — NEVER a real geopolitical entity;
 --         'United States' / 'US' are NOT in the list);
 --     (2) pure-numeric surface (digits + numeric punctuation, no letters);
---     (3) trailing spaced possessive artifact (" 's" at end).
+--     (3) trailing spaced possessive artifact (" 's" at end; straight U+0027
+--         OR curly U+2019 apostrophe — mirrors the code gate
+--         _POSSESSIVE_FRAGMENT_RE = re.compile(r"\s['’]s$")).
 --   It does NOT attempt to pattern-match SEMANTIC junk ('Germany employed by
 --   Nagelsmann') — that is left to the code fix + natural staleness (per the
 --   finding). Only the source_type='ingestion' tier is touched (seed / agent /
@@ -37,11 +41,13 @@
 --   NULL guard -> re-run no-op). Routed through the migration runner (ONE
 --   transaction + ledger row; NO inline BEGIN/COMMIT).
 --
--- MEASURED (live `legba`, 2026-07-03): 156 open ingestion facts matched
---   (bare_token 30, pure_numeric 0, trailing_spaced_possessive 126; overlap
+-- MEASURED (live `legba`, 2026-07-03): 198 open ingestion facts matched after
+--   the curly-apostrophe extension (bare_token 30, pure_numeric 0,
+--   trailing_spaced_possessive 168 = 126 straight + 42 curly-only; overlap
 --   folded). Examples: 'half employed by Russian', 'Thousands located in South
 --   Africa', 'Asia member of first', 'Abu Dhabi ''s located in UAE',
---   'Angela Diffley employed by FRANCE 24 ''s'.
+--   'Angela Diffley employed by FRANCE 24 ''s', 'FRANCE 24 ’s located in
+--   Bogota', 'Saudi Arabia ’s'. (Round-1 straight-only matched 156.)
 
 WITH junktok(w) AS (
     VALUES
@@ -62,6 +68,6 @@ WHERE f.valid_until IS NULL
      OR lower(btrim(f.value))   IN (SELECT w FROM junktok)
      OR btrim(f.subject) ~ '^[0-9][0-9.,%''-]*$'
      OR btrim(f.value)   ~ '^[0-9][0-9.,%''-]*$'
-     OR f.subject ~ '[[:space:]]''s$'
-     OR f.value   ~ '[[:space:]]''s$'
+     OR f.subject ~ '[[:space:]][''’]s$'
+     OR f.value   ~ '[[:space:]][''’]s$'
   );
