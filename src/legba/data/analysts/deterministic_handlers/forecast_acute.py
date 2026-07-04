@@ -65,6 +65,16 @@ HAZARD_SEVERE_SOURCES: tuple[str, ...] = (
 # segregable from the legacy CI-coverage rows).
 RESOLVED_BY = "forecast_acute_exogenous"
 
+# P7-F6 — VOID sentinel prefix for a forecast withdrawn from grading (e.g. the
+# pre-clamp {0,1}-degenerate pilot batch void in migration 0075:
+# resolved_by='voided:pre_clamp_degenerate'). A voided row keeps
+# resolved_outcome NULL (so it never enters the segregated pilot Brier) but MUST
+# also be skipped by the exogenous resolver — otherwise, once its window closes,
+# the resolver (which guards only on resolved_outcome IS NULL) would grade it and
+# OVERWRITE the void back to 'forecast_acute_exogenous', silently re-admitting
+# the known-broken batch. Both the resolver and the scoreboard pull exclude it.
+VOID_PREFIX = "voided:"
+
 # --- Tuning knobs (module-level so tests/options can override). ---
 RESOLUTION_GRACE_DAYS = 1
 """Grade only windows closed AND settled — a window [t0,t1) is resolvable at
@@ -440,6 +450,8 @@ async def resolve_open_acute_forecasts(deps: Any, options: Mapping[str, Any]) ->
                 FROM acute_forecasts
                 WHERE resolved_outcome IS NULL
                   AND window_end < $1::timestamptz
+                  -- P7-F6: never re-grade (and thus un-void) a withdrawn row.
+                  AND (resolved_by IS NULL OR resolved_by NOT LIKE 'voided:%')
                 ORDER BY window_end
                 LIMIT 500
                 """,
@@ -534,6 +546,8 @@ async def pull_resolved_acute_forecasts(
                 FROM acute_forecasts
                 WHERE resolved_outcome IS NOT NULL
                   AND issued_at > NOW() - make_interval(days => $1)
+                  -- P7-F6: a voided row never enters the segregated pilot Brier.
+                  AND (resolved_by IS NULL OR resolved_by NOT LIKE 'voided:%')
                 """,
                 lookback_days,
             )

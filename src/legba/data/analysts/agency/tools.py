@@ -199,9 +199,14 @@ class ChannelEmitter:
                 "channel.emit name=%s kind=%s payload=%s",
                 channel.name, channel.kind, payload,
             )
-            record["delivered"] = self._nats_publish is None and channel.kind in (
-                "alert", "nats_stream"
-            )
+            # P7-F5(a): a log-only emit went NOWHERE — never claim delivery. The
+            # pre-fix branch stamped delivered=True for an alert/nats_stream channel
+            # whenever no publisher was wired (tests, an unwired subclass, a partial
+            # bring-up), so the durable alert_sink_deliveries audit lied that a
+            # vanished emit was delivered. Report delivered=False + a distinct
+            # 'logged_only' status so the audit row is honest.
+            record["delivered"] = False
+            record["status"] = "logged_only"
         self.emitted.append(record)
         await self._write_delivery_audit(channel, subject, payload, record)
         return record
@@ -268,7 +273,10 @@ class ChannelEmitter:
             payload.get("target_id"),
             payload.get("severity"),
             eff_conf,
-            "delivered" if delivered else "failed",
+            # P7-F5(a): honor an explicit non-delivery status ('logged_only' for a
+            # log-only emit) so the audit distinguishes 'went nowhere by design'
+            # from a delivery 'failed'; a confirmed publish stays 'delivered'.
+            record.get("status") or ("delivered" if delivered else "failed"),
             record.get("error"),
             _dt.datetime.now(tz=_dt.timezone.utc) if delivered else None,
             json.dumps(summary, separators=(",", ":")),

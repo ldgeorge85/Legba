@@ -138,9 +138,12 @@ cadence:
   # AFTER the freshest per-desk escalation heads have landed (a ~90m margin for
   # the fan-out + verify to complete).
   fallback_schedule: "30 8,20 * * *"
-  # 11h — below the 12h interval, stamped per-analyst at completion. A cooldown ==
-  # the 12h interval would land past the next fire and silently halve the cadence
-  # (12h→24h). 11h keeps a 1h margin (matches the units + the other compositions).
-  cooldown_seconds: 39600
+  # P7-F3(c): 6h — well UNDER the 12h cron interval. The prior 11h (39600s) left
+  # only a ~1h margin against the 12h fire, so any completion drift (run duration +
+  # reminder jitter, absorbed by the runtime's small cooldown-slack) risked pushing
+  # cooldown_until past the next scheduled tick and silently halving the cadence.
+  # 6h keeps a full 6h margin while still suppressing a burst of rapid re-fires
+  # (the cooldown only ever stamps on an ORGANIC tick now — see dapr_actors P7-F3a).
+  cooldown_seconds: 21600
 
 outputs: []

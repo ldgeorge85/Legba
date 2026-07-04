@@ -49,9 +49,20 @@ GLOBAL_SCOPE = TargetScopeView(target_id="__global__")
 # lets a verify-DEMOTED finding (low effective confidence) cross the threshold —
 # that is the raw-confidence gate S3-T4 closes (a high-severity TAG alone can no
 # longer fire an alert on a floored finding).
+# P7-F4 (2026-07-04): DOWN-WEIGHT the low-signal severities so a confident-but-
+# BORING finding cannot page the escalations channel. The pre-fix curve left
+# info/low/moderate at 1.0, so a 0.88-confidence 'Low leadership transition risk'
+# finding cleared the 0.85 gate and paged an alert that said nothing was
+# happening — the channel selected for confident boredom. info/low now carry a
+# <1.0 weight (0.3 / 0.4) so a low-severity finding needs implausibly high
+# post-verify confidence to fire (0.88 × 0.4 = 0.35, well under 0.85); moderate+
+# stays at the baseline (a moderate development is a legitimate page) and
+# high/critical keep their >1 boost so a SEVERE verified finding alerts on less
+# confidence. Absence/negative findings are suppressed outright (see
+# escalation_gate_decision) regardless of weight.
 _SEVERITY_WEIGHT = {
-    "info": 1.0,
-    "low": 1.0,
+    "info": 0.3,
+    "low": 0.4,
     "moderate": 1.0,
     "medium": 1.0,
     "elevated": 1.0,
@@ -62,6 +73,57 @@ _SEVERITY_WEIGHT = {
 # score reduces to the effective confidence itself, so the gate is the plain
 # effective-confidence threshold — unchanged for severity-less findings.
 _SEVERITY_WEIGHT_BASELINE = 1.0
+
+# P7-F4 — ABSENCE / negative-finding title markers. A confident 'nothing is
+# happening' read must NOT page the escalations channel (the channel is for the
+# signal, not for confident boredom). These mirror the verify floor's absence
+# vocabulary (legba.data.provenance.verify._ABSENCE_MARKERS) so the alert gate
+# classifies the same low-risk reads the verify pass already recognizes. The
+# check is on the finding TITLE (the assessors lead with the verdict there — 'No
+# material escalation', 'Argentina – Low leadership transition risk'). A genuine
+# indicator-flip escalation is unaffected: this suppression lives ONLY on the
+# confidence×severity gate leg, so a pre-registered warning signpost firing
+# (_is_indicator_activation) still escalates regardless of an absence title.
+_ABSENCE_TITLE_MARKERS = (
+    "no material",
+    "no significant",
+    "no credible",
+    "no confirmed",
+    "no evidence",
+    "no indication",
+    "no reports",
+    "no report of",
+    "no new",
+    "no notable",
+    "no observed",
+    "no discernible",
+    "low risk",
+    "low near-term",
+    "low leadership transition risk",
+    "nothing to suggest",
+    "nothing indicating",
+    "steady state",
+    "steady-state",
+    "no change",
+    "no escalation",
+    "routine",
+)
+
+
+def is_absence_or_negative_title(title: str | None) -> bool:
+    """True when a finding TITLE reads as an absence / low-risk 'nothing is
+    happening' verdict (P7-F4). Conservative: keyed on the leading verdict phrase
+    or an explicit absence marker, so a real event title never trips it."""
+    if not title:
+        return False
+    low = str(title).strip().lower()
+    if not low:
+        return False
+    if low.startswith("no ") and not low.startswith(
+        ("no fewer", "no less", "no-fly", "no fly")
+    ):
+        return True
+    return any(marker in low for marker in _ABSENCE_TITLE_MARKERS)
 
 
 @dataclass
@@ -197,6 +259,7 @@ def escalation_gate_decision(
     confidence: float | None,
     severity_gate: str = "high",
     confidence_gate: float = 0.85,
+    title: str | None = None,
 ) -> bool:
     """Should a landed finding be escalated? (S3-T4 combined gate.)
 
@@ -222,6 +285,11 @@ def escalation_gate_decision(
     """
     if confidence is None:
         return False
+    # P7-F4: an absence / 'nothing is happening' verdict never pages the
+    # escalations channel on the confidence×severity leg (a genuine indicator
+    # flip escalates via _is_indicator_activation, which does NOT call this).
+    if is_absence_or_negative_title(title):
+        return False
     weight = (
         _SEVERITY_WEIGHT.get(str(severity).lower(), _SEVERITY_WEIGHT_BASELINE)
         if severity is not None
@@ -237,4 +305,5 @@ __all__ = [
     "escalation_gate_decision",
     "fetch_action_pack",
     "grants_include",
+    "is_absence_or_negative_title",
 ]

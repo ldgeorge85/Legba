@@ -349,6 +349,18 @@ _CITATION_ONLY_RE = re.compile(
     r"^\s*(?:\[\d+\]|\[\[ref:\d+\]\])(?:\s*(?:\[\d+\]|\[\[ref:\d+\]\]))*\s*$"
 )
 
+# P7-F1(2) — a citation marker that sits AFTER a sentence terminator
+# (``…fighters. [[ref:1]]`` / ``…zones.\n[21]``) is severed from the claim it
+# supports by _SENTENCE_SPLIT_RE, orphaning the clause as ``no_citation`` even
+# though it IS cited. This pulls a run of trailing markers back INSIDE the
+# sentence (before the terminator) so the split keeps the marker on the claim.
+# It also handles the marker-leads-the-next-line style (the marker glues to the
+# PRECEDING clause, which is the one it grounds). Applied at the top of
+# _segment_claims, after marker-drift normalization and before the split.
+_TRAILING_MARKER_PULL_RE = re.compile(
+    r"([.!?])(\s+)((?:\[\d+\]|\[\[ref:\d+\]\])(?:\s*(?:\[\d+\]|\[\[ref:\d+\]\]))*)"
+)
+
 # Section headings whose CONTENT is not a checkable factual assertion: the
 # "indicators to watch" block is explicitly forward-looking ("would confirm /
 # break this assessment"), so its lines are NOT scored as unsupported facts.
@@ -395,6 +407,14 @@ _SYNTHESIS_PREFIXES = (
     "assessment:",
     "judgment:",
     "judgement:",
+    # P7-F1(3): the composition assessors emit bare ``JUDGMENT`` / ``ASSUMPTION``
+    # synthesis lines (no colon) as their derived-read scaffolding — a conclusion
+    # over the cited sub-claims, not a new first-order citable fact. FLOOR-ONLY
+    # (via _is_fact_asserting); the judge still grades them (_is_judgeable_claim).
+    "judgment",
+    "judgement",
+    "assumption:",
+    "assumption",
     "consequently",
     "collectively",
     "on balance",
@@ -454,6 +474,36 @@ _ABSENCE_MARKERS = (
     "nothing to suggest",
     "nothing indicating",
 )
+
+# P7-F1(5) — FORWARD-LOOKING watch/indicator bullet markers. A bullet phrased as a
+# future conditional ("Official announcements of fuel rationing WOULD CONFIRM a
+# supply crisis", "a border incident WOULD SIGNAL escalation") is a signpost the
+# read is watching FOR — it describes a non-occurrence that, by construction,
+# cannot cite an existing signal (you cite what happened, not what would). The
+# floor already drops the 'Indicators to watch' SECTION wholesale; this catches a
+# forward-looking bullet that leaked OUTSIDE a recognized heading (the high-
+# severity 10535403 crush: the judge graded its 'Official announcements of …'
+# watch bullets as uncited present facts). Narrow by design — it matches the
+# future-conditional 'would confirm/break/signal' idiom, NOT a present-tense
+# absence read ('No evidence of X'), so the judge STILL grades present absence
+# claims (H1: the judge, not the floor, catches a fabricated absence).
+_FORWARD_LOOKING_MARKERS = (
+    "would confirm",
+    "would break",
+    "would signal",
+    "would indicate",
+    "would mark",
+    "would suggest escalation",
+    "would point to",
+    "to watch for",
+    "watch for",
+)
+
+
+def _is_forward_looking(low: str) -> bool:
+    """True when a claim is a future-conditional watch/indicator bullet (P7-F1(5))."""
+    return any(marker in low for marker in _FORWARD_LOOKING_MARKERS)
+
 
 # Advisory span reasons (#3): NOT unsupported claims — they are structural
 # observations (a shared-lineage double-count note; a hedge-laundering cap
@@ -809,13 +859,53 @@ def _ordinal_derived_map(citations: Any) -> dict[int, set[str]]:
     return out
 
 
+def _ordinal_source_map(citations: Any) -> dict[int, str]:
+    """Map each cited sub-claim's ORDINAL → its SOURCE producer (``source`` /
+    ``analyst_id``), the discriminator for P7-F1(6).
+
+    A country_composition cites the SEVEN bounded UNITS of one desk: they share
+    the desk's wire lineage by construction (all read the same signal slice) yet
+    each answers a DIFFERENT bounded question — so shared lineage across two
+    DIFFERENT-source units is NOT double-counting. A thematic / region / world
+    composition cites many blocks of the SAME source (``escalation`` desks,
+    ``country_composition`` reads) where shared lineage DOES mean two views of one
+    incident. Keying the correlation on shared-lineage AND same-source flags the
+    real double-count and stops falsely collapsing a desk's 7 independent units.
+    A citation with no source is omitted → it never blocks a union (back-compat).
+    """
+    out: dict[int, str] = {}
+    if not isinstance(citations, (list, tuple)):
+        return out
+    for entry in citations:
+        if not isinstance(entry, Mapping):
+            continue
+        n = _citation_ordinal(entry)
+        if n is None:
+            continue
+        src = entry.get("source")
+        if not (isinstance(src, str) and src):
+            src = entry.get("analyst_id")
+        if isinstance(src, str) and src:
+            out[n] = src
+    return out
+
+
 def _correlated_components(
     ids: list[_H],
     derived_map: Mapping[_H, set[str]],
+    group_map: Mapping[_H, str] | None = None,
 ) -> list[list[_H]]:
     """Connected components over ``ids`` (composition sub-claim ordinals — kept
     generic over any hashable key), joined when their ``derived_from`` sets
     intersect. Each component = ONE independent evidence unit (T7).
+
+    P7-F1(6): when ``group_map`` is supplied, two ids are joined only when they
+    share lineage AND belong to the SAME group (same producing source). Two ids
+    that share lineage but come from DIFFERENT sources are NOT double-counting —
+    they are different bounded questions over a shared wire slice (the
+    country_composition case: 7 units, one desk). An id missing from ``group_map``
+    imposes NO constraint (falls back to lineage-only) so the legacy behaviour is
+    byte-identical when no source is present.
 
     Pure stdlib union-find; O(n^2) pairwise which is fine at composition scale
     (≤4 units × a couple fires each).
@@ -837,8 +927,16 @@ def _correlated_components(
         for j in range(i + 1, len(ids)):
             da = derived_map.get(ids[i]) or set()
             db = derived_map.get(ids[j]) or set()
-            if da and db and (da & db):
-                union(ids[i], ids[j])
+            if not (da and db and (da & db)):
+                continue
+            if group_map is not None:
+                gi = group_map.get(ids[i])
+                gj = group_map.get(ids[j])
+                # Distinct KNOWN sources sharing lineage = different bounded
+                # questions, NOT one double-counted source → do not union.
+                if gi is not None and gj is not None and gi != gj:
+                    continue
+            union(ids[i], ids[j])
 
     comps: dict[_H, list[_H]] = {}
     for i in ids:
@@ -864,6 +962,18 @@ def _is_fact_asserting(claim: str) -> bool:
     low = stripped.lower()
     # A markdown heading line is structure, not an assertion.
     if s.lstrip().startswith("#"):
+        return False
+    # P7-F1(1): a whole-line BOLD heading (``**Key points**``, ``- **Drivers**``)
+    # is a section label, not a fact — extend the ``#`` heading drop to the bold
+    # style the composition assessors emit (the AU energy finding floored 0/4 with
+    # ``**Key points**`` itself counted as an uncited claim). A ``**Severity:**
+    # High`` scaffold line does NOT match (_BOLD_HEADING_RE requires the line be
+    # ONLY the bold run) — it stays handled by _LABELED_SCAFFOLD_RE below.
+    if _BOLD_HEADING_RE.match(s):
+        return False
+    # P7-F1(5): a forward-looking watch/indicator bullet ('… would confirm …') is
+    # a future non-occurrence the read is watching FOR — nothing exists to cite.
+    if _is_forward_looking(low):
         return False
     # (#116b) A bolded label:value line (**Severity:** High) is scaffolding, not a
     # citable present-fact — FLOOR-ONLY (the judge still grades it via
@@ -921,12 +1031,26 @@ def _is_judgeable_claim(claim: str) -> bool:
     low = stripped.lower()
     if s.lstrip().startswith("#"):
         return False
+    # P7-F1(1): a whole-line BOLD heading is structure for the JUDGE too — a bold
+    # section label carries no fact for the judge to grade. (Unlike the floor's
+    # BLUF/synthesis/absence exemptions, this is a genuine NON-claim, so exempting
+    # it from the judge does not risk hiding a fabricated fact — H1 preserved.)
+    if _BOLD_HEADING_RE.match(s):
+        return False
     # Still skip the explicitly forward-looking watch section (not a present
     # claim by construction); _segment_claims already section-skips it, this
     # guards an inline heading-opener.
     for head in _NON_FACTUAL_HEADINGS:
         if low.startswith(head):
             return False
+    # P7-F1(5): exempt the JUDGE (as the floor now is) from grading a forward-
+    # looking watch/indicator bullet that leaked outside a recognized heading — a
+    # future conditional ('… would confirm …') is not a present fact and cannot
+    # cite an existing signal. This does NOT exempt a present-tense absence read
+    # ('No evidence of X'), which the judge still grades to catch a fabricated
+    # absence (H1).
+    if _is_forward_looking(low):
+        return False
     if len(re.findall(r"[A-Za-z]{2,}", stripped)) < 2:
         return False
     return True
@@ -940,6 +1064,13 @@ def _segment_claims(body: str) -> list[str]:
     # parenthesized (57, 87) lists) up front so BOTH the segmentation below and the
     # [N] matching that consumes these spans see ASCII markers.
     body = _normalize_verify_markers(body)
+    # P7-F1(2): pull a citation marker that trails a sentence terminator back
+    # inside the sentence (``…fighters. [[ref:1]]`` -> ``…fighters [[ref:1]].``)
+    # so the split below keeps the marker on the claim it supports instead of
+    # orphaning a ``no_citation`` fragment.
+    body = _TRAILING_MARKER_PULL_RE.sub(
+        lambda m: f" {m.group(3)}{m.group(1)}{m.group(2)}", body
+    )
     # Drop everything from a 'watch'-family heading onward — that whole section is
     # forward-looking by construction (the assessor prompt defines it as
     # "developments that would confirm or break this assessment"). C1: recognize a
@@ -1067,6 +1198,7 @@ def _deterministic_floor_subclaim(
     resolved_ords = _resolved_citation_ordinals(citations)
     eff_map = _ordinal_effconf_map(citations)
     derived_map = _ordinal_derived_map(citations)
+    source_map = _ordinal_source_map(citations)
 
     claims = [c for c in _segment_claims(body) if _is_fact_asserting(c)]
     supported = 0
@@ -1106,7 +1238,7 @@ def _deterministic_floor_subclaim(
 
     # DOUBLE-COUNTING + the evidence ceiling over the CITED sub-claims (ordinals).
     cited_ords = sorted(resolved_ords)
-    components = _correlated_components(cited_ords, derived_map)
+    components = _correlated_components(cited_ords, derived_map, source_map)
     rep_effs: list[float] = []
     for comp in components:
         comp_effs = [eff_map[n] for n in comp if n in eff_map]

@@ -1657,6 +1657,14 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
     async def run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
         target_filter = payload.get("target_filter")
+        # P7-F3 — the run's trigger class. Organic cadence ticks pass 'cadence'
+        # (_on_reminder / _fanout_to_workers) or 'reminder'; a manual/forced/ad-hoc
+        # proxy.run() defaults to 'method'. Only an ORGANIC tick stamps the cadence
+        # cooldown at completion, so a forced run never steals the next scheduled
+        # organic fire (the escalation_composition 08:30Z-tick-suppressed-by-01:04Z-
+        # force symptom).
+        trigger_kind = str(payload.get("trigger_kind", "method"))
+        _is_organic_tick = trigger_kind in ("cadence", "reminder")
         actor_id = self.id.id
         # Durable scoping (review 2026-07-03). The production fan-out ALWAYS passes
         # target_filter (source_first_runtime._work → proxy.run), but an AD-HOC
@@ -1715,6 +1723,14 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
             else:
                 return {"outcome": ActorRunOutcome.NOOP.value, "reason": "no_state"}
         if rec["lifecycle"] != ACTIVE:
+            # P7-F3(b): make the lifecycle NOOP observable — an organic tick that
+            # silently no-ops (e.g. a paused/suspended analyst) otherwise leaves
+            # zero trace and looks like a lost reminder.
+            logger.info(
+                "dapr_actors.analyst.noop actor_id=%s reason=lifecycle "
+                "lifecycle=%s trigger=%s target=%s",
+                actor_id, rec["lifecycle"], trigger_kind, target_filter,
+            )
             return {"outcome": ActorRunOutcome.NOOP.value, "reason": f"lifecycle={rec['lifecycle']}"}
 
         now = _utcnow()
@@ -1730,6 +1746,12 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         # every target.
         cooldown_raw = rec.get("cooldown_until")
         if cooldown_raw and _as_dt(cooldown_raw) > now:
+            # P7-F3(b): observable global-cooldown suppression (budget pause).
+            logger.info(
+                "dapr_actors.analyst.noop actor_id=%s reason=cooldown scope=global "
+                "cooldown_until=%s trigger=%s target=%s",
+                actor_id, cooldown_raw, trigger_kind, target_filter,
+            )
             return {"outcome": ActorRunOutcome.NOOP.value, "reason": "cooldown"}
 
         # Per-(analyst, target) cadence cooldown — keyed by target_filter so a
@@ -1753,6 +1775,15 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
             seconds=min(deps_bundle.descriptor.cadence.cooldown_seconds * 0.05, 600.0)
         )
         if cd_raw and _as_dt(cd_raw) > now + _cd_slack:
+            # P7-F3(b): make the per-target cadence-cooldown NOOP observable — this
+            # is the path that silently suppressed the escalation_composition 08:30Z
+            # organic tick (a forced 01:04Z run had stamped the '_global' cooldown),
+            # leaving no analyst_traces row and only a bare 'reminder.fired' log.
+            logger.info(
+                "dapr_actors.analyst.noop actor_id=%s reason=cooldown scope=cadence "
+                "cooldown_key=%s cooldown_until=%s trigger=%s",
+                actor_id, cooldown_key, cd_raw, trigger_kind,
+            )
             return {
                 "outcome": ActorRunOutcome.NOOP.value,
                 "reason": "cooldown",
@@ -2656,10 +2687,16 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 rec["last_run_at"] = _utcnow().isoformat()
                 rec["last_outcome"] = ActorRunOutcome.SUCCESS.value
                 rec["last_error"] = None
-                if deps_bundle.descriptor.cadence.cooldown_seconds > 0:
+                if (
+                    deps_bundle.descriptor.cadence.cooldown_seconds > 0
+                    and _is_organic_tick
+                ):
                     # Per-(analyst, target) cooldown — keyed by target_filter so
                     # each target throttles independently (a busy country can't
                     # starve a quiet one). "_global" for the meta/global run.
+                    # P7-F3(a): stamped ONLY on an organic cadence/reminder tick —
+                    # a manual/forced 'method' run no longer writes the cooldown, so
+                    # a debug force can't consume the next scheduled organic fire.
                     cd_key = str(target_filter) if target_filter else "_global"
                     cd_map = rec.get("cooldown_by_target")
                     if not isinstance(cd_map, dict):

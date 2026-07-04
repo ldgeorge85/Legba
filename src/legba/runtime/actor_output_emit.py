@@ -292,6 +292,10 @@ async def _maybe_escalate_finding(
             confidence=confidence,
             severity_gate=escalation.severity_gate,
             confidence_gate=escalation.confidence_gate,
+            # P7-F4 — suppress a confident ABSENCE / 'nothing is happening' read
+            # on the confidence×severity leg (an indicator flip still escalates
+            # via _is_indicator_activation below).
+            title=getattr(payload, "title", None),
         )
         or _is_indicator_activation(payload)
     ):
