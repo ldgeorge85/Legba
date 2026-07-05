@@ -584,11 +584,29 @@ def _coerce_typing(
 async def _read_candidates(conn: Any, *, limit: int) -> list[dict[str, Any]]:
     """Pull pending co-mentioned entity pairs from ``proposed_edges`` that are
     not yet reified into an OPEN nexus. Ordered by confidence so the
-    most-corroborated pairs are typed first within the per-run cap."""
+    most-corroborated pairs are typed first within the per-run cap.
+
+    FU4 — also aggregates ``source_signal_text``: the UNION of every backing
+    source signal's ``title`` + ``summary`` (joined via the edge's
+    ``derived_from`` lineage → ``signals.payload``). The D14 sports gate runs over
+    this union so a sports fixture whose sports frame ('World Cup') sits in a
+    DIFFERENT source signal than the excerpt is still gated (see
+    :func:`_sports_gate_text`). ``NULL`` when the edge has no signal lineage."""
     rows = await conn.fetch(
         """
         SELECT pe.source_entity, pe.target_entity, pe.evidence_text,
-               pe.confidence, pe.produced_at, pe.derived_from
+               pe.confidence, pe.produced_at, pe.derived_from,
+               (
+                 SELECT string_agg(
+                          btrim(
+                            coalesce(s.payload->>'title', '') || ' ' ||
+                            coalesce(s.payload->>'summary', '')
+                          ),
+                          ' '
+                        )
+                   FROM signals s
+                  WHERE s.id = ANY(pe.derived_from)
+               ) AS source_signal_text
           FROM proposed_edges pe
          WHERE pe.confidence >= $1
            AND NOT EXISTS (
@@ -604,6 +622,20 @@ async def _read_candidates(conn: Any, *, limit: int) -> list[dict[str, Any]]:
         limit,
     )
     return [dict(r) for r in rows]
+
+
+def _sports_gate_text(cand: Mapping[str, Any]) -> str:
+    """The text the D14 sports gate runs over (FU4): the co-mention EXCERPT
+    UNIONED with ALL backing source signals' title+summary. A sports fixture whose
+    sports frame ('World Cup') sits in a DIFFERENT source signal than the excerpt
+    is thus still gated. Falls back to the excerpt alone on the no-pool / test
+    path (where ``source_signal_text`` is absent). This union feeds ONLY the gate
+    — the LLM typing prompt keeps the terse excerpt (no token bloat)."""
+    parts = [
+        str(cand.get("evidence_text") or ""),
+        str(cand.get("source_signal_text") or ""),
+    ]
+    return " ".join(p for p in parts if p.strip())
 
 
 async def _intermediary_candidates_for(
@@ -872,7 +904,9 @@ async def run_method(
             fallback_subject=source,
             fallback_object=target,
             allowed_intermediaries=intermediaries,
-            evidence_text=str(cand.get("evidence_text") or ""),
+            # FU4 — gate over the UNION of the excerpt + all source-signal texts,
+            # so a sports frame in a CO-SOURCE signal (not the excerpt) still gates.
+            evidence_text=_sports_gate_text(cand),
         )
         if payload is None:
             # Model said no real relationship, or shape unusable — not a

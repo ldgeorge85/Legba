@@ -90,6 +90,9 @@ from ..data.provenance.kinds import TRACE_ONLY, OutputKind, _TraceOnly
 from ..data.provenance.models import FindingPayload
 from ..data.provenance.output_graph import make_conn_age_output_hook
 from ..data.provenance.receipts import RuntimeReceiptChain
+from ..data.analysts.deterministic_handlers.finding_supersession import (
+    fold_prior_composition_heads,
+)
 from ..data.provenance.writes import write_analyst_output
 from ..data.schemas.analyst import AnalystDescriptor
 from ..data.schemas.target import TargetDescriptor
@@ -2455,6 +2458,35 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             "outcome": ActorRunOutcome.HARD_FAIL.value,
                             "error": "analyst output failed validation, sent to DLQ",
                         }
+
+                    # FU6 — LIVE composition-head fold. A composition finding
+                    # (country/region/world/thematic) stamps a stable
+                    # ``data['situation_signature']`` but is EXCLUDED from the
+                    # situation clusterer, so nothing folded its heads live — the
+                    # world head accumulated parallel empty-signature heads until a
+                    # migration folded them by hand. Stamp the new head's signature
+                    # column + close prior heads of the SAME (analyst, signature)
+                    # so successive heads supersede cleanly. Best-effort: a fold
+                    # failure leaves the head durable (no regression).
+                    _comp_data = getattr(output_payload, "data", None)
+                    _comp_sig = (
+                        _comp_data.get("situation_signature")
+                        if isinstance(_comp_data, dict)
+                        else None
+                    )
+                    if output_kind == OutputKind.FINDING and _comp_sig:
+                        try:
+                            await fold_prior_composition_heads(
+                                conn,
+                                analyst_id=analyst_ctx.analyst_id,
+                                raw_signature=_comp_sig,
+                                new_head_id=output_row.id,
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.warning(
+                                "dapr_actors.composition_fold.failed run_id=%s "
+                                "err=%s", run_id, exc,
+                            )
 
                 # Extend the per-analyst receipt chain (L-107 §7) when one
                 # is wired. The chain INSERT lands in ``analyst_traces``

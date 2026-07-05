@@ -1228,6 +1228,129 @@ async def _supersede_prior_facts_coexist(
         return 0
 
 
+# ---------------------------------------------------------------------------
+# FU3 — office-keyed supersession for FUNCTIONAL-ROLE facts (P5 durable
+# stale-leader fix)
+# ---------------------------------------------------------------------------
+#
+# supersede_prior_facts keys on (subject, predicate). For a FUNCTIONAL ROLE the
+# canonical "current holder" is keyed on the COUNTRY, not the person:
+#   * a person-subject 'leader of <country>' fact carries the country in VALUE;
+#   * a country-subject 'head of state' / 'head of government' fact carries it
+#     in SUBJECT (its office IS the predicate).
+# So a re-seed of a NEW office-holder (a DIFFERENT person subject) never closed
+# the prior 'leader of <country>' row — the P5 both-open stale-leader
+# contradiction migration 0064 had to clean by hand (Biden/Scholz/…). This closes
+# every OTHER open row of the same functional role for the SAME country, keyed on
+# the country side, regardless of person. The caller scopes it to the
+# authoritative seed/curated tier so ingestion contention COEXISTENCE is
+# untouched, and — for the person-subject 'leader of' shape — it is role-aware
+# (``data->>'role'``) so a dual-office country (Iran supreme leader vs president,
+# both 'leader of Iran') is NOT collapsed into one holder.
+
+#: Which column names the COUNTRY for each functional-role predicate (normalized).
+_FUNCTIONAL_ROLE_COUNTRY_SIDE: dict[str, str] = {
+    "leader of": "value",          # subject=person, value=country
+    "head of state": "subject",    # subject=country, value=person
+    "head of government": "subject",
+}
+
+#: Reused SQL tier-rank CASE (mirrors supersede_prior_facts's A1 guard exactly).
+_FUNCTIONAL_ROLE_TIER_CASE = """
+        CASE lower(coalesce(source_type, ''))
+            WHEN 'seed'      THEN 2
+            WHEN 'curated'   THEN 2
+            WHEN 'ingestion' THEN 1
+            WHEN 'agent'     THEN 1
+            ELSE 1
+        END
+"""
+
+
+async def supersede_prior_functional_role_facts(
+    conn: asyncpg.Connection,
+    *,
+    subject: str,
+    predicate: str,
+    value: str,
+    role: str | None,
+    new_fact_id: UUID,
+    incoming_source_type: str | None = None,
+) -> int:
+    """Office-keyed supersession for a FUNCTIONAL-ROLE fact (FU3 / P5).
+
+    ``predicate`` MUST already be canonical (``normalize_predicate``). Closes
+    every OTHER open row of the SAME functional role for the SAME COUNTRY
+    (whichever column holds it), pointing them at ``new_fact_id``:
+
+      * 'leader of' — country is VALUE, person is SUBJECT: close prior open
+        'leader of <country>' rows with a DIFFERENT person of the SAME office
+        (``data->>'role'``). A role-less incoming fact can't safely role-split a
+        dual-office country, so it takes NO office-keyed close (the plain
+        (subject, predicate) supersession the caller already ran still applies).
+      * 'head of state' / 'head of government' — country is SUBJECT, person is
+        VALUE, office is the predicate: close prior open rows for the SAME country
+        with a DIFFERENT person. (A no-op on the OFF path — supersede_prior_facts
+        already closed them — but completes the fold when contention coexistence
+        spared a fuzzy-distinct same-tier prior.)
+
+    A1 source-tier guard applies (never closes a STRICTLY higher-authority prior).
+    Idempotent (only open rows touched). ``id <> new_fact_id`` plus the person-side
+    inequality exclude the just-inserted / collapsed-into row. Returns #closed.
+    """
+    side = _FUNCTIONAL_ROLE_COUNTRY_SIDE.get(predicate)
+    if side is None or not new_fact_id:
+        return 0
+    incoming_rank = (
+        None if incoming_source_type is None
+        else _source_tier_rank(incoming_source_type)
+    )
+    if side == "value":
+        # 'leader of' — country=value, person=subject. Role-split guard: only
+        # close within the SAME office/role, and only when a role is known.
+        if not role:
+            return 0
+        result = await conn.execute(
+            f"""
+            UPDATE facts
+               SET valid_until   = now(),
+                   superseded_by = $1,
+                   updated_at    = now()
+             WHERE lower(predicate) = $2
+               AND lower(value)     = lower($3)
+               AND lower(subject)  <> lower($4)
+               AND coalesce(data->>'role', '') = $5
+               AND valid_until IS NULL
+               AND superseded_by IS NULL
+               AND id <> $1
+               AND ($6::int IS NULL OR {_FUNCTIONAL_ROLE_TIER_CASE} <= $6::int)
+            """,
+            new_fact_id, predicate, value, subject, role, incoming_rank,
+        )
+    else:
+        # 'head of state' / 'head of government' — country=subject, person=value.
+        result = await conn.execute(
+            f"""
+            UPDATE facts
+               SET valid_until   = now(),
+                   superseded_by = $1,
+                   updated_at    = now()
+             WHERE lower(predicate) = $2
+               AND lower(subject)   = lower($3)
+               AND lower(value)    <> lower($4)
+               AND valid_until IS NULL
+               AND superseded_by IS NULL
+               AND id <> $1
+               AND ($5::int IS NULL OR {_FUNCTIONAL_ROLE_TIER_CASE} <= $5::int)
+            """,
+            new_fact_id, predicate, subject, value, incoming_rank,
+        )
+    try:
+        return int(result.split()[-1]) if result else 0
+    except (ValueError, IndexError):                     # pragma: no cover
+        return 0
+
+
 async def collapse_open_triple(
     conn: asyncpg.Connection,
     *,
@@ -1432,6 +1555,25 @@ async def _insert_fact(
         valid_from=getattr(p, "valid_from", None),
         source_credibility=source_credibility,
     )
+    # FU3 (P5 durable stale-leader fix) — office-keyed supersession for FUNCTIONAL
+    # ROLES from the authoritative seed/curated tier. supersede_prior_facts keys on
+    # (subject, predicate); a person-subject 'leader of <country>' fact carries the
+    # country in VALUE, so a re-seeded NEW leader (a DIFFERENT person) never closed
+    # the prior holder — the both-open stale-leader class migration 0064 cleaned by
+    # hand. Points priors at the SURVIVING open row (the collapsed-into row when the
+    # incoming triple already had an open row, else the row about to be inserted) so
+    # a re-seed can never leave a dangling superseded_by pointer. Scoped to
+    # seed/curated so ingestion contention coexistence stays untouched.
+    if str(effective_source_type or "").lower() in ("seed", "curated"):
+        await supersede_prior_functional_role_facts(
+            conn,
+            subject=getattr(p, "subject"),
+            predicate=predicate,
+            value=getattr(p, "value"),
+            role=(data_payload.get("role") if isinstance(data_payload, dict) else None),
+            new_fact_id=(collapsed_into or row_id),
+            incoming_source_type=effective_source_type,
+        )
     if collapsed_into is not None:
         # An open row already carries this exact triple — refreshed in place,
         # no duplicate inserted (mirrors _insert_ingestion_fact).

@@ -357,7 +357,22 @@ _PRESENT_FACT_VERB_RE = re.compile(
     r"resumed|seized|deployed|launched|killed|announced|began|fired|"
     r"mobili[sz]ed|halted|suspended|restored|captured|invaded|shelled|"
     r"bombed|declared|imposed|signed|breached|assassinated|detained|"
-    r"arrested|ousted|toppled|erupted|escalated)\b"
+    r"arrested|ousted|toppled|erupted|escalated|"
+    # P7 FU1 — common present-tense (3rd-person -s) EVENT verbs. A present fact
+    # with a conditional tail but NO comma and a verb OUTSIDE the past-tense list
+    # above ("Beijing conducts drills that would confirm intent", "Iran enriches
+    # uranium which would confirm breakout") was wrongly read as pure prediction
+    # and hidden from BOTH floor and judge (H1 residual). ONLY the unambiguous -s
+    # form is listed (never the bare stem), so a genuine modal prediction ("Iran
+    # WOULD enrich uranium if talks fail") still reads forward-looking — the -s is
+    # the disambiguator. Noun-homograph -s forms a prediction legitimately uses as
+    # a subject (strikes / fires / shells / tests / sanctions / launches / signs /
+    # reports / hits) are DELIBERATELY excluded so "air strikes would confirm …"
+    # stays a forward-looking prediction.
+    r"conducts|enriches|deploys|seizes|imposes|expands|announces|halts|"
+    r"suspends|resumes|mobili[sz]es|expels|ratifies|withdraws|invades|"
+    r"unveils|escalates|annexes|besieges|bombards|occupies|captures|"
+    r"detains|ousts)\b"
 )
 
 

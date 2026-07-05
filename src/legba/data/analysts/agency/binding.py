@@ -157,10 +157,12 @@ def is_absence_or_negative_title(title: str | None) -> bool:
     Anchored on the leading verdict phrase — after an optional '<subject> – ' prefix
     — NOT a bare ``startswith('no ')`` and NOT a mid-title substring, so a real
     escalation title ('No off-ramp as … widens', 'Routine patrol ambushed', 'Non-
-    routine mobilization near border') never trips it. Severity-independent: a
-    genuine 'nothing happening' verdict is boredom at any severity. The WEAKER bare
-    'No <qualifier>' catch-all lives in :func:`escalation_gate_decision`, gated on
-    sub-moderate severity so a severe finding is never suppressed by a heuristic.
+    routine mobilization near border') never trips it. This is a PURE title
+    classifier (no severity input); its USE for alert suppression in
+    :func:`escalation_gate_decision` is gated on SUB-MODERATE severity (FU2), so a
+    moderate+/high negation-framed event ('No confirmed casualties as fighting
+    intensifies') is never title-gagged — only low/info absence reads are. The
+    WEAKER bare 'No <qualifier>' catch-all is gated the same way at that call site.
     """
     if not title:
         return False
@@ -356,16 +358,20 @@ def escalation_gate_decision(
     """
     if confidence is None:
         return False
-    # P7-F4: an absence / 'nothing is happening' verdict never pages the
-    # escalations channel on the confidence×severity leg (a genuine indicator
-    # flip escalates via _is_indicator_activation, which does NOT call this).
-    if is_absence_or_negative_title(title):
-        return False
-    # P7 r2: a WEAKER bare 'No <qualifier> …' lead that is NOT a recognized verdict
-    # ('No major developments …') is treated as absence ONLY for a sub-moderate
-    # finding — a moderate+/high finding with such a title describes an ongoing
-    # situation and MUST still page (a title heuristic never gags a severe finding).
-    if _severity_rank(severity) < _MODERATE_RANK and _is_bare_negative_lead(title):
+    # P7-F4 / FU2 — a title-heuristic absence / 'nothing is happening' verdict gags
+    # the confidence×severity alert leg ONLY for a SUB-MODERATE finding. Round-1
+    # suppressed a strong-absence VERDICT LEAD ('No confirmed …') at ANY severity,
+    # which title-gagged a high-severity NEGATION-FRAMED event — 'No confirmed
+    # casualties as fighting intensifies' is the report of an INTENSIFYING battle,
+    # not boredom, and must page. A moderate+/high finding describes an ongoing
+    # situation, so a title heuristic never suppresses it; only genuinely low/info
+    # absence reads ('Argentina – Low leadership transition risk', 'United States –
+    # No observable WMD…') are gagged here. The WEAKER bare 'No <qualifier> …' lead
+    # ('No major developments …') is gated the SAME way. A genuine indicator flip
+    # still escalates via _is_indicator_activation, which does NOT call this.
+    if _severity_rank(severity) < _MODERATE_RANK and (
+        is_absence_or_negative_title(title) or _is_bare_negative_lead(title)
+    ):
         return False
     weight = (
         _SEVERITY_WEIGHT.get(str(severity).lower(), _SEVERITY_WEIGHT_BASELINE)

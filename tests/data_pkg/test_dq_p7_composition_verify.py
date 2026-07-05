@@ -240,10 +240,13 @@ def test_alert_gate_suppresses_absence_titles():
     assert is_absence_or_negative_title("Argentina – Low leadership transition risk") is True
     assert is_absence_or_negative_title("No material escalation observed") is True
     assert is_absence_or_negative_title("Iran strikes Hormuz shipping lane") is False
-    # Even a high-severity, high-confidence ABSENCE title is suppressed on the
-    # confidence×severity leg.
+    # A SUB-MODERATE (low/info) ABSENCE title is suppressed on the confidence×severity
+    # leg. FU2 tightened this: a MODERATE+/high finding is never title-gagged (see
+    # test_alert_gate_high_severity_negation_framed_event_pages), because at that
+    # severity a negation-framed title ('No confirmed casualties as fighting
+    # intensifies') describes an ongoing situation, not boredom.
     assert escalation_gate_decision(
-        severity="high", confidence=0.95, title="No credible escalation this window"
+        severity="low", confidence=0.95, title="No credible escalation this window"
     ) is False
     # A real high-severity event with a non-absence title still escalates.
     assert escalation_gate_decision(

@@ -346,6 +346,97 @@ async def _link_supersession(
     return inserted is not None
 
 
+# ---------------------------------------------------------------------------
+# FU6 — LIVE composition-head fold
+# ---------------------------------------------------------------------------
+#
+# Composition findings (country/region/world/thematic) are EXCLUDED from the
+# situation clusterer above (:data:`_COMPOSITION_ANALYST_IDS`) — they are
+# assessment REPORTS, not evolving situations — so nothing folded their heads
+# LIVE: every cadence left ANOTHER open head until a migration (0058/0074) folded
+# them by hand. After the P6/P7 world target_id fix the current world heads carry
+# an EMPTY situation_signature COLUMN, so a plain column-keyed fold would miss
+# them. This runs at the composition WRITE path: it stamps the new head's
+# situation_signature column and closes every OTHER open head of the SAME analyst
+# carrying the SAME raw composition signature — matched on the PERSISTED DATA
+# payload (``data->'data'->>'situation_signature'``), so it catches the
+# empty-column heads too — mirroring the finding_supersessions audit edge.
+# APPEND-ONLY + idempotent (guarded by superseded_by IS NULL + ON CONFLICT).
+
+#: The canonical 'sit:' column prefix derive_signature stamps (so the FU6 column
+#: value matches the historical rows + migrations 0058/0074).
+_COMPOSITION_SIG_COLUMN_PREFIX = "sit:"
+
+#: The raw data-payload signature prefix meta_findings_synthesizer stamps
+#: (``composition:<analyst_id>:<target|world>``) — the defensive guard that keeps
+#: this fold from ever touching a first-order (non-composition) finding.
+_COMPOSITION_RAW_SIG_PREFIX = "composition:"
+
+_COMPOSITION_FOLD_PRODUCED_BY = "composition_head_fold"
+
+
+async def fold_prior_composition_heads(
+    conn: Any,
+    *,
+    analyst_id: str | None,
+    raw_signature: str | None,
+    new_head_id: Any,
+    reason: str = "composition head supersession (FU6)",
+) -> int:
+    """Stamp the new composition head's signature column + close prior heads of the
+    SAME ``(analyst_id, raw_signature)``. Returns #prior heads closed.
+
+    ``raw_signature`` is the ``composition:<analyst_id>:<target|world>`` value the
+    synthesizer stamps onto ``FindingPayload.data['situation_signature']`` (NO
+    'sit:' prefix). Prior open heads are matched on the PERSISTED payload
+    (``data->'data'->>'situation_signature'``, COALESCE the top level) so an
+    empty-column head — the live world-head symptom — is still caught. No-op when
+    an arg is missing or the signature is not a composition signature (so a
+    first-order finding is never touched)."""
+    if not (analyst_id and raw_signature and new_head_id):
+        return 0
+    if not str(raw_signature).startswith(_COMPOSITION_RAW_SIG_PREFIX):
+        return 0
+    column_sig = f"{_COMPOSITION_SIG_COLUMN_PREFIX}{raw_signature}"
+    # Stamp the NEW head's column (the write path leaves it NULL for findings).
+    await conn.execute(
+        """
+        UPDATE analyst_outputs
+           SET situation_signature = $2
+         WHERE id = $1 AND situation_signature IS DISTINCT FROM $2
+        """,
+        new_head_id, column_sig,
+    )
+    prior = await conn.fetch(
+        """
+        SELECT id
+          FROM analyst_outputs
+         WHERE analyst_id = $1
+           AND kind = 'finding'
+           AND superseded_by IS NULL
+           AND id <> $2
+           AND COALESCE(
+                   data->'data'->>'situation_signature',
+                   data->>'situation_signature'
+               ) = $3
+        """,
+        analyst_id, new_head_id, raw_signature,
+    )
+    closed = 0
+    for row in prior:
+        await _link_supersession(
+            conn,
+            superseded_id=row["id"],
+            superseding_id=new_head_id,
+            situation_signature=column_sig,
+            reason=reason,
+            score=_EXACT_SCORE,
+            produced_by=_COMPOSITION_FOLD_PRODUCED_BY,
+        )
+        closed += 1
+    return closed
+
+
 async def _fetch_findings(
     conn: Any,
     *,

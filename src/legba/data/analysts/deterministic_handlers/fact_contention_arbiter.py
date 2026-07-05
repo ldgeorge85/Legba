@@ -86,7 +86,9 @@ from ..._entity_canon import is_junk_entity
 from ...filters.fact_extractor import (
     _is_inverted_relation,
     _is_nongeo_containment_inversion,
+    _is_possessive_fragment,          # FU5b — surfacing junk gate
     _is_reflexive_after_canon,
+    _is_source_publication_subject,   # FU5b — surfacing junk gate (byline outlet)
 )
 from ...provenance.models import FindingPayload
 from ...provenance.value_clustering import cluster_values
@@ -135,6 +137,19 @@ HALFLIFE_DAYS = 30.0
 #: from open rows every pass, so the bound only caps a pathological single-pass
 #: cost; the next pass picks up anything skipped.
 MAX_SCAN_FACTS = 200_000
+
+#: FU5(c) — the nominal credibility of a source whose ``source_credibility`` is
+#: NULL/UNKNOWN, used ONLY for the credibility-weighted quorum (never for cred_sum,
+#: which sums non-NULL only). Mirrors the machine-extraction tier nominal.
+_UNKNOWN_SOURCE_CRED = 0.5
+
+#: FU5(a) — person-subject functional-role predicates (country in VALUE, holder in
+#: SUBJECT). The normal (subject, predicate) grouping buckets each PERSON
+#: separately, so a cross-person contradiction (Biden vs Trump both 'leader of US')
+#: is never clustered. These rows are RE-KEYED on (country, office/role) so the
+#: dispute clusters. 'head of state'/'head of government' already key on the
+#: country in the SUBJECT (normal path), so only 'leader of' needs re-keying.
+_PERSON_SUBJECT_ROLE_PREDICATE = "leader of"
 
 
 def _now() -> datetime:
@@ -214,7 +229,7 @@ class _ValueAgg:
         "value_key", "representative_fact_id", "representative_value",
         "distinct_lineage", "supporting_fact_ids", "source_types",
         "cred_sum", "confidence_sum", "confidence_max", "latest_asserted_at",
-        "row_count",
+        "row_count", "_source_cred",
     )
 
     def __init__(self, value_key: str) -> None:
@@ -229,6 +244,11 @@ class _ValueAgg:
         self.confidence_max: float = 0.0
         self.latest_asserted_at: datetime | None = None
         self.row_count: int = 0
+        # FU5(c) — per DISTINCT source (lineage ref) MAX credibility, for the
+        # credibility-weighted quorum. Empty ⇒ no per-source credibility was seen
+        # (e.g. the pure-logic test aggs), in which case the weighted count falls
+        # back to the raw distinct-source count (byte-identical prior behavior).
+        self._source_cred: dict[str, float] = {}
 
     def add(self, row: Mapping[str, Any]) -> None:
         fid = row["id"]
@@ -250,14 +270,17 @@ class _ValueAgg:
         # falling back to the distinct fact-row id when a row has no lineage — so a
         # single chatty source (one lineage, many rows) counts ONCE, but two
         # lineage-less rows still count as two distinct sources.
-        derived = row.get("derived_from") or []
-        if derived:
-            for ref in derived:
-                self.distinct_lineage.add(str(ref))
-        else:
-            self.distinct_lineage.add(f"fact:{fid}")
         # source_credibility: SUM of non-NULL only (NULL = UNKNOWN, never 0).
         cred = row.get("source_credibility")
+        # FU5(c) — the per-source credibility used for the WEIGHTED quorum: the row's
+        # score when known, else the machine-extraction nominal (so an unknown-cred
+        # source still casts a bounded, non-zero vote — it is not silently dropped).
+        cred_nominal = float(cred) if cred is not None else _UNKNOWN_SOURCE_CRED
+        derived = row.get("derived_from") or []
+        refs = [str(ref) for ref in derived] if derived else [f"fact:{fid}"]
+        for ref in refs:
+            self.distinct_lineage.add(ref)
+            self._source_cred[ref] = max(self._source_cred.get(ref, 0.0), cred_nominal)
         if cred is not None:
             self.cred_sum += float(cred)
         conf = float(row.get("confidence") or 0.0)
@@ -271,6 +294,17 @@ class _ValueAgg:
     @property
     def distinct_source_count(self) -> int:
         return len(self.distinct_lineage)
+
+    @property
+    def credibility_weighted_source_count(self) -> float:
+        """FU5(c) — the quorum vote WEIGHTED by source credibility: the sum of each
+        DISTINCT source's credibility, so N low-credibility syndicated copies cannot
+        out-vote one authoritative source on raw count alone. Falls back to the raw
+        distinct-source count when no per-source credibility was recorded (the
+        pure-logic test path), keeping that path byte-identical."""
+        if not self._source_cred:
+            return float(self.distinct_source_count)
+        return sum(self._source_cred.values())
 
     @property
     def confidence_mean(self) -> float:
@@ -326,6 +360,62 @@ def _bucket_rows(rows: list[Mapping[str, Any]]) -> dict[tuple[str, str], list[Ma
     return buckets
 
 
+async def _open_functional_role_triples(conn: Any) -> list[Mapping[str, Any]]:
+    """FU5(a) — fetch open person-subject 'leader of' facts where >= 2 DISTINCT
+    persons claim the SAME (country, office/role) — the cross-subject contradiction
+    the normal (subject, predicate) grouping cannot see.
+
+    Grouped by (country=value, ``data->>'role'``) so a genuine DUAL-OFFICE country
+    (Iran supreme leader vs president — both 'leader of Iran' but DIFFERENT office
+    roles) is NOT flagged as a contradiction; only two people claiming the SAME
+    office of the same country cluster. Rows carry ``role_key`` so the rekey can
+    keep the offices in separate contention groups."""
+    return await conn.fetch(
+        f"""
+        WITH open_role_facts AS (
+            SELECT id, subject, predicate, value, confidence, source_type,
+                   source_credibility, produced_at, derived_from,
+                   coalesce(data->>'role', '') AS role_key
+              FROM facts
+             WHERE valid_until IS NULL
+               AND superseded_by IS NULL
+               AND lower(btrim(predicate)) = '{_PERSON_SUBJECT_ROLE_PREDICATE}'
+             LIMIT {MAX_SCAN_FACTS}
+        ),
+        grouped AS (
+            SELECT lower(btrim(value)) AS country_key, role_key,
+                   count(DISTINCT lower(btrim(subject))) AS n
+              FROM open_role_facts
+             GROUP BY 1, 2
+            HAVING count(DISTINCT lower(btrim(subject))) >= 2
+        )
+        SELECT f.id, f.subject, f.predicate, f.value, f.confidence, f.source_type,
+               f.source_credibility, f.produced_at, f.derived_from, f.role_key
+          FROM open_role_facts f
+          JOIN grouped g
+            ON lower(btrim(f.value)) = g.country_key
+           AND f.role_key = g.role_key
+         ORDER BY lower(btrim(f.value)), f.role_key, lower(btrim(f.subject)), f.id
+        """
+    )
+
+
+def _rekey_role_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """FU5(a) — re-key one person-subject 'leader of' row so the COUNTRY (+ office)
+    becomes the group subject and the PERSON becomes the disputed VALUE. The fact
+    ``id`` (used for the DETECT-ONLY marker stamping) is preserved untouched; only
+    the grouping/clustering surfaces are swapped. The office/role is folded into the
+    synthetic subject so two OFFICES of the same country stay in SEPARATE contention
+    groups (a dual-office country is never a contradiction)."""
+    d = dict(row)
+    country = str(row.get("value") or "")
+    person = str(row.get("subject") or "")
+    role = str(row.get("role_key") or "").strip()
+    d["subject"] = f"{country} [{role}]" if role else country
+    d["value"] = person
+    return d
+
+
 def _aggregate_group(
     rows: list[Mapping[str, Any]],
 ) -> tuple[list[_ValueAgg], list[tuple[_ValueAgg, str]]]:
@@ -356,17 +446,43 @@ def _aggregate_group(
 
 
 def _score_group(aggs: list[_ValueAgg], now: datetime) -> dict[str, float]:
-    """Compute the ``Q·C·R·F`` score for every non-junk cluster, keyed by value_key."""
-    max_distinct = max((a.distinct_source_count for a in aggs), default=0)
+    """Compute the ``Q·C·R·F`` score for every non-junk cluster, keyed by value_key.
+
+    FU5(c) — the quorum ``Q`` is normalized over the CREDIBILITY-WEIGHTED source
+    count (sum of each distinct source's credibility) rather than the raw
+    observation count, so syndication (many low-credibility copies) cannot
+    manufacture quorum. On the pure-logic path (no per-source credibility) the
+    weighted count degrades to the raw distinct count, so ``Q`` is unchanged there."""
+    max_distinct = max(
+        (a.credibility_weighted_source_count for a in aggs), default=0.0
+    )
     group_cred_total = sum(a.cred_sum for a in aggs)
     scores: dict[str, float] = {}
     for agg in aggs:
-        q = _quorum(agg.distinct_source_count, max_distinct)
+        q = _quorum(agg.credibility_weighted_source_count, max_distinct)
         c = _credibility_share(agg.cred_sum, group_cred_total)
         r = _recency(agg.latest_asserted_at, now)
         f = agg.confidence_mean
         scores[agg.value_key] = _arbiter_score(q, c, r, f)
     return scores
+
+
+def _is_unsurfaceable_value(value: str) -> bool:
+    """FU5(b) — a value that must NEVER be SURFACED as a contention winner even if
+    its cluster passed the group junk gate (``_junk_reason``): a determiner /
+    numeral / stopword (``is_junk_entity``), a spaced-possessive tokenizer fragment
+    ('Donald Trump 's'), or a byline outlet name. Reuses the fact_extractor /
+    entity-canon junk predicates verbatim (never reimplemented). An EMPTY value is
+    NOT judged here (deferred — the group junk gate owns it), so a rep-less
+    pure-logic agg is unaffected."""
+    v = str(value or "").strip()
+    if not v:
+        return False
+    return (
+        is_junk_entity(v)
+        or _is_possessive_fragment(v)
+        or _is_source_publication_subject(v)
+    )
 
 
 def _select_winner(
@@ -409,6 +525,12 @@ def _select_winner(
     if best_score < MIN_SURFACE_SCORE:
         return None
     if runner_up_score > 0 and best_score < DOMINANCE_RATIO * runner_up_score:
+        return None
+    # FU5(b) — never SURFACE a junk value (determiner / numeral / possessive
+    # fragment / byline outlet) as the winner even if it cleared both score gates;
+    # abstain instead (an honest "no clean winner"). The group junk gate already
+    # excludes junk CLUSTERS, but the possessive/byline classes slip past it.
+    if _is_unsurfaceable_value(best.representative_value):
         return None
     return best
 
@@ -788,6 +910,83 @@ async def _collapse_group(conn: Any, contention_id: UUID) -> None:
     )
 
 
+async def _process_group(
+    conn: Any,
+    subject_key: str,
+    predicate_key: str,
+    group_rows: list[Mapping[str, Any]],
+    *,
+    now: datetime,
+    llm: Any | None,
+    llm_tiebreaks_left: int,
+    counts: dict[str, int],
+    live_keys: set[tuple[str, str]],
+) -> int:
+    """Cluster + score + surface ONE contention group, updating ``counts`` /
+    ``live_keys`` and returning the (possibly-decremented) LLM tie-break budget.
+
+    Shared by the normal (subject, predicate) pass and the FU5(a) role-keyed pass —
+    both feed the SAME detect-only pipeline (aggregate → junk-gate → score →
+    surface/abstain → sidecar + markers)."""
+    non_junk, junk = _aggregate_group(group_rows)
+    counts["junk_excluded"] += len(junk)
+    if len(non_junk) < 2:
+        # Not a genuine dispute (all-but-one value is junk, or a single clustered
+        # value). Collapse any pre-existing group for this key; else nothing to open.
+        existing = await conn.fetchval(
+            "SELECT id FROM fact_contention WHERE subject_key = $1 AND predicate_key = $2",
+            subject_key,
+            predicate_key,
+        )
+        if existing is not None:
+            await _collapse_group(conn, existing)
+            counts["groups_collapsed"] += 1
+        return llm_tiebreaks_left
+    live_keys.add((subject_key, predicate_key))
+    scores = _score_group(non_junk, now)
+    winner = _select_winner(non_junk, scores)
+    # Wave 2b — LLM tie-break on a NEAR-TIE abstain ONLY (decision #2). A WEAK
+    # abstain (cause 1) is left alone; a genuine deterministic winner is never
+    # second-guessed. Bounded by MAX_LLM_TIEBREAKS per pass.
+    if (
+        winner is None
+        and llm is not None
+        and llm_tiebreaks_left > 0
+        and _abstain_cause(non_junk, scores) == "near_tie"
+    ):
+        llm_tiebreaks_left -= 1
+        counts["llm_tiebreak_calls"] += 1
+        llm_winner = await _llm_tiebreak(
+            llm, subject_key, predicate_key, non_junk, scores, now,
+        )
+        # Observable BOTH ways: a near-tie that consults the LLM logs here even
+        # when the LLM ABSTAINS (returns None) — so "consulted + abstained" is
+        # never mistaken for "never consulted" (the ``llm_tiebreaks`` receipt
+        # counts only SUCCESSFUL picks).
+        logger.info(
+            "fact_contention_arbiter.llm_tiebreak subject=%r predicate=%r "
+            "outcome=%s",
+            subject_key, predicate_key,
+            f"pick:{llm_winner.value_key}" if llm_winner is not None else "abstain",
+        )
+        if llm_winner is not None:
+            winner = llm_winner
+            counts["llm_tiebreaks"] += 1
+    contention_id = await _upsert_group(conn, subject_key, predicate_key)
+    await _replace_group_values(conn, contention_id, non_junk, junk, scores, winner)
+    await conn.execute(
+        "UPDATE fact_contention SET junk_count = $2 WHERE id = $1",
+        contention_id,
+        len(junk),
+    )
+    await _finalize_group(conn, contention_id, non_junk, winner)
+    counts["groups_open"] += 1
+    counts["values_total"] += len(non_junk)
+    if winner is None:
+        counts["abstained"] += 1
+    return llm_tiebreaks_left
+
+
 async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
     """One full arbiter pass over the open facts. Idempotent.
 
@@ -810,67 +1009,20 @@ async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
     async with pool.acquire() as conn:
         rows = await _open_triples(conn)
         buckets = _bucket_rows(list(rows))
+        # FU5(a) — role-keyed clustering: person-subject 'leader of' rows re-keyed
+        # on (country, office) so two people both 'leader of US' cluster into one
+        # dispute the normal (subject, predicate) grouping cannot see.
+        role_rows = [_rekey_role_row(r) for r in await _open_functional_role_triples(conn)]
+        role_buckets = _bucket_rows(role_rows)
         live_keys: set[tuple[str, str]] = set()
-        for (subject_key, predicate_key), group_rows in buckets.items():
-            non_junk, junk = _aggregate_group(group_rows)
-            counts["junk_excluded"] += len(junk)
-            if len(non_junk) < 2:
-                # Not a genuine dispute (all-but-one value is junk, or a single
-                # clustered value). Collapse any pre-existing group for this
-                # triple; otherwise nothing to open.
-                existing = await conn.fetchval(
-                    "SELECT id FROM fact_contention WHERE subject_key = $1 AND predicate_key = $2",
-                    subject_key,
-                    predicate_key,
-                )
-                if existing is not None:
-                    await _collapse_group(conn, existing)
-                    counts["groups_collapsed"] += 1
-                continue
-            live_keys.add((subject_key, predicate_key))
-            scores = _score_group(non_junk, now)
-            winner = _select_winner(non_junk, scores)
-            # Wave 2b — LLM tie-break on a NEAR-TIE abstain ONLY (decision #2). A
-            # WEAK abstain (cause 1) is left alone; a genuine deterministic winner
-            # is never second-guessed. Bounded by MAX_LLM_TIEBREAKS per pass.
-            if (
-                winner is None
-                and llm is not None
-                and llm_tiebreaks_left > 0
-                and _abstain_cause(non_junk, scores) == "near_tie"
-            ):
-                llm_tiebreaks_left -= 1
-                counts["llm_tiebreak_calls"] += 1
-                llm_winner = await _llm_tiebreak(
-                    llm, subject_key, predicate_key, non_junk, scores, now,
-                )
-                # Observable BOTH ways: a near-tie that consults the LLM logs
-                # here even when the LLM ABSTAINS (returns None) — so "consulted
-                # + abstained" is never mistaken for "never consulted" (the
-                # ``llm_tiebreaks`` receipt counts only SUCCESSFUL picks).
-                logger.info(
-                    "fact_contention_arbiter.llm_tiebreak subject=%r predicate=%r "
-                    "outcome=%s",
-                    subject_key, predicate_key,
-                    f"pick:{llm_winner.value_key}" if llm_winner is not None else "abstain",
-                )
-                if llm_winner is not None:
-                    winner = llm_winner
-                    counts["llm_tiebreaks"] += 1
-            contention_id = await _upsert_group(conn, subject_key, predicate_key)
-            await _replace_group_values(conn, contention_id, non_junk, junk, scores, winner)
-            await conn.execute(
-                "UPDATE fact_contention SET junk_count = $2 WHERE id = $1",
-                contention_id,
-                len(junk),
+        for (subject_key, predicate_key), group_rows in {**buckets, **role_buckets}.items():
+            llm_tiebreaks_left = await _process_group(
+                conn, subject_key, predicate_key, group_rows,
+                now=now, llm=llm, llm_tiebreaks_left=llm_tiebreaks_left,
+                counts=counts, live_keys=live_keys,
             )
-            await _finalize_group(conn, contention_id, non_junk, winner)
-            counts["groups_open"] += 1
-            counts["values_total"] += len(non_junk)
-            if winner is None:
-                counts["abstained"] += 1
 
-        # Collapse any standing group whose triple no longer appears as a live
+        # Collapse any standing group whose key no longer appears as a live
         # >=2-cluster dispute (its values converged / aged out).
         stale = await conn.fetch(
             "SELECT id, subject_key, predicate_key FROM fact_contention WHERE status <> 'collapsed'"
