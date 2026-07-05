@@ -367,11 +367,11 @@ _PRESENT_FACT_VERB_RE = re.compile(
     # WOULD enrich uranium if talks fail") still reads forward-looking — the -s is
     # the disambiguator. Noun-homograph -s forms a prediction legitimately uses as
     # a subject (strikes / fires / shells / tests / sanctions / launches / signs /
-    # reports / hits) are DELIBERATELY excluded so "air strikes would confirm …"
-    # stays a forward-looking prediction.
-    r"conducts|enriches|deploys|seizes|imposes|expands|announces|halts|"
-    r"suspends|resumes|mobili[sz]es|expels|ratifies|withdraws|invades|"
-    r"unveils|escalates|annexes|besieges|bombards|occupies|captures|"
+    # reports / hits / halts / resumes / captures / annexes) are DELIBERATELY
+    # excluded so "air strikes would confirm …" stays a forward-looking prediction.
+    r"conducts|enriches|deploys|seizes|imposes|expands|announces|"
+    r"suspends|mobili[sz]es|expels|ratifies|withdraws|invades|"
+    r"unveils|escalates|besieges|bombards|occupies|"
     r"detains|ousts)\b"
 )
 

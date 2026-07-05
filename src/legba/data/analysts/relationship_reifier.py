@@ -419,6 +419,49 @@ def _is_sports_context(evidence_text: str) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# FU4 (round 2) — conflict / casualty guard on the sports downgrade.
+#
+# The D14 sports gate now runs over the UNION of the co-mention excerpt + ALL
+# backing source signals' title+summary (FU4 round 1). A proposed_edge
+# accumulates EVERY co-mention signal into ``derived_from``, so a genuinely
+# HOSTILE dyad (Gaza/Israel, Russia/Ukraine) that ever shared ONE signal
+# carrying sports vocabulary ("World Cup") would have the whole union read as a
+# sports frame → the real hostility downgraded to CoOccursWith / polarity 0.
+#
+# Guard: the sports downgrade fires ONLY when the union has a sports frame AND
+# NO conflict/casualty vocabulary anywhere in the union. If ANY backing signal
+# carries conflict vocab, the dyad is treated as real and the reifier's normal
+# hostility typing proceeds (no downgrade). A PURE sports fixture (sports frame,
+# no conflict vocab) is still downgraded — the FU4 round-1 gain is preserved.
+#
+# Curated to strongly-conflict, minimally sports-ambiguous terms (anchored on
+# word boundaries). Err toward NOT downgrading: the far worse error is erasing a
+# real interstate hostility, so a couple of dual-use conflict words (offensive /
+# war / troops / sanctions) that also brush sports contexts are accepted here.
+_CONFLICT_CASUALTY_RE = _re.compile(
+    r"\b(?:"
+    r"kill(?:ed|ings?)|casualt(?:y|ies)|wounded|"
+    r"air[\s-]?strikes?|shell(?:ed|ing)|bombard(?:ed|ment|ing)|"
+    r"bomb(?:ed|ing)|bombings?|missiles?|drones?|artillery|"
+    r"war|warfare|wartime|war\s+crimes?|invasion|invad(?:e|ed|ing)|"
+    r"offensive|siege|besieg(?:e|ed|ing)|ceasefire|cease[\s-]?fire|truce|"
+    r"sanctions|troops|soldiers|militants?|insurgents?|"
+    r"front[\s-]?line|genocide|massacres?|atrocit(?:y|ies)|combat|military"
+    r")\b",
+    _re.IGNORECASE,
+)
+
+
+def _has_conflict_context(text: str) -> bool:
+    """True when the text carries CONFLICT / CASUALTY vocabulary (FU4 round 2).
+
+    Pure. Used to BLOCK the sports downgrade: a real hostile dyad whose lineage
+    union happens to include a stray sports signal must never be erased. The
+    downgrade fires only when a sports frame is present AND this returns False."""
+    return bool(_CONFLICT_CASUALTY_RE.search(str(text or "")))
+
+
 def _canonical_polarity(rel_type: str, intent: Any) -> int:
     """Resolve the canonical sign DETERMINISTICALLY from (intent, rel_type) — D14.
 
@@ -528,7 +571,18 @@ def _coerce_typing(
     # D14 SPORTS GATE — a hostile typing over a sports/fixture co-mention is a
     # false antagonism (World-Cup group draw ≠ geopolitics). Downgrade it to a
     # neutral co-occurrence so the signed graph is not poisoned.
-    if intent == "hostile" and _is_sports_context(evidence_text):
+    #
+    # FU4 (round 2) — the gate runs over the UNION of the excerpt + all backing
+    # source signals (see :func:`_sports_gate_text`); a genuinely hostile dyad
+    # that ever shared one signal carrying sports vocab must NOT be downgraded.
+    # So the downgrade fires only when a sports frame is present AND NO conflict/
+    # casualty vocabulary sits anywhere in the union — otherwise it is a real
+    # dyad and the normal hostility typing proceeds.
+    if (
+        intent == "hostile"
+        and _is_sports_context(evidence_text)
+        and not _has_conflict_context(evidence_text)
+    ):
         intent = "neutral"
         rel_type = "CoOccursWith" if "CoOccursWith" in ALLOWED_REL_TYPES else rel_type
         logger.info(

@@ -1285,9 +1285,11 @@ async def supersede_prior_functional_role_facts(
 
       * 'leader of' — country is VALUE, person is SUBJECT: close prior open
         'leader of <country>' rows with a DIFFERENT person of the SAME office
-        (``data->>'role'``). A role-less incoming fact can't safely role-split a
-        dual-office country, so it takes NO office-keyed close (the plain
-        (subject, predicate) supersession the caller already ran still applies).
+        (``data->>'role'``, matched CASE-INSENSITIVELY so 'President' vs
+        'president' casing drift between re-seeds still closes the prior holder).
+        A role-less incoming fact can't safely role-split a dual-office country,
+        so it takes NO office-keyed close (the plain (subject, predicate)
+        supersession the caller already ran still applies).
       * 'head of state' / 'head of government' — country is SUBJECT, person is
         VALUE, office is the predicate: close prior open rows for the SAME country
         with a DIFFERENT person. (A no-op on the OFF path — supersede_prior_facts
@@ -1319,7 +1321,7 @@ async def supersede_prior_functional_role_facts(
              WHERE lower(predicate) = $2
                AND lower(value)     = lower($3)
                AND lower(subject)  <> lower($4)
-               AND coalesce(data->>'role', '') = $5
+               AND lower(coalesce(data->>'role', '')) = lower($5)
                AND valid_until IS NULL
                AND superseded_by IS NULL
                AND id <> $1

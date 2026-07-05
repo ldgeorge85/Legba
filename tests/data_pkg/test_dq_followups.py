@@ -76,6 +76,32 @@ def test_fu1_noun_homograph_prediction_not_misgraded():
     assert _is_forward_looking("air strikes would confirm the offensive") is True
 
 
+def test_fu1_trimmed_noun_homograph_verbs_removed():
+    """FU1 round 2 (nit) — the noun-homograph -s forms the exclusion policy meant
+    to avoid ('halts'/'resumes'/'captures'/'annexes') are trimmed from
+    _PRESENT_FACT_VERB_RE; the unambiguous present-tense EVENT verbs stay."""
+    from legba.data.provenance.verify import _PRESENT_FACT_VERB_RE
+
+    for noun_form in ("halts", "resumes", "captures", "annexes"):
+        assert _PRESENT_FACT_VERB_RE.search(noun_form) is None, noun_form
+    for verb in (
+        "conducts", "enriches", "deploys", "seizes", "imposes",
+        "withdraws", "invades", "expels", "ratifies", "mobilizes",
+    ):
+        assert _PRESENT_FACT_VERB_RE.search(verb) is not None, verb
+
+
+def test_fu1_trimmed_homograph_prediction_stays_forward_looking():
+    """A prediction whose subject is one of the newly-trimmed homographs ('captures
+    would confirm the offensive') is no longer flipped to a present fact — it stays
+    forward-looking and floor-exempt."""
+    from legba.data.provenance.verify import _is_fact_asserting, _is_forward_looking
+
+    pred = "further captures would confirm the offensive if the front collapses"
+    assert _is_forward_looking(pred) is True
+    assert _is_fact_asserting(pred) is False
+
+
 # ===========================================================================
 # FU2 — binding.py: absence-title suppression gated on sub-moderate severity
 # ===========================================================================
@@ -241,6 +267,36 @@ async def test_fu3_dual_office_country_not_collapsed(pg_pool):
     assert hos["valid_until"] is None and hos["superseded_by"] is None
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_fu3_role_casing_drift_still_closes_prior_holder(pg_pool):
+    """FU3 round 2 (minor) — the office key is matched CASE-INSENSITIVELY: a prior
+    holder seeded with role 'President' is still closed by a re-seed carrying
+    'president' (casing drift between adapter runs no longer skips the auto-close)."""
+    country = f"Caselandia{uuid4().hex[:8]}"
+    out_old, _ = await _write_leader_fact(
+        pg_pool, person=f"OldLeader{uuid4().hex[:6]}", country=country,
+        role="President",
+    )
+    assert out_old is not None
+    out_new, _ = await _write_leader_fact(
+        pg_pool, person=f"NewLeader{uuid4().hex[:6]}", country=country,
+        role="president",  # same office, different casing
+    )
+    assert out_new is not None
+
+    async with pg_pool.acquire() as conn:
+        old_row = await conn.fetchrow(
+            "SELECT valid_until, superseded_by FROM facts WHERE id=$1", out_old.id
+        )
+        new_row = await conn.fetchrow(
+            "SELECT valid_until, superseded_by FROM facts WHERE id=$1", out_new.id
+        )
+    assert old_row["valid_until"] is not None, "casing drift must not skip the close"
+    assert old_row["superseded_by"] == out_new.id
+    assert new_row["valid_until"] is None and new_row["superseded_by"] is None
+
+
 # ===========================================================================
 # FU4 — reifier sports gate over the UNION of source-signal texts (P5)
 # ===========================================================================
@@ -293,6 +349,74 @@ def test_fu4_real_conflict_dyad_not_downgraded_by_union():
     assert payload is not None
     assert payload.polarity == -1, "a real conflict dyad must NOT be downgraded"
     assert payload.intent == "hostile"
+
+
+def test_fu4_real_hostility_with_stray_sports_signal_not_downgraded():
+    """FU4 round 2 (BLOCKING) — a genuinely HOSTILE dyad whose lineage union
+    contains BOTH real conflict signals AND a stray UNAMBIGUOUS sports signal
+    ('World Cup') stays HOSTILE: the conflict/casualty vocab in the union BLOCKS
+    the sports downgrade (a real Gaza/Israel dyad is never erased because it once
+    co-occurred with a sports fixture in the same source pool)."""
+    from legba.data.analysts.relationship_reifier import (
+        _coerce_typing,
+        _has_conflict_context,
+        _is_sports_context,
+        _sports_gate_text,
+    )
+
+    cand = {
+        "evidence_text": "Israeli forces launched airstrikes on Gaza killing dozens",
+        # a stray World-Cup signal shares the source pool with the strike report
+        "source_signal_text": (
+            "World Cup 2026 qualifiers draw announced; "
+            "Israel bombards Gaza as casualties mount along the front line"
+        ),
+    }
+    gate = _sports_gate_text(cand)
+    # the union DOES read as a sports frame (unambiguous 'World Cup') ...
+    assert _is_sports_context(gate) is True
+    # ... but it ALSO carries conflict/casualty vocab, so the downgrade is blocked.
+    assert _has_conflict_context(gate) is True
+    payload = _coerce_typing(
+        {"related": True, "rel_type": "HostileTo", "subject": "Israel",
+         "object": "Gaza", "intent": "hostile"},
+        fallback_subject="Israel", fallback_object="Gaza",
+        evidence_text=gate,
+    )
+    assert payload is not None
+    assert payload.polarity == -1, "a real hostility must NOT be downgraded"
+    assert payload.intent == "hostile"
+
+
+def test_fu4_pure_worldcup_fixture_still_downgraded():
+    """FU4 round 2 — the round-1 gain is preserved: a PURE World-Cup fixture
+    (DR Congo face England, no conflict vocab anywhere in the union) is STILL
+    downgraded to a neutral co-occurrence."""
+    from legba.data.analysts.relationship_reifier import (
+        _coerce_typing,
+        _has_conflict_context,
+        _is_sports_context,
+        _sports_gate_text,
+    )
+
+    cand = {
+        "evidence_text": "DR Congo and England were drawn together on Tuesday",
+        "source_signal_text": (
+            "World Cup last-16: DR Congo face England with nothing to lose in the tie"
+        ),
+    }
+    gate = _sports_gate_text(cand)
+    assert _is_sports_context(gate) is True
+    assert _has_conflict_context(gate) is False  # no conflict vocab -> gate fires
+    payload = _coerce_typing(
+        {"related": True, "rel_type": "HostileTo", "subject": "DR Congo",
+         "object": "England", "intent": "hostile"},
+        fallback_subject="DR Congo", fallback_object="England",
+        evidence_text=gate,
+    )
+    assert payload is not None
+    assert payload.polarity == 0, "a pure sports fixture must be downgraded"
+    assert payload.intent == "neutral"
 
 
 @pytest.mark.integration
