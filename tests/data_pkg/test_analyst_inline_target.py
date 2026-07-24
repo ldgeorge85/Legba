@@ -42,6 +42,7 @@ from legba.data.analysts.inline_target import (
     _build_citation_index,
     _coerce_finding,
     _extract_citations,
+    _gather,
     _normalize_citation_markers,
     _orient,
     _render_user_prompt,
@@ -53,6 +54,7 @@ from legba.data.analysts.inline_target import (
 from legba.data.analysts.agency.agency import AgencyOutcome
 from legba.data.analysts.agency.tools import ToolResult
 from legba.data.provenance.models import FindingPayload
+from legba.runtime.actor_substrate_slice import _read_substrate_slice
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +667,98 @@ def test_build_citation_index_captures_snippet():
     # And _extract_citations carries the snippet onto the citation entry.
     citations, _, _ = _extract_citations("A claim [1].", index)
     assert citations[0]["snippet"] == "The FOMC held the target range steady."
+
+
+def test_build_citation_index_source_text_is_raw_not_distilled():
+    """TRUST BOUNDARY: the citation carries BOTH the analyst's working ``snippet``
+    (distilled-first, what the analyst READ) AND a ``source_text`` drawn ONLY from
+    the RAW source (raw_body → summary → description, never distilled_body). The
+    verify judge grounds faithfulness against ``source_text`` so a summarizer
+    hallucination in distilled_body can't be rubber-stamped."""
+    sid = uuid4()
+    sliced = [
+        {
+            "id": sid,
+            "title": "Rate decision",
+            "source_url": "https://x/1",
+            "data": {
+                # our LLM summary the analyst reads (may overreach)
+                "distilled_body": "The bank held rates and hinted at cuts.",
+                # the RAW authoritative article
+                "raw_body": "The central bank left its policy rate unchanged today.",
+            },
+        },
+    ]
+    index = _build_citation_index(sliced)
+    # snippet = what the analyst read (distilled-first)
+    assert index[1]["snippet"] == "The bank held rates and hinted at cuts."
+    # source_text = the RAW source ONLY (distilled_body deliberately excluded)
+    assert index[1]["source_text"] == "The central bank left its policy rate unchanged today."
+    # Both fields ride onto the citation entry for the verify judge.
+    citations, _, _ = _extract_citations("A claim [1].", index)
+    assert citations[0]["snippet"] == "The bank held rates and hinted at cuts."
+    assert citations[0]["source_text"] == "The central bank left its policy rate unchanged today."
+
+
+def test_build_citation_index_source_text_falls_back_to_summary():
+    """With no distilled_body/raw_body, snippet and source_text coincide on the
+    fallback source (summary) — the honest no-summarizer case."""
+    sid = uuid4()
+    sliced = [{
+        "id": sid, "title": "Floods", "source_url": "https://x/1",
+        "data": {"summary": "Flooding displaced thousands across the delta."},
+    }]
+    index = _build_citation_index(sliced)
+    assert index[1]["snippet"] == "Flooding displaced thousands across the delta."
+    assert index[1]["source_text"] == "Flooding displaced thousands across the delta."
+
+
+def test_build_citation_index_grounds_message_and_body_source_fields():
+    """F2: source_text precedence covers the message/full-text shapes the summarizer
+    distils from — telegram ``data['text']`` (~95% of volume) and discord /
+    common_crawl ``data['body']`` BOTH yield a non-empty source_text, so the judge
+    grounds on the raw field, not the distilled snippet."""
+    ids = [uuid4(), uuid4(), uuid4()]
+    sliced = [
+        {"id": ids[0], "title": "TG", "data": {
+            "distilled_body": "Distilled A.", "text": "Raw telegram body A."}},
+        {"id": ids[1], "title": "DC", "data": {
+            "distilled_body": "Distilled B.", "body": "Raw discord body B."}},
+        {"id": ids[2], "title": "CC", "data": {
+            "distilled_body": "Distilled C.", "content": "Raw content C."}},
+    ]
+    index = _build_citation_index(sliced)
+    # source_text grounds on the RAW message/full-text field, NOT distilled_body.
+    assert index[1]["source_text"] == "Raw telegram body A."
+    assert index[2]["source_text"] == "Raw discord body B."
+    assert index[3]["source_text"] == "Raw content C."
+    # snippet still = the distilled text the analyst actually READ.
+    assert index[1]["snippet"] == "Distilled A."
+    citations, _, _ = _extract_citations("A [1] B [2] C [3].", index)
+    assert citations[0]["source_text"] == "Raw telegram body A."
+    assert citations[1]["source_text"] == "Raw discord body B."
+
+
+def test_build_citation_index_flags_truncated_long_source():
+    """F1: when the cleaned raw source EXCEEDS the store cap the citation carries
+    ``source_truncated=True`` (so the judge treats it as an excerpt); a short source
+    does NOT carry the flag onto the citation (absent => complete)."""
+    from legba.data.analysts.inline_target import _SOURCE_TEXT_CHARS
+
+    sid = uuid4()
+    long_body = "word " * _SOURCE_TEXT_CHARS  # ~5x the cap after whitespace-collapse
+    sliced = [{"id": sid, "title": "Long", "data": {"raw_body": long_body}}]
+    index = _build_citation_index(sliced)
+    assert index[1]["source_truncated"] is True
+    assert len(index[1]["source_text"]) == _SOURCE_TEXT_CHARS
+    citations, _, _ = _extract_citations("A claim [1].", index)
+    assert citations[0]["source_truncated"] is True
+
+    short = [{"id": uuid4(), "title": "Short", "data": {"raw_body": "a brief note."}}]
+    sidx = _build_citation_index(short)
+    assert sidx[1]["source_truncated"] is False
+    scits, _, _ = _extract_citations("A claim [1].", sidx)
+    assert "source_truncated" not in scits[0]  # payload-minimal: absent => complete
 
 
 # ---------------------------------------------------------------------------
@@ -1614,3 +1708,324 @@ async def test_run_method_no_markers_leaves_no_citations_key():
     llm = _StubLLMHandler(content_override=json.dumps(fixture))
     result = await run_method(inputs, {"target_id": "t"}, InlineTargetDeps(llm=llm))
     assert "citations" not in result.finding.data
+
+
+# ---------------------------------------------------------------------------
+# Piece 1 — GATHER-gathered corpus docs are [N]-citable
+# ---------------------------------------------------------------------------
+
+
+class _MultiToolBinding:
+    """Binding double that returns a per-tool-name canned output dict.
+
+    Unlike ``_FakeBinding`` (one fixed output for every tool), this maps a tool
+    name → its result output so a test can drive a search_corpus turn and a
+    read_document turn with distinct SIGNAL-bearing shapes through one binding.
+    """
+
+    def __init__(self, outputs: dict[str, dict[str, Any]]) -> None:
+        self.outputs = outputs
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def run_tool(
+        self, tool_name: str, args: dict[str, Any], **kwargs: Any
+    ) -> AgencyOutcome:
+        self.calls.append((tool_name, dict(args)))
+        return AgencyOutcome(
+            admitted=True,
+            pack_id="substrate_read",
+            tool_name=tool_name,
+            tool_result=ToolResult(
+                status="completed", output=dict(self.outputs.get(tool_name, {}))
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_gather_numbers_corpus_signals_extension_and_dedup():
+    """PIECE 1(a): a GATHER over search_corpus + read_document numbers each
+    result signal ``[base_offset+1 ..]`` (continuing after the slice), DEDUPS a
+    signal returned by two calls (first N wins), and returns a citation-extension
+    whose entries carry the signal_id + the RAW ``source_text`` (NOT the
+    distilled_body — the faithfulness trust boundary)."""
+    sig_x = uuid4()
+    sig_y = uuid4()
+    # search_corpus returns X (row 0) and Y (row 1); read_document then RE-returns
+    # X — the dedup case (X keeps its first N; read_document's fields ignored).
+    outputs = {
+        "search_corpus": {
+            "rows": [
+                {
+                    "id": str(sig_x),
+                    "score": 1.0,
+                    "source": {
+                        "title": "Doc X",
+                        "raw_body": "RAW BODY OF X about the maritime treaty.",
+                        "distilled_body": "DISTILLED SUMMARY OF X",
+                    },
+                },
+                {
+                    "id": str(sig_y),
+                    "score": 0.9,
+                    "source": {"title": "Doc Y", "raw_body": "RAW BODY OF Y."},
+                },
+            ]
+        },
+        "read_document": {
+            "status": "found",
+            "doc_id": str(sig_x),
+            "document": {
+                "title": "Doc X (full, later fetch)",
+                "raw_body": "RAW BODY OF X about the maritime treaty.",
+                "distilled_body": "DISTILLED SUMMARY OF X",
+            },
+        },
+    }
+    binding = _MultiToolBinding(outputs)
+    llm = _ScriptedGatherLLM([
+        '{"tool": "search_corpus", "args": {"query": "maritime treaty"}}',
+        '{"tool": "read_document", "args": {"doc_id": "x"}}',
+        '{"done": true}',
+    ])
+    deps = InlineTargetDeps(llm=llm, max_rounds=3)
+
+    steps: list[dict[str, Any]] = []
+    (
+        gathered_context,
+        _usage,
+        _refs,
+        _gather_steps,
+        citation_extension,
+    ) = await _gather(
+        deps,
+        binding=binding,
+        user_prompt="prompt",
+        target_id=None,
+        analyst_id="corpus_researcher",
+        steps=steps,
+        base_offset=2,  # the run already numbered 2 slice signals [1],[2]
+    )
+
+    # Gathered signals continue after the slice: X -> [3], Y -> [4]. read_document
+    # re-returned X → deduped (no [5]); the extension has exactly {3, 4}.
+    assert set(citation_extension.keys()) == {3, 4}
+    assert citation_extension[3]["signal_id"] == str(sig_x)
+    assert citation_extension[4]["signal_id"] == str(sig_y)
+    # First-wins: X keeps the search_corpus title, NOT read_document's later one.
+    assert citation_extension[3]["title"] == "Doc X"
+    # FAITHFULNESS TRUST BOUNDARY: source_text is the RAW body, never distilled.
+    assert "RAW BODY OF X" in citation_extension[3]["source_text"]
+    assert "DISTILLED" not in citation_extension[3]["source_text"]
+    # snippet is the analyst's WORKING text (distilled-first — what it read).
+    assert citation_extension[3]["snippet"] == "DISTILLED SUMMARY OF X"
+    # The model SEES numbered [N] blocks for each corpus doc so it can cite them.
+    assert "[3] Doc X" in gathered_context
+    assert "[4] Doc Y" in gathered_context
+    # Both tool calls were dispatched through the governed binding.
+    assert [c[0] for c in binding.calls] == ["search_corpus", "read_document"]
+
+
+@pytest.mark.asyncio
+async def test_gathered_citation_extension_resolves_marker():
+    """PIECE 1(b): merging the gathered citation-extension into the slice-built
+    index makes a ``[gathered N]`` marker RESOLVE in ``_extract_citations`` — the
+    faithfulness fix (a corpus-mined [N] now binds to its source signal)."""
+    slice_ids = [uuid4(), uuid4()]
+    sliced = [_signal_row(id_=i) for i in slice_ids]
+    citation_index = _build_citation_index(sliced)  # keys [1], [2]
+
+    corpus_sig = uuid4()
+    binding = _MultiToolBinding({
+        "search_corpus": {
+            "rows": [{
+                "id": str(corpus_sig),
+                "source": {
+                    "title": "Treaty analysis",
+                    "raw_body": "The 1982 convention text in full.",
+                },
+            }]
+        }
+    })
+    llm = _ScriptedGatherLLM([
+        '{"tool": "search_corpus", "args": {"query": "treaty"}}',
+        '{"done": true}',
+    ])
+    deps = InlineTargetDeps(llm=llm, max_rounds=2)
+    (_ctx, _u, _r, _s, extension) = await _gather(
+        deps, binding=binding, user_prompt="p", target_id=None,
+        analyst_id="corpus_researcher", steps=[], base_offset=len(sliced),
+    )
+    # MERGE exactly as run_method does (slice keys win on any collision).
+    for n, entry in extension.items():
+        citation_index.setdefault(n, entry)
+
+    # Prose cites the slice [1] AND the gathered corpus doc [3].
+    body = "Slice claim [1]. Corpus-grounded claim [3]."
+    citations, marker_count, resolved = _extract_citations(body, citation_index)
+    assert marker_count == 2
+    assert resolved == 2
+    resolved_ids = {c["signal_id"] for c in citations}
+    assert str(slice_ids[0]) in resolved_ids
+    assert str(corpus_sig) in resolved_ids  # the gathered [3] now resolves
+
+
+# ---------------------------------------------------------------------------
+# Piece 2 — gather_only: skip the slice + proceed into GATHER on empty slice
+# ---------------------------------------------------------------------------
+
+
+class _SubStub:
+    def __init__(self, substrate: dict[str, Any]) -> None:
+        self.substrate = substrate
+        self.targets = None
+        self.time_window = None
+
+
+class _DescStub:
+    def __init__(self, substrate: dict[str, Any]) -> None:
+        self.subscription = _SubStub(substrate)
+
+
+@pytest.mark.asyncio
+async def test_read_substrate_slice_gather_only_returns_empty():
+    """PIECE 2(c): a gather_only descriptor short-circuits ``_read_substrate_slice``
+    to [] at the TOP — before any DB access — so the analyst gathers its own
+    evidence via tools instead of consuming the coarse cadence slice. (conn=None
+    proves no query runs.)"""
+    rows = await _read_substrate_slice(
+        None, descriptor=_DescStub({"direct_queries": True, "gather_only": True}),
+        target_filter=None,
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_run_method_gather_only_empty_slice_with_binding_proceeds():
+    """PIECE 2(d.1): gather_only + EMPTY slice + a GATHER binding PROCEEDS into
+    GATHER→synthesis (NOT the empty-slice NOOP) — the researcher assembles its
+    finding from gathered corpus evidence, not from a (non-existent) slice."""
+    final_json = (
+        '{"title": "Grounded finding", "body": "Corpus claim [1].", '
+        '"confidence": 0.7, "evidence": [], "tags": ["topic:corpus_research"]}'
+    )
+    corpus_sig = uuid4()
+    binding = _MultiToolBinding({
+        "search_corpus": {
+            "rows": [{
+                "id": str(corpus_sig),
+                "source": {"title": "Mined doc", "raw_body": "Full mined body."},
+            }]
+        }
+    })
+    llm = _ScriptedGatherLLM([
+        '{"tool": "search_corpus", "args": {"query": "topic"}}',
+        '{"done": true}',
+        final_json,
+    ])
+    deps = InlineTargetDeps(llm=llm, max_rounds=2)
+
+    result = await run_method(
+        [],
+        {"target_id": None, "gather_only": True, "agency_binding": binding},
+        deps,
+    )
+
+    # Proceeded to synthesis — NOT the empty-slice diagnostic finding.
+    assert result.finding.title == "Grounded finding"
+    assert "empty_slice" not in result.finding.tags
+    phases = [s["phase"] for s in result.intermediate_steps]
+    assert "reason" in phases  # the synthesis LLM call happened
+    assert "gather" in phases
+    # The gathered corpus doc was numbered [1] (empty slice → base_offset 0) and
+    # its [1] marker resolved to the corpus signal.
+    citations = result.finding.data.get("citations") or []
+    assert any(c["signal_id"] == str(corpus_sig) for c in citations)
+    # L1 lineage: a [N]-cited corpus doc (no `refs` key on search_corpus) still
+    # reaches derived_from via the gathered-signal → refs fold.
+    assert corpus_sig in result.derived_from
+
+
+@pytest.mark.asyncio
+async def test_gather_search_signals_not_numbered_no_regression():
+    """M1: search_signals results are NOT numbered [N] (its FTS rows carry no
+    body → a title-only citation would spuriously DEMOTE faithfulness). It stays
+    a prose-summary tool exactly as before — no citation_extension entry, no
+    numbered block — and its `refs` still extend lineage the normal way."""
+    ref_id = uuid4()
+    row_id = uuid4()
+    binding = _MultiToolBinding({
+        "search_signals": {
+            "refs": [str(ref_id)],
+            "rows": [{"id": str(row_id), "title": "An FTS hit", "rank": 0.9}],
+        }
+    })
+    llm = _ScriptedGatherLLM([
+        '{"tool": "search_signals", "args": {"query": "energy"}}',
+        '{"done": true}',
+    ])
+    deps = InlineTargetDeps(llm=llm, max_rounds=2)
+    (gathered_context, _u, refs, _s, extension) = await _gather(
+        deps, binding=binding, user_prompt="p", target_id=None,
+        analyst_id="unit", steps=[], base_offset=3,
+    )
+
+    # NOT numbered — no citation-extension entry, no [N] block for the FTS row.
+    assert extension == {}
+    assert "[4]" not in gathered_context
+    # Stays a prose summary (the pre-change shape).
+    assert "search_signals(" in gathered_context
+    # Its own `refs` still extend lineage (unchanged path).
+    assert ref_id in refs
+
+
+@pytest.mark.asyncio
+async def test_run_method_gather_only_no_gathered_evidence_noops():
+    """L2: gather_only + EMPTY slice + a binding, but GATHER gathers NOTHING (the
+    model says done with no tool call) → NOOP gracefully with the empty-slice
+    diagnostic instead of synthesizing a zero-citation finding over 0 signals."""
+    binding = _MultiToolBinding({})
+    # GATHER immediately says done (no tool call) → no gathered_context, no
+    # citation_extension. A synthesis JSON is scripted but must NOT be consumed.
+    llm = _ScriptedGatherLLM([
+        '{"done": true}',
+        '{"title": "SHOULD NOT SYNTHESIZE", "body": "x", "confidence": 0.9, '
+        '"evidence": [], "tags": []}',
+    ])
+    deps = InlineTargetDeps(llm=llm, max_rounds=2)
+
+    result = await run_method(
+        [],
+        {"target_id": None, "gather_only": True, "agency_binding": binding},
+        deps,
+    )
+
+    # NOOPed on no gathered evidence — the synthesis was NOT run.
+    assert result.finding.title.startswith("No signals")
+    assert "empty_slice" in result.finding.tags
+    assert result.finding.title != "SHOULD NOT SYNTHESIZE"
+    # Exactly ONE LLM call (the single GATHER 'done' turn); synthesis never fired.
+    assert len(llm.calls) == 1
+    phases = [s["phase"] for s in result.intermediate_steps]
+    assert any(
+        s.get("kind") == "noop_no_gathered_evidence" for s in result.intermediate_steps
+    )
+    assert "reason" not in phases
+
+
+@pytest.mark.asyncio
+async def test_run_method_gather_only_empty_slice_no_binding_still_noops():
+    """PIECE 2(d.2): gather_only + EMPTY slice + NO GATHER binding still NOOPs
+    gracefully — a tool-less synthesis on an empty slice would fabricate, so the
+    guard falls back to the empty-slice finding and makes ZERO LLM calls."""
+    llm = _StubLLMHandler()
+    deps = InlineTargetDeps(llm=llm)  # no agency_binding
+
+    result = await run_method(
+        [], {"target_id": None, "gather_only": True}, deps,
+    )
+
+    assert llm.calls == []  # never ran a tool-less synthesis
+    assert result.finding.title.startswith("No signals")
+    assert "empty_slice" in result.finding.tags
+    phases = [s["phase"] for s in result.intermediate_steps]
+    assert "reason" not in phases

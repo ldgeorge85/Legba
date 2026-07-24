@@ -80,19 +80,26 @@ def _services_for_profile(doc: dict, profile: str | None) -> set[str]:
 
 
 def test_substrate_services_unprofiled(compose_doc: dict) -> None:
-    """Plain `docker compose up -d` brings the 4 substrate services only.
+    """Plain `docker compose up -d` brings the 5 substrate services only.
 
     Regression guard (B4): `legba-caddy` must carry a `profiles:` key so it
     does NOT leak into the unprofiled substrate set. An earlier drift had
     caddy lose its `profiles:` entry, contaminating this set; the compose
     file now restores `profiles: [runtime]` on caddy and this test asserts
     the substrate set stays clean.
+
+    `opensearch` joined the always-on substrate set by design (the
+    signal-content-depth program's full-text corpus, backing
+    `search_corpus`/`read_document`, used by base-tier analysts — not gated
+    behind `--profile runtime`); docs/RUNBOOK.md already documents "5
+    substrate containers."
     """
     expected = {
         "redis",
         "postgres",
         "qdrant",
         "nats",
+        "opensearch",
     }
     actual = _services_for_profile(compose_doc, profile=None)
     assert actual == expected, (

@@ -114,6 +114,10 @@ async def test_sipri_real_curated_yaml_maps():
     """The shipped seeds/sipri_arms_transfers.yaml parses + maps to many
     signed +1 ArmsTransferTo nexuses (no fixture override)."""
     adapter = SIPRIArmsTransfersSeedSource()
+    if not adapter._yaml_path.exists():
+        pytest.skip(
+            "curated seed data not bundled (operator-provided); see seeds/README.md"
+        )
     raw = await adapter.fetch(SeedContext(dry_run=True))
     nexuses = [p for p in adapter.map(raw) if isinstance(p, SeedNexus)]
     assert len(nexuses) >= 12, "a couple dozen curated transfers"

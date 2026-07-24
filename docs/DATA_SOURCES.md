@@ -208,9 +208,9 @@ the reference deployment:
 
 | Source (descriptor) | Auth | Status |
 |---|---|---|
-| `source.telegram.org_channels` | Telegram API (id/hash/session) | **Active** — thousands of signals, hourly. The live exemplar of a credentialed source. |
+| `source.telegram.org_channels` | Telegram API (id/hash/session) | **Active** — re-authenticated 2026-07-16 with a fresh session, polling every 30 minutes (softened from 15). The live exemplar of a credentialed source. |
 | `source.gdelt.doc_api` | none (free `json_api`) | Registered; the handler works, but GDELT's free DOC API rate-limits (`429`) bursty polls. **Currently `paused`** in the reference deployment (flip to active to resume the spaced cron cadence). |
-| `source.acled.conflict` | **OAuth2 password grant** (account email + password) | **Handler migrated to OAuth2** (ACLED retired the legacy api-key method); creds **authenticate** (token issued). Activation is blocked one step upstream: the ACLED account must be **granted data-API access in the ACLED Access portal** (a read returns `403 Access denied` until then). Once granted, flip the descriptor to active. |
+| ~~`source.acled.conflict`~~ | OAuth2 password grant | **Removed from the wired set (operator decision, 2026-07-16).** The account never received the portal data-API grant (reads 403'd; 0 signals ever), so the descriptor and its poll history were deleted and the seed entry removed. The OAuth2 handler + seed-adapter *machinery* remain in-tree; re-wiring is a registration away if access is ever granted. |
 | `source.gdelt.bigquery` | GCP service account | descriptor-defined, **dormant** — no creds. |
 | `source.mediacloud.world` | MediaCloud API key | descriptor-defined, **dormant** — no creds. |
 | `source.opensanctions.api` · `.bulk` | API key / bulk download | descriptor-defined, **dormant**. |
@@ -218,8 +218,8 @@ the reference deployment:
 | `source.reliefweb.reports` | keyless, but `appname` must be **approved** by ReliefWeb | descriptor-defined, **dormant** — would `403` until the appname is approved. |
 
 The takeaway: of the credentialed tier only **Telegram** is fully productive;
-**GDELT-DOC** is wired but currently `paused` (rate-limit-managed); **ACLED** is
-code-ready and auth-validated but blocked on ACLED-side account authorization; the
+**GDELT-DOC** is wired but currently `paused` (rate-limit-managed); **ACLED** has
+been removed from the wiring entirely (operator decision — machinery kept); the
 rest ship as ready descriptors awaiting creds/infra.
 
 ---
@@ -676,7 +676,7 @@ How it works:
 2. Normalize the host: lowercase, strip `www.`, drop user-info + port, decode
    punycode (IDN).
 3. Look it up in the registry-backed `source_credibility` table (created in
-   `0001_baseline.sql`; the migration head is **0060**). On a miss, retry
+   `0001_baseline.sql`; the migration head is **0085**). On a miss, retry
    against progressively-trimmed parent domains
    (`news.bbc.co.uk` → `bbc.co.uk` → `co.uk`); first hit wins. A small
    per-instance TTL'd LRU cache (default 3600 s) avoids re-querying the same

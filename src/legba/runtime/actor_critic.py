@@ -191,6 +191,160 @@ def _critic_descriptor_pinned_analyst_id(descriptor: AnalystDescriptor) -> str |
 # ---------------------------------------------------------------------------
 
 
+# V1 (journal verify profile): cap the raw source_text carried per resolved
+# ref so a fat cited body can't blow the judge's context (mirrors the unit
+# bridge's evidence cap ethos).
+_JOURNAL_EVIDENCE_TEXT_CHARS = 4000
+
+# T-3: the honesty flag appended to a journal entry row when the verify pass's
+# support-judge marked ANY of its claims contradicted-by-its-own-source
+# (UnsupportedSpan.reason == 'judge_contradicted'). Durable + renderable — the
+# CONSEQUENCE arm of V1 (the gate DETECTED the Rubio inversion via judge_
+# contradicted; this makes the finding stick on the entry, not just in the
+# critique row). The verify report already CONTAINS this; T-3 only records it.
+_JOURNAL_CONTRADICTED_FLAG = "contradicted_claims"
+
+
+async def _stamp_journal_contradicted_flag(
+    conn: "asyncpg.Connection", entry_id: Any
+) -> None:
+    """Append ``contradicted_claims`` to a journal entry's ``honesty_flags`` array
+    (idempotent — never duplicates the flag). Degrade-not-fail: a write error is
+    logged and swallowed; a monitoring/consequence write must never break the run
+    that produced the entry (the entry already persisted; the critique already
+    landed). ``journal_entries.honesty_flags`` is a Postgres ``text[]``."""
+    try:
+        await conn.execute(
+            """
+            UPDATE journal_entries
+               SET honesty_flags = array_append(honesty_flags, $2)
+             WHERE id = $1
+               AND NOT (honesty_flags @> ARRAY[$2]::text[])
+            """,
+            entry_id,
+            _JOURNAL_CONTRADICTED_FLAG,
+        )
+    except Exception as exc:  # pragma: no cover — never break the run
+        logger.warning(
+            "actor_critic.journal_verify.contradicted_flag_write_failed "
+            "entry_id=%s err=%s", entry_id, exc,
+        )
+
+
+async def _resolve_journal_citation_bridge(
+    conn: asyncpg.Connection, ordered_refs: list[str]
+) -> list[dict[str, Any]]:
+    """Resolve a journal entry's cited substrate uuids into the standard
+    citations bridge the faithfulness verify binds ``[N]`` markers against.
+
+    ``ordered_refs[N-1]`` is the uuid behind marker ``[N]`` (the contract from
+    ``build_journal_verify_inputs``). Each ref may point at an
+    ``analyst_outputs`` row (findings/instrument outputs the GATHER tools
+    returned) or a raw ``signals`` row (the priming slice's citable ids) —
+    try both. An unresolvable ref still gets a bridge entry with empty
+    ``source_text`` (marked unresolved) so the ordinals never skew; the judge
+    treats absent evidence honestly rather than mis-binding the rest."""
+    entries: list[dict[str, Any]] = []
+    if not ordered_refs:
+        return entries
+    uuids: list[UUID] = []
+    for u in ordered_refs:
+        try:
+            uuids.append(UUID(u))
+        except (ValueError, AttributeError):
+            uuids.append(UUID(int=0))  # placeholder — resolves to nothing
+
+    resolved: dict[str, dict[str, Any]] = {}
+
+    async def _lookup(sql: str, keys: list[UUID]) -> list[Any]:
+        try:
+            return await conn.fetch(sql, keys)
+        except Exception:  # noqa: BLE001 — a table absent on a slim deploy
+            return []      # degrades to unresolved, never breaks the verify
+
+    # 1) analyst_outputs (findings / instrument outputs the GATHER tools return)
+    for r in await _lookup(
+        "SELECT id, title, body, analyst_id FROM analyst_outputs "
+        "WHERE id = ANY($1::uuid[])", uuids,
+    ):
+        resolved[str(r["id"]).lower()] = {
+            "title": str(r["title"] or "")[:300],
+            "source": str(r["analyst_id"] or "substrate"),
+            "source_text": str(r["body"] or "")[:_JOURNAL_EVIDENCE_TEXT_CHARS],
+        }
+    # 2) signals (the priming slice's citable ids)
+    still = [uu for u, uu in zip(ordered_refs, uuids) if u.lower() not in resolved]
+    for r in await _lookup(
+        "SELECT id, payload, canonical_url FROM signals WHERE id = ANY($1::uuid[])",
+        still,
+    ):
+        payload = r["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                payload = {}
+        if not isinstance(payload, Mapping):
+            payload = {}
+        title = next(
+            (str(payload[k]).strip() for k in ("title", "headline", "name")
+             if isinstance(payload.get(k), str) and payload[k].strip()), "",
+        )
+        body_txt = next(
+            (str(payload[k]).strip()
+             for k in ("distilled_body", "summary", "body", "text", "content")
+             if isinstance(payload.get(k), str) and payload[k].strip()), "",
+        )
+        resolved[str(r["id"]).lower()] = {
+            "title": title[:300],
+            "source": str(r["canonical_url"] or "signal")[:300],
+            "source_text": body_txt[:_JOURNAL_EVIDENCE_TEXT_CHARS],
+        }
+    # 3) the remaining legitimate journal ref kinds (mirrors the UI chip
+    #    resolver journal_api._REF_TABLES): situations / facts / nexuses /
+    #    hypotheses. For these row kinds the composed label IS the substance
+    #    (a fact's triple is its whole content), so it serves as source_text.
+    #    journal_entries stays DELIBERATELY absent (§3.5 + B0-8 de-echo: a
+    #    prior entry is the journal's own memory, not substrate evidence — a
+    #    fact claim resting only on self-citation is honestly unsupported).
+    for sql in (
+        "SELECT id, name AS label, name AS text FROM situations WHERE id = ANY($1::uuid[])",
+        "SELECT id, subject || ' ' || predicate || ' ' || value AS label, "
+        "subject || ' ' || predicate || ' ' || value AS text "
+        "FROM facts WHERE id = ANY($1::uuid[])",
+        "SELECT id, label, label AS text FROM nexuses WHERE id = ANY($1::uuid[])",
+        "SELECT id, LEFT(thesis, 240) AS label, thesis AS text "
+        "FROM hypotheses WHERE id = ANY($1::uuid[])",
+    ):
+        still = [uu for u, uu in zip(ordered_refs, uuids) if u.lower() not in resolved]
+        if not still:
+            break
+        for r in await _lookup(sql, still):
+            resolved[str(r["id"]).lower()] = {
+                "title": str(r["label"] or "")[:300],
+                "source": "substrate",
+                "source_text": str(r["text"] or "")[:_JOURNAL_EVIDENCE_TEXT_CHARS],
+            }
+
+    for i, u in enumerate(ordered_refs, start=1):
+        entry: dict[str, Any] = {"marker": f"[{i}]"}
+        hit = resolved.get(u.lower())
+        if hit is not None:
+            # signal_id ONLY on a genuinely resolved ref — the deterministic
+            # floor counts non-empty signal_id as support, so stamping it on an
+            # unresolved (possibly fabricated) uuid would let fabrication PASS
+            # the floor whenever the judge soft-fails (adversarial review C-1;
+            # the unit path's honesty guarantee, preserved).
+            entry["signal_id"] = u
+            entry.update(hit)
+        else:
+            entry["title"] = "(unresolved substrate ref)"
+            entry["source"] = "unresolved"
+            entry["source_text"] = ""
+        entries.append(entry)
+    return entries
+
+
 async def verify_inline_target_finding(
     conn: asyncpg.Connection,
     *,
@@ -198,6 +352,7 @@ async def verify_inline_target_finding(
     finding_id: UUID,
     finding_payload: Any,
     run_id: Any,
+    target_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Run the faithfulness verify pass over a just-emitted FINDING and PERSIST
     the verdict as a ``critique`` so the existing critic-actuation gate folds
@@ -228,6 +383,9 @@ async def verify_inline_target_finding(
     """
     kind = getattr(deps.descriptor.identity, "kind", None)
     body = str(getattr(finding_payload, "body", "") or "")
+    # M13/M15: the finding's title + run target feed the write/verify-time
+    # world-knowledge + cross-target guards inside verify_finding_faithfulness.
+    title = str(getattr(finding_payload, "title", "") or "")
     data = getattr(finding_payload, "data", None)
     citations = data.get("citations") if isinstance(data, Mapping) else None
     # S3-T1: the finding's structured I&W block, if any. A 'triggered' indicator
@@ -240,12 +398,34 @@ async def verify_inline_target_finding(
     # The honest-EMPTY composition returns before its CITE block with NO citations
     # key, and the GLOBAL meta never sets one → both are no-ops here (the second
     # gate; the first is the dapr_actors fire condition on target_id).
-    is_composition = kind == "meta_findings_synthesizer"
+    # M16 — the cross_analyst_correlator is graded through the SAME composition
+    # (sub-claim) verify path: it cites other analyst_outputs via ``[[ref:N]]``
+    # markers resolved into ``data['citations']`` (ref_kind='finding'), so its
+    # confidence is clamped to faithfulness like every other LLM peer. Verify only
+    # when a citation bridge is present (a blind_spot that is pure absence prose
+    # emits none → no-op, honest-low by construction).
+    # V1 (journal verify profile, the chronicle gate) — the journal_assessor
+    # kind (BOTH tiers: entry + consolidation share identity.kind). The entry's
+    # ``[[ref:<uuid>]]``-cited FACT claims are re-shaped into the standard
+    # ``[N]`` + citations-bridge form and graded by the SAME floor + judge;
+    # ``perspective`` claims never enter the document (§10 flag-never-strip —
+    # the entry itself is NEVER mutated; the verdict is a side critique row).
+    is_composition = kind in ("meta_findings_synthesizer", "cross_analyst_correlator")
+    is_journal = kind == "journal_assessor"
     if kind == "inline_target":
         pass
     elif is_composition:
         if citations is None:
             return None
+    elif is_journal:
+        from ..data.analysts.journal_assessor import build_journal_verify_inputs
+
+        body, ordered_refs = build_journal_verify_inputs(finding_payload)
+        if not body:
+            # An all-perspective (or all-uncited) entry has nothing judgeable —
+            # a valid entry, not a failure. REFLECT already flagged uncited facts.
+            return None
+        citations = await _resolve_journal_citation_bridge(conn, ordered_refs)
     else:
         return None
 
@@ -273,10 +453,30 @@ async def verify_inline_target_finding(
             judge_llm=deps.verify_judge,
             finding_confidence=finding_confidence,
             indicators=indicators,
+            title=title,
+            target_id=target_id,
         )
     except Exception as exc:  # pragma: no cover — verify must never break a run
         logger.warning(
             "actor_critic.verify.failed finding_id=%s err=%s", finding_id, exc,
+        )
+        return None
+
+    # JOURNAL judge-down honesty (j6 review #2, the "cheaper sibling" hole): a
+    # journal's deterministic floor is RESOLVE-based, and a token-sprayed entry
+    # cites real (resolvable) ids — so a floor-only score would certify
+    # fabricated attribution whenever the judge soft-fails. For the journal
+    # profile ONLY: if the LLM judge did not actually run, land NO critique row
+    # at all — an UN-JUDGED entry (the chronicle gate treats critique-absent as
+    # not-cleared, never as resolve-passed). Units/compositions keep the
+    # labelled floor fallback (their bridges carry source_text the floor
+    # meaningfully checks; the journal's failure mode is attribution itself).
+    if is_journal and report.judge_status != "llm":
+        logger.warning(
+            "actor_critic.journal_verify.judge_unavailable entry_id=%s reason=%s "
+            "— entry left UN-JUDGED (no critique row; floor would certify "
+            "resolvable-but-unsupporting citations)",
+            finding_id, report.judge_unavailable_reason,
         )
         return None
 
@@ -306,11 +506,16 @@ async def verify_inline_target_finding(
         target_version=None,
     )
     try:
+        # C-3 (adversarial review): a JOURNAL critique's subject lives in
+        # journal_entries, which the integrity sweep's lineage catalogs do not
+        # (and should not) cover — stamping the entry id into derived_from
+        # would permanently pollute the dangling-lineage audit. The linkage
+        # already lives in data.analyzed_output_id; findings keep the edge.
         row, dlq = await write_critique(
             conn,
             analyst_ctx=ctx,
             payload=payload,
-            derived_from=[finding_id],
+            derived_from=([] if is_journal else [finding_id]),
         )
         if row is None:
             logger.warning(
@@ -322,5 +527,17 @@ async def verify_inline_target_finding(
             "actor_critic.verify.persist_failed finding_id=%s err=%s",
             finding_id, exc,
         )
+
+    # T-3: CONSEQUENCE for a contradicted claim. The verify report's support-judge
+    # marks a claim contradicted-by-its-own-source with reason 'judge_contradicted'
+    # (verify.py). When a JOURNAL entry carries any such verdict, append a durable,
+    # renderable 'contradicted_claims' honesty flag to the entry row itself — so the
+    # finding sticks on the entry, not only in the side critique. Degrade-not-fail
+    # (the stamp helper swallows write errors); never touches the API/UI.
+    if is_journal and any(
+        getattr(s, "reason", None) == "judge_contradicted"
+        for s in report.unsupported_spans
+    ):
+        await _stamp_journal_contradicted_flag(conn, finding_id)
 
     return report.as_dict()

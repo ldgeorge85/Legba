@@ -94,6 +94,16 @@ def substrate_up():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _pin_composition_floor_default(monkeypatch):
+    """B0-1 (2026-07-10): the LIVE deploy sets ``LEGBA_COMPOSITION_VERIFY_FLOOR``
+    in .env (0.50), and this suite's environment may inherit it — which would
+    flip every floor-plumbing assertion written against the code DEFAULT (0.0).
+    Strip it so tests are deterministic regardless of the host .env; a test that
+    wants to exercise the override sets it explicitly via monkeypatch.setenv."""
+    monkeypatch.delenv("LEGBA_COMPOSITION_VERIFY_FLOOR", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Persistent pivot-test database (legba_pivot_test)
 # ---------------------------------------------------------------------------

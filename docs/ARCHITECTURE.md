@@ -66,11 +66,11 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 - **Maintenance / GC** (deterministic analysts on cadence, `data/analysts/deterministic_handlers/`): `fact_decay` / `nexus_decay` (temporal-confidence decay + expiry), `finding_supersession`, `entity_gc`, `signals_retention` (0036), `integrity_sweep`, `reminder_gc` (`runtime/reminder_gc.py`, GC of reminders for retired `actor_state` rows). These UPDATE/prune pre-existing rows.
 - **Per-source liveness watchdog** (`liveness_watchdog.check_source_cadence_once`, cadence): detects a silent source by comparing `now()` to `max(signals.fetched_at)` per source, then lateral-joins `source_poll_outcomes` (0046) for the *why* — `SourceActor.pull_once` writes a `source_poll_outcomes` row for every NON-productive poll (empty HTTP-200-with-0-signals, or error; productive polls are self-evidencing via their `signals` rows and are not logged), carrying the handler's own health diagnosis so the watchdog alert (and the UI) can distinguish a genuinely quiet feed from a broken one.
 - **Meta-analysts over the substrate** (altitude 2): `meta_findings_synthesizer` / `cross_analyst_correlator` / `competing_hypotheses` / `calibration_tracking` — they read accumulated outputs, not signals (Tier-2 cadence, but analysis-of-analysis rather than first-order).
-- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0060`, current head **0060**): schema evolution, applied PG-direct out of band. The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), the `unit_reference_labels` correctness-gold table (0057, §5.10), and the composition-supersession fold + critique index + null-target composition-head fold (0058–0060, supporting the one-live-head-per-desk composition tower).
+- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0085`, current head **0085**): schema evolution, applied PG-direct out of band. Beyond 0060 the chain adds the contested-claims + data-quality-program migrations (0061–0075), the 2026-07-06 audit sweep (0076–0080: entity re-fold + junk gate, semantic/junk-fact close, nexus junk/self-edge/dyad canonicalize, cross_correlator stale-head sweep, state-media `source_credibility` seed — the 0077–0080 closes are reversible), and the signal-content-depth / NER-reenrich wave (0081–0085: the `signal_summarized` / `signal_indexed` / reindex-summarized / `signal_embedding` / `signal_reenriched` markers that drive the OpenSearch corpus + Qdrant embeddings + NER backfill). The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), the `unit_reference_labels` correctness-gold table (0057, §5.10), and the composition-supersession fold + critique index + null-target composition-head fold (0058–0060, supporting the one-live-head-per-desk composition tower).
 
 ### 0.1 Substrate data inventory — what is kept where, written-by / read-by
 
-Per store, the actual datasets and their producers/consumers (verified 2026-06). The runtime substrate is **four backing services** — Postgres+AGE, NATS JetStream, Qdrant, Redis (the time-series-metrics and full-text-search stores that earlier drafts over-claimed have been removed; see SEAMS):
+Per store, the actual datasets and their producers/consumers (verified 2026-06). The runtime substrate is **five backing services** — Postgres+AGE, NATS JetStream, Qdrant, Redis, OpenSearch (the time-series-metrics store that earlier drafts over-claimed has been removed; full-text search, by contrast, is **LIVE and load-bearing** on a single-node OpenSearch cluster; see SEAMS):
 
 | Store | Datasets kept | Written by | Read by |
 |---|---|---|---|
@@ -78,9 +78,10 @@ Per store, the actual datasets and their producers/consumers (verified 2026-06).
 | **NATS JetStream** | **transport / events, NOT a dataset store** — `legba_signals` (interest-retention signal bus), 4 registry-lifecycle streams, the DLQ stream, work-queues, consult-step relay. Transient fan-out; the durable copy is always in PG | SourceActors (signal publish), registry (lifecycle events), analysts (output envelopes + consult steps) | subscription consumers, the reconcile loop, the SSE relay, job workers |
 | **Qdrant** | **3 collections** — `legba_signals` (signal vectors, 1024-dim BGE-M3 cosine, ingest-dedupe tiers 3-4) **plus the two LIVE RAG corpora** `tradecraft` (~1716 chunks) and `world_context` (~293 chunks), both 1024-dim bge-m3 cosine, embedded through the stack embedder port | Tier-1 dedupe / embedder; the RAG loader (`data/rag/`) for the corpora | dedupe tier 3-4; consult `vector_search` + `search_context`; the **live** grounding resolver — `vector:world_context` retrieval is provisioned and flipped ON for `leadership_transition` + `internal_stability` (opportunistic, relevance-floored, country-filtered, degrade-not-drop), §5.8 |
 | **Redis** | **TTL'd cache only** — geocode cache, ingest-dedup hints, registry-health, intelmq source state (~84 keys live) | Tier-1 filters, health checker | the same filters / health (cache-aside; never a source of truth) |
+| **OpenSearch** (single-node) | **1 index** — `legba_signals_corpus` (BM25 full-text over the whole raw body of every ingested signal, ~112k docs — the signal-content-depth corpus) | the `corpus_indexer` deterministic analyst (full-body signal reads → OpenSearch) | the `search_corpus` (BM25 lexical search) + `read_document` (by-id full-doc fetch) substrate-read tools; the `corpus_researcher` / `cross_doc_corroborator` agentic analysts |
 | **SeaweedFS** | object store for retained media — **schema-slotted stack-component kind; NO handler shipped** (eager-media extraction is a seam, §6.3) | (none) | (none) |
 
-> **Removed stores.** A dedicated time-series-metrics store (Grafana/TimescaleDB observability) and a full-text-search backing (OpenSearch BM25, primary + audit) were both *provisioned-but-idle* with zero callers and have been **removed from the codebase**. Time-series metrics and full-text search are now **declared seams** (see SEAMS): there is no metrics store, and `search_signals` uses Postgres FTS (`to_tsvector`/`plainto_tsquery`). `anomaly_detection` is unaffected — it reads `time_bucket()` from the **primary Postgres pool**, not a separate cluster.
+> **OpenSearch (LIVE full-text corpus) + the one removed store.** A dedicated time-series-metrics store (Grafana/TimescaleDB observability) was *provisioned-but-idle* with zero callers and has been **removed from the codebase**; time-series metrics are now a **declared seam** (see SEAMS) — there is no metrics store, and `anomaly_detection` reads `time_bucket()` from the **primary Postgres pool**, not a separate cluster. Full-text search, by contrast, is **LIVE and load-bearing**: a **single-node OpenSearch cluster** (service `legba-opensearch-1`) holds the `legba_signals_corpus` index — the full raw body of every ingested signal (~112k docs), populated by the `corpus_indexer` deterministic analyst and queried by the `search_corpus` / `read_document` substrate-read tools (the signal-content-depth subsystem, alongside `signal_summarizer`, `signal_embedder` → Qdrant `vector_search`, `corpus_researcher`, and `cross_doc_corroborator`). The legacy `search_signals` tool still uses Postgres FTS (`to_tsvector`/`plainto_tsquery`).
 
 ---
 
@@ -101,7 +102,7 @@ lens for the rest of this document.
 | **top — Banded scorecard + skill scoreboard** | one banded per-country row from high-precision RULES over already-verified claims (demote-never-promote) + the per-unit skill numbers | `scorecard_producer` (deterministic META, 12th OutputKind `scorecard`), `unit_correctness_scorer` / `calibration_tracking` / `forecast_scoreboard` | **LIVE** — honest: an unqualified dimension reads `insufficient-evidence`; the live scorecard is a MIX (some countries band, e.g. the US reads all-insufficient because its unit faithfulness is genuinely low); the forecast pilot reports NO proven skill (§5.10) |
 | **2 — Second-order** | hypotheses (competing claims, ACH matrix; per-cell scoring is LLM-scored on Heuer CC/C/N/I/II with a lexical fallback — §5.3) | the **`competing_hypotheses`** (alias `ach`) META analyst + `calibration_tracking` (Brier reads `resolved_outcome`; exogenous resolver built + firing — subsequent-facts auto-resolver that ABSTAINS on undirected theses + operator-label path — alongside the live self-consistency tier, §5.3) | **LIVE** — ≈940 hypotheses (253 confirmed / 287 refuted / ≈400 active) (§5.7) |
 | **3 — On-demand deep** | deep consult (a staged analytical job: plan→acquire→analyze→synthesize) | the **deep-consult Dapr Workflow** | **LIVE** — registered alongside `optimizer_workflow` (§9) |
-| **across — Reflective voice (OFF-CHAIN)** | the **journal** — Legba's first-person reflective voice; a `journal` row is a *perspective OVER* the whole flow, **NOT** a node in the fact/finding/nexus lineage (always-empty `derived_from`, excluded from the lineage catalog) | the **`journal_assessor`** META analyst (entry + consolidation tiers, per-phase LLM split: local gpt-oss/vLLM GATHER + Anthropic Opus 4.8 voice) | **LIVE, ON cadence** — runs as an introspective instrument (`journal_assessor` 12h entry + `journal_consolidator` daily); writes ONLY `journal_entries`, off the fact/finding/nexus chain, so it cannot pollute product output (routing its reflections back via a human-gated proposal queue is a FUTURE item); `OutputKind.JOURNAL` + dedicated `journal_entries` table (migration 0048); §8.4 |
+| **across — Reflective voice (OFF-CHAIN)** | the **journal** — Legba's first-person reflective voice; a `journal` row is a *perspective OVER* the whole flow, **NOT** a node in the fact/finding/nexus lineage (always-empty `derived_from`, excluded from the lineage catalog) | the **`journal_assessor`** META analyst (entry + consolidation tiers; per-phase LLM split, BOTH phases on the local gpt-oss/vLLM core plane — GATHER loop + VOICE — the voice previously ran on Anthropic Opus 4.8 but moved fully to core 2026-07-06, so the journal is $0 / no Anthropic spend) | **LIVE, ON cadence** — runs as an introspective instrument (`journal_assessor` 12h entry + `journal_consolidator` daily); writes ONLY `journal_entries`, off the fact/finding/nexus chain, so it cannot pollute product output (routing its reflections back via a human-gated proposal queue is a FUTURE item); `OutputKind.JOURNAL` + dedicated `journal_entries` table (migration 0048); §8.4 |
 
 Two clean regimes fall out: **extraction is always-on at ingest** (altitude 0,
 once per signal); **deep analysis is on-demand** (altitude 3). The entire stack —
@@ -505,7 +506,8 @@ never plaintext.
 | **Vault** | `stack_credentials` table, XSalsa20-Poly1305, versioned rotation | **LIVE** (`registry/credentials.py`) |
 | **Redis** | hot state / caches — geocode cache, ingest-dedup, registry health, intelmq source | **LIVE as a cache** (`data/redis.py`, `data/filters/geocode.py`, `data/filters/dedupe.py`) |
 | **SeaweedFS** | object store for retained media | **schema-slotted stack-component kind; NO handler shipped** |
-| time-series metrics / full-text search | observability store + BM25 backing | **REMOVED — declared seams** (no metrics store; `search_signals` uses Postgres FTS; see SEAMS) |
+| **OpenSearch** (single-node) | full-text signal corpus — `legba_signals_corpus` (~112k docs, BM25 over the whole raw signal body) | **LIVE** (`corpus_indexer` indexes; `search_corpus`/`read_document` read; `data/opensearch.py`) |
+| time-series metrics | observability store | **REMOVED — declared seam** (no metrics store; `search_signals` uses Postgres FTS; see SEAMS) |
 
 The Postgres `signals` table is the **source of truth** (canonical, persistent,
 queryable for batch reads and backfill, `data/migrations/0001_baseline.sql`);
@@ -515,12 +517,13 @@ mechanism rather than two. NATS subject tokens cannot contain dots, so
 `SourceDescriptor.id` is flattened by `subject_token()` (`data/nats.py:86-95`).
 
 > **Reality check.** The Postgres/AGE + NATS + Qdrant + vault + Redis-as-cache
-> set is what is actually exercised. SeaweedFS has a schema-slotted stack kind
-> but **no live substrate handler** — it is a declared seam, not a running
-> integration. (The former TimescaleDB metrics store and OpenSearch full-text
-> backing have been removed outright; time-series metrics and full-text search
-> are now declared seams — see SEAMS.) Earlier drafts listed all of these as if
-> first-class; this doc corrects that.
+> + OpenSearch set is what is actually exercised. SeaweedFS has a schema-slotted
+> stack kind but **no live substrate handler** — it is a declared seam, not a
+> running integration. (The former TimescaleDB metrics store has been removed
+> outright and time-series metrics is now a declared seam — see SEAMS. Full-text
+> search, by contrast, is **LIVE on a single-node OpenSearch cluster** — the
+> `legba_signals_corpus` index, ~112k docs, read via `search_corpus`/`read_document`.)
+> Earlier drafts listed all of these as if first-class; this doc corrects that.
 
 The data-analysis rigor arc (§5.7) added three things to the Postgres substrate
 (migrations live under `src/legba/data/migrations/`):
@@ -569,8 +572,9 @@ Analyst capability is **granted, not hard-coded**. An `ActionPack`
 *(tools + prompt fragments/rules + escalation channels + a per-pack governor +
 an applicability predicate)*. Seed packs: `media_processing` (`process_media`),
 `incident_response` (`escalate`/`create_incident` → channels), `substrate_read`
-(the consult kind's **~17 governed read tools**, incl. the live semantic
-`search_context` corpus search), and `escalate_finding` (the delivery edge: it
+(the consult kind's **19 governed read tools**, incl. the live semantic
+`search_context` corpus search + the `search_corpus`/`read_document` OpenSearch
+full-text readers), and `escalate_finding` (the delivery edge: it
 alerts a finding when **post-verify `effective_confidence × severity`** crosses its
 `confidence_gate` — a verify-demoted finding does not alert; severity is a
 first-class read column, not a tag; external delivery currently lands on the NATS
@@ -805,7 +809,7 @@ The whole subsystem is **flag-gated and ships OFF by default** (both
 `LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` default to OFF in
 code *and* in `docker-compose.yml` via `${VAR:-0}`); they are enabled (`=1`) only
 on this instance through the gitignored `.env`. The contested-claims schema landed
-at migrations 0054–0055; the current migration **head is 0060**.
+at migrations 0054–0055; the current migration **head is 0085** (0081–0085 = the signal-content-depth / NER-reenrich wave).
 
 **Per-fact source credibility (Wave 0, migration 0054).** A `facts.source_credibility
 real` column carries the trust weight of the most credible source backing a fact
@@ -948,7 +952,9 @@ ids) → the **VERIFY** pass below → an `effective_confidence` fold + drill-to
 provenance. Skill is a **per-unit** number (§ skill scoreboard), never a platform
 boast.
 
-**2 — The mandatory faithfulness verify pass.** Every cited finding is scored for
+**2 — The mandatory faithfulness verify pass.** Every cited finding — and every
+journal entry's cited fact claims (the journal verify profile; perspective
+spans are exempt and the entry is never mutated) — is scored for
 **faithfulness ∈ [0,1]** — *does each fact-asserting claim follow from its cited
 evidence?* — by `verify_finding_faithfulness` (`data/provenance/verify.py:263`).
 Two components:
@@ -1413,11 +1419,13 @@ ceiling); `budget_tokens_per_day: 2,000,000`; grounding enabled
 investigation loop runs on the **core OpenAI-compatible plane**
 (`llm.primary.openai_compat` — the local gpt-oss / vLLM plane, with a "Reasoning:
 high" directive injected into the gather system prompt only), and the **voice**
-(the in-voice field-notes seam + the NARRATE synthesis) runs on the **Anthropic
-plane, Opus 4.8** (`llm.anthropic.opus_4_7`). So Anthropic spend is just the
-bounded final voice synthesis (`max_tokens` governs only the Opus narrate — it is
-never sent to the vLLM gather, which uses its own server budget); the deep agentic
-loop is local. The deps builder reads `method.llm.narrate.raw` (optional;
+(the in-voice field-notes seam + the NARRATE synthesis) resolves a second handler
+(`method.llm.narrate`) that ALSO runs on the **core plane**
+(`llm.primary.openai_compat` — it previously ran on Anthropic Opus 4.8 but moved
+fully to core 2026-07-06, so the journal costs NO Anthropic spend; that plane is
+reserved for `consult`/`deep_consult`). So `max_tokens` governs only the narrate
+voice output — it is never sent to the vLLM gather, which uses its own server
+budget; the deep agentic loop is local. The deps builder reads `method.llm.narrate.raw` (optional;
 `method.llm` is an open dict, no schema change) and resolves a second handler —
 analysts without `method.llm.narrate` fall back to the single primary handler,
 byte-unchanged. Prompts: `legba.prompts.journal_assessor:JOURNAL_SYSTEM` (entry
@@ -1588,7 +1596,7 @@ Two properties hold across every layer and are not bolt-ons:
 
 The full loop — **altitudes 0 through 3** — runs end-to-end from cold-start
 (empty volumes, the `0001_baseline.sql` baseline + the forward chain
-`0032`…`0060` under `src/legba/data/migrations/`, current head **0060** — the
+`0032`…`0085` under `src/legba/data/migrations/`, current head **0085** — the
 `facts`/`nexuses`/`seed_batches` schema plus the entity-profile composite key
 (`0035`), signals retention (`0036`), the AGE output label (`0037`), the ACH
 `resolved_outcome` column (`0038`), the consult-sessions tables (`0039`),
@@ -1600,7 +1608,10 @@ schema — `facts.source_credibility` (`0054`) + the `fact_contention` sidecar
 (`0055`, §5.9), a second dangling-`derived_from` prune (`0056`), the
 `unit_reference_labels` correctness-gold table (`0057`, §5.10), and the
 composition-supersession fold + critique index + null-target composition-head fold
-(`0058`–`0060`)):
+(`0058`–`0060`), the contested-claims + data-quality-program migrations
+(`0061`–`0075`), the 2026-07-06 audit sweep (`0076`–`0080`), and the
+signal-content-depth / NER-reenrich wave (`0081`–`0085`: the OpenSearch-corpus +
+Qdrant-embedding + NER-backfill markers)):
 
 - Real RSS sources (BBC / Deutsche Welle / Al Jazeera) acquire enriched signals —
   geo, language, and entity-class promoted to indexed columns; the
@@ -1666,8 +1677,9 @@ composition-supersession fold + critique index + null-target composition-head fo
   the same worker (plan→acquire→analyze→synthesize), submitted detached via
   `POST /api/v1/deep_consult` (202 + task_id), polled to a persisted finding.
 - An on-demand **consult** engine runs a ReAct analyst against the live substrate
-  (`POST /api/v1/consult`, `consult_on_demand` kind, ~17 governed read tools incl. the
-  live semantic `search_context` corpus search) in
+  (`POST /api/v1/consult`, `consult_on_demand` kind, 19 governed read tools incl. the
+  live semantic `search_context` corpus search + the `search_corpus`/`read_document`
+  OpenSearch full-text readers) in
   two modes: **`chat`** (default — multi-turn via a client-held `messages[]`, no
   durable finding; each ReAct step streamed to a request-scoped NATS subject and
   relayed to the browser as SSE via `GET /api/v1/consult/stream/{request_id}`)
@@ -1695,9 +1707,12 @@ layer (§5.7), which was the open frontier in the pre-2026-06 drafts. What is
 - **`stream` acquisition** — `poll | push` live; long-lived-consumer mode is a
   documented enum extension (§5.1).
 - **SeaweedFS object store** — schema-slotted stack kind; no live handler (§5.5).
-- **Time-series metrics / full-text search** — the former TimescaleDB metrics
-  store and OpenSearch BM25 backing were removed; both are declared seams now
-  (no metrics store; `search_signals` uses Postgres FTS) — see SEAMS.
+- **Time-series metrics** — the former TimescaleDB metrics store was removed; it
+  is a declared seam now (no metrics store; `anomaly_detection` reads
+  `time_bucket()` from the primary Postgres pool) — see SEAMS. (Full-text search
+  is **NOT** a seam: it is LIVE on a single-node OpenSearch cluster — the
+  `legba_signals_corpus` corpus, indexed by `corpus_indexer` and read via
+  `search_corpus`/`read_document`. `search_signals` still uses Postgres FTS.)
 - **Nexus → AGE-edge mirroring** — typed signed `nexuses` are the relational
   source of truth; mirroring them onto `legba_graph` edges is deferred (the
   `derived_from` AGE hook in `write_analyst_output` is left in place but not

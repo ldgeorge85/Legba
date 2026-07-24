@@ -70,7 +70,11 @@ G20_ISO2 = [
     "AR", "AU", "BR", "CA", "CN", "DE", "FR", "GB", "ID", "IN",
     "IT", "JP", "KR", "MX", "RU", "SA", "TR", "US", "ZA",
 ]
-WATCH_ISO2 = ["IL", "IR", "UA", "TW", "KP", "PK"]
+WATCH_ISO2 = [
+    "IL", "IR", "UA", "TW", "KP", "PK",
+    # A3 / DEC-C (2026-07-16): escalation-risk watch desks
+    "SD", "ML", "BF", "NE", "CD", "MM", "HT",
+]
 
 # Exactly one region tag per desk. Two assignments are judgment calls flagged to
 # the operator (see the task's operator_questions): RU spans Eurasia (filed
@@ -107,6 +111,14 @@ REGION_BY_ISO2: dict[str, str] = {
     "PK": "region_indo_pacific",   # S1-T2: Pakistan watch desk
     # Africa
     "ZA": "region_africa",
+    # A3 / DEC-C (operator-approved 2026-07-16): escalation-risk watch desks
+    "SD": "region_africa",         # Sudan
+    "ML": "region_africa",         # Mali
+    "BF": "region_africa",         # Burkina Faso
+    "NE": "region_africa",         # Niger
+    "CD": "region_africa",         # DR Congo
+    "MM": "region_indo_pacific",   # Myanmar
+    "HT": "region_americas",       # Haiti
 }
 
 # Watch tags per desk (canonical order: nuclear_watch, conflict_active,
@@ -135,6 +147,15 @@ WATCH_TAGS_BY_ISO2: dict[str, list[str]] = {
     "IR": ["nuclear_watch", "conflict_active", "sanctions_regime"],
     "KP": ["nuclear_watch", "sanctions_regime"],
     "PK": ["nuclear_watch"],   # S1-T2: declared nuclear state (IN-PK dyad)
+    # A3 / DEC-C (2026-07-16): the escalation-risk sample — all in active
+    # armed conflict or armed-group state-fragility as of mid-2026.
+    "SD": ["conflict_active"],
+    "ML": ["conflict_active"],
+    "BF": ["conflict_active"],
+    "NE": ["conflict_active"],
+    "CD": ["conflict_active"],
+    "MM": ["conflict_active", "sanctions_regime"],
+    "HT": ["conflict_active"],
 }
 
 # The full closed vocabulary this script may assign (region + watch). Used for a

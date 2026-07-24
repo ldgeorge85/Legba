@@ -81,6 +81,39 @@ DOCKER_RUN+=(-e "LEGBA_TEST_STRICT=${LEGBA_TEST_STRICT}")
 
 DOCKER_RUN+=(--entrypoint python "${TEST_IMAGE}")
 
+# Ensure the DISPOSABLE Postgres+AGE fixture for tests/journal_w1, w2, w4
+# is up before pytest runs (TEST_DEBT_RECON.md Bucket C). This is a
+# throwaway container, distinct from the persistent `postgres` compose
+# service (5432) — it lives on 127.0.0.1:5544 and is never part of the
+# live stack (grep confirms port 5544 appears nowhere in docker-compose*.yml).
+# Start-if-absent + idempotent, mirroring the legba_pivot_test pattern below:
+# a container already running is left alone; a stopped one is restarted;
+# a missing one is created. Best-effort — if docker itself is unreachable
+# here, the journal_w1/w2/w4 conftest's own skip (escalated to FAIL under
+# strict mode) surfaces the gap loudly rather than this step silently
+# swallowing it.
+_AGE_TEST_CONTAINER="legba-test-age-w1"
+if ! docker inspect "${_AGE_TEST_CONTAINER}" >/dev/null 2>&1; then
+  echo ">> Starting disposable ${_AGE_TEST_CONTAINER} (Postgres+AGE, 127.0.0.1:5544) ..." >&2
+  docker run -d --name "${_AGE_TEST_CONTAINER}" \
+    -e POSTGRES_USER=legba -e POSTGRES_PASSWORD=legba -e POSTGRES_DB=legba_w1 \
+    -p 127.0.0.1:5544:5432 apache/age:latest >/dev/null \
+    || echo ">> WARN: could not start ${_AGE_TEST_CONTAINER}; tests/journal_w1/w2/w4 will skip/fail their infra gate" >&2
+elif [ "$(docker inspect -f '{{.State.Running}}' "${_AGE_TEST_CONTAINER}" 2>/dev/null)" != "true" ]; then
+  echo ">> Restarting existing (stopped) ${_AGE_TEST_CONTAINER} ..." >&2
+  docker start "${_AGE_TEST_CONTAINER}" >/dev/null \
+    || echo ">> WARN: could not restart ${_AGE_TEST_CONTAINER}; tests/journal_w1/w2/w4 will skip/fail their infra gate" >&2
+fi
+# Wait up to 30s for it to accept connections (fresh apache/age init is fast,
+# ~5s observed) — best-effort, never blocks the run past the deadline.
+_age_deadline=$((SECONDS + 30))
+while [ $SECONDS -lt $_age_deadline ]; do
+  if docker exec "${_AGE_TEST_CONTAINER}" pg_isready -U legba >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
 # Ensure the fixed legba_pivot_test DB exists + is migrated before pytest
 # runs, so subsets that don't pull in the data_pkg conftest (e.g. a single
 # tests/runtime path) are still self-standing. Idempotent + best-effort:

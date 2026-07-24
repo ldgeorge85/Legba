@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
 import os
 import tempfile
 from contextlib import suppress
@@ -79,6 +80,68 @@ def _flood_wait_error_class():
         return FloodWaitError
     except ImportError:
         return None
+
+
+def _auth_error_classes() -> tuple[type[BaseException], ...]:
+    """Return telethon's SESSION-level auth error classes (or ``()``).
+
+    A revoked / expired / deauthorized MTProto session raises one of these on
+    EVERY request — they are systemic (the whole session is dead), NOT a
+    per-channel access problem (``ChannelPrivateError`` / ``ChannelInvalidError``
+    are deliberately excluded — those are one bad handle, not a dead session).
+    ``UnauthorizedError`` is telethon's base class for the 401 family
+    (AuthKeyUnregistered / SessionRevoked / SessionExpired / UserDeactivated /
+    ...); we also name the concrete leaves so a telethon layout that doesn't
+    re-export the base still matches. Returns ``()`` when telethon is
+    unavailable so callers degrade to a no-op.
+
+    Module-level (like :func:`_flood_wait_error_class`) so tests can
+    monkeypatch it to inject a stand-in auth error without importing telethon.
+    """
+    try:
+        from telethon import errors as _errors
+    except ImportError:
+        return ()
+    classes: list[type[BaseException]] = []
+    for name in (
+        "UnauthorizedError",        # base for the 401 family
+        "AuthKeyUnregisteredError",
+        "AuthKeyError",
+        "SessionRevokedError",
+        "SessionExpiredError",
+        "UserDeactivatedError",
+        "UserDeactivatedBanError",
+    ):
+        cls = getattr(_errors, name, None)
+        if isinstance(cls, type) and issubclass(cls, BaseException):
+            classes.append(cls)
+    return tuple(classes)
+
+
+_TELETHON_LOGGERS_TAMED = False
+
+
+def _tame_telethon_loggers() -> None:
+    """Raise telethon's chatty transport loggers to WARNING (H1).
+
+    A dead / expired / IP-blocked MTProto session drops telethon into a
+    transport-level reconnect loop that emits ``Connecting to …`` /
+    ``Connection … complete!`` / ``Server closed the connection`` at INFO
+    every few ms — a stuck session was measured at ~150 lines/sec, 95% of
+    the whole runtime log. We only ever want WARNING+ from telethon's
+    network layer; real errors still surface. Idempotent."""
+    global _TELETHON_LOGGERS_TAMED
+    if _TELETHON_LOGGERS_TAMED:
+        return
+    for name in (
+        "telethon",
+        "telethon.network",
+        "telethon.network.mtprotosender",
+        "telethon.network.connection",
+        "telethon.network.connection.connection",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    _TELETHON_LOGGERS_TAMED = True
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +240,36 @@ class TelegramChannelSourceConfig(BaseModel):
         default=200,
         ge=1,
         le=1000,
-        description="Hard cap on messages pulled per channel per pull. "
-                    "Telethon's iter_messages is paginated; this is a "
-                    "safety belt against runaway pulls on a busy channel.",
+        description="Hard cap on messages pulled per channel per pull in "
+                    "the NORMAL (no-backlog) case, and the per-PAGE size "
+                    "during bounded catch-up (see "
+                    "catchup_max_pages_per_channel). Telethon's "
+                    "iter_messages is paginated; this is a safety belt "
+                    "against runaway pulls on a busy channel.",
+    )
+    catchup_max_pages_per_channel: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Task #206 — bounded backlog catch-up. When a channel's "
+                    "stored cursor is more than one page "
+                    "(per_channel_message_limit) behind the newest message "
+                    "(the source dropped backlog because the gap exceeded "
+                    "the per-poll limit — e.g. the channel was unreachable "
+                    "for a while), the handler walks FORWARD from the "
+                    "cursor with min_id + reverse=True instead of a single "
+                    "newest-first page, so no message in the gap is "
+                    "skipped. Each page is still capped at "
+                    "per_channel_message_limit; this field is the HARD cap "
+                    "on how many such pages one channel may consume in ONE "
+                    "poll, so a catastrophic backlog (e.g. a channel down "
+                    "for weeks) can never flood a single poll — it drains "
+                    "over successive polls instead, at up to "
+                    "per_channel_message_limit * catchup_max_pages_per_"
+                    "channel messages per poll. The cursor advances (and "
+                    "persists) after every page, so a poll that hits this "
+                    "cap resumes exactly where it left off next time — no "
+                    "gap, no re-emission of the pages already drained.",
     )
     max_retries_per_channel: int = Field(
         default=5,
@@ -199,6 +289,32 @@ class TelegramChannelSourceConfig(BaseModel):
                     "Longer waits are treated as a transient failure for "
                     "the channel and skipped to the next pull.",
     )
+    auto_reconnect: bool = Field(
+        default=False,
+        description="Telethon transport auto-reconnect (H1). Default False: "
+                    "a dropped/dead session fails the pull fast and our "
+                    "per-channel retry loop reconnects deliberately, instead "
+                    "of telethon spawning a background hot-loop that floods "
+                    "the log at ~150 lines/sec on an expired session.",
+    )
+    connection_retries: int = Field(
+        default=3,
+        ge=0,
+        description="Bounded telethon transport connect/request retries. "
+                    "0 = a single attempt; a dead session then errors out "
+                    "cleanly rather than looping.",
+    )
+    connect_retry_delay_seconds: float = Field(
+        default=5.0,
+        ge=0.0,
+        description="Seconds between telethon transport connect retries "
+                    "(never 0 in prod → no busy-loop).",
+    )
+    connect_timeout_seconds: float = Field(
+        default=15.0,
+        ge=1.0,
+        description="Per-connect timeout handed to the telethon client.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +323,12 @@ class TelegramChannelSourceConfig(BaseModel):
 
 
 _STATE_KEY = "telegram_cursor"  # value: { channel_handle: int (max message_id) }
+# DQ-H5b (#88) — state-store key under which this handler records its poll
+# health, so SourceActor._record_poll_outcome can read the WHY for a
+# non-productive poll and turn a SWALLOWED systemic failure (a revoked session)
+# into an honest 'error' outcome instead of a silent 'empty'. Mirrors the RSS
+# handler's ``_RSS_HEALTH_KEY`` + ``health_state_key`` mechanism.
+_HEALTH_KEY = "telegram_health"
 
 
 @dataclass
@@ -214,6 +336,10 @@ class _PullStats:
     yielded: int = 0
     channels_ok: list[str] = field(default_factory=list)
     channels_failed: dict[str, str] = field(default_factory=dict)
+    # Channels whose pull failed with a SESSION-level auth error (revoked /
+    # expired session), tracked apart from transient give-ups so pull() can
+    # tell a systemic dead session from a per-channel hiccup.
+    channels_auth_failed: dict[str, str] = field(default_factory=dict)
     last_error: str | None = None
 
 
@@ -246,6 +372,9 @@ class TelegramChannelSourceHandler:
     schema_version: ClassVar[str] = "legba/source.telegram_channel/1-0-0"
     handler_version: ClassVar[str] = "0.1.0"
     config_schema: ClassVar[type[BaseModel]] = TelegramChannelSourceConfig
+    # DQ-H5b (#88) — state-store key the source actor reads to surface the WHY
+    # of a non-productive poll (a revoked session → 'error', not silent 'empty').
+    health_state_key: ClassVar[str] = _HEALTH_KEY
 
     # --- Construction ---------------------------------------------------
     def __init__(
@@ -402,48 +531,107 @@ class TelegramChannelSourceHandler:
 
         stats = _PullStats()
 
-        for channel_ref in cfg.channels:
-            handle = self._normalize_handle(channel_ref)
-            try:
-                async for sig in self._pull_channel(
-                    ctx=ctx,
-                    handle=handle,
-                    since=lower_bound,
-                    last_seen_id=int(cursors.get(handle, 0)),
-                    cfg=cfg,
-                ):
-                    stats.yielded += 1
-                    # Track max message_id per channel for cursor advance.
-                    mid = int(sig.payload.get("message_id", 0))
-                    if mid > cursors.get(handle, 0):
-                        cursors[handle] = mid
-                    yield sig
-                stats.channels_ok.append(handle)
-            except _ChannelGiveUp as gu:
-                stats.channels_failed[handle] = str(gu)
-                stats.last_error = str(gu)
-                ctx.logger.warning(
-                    "telegram_channel: %s give-up after retries: %s",
-                    handle, gu,
-                )
-                # do not advance cursor for this channel
-                continue
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 — last-ditch isolation
-                stats.channels_failed[handle] = repr(exc)
-                stats.last_error = repr(exc)
-                ctx.logger.warning(
-                    "telegram_channel: %s unexpected failure: %r",
-                    handle, exc,
-                )
-                continue
+        try:
+            for channel_ref in cfg.channels:
+                handle = self._normalize_handle(channel_ref)
 
-        await ctx.state_store.set(_STATE_KEY, cursors)
-        if stats.yielded > 0 or stats.channels_ok:
-            self._last_success_at = datetime.now(tz=timezone.utc)
-            self._rows_pulled_24h = stats.yielded  # last-pull approximation
-        self._last_error = stats.last_error
+                # Task #206 — durable-across-pages cursor persistence. A
+                # catch-up walk (see _pull_channel) can span MULTIPLE
+                # Telethon pages within one `pull` call; this closure lets
+                # it persist the cursor to the (crash-safe, Postgres-backed
+                # in production) state_store after EACH page, not just once
+                # at the very end of the whole multi-channel loop below. If
+                # the process dies mid-catch-up, the next poll resumes from
+                # the last-persisted page boundary — no drained page is
+                # re-walked, no pending backlog message is skipped.
+                #
+                # Deliberately UNCONDITIONAL (no ">" guard against the outer
+                # loop's own `cursors[handle] = mid` tracking below): by the
+                # time a page's own persist_cursor() call runs, every signal
+                # from that page has already been yielded UP to this outer
+                # `async for sig in self._pull_channel(...)` loop and its
+                # per-signal cursor bump has ALREADY executed (each `yield`
+                # inside the catch-up walk suspends into this exact loop
+                # body first) — so `new_cursor > cursors.get(_handle, 0)`
+                # would always read False here and silently skip every
+                # write. Persisting is idempotent (re-writing the current
+                # value is harmless); the whole point is the WRITE ITSELF
+                # landing durably once per page, not a redundant-write guard.
+                async def _persist_page_cursor(new_cursor: int, *, _handle: str = handle) -> None:
+                    if new_cursor > cursors.get(_handle, 0):
+                        cursors[_handle] = new_cursor
+                    await ctx.state_store.set(_STATE_KEY, dict(cursors))
+
+                try:
+                    async for sig in self._pull_channel(
+                        ctx=ctx,
+                        handle=handle,
+                        since=lower_bound,
+                        last_seen_id=int(cursors.get(handle, 0)),
+                        cfg=cfg,
+                        persist_cursor=_persist_page_cursor,
+                    ):
+                        stats.yielded += 1
+                        # Track max message_id per channel for cursor advance.
+                        mid = int(sig.payload.get("message_id", 0))
+                        if mid > cursors.get(handle, 0):
+                            cursors[handle] = mid
+                        yield sig
+                    stats.channels_ok.append(handle)
+                except _ChannelAuthFailure as af:
+                    # SESSION-level auth failure (revoked / expired session).
+                    # Systemic — tracked apart from a transient give-up so the
+                    # post-loop health decision can distinguish a dead session
+                    # (every channel auth-fails) from a one-off channel hiccup.
+                    stats.channels_auth_failed[handle] = str(af)
+                    stats.last_error = str(af)
+                    ctx.logger.warning(
+                        "telegram_channel: %s SESSION auth failure "
+                        "(session likely revoked/expired): %s",
+                        handle, af,
+                    )
+                    # do not advance cursor for this channel
+                    continue
+                except _ChannelGiveUp as gu:
+                    stats.channels_failed[handle] = str(gu)
+                    stats.last_error = str(gu)
+                    ctx.logger.warning(
+                        "telegram_channel: %s give-up after retries: %s",
+                        handle, gu,
+                    )
+                    # do not advance cursor for this channel
+                    continue
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — last-ditch isolation
+                    stats.channels_failed[handle] = repr(exc)
+                    stats.last_error = repr(exc)
+                    ctx.logger.warning(
+                        "telegram_channel: %s unexpected failure: %r",
+                        handle, exc,
+                    )
+                    continue
+
+            await ctx.state_store.set(_STATE_KEY, cursors)
+            if stats.yielded > 0 or stats.channels_ok:
+                self._last_success_at = datetime.now(tz=timezone.utc)
+                self._rows_pulled_24h = stats.yielded  # last-pull approximation
+            self._last_error = stats.last_error
+            # FIX 1 (fail-loud) — record this pull's health under
+            # ``health_state_key`` so a SWALLOWED systemic auth failure surfaces
+            # HONESTLY as a source 'error'. Reached whenever the channel loop
+            # runs to a natural conclusion; a revoked session yields zero
+            # signals (no cap), so the generator never suspends at a yield and
+            # this line always runs for that case.
+            await self._record_pull_health(ctx, stats)
+        finally:
+            # H1: the SourceActor builds a FRESH handler per pull, so the
+            # "held open across pulls" optimization never actually applies in
+            # production — and leaving the client connected leaks a telethon
+            # background reconnect task that hot-loops forever on a dead /
+            # expired session (the H1 flood). Tear it down whenever the pull
+            # generator finishes or is closed.
+            await self._disconnect()
 
     async def _pull_channel(
         self,
@@ -453,82 +641,306 @@ class TelegramChannelSourceHandler:
         since: datetime,
         last_seen_id: int,
         cfg: TelegramChannelSourceConfig,
+        persist_cursor: Callable[[int], Awaitable[None]] | None = None,
     ) -> AsyncIterator[Signal]:
-        """Pull one channel with exponential-backoff retry."""
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                entity = await self._client.get_entity(handle)
-                channel_info = self._extract_channel_info(entity, handle)
+        """Pull one channel — dispatches cold-start vs. bounded catch-up.
 
+        ``last_seen_id == 0`` (no stored cursor — first-ever pull for this
+        channel) takes the ORIGINAL newest-first, ``since``-bounded, single
+        page path UNCHANGED: that case is governed by ``lookback_hours``
+        (how far back to backfill on first activation), not a dropped-gap —
+        there is no cursor floor below which anything could have been lost.
+
+        ``last_seen_id > 0`` (a cursor exists — this is a RESUMED poll) takes
+        the #206 bounded catch-up path: page FORWARD from the cursor with
+        ``min_id=last_seen_id, reverse=True`` (Telethon returns oldest-first
+        starting just after ``min_id`` in this mode — see
+        ``_pull_channel_catchup``) instead of a single newest-first page.
+        This single mode correctly covers BOTH the everyday case (the gap
+        since the last poll is smaller than one page — the walk yields one
+        short page and stops, identical rows to the old code) AND the
+        genuine catch-up case (the gap exceeds one page — the walk continues
+        across bounded pages, capped by ``catchup_max_pages_per_channel``, so
+        no message between the cursor and "now" is ever skipped).
+
+        Both branches share the SAME retry/backoff/FloodWait/auth-failure
+        policy (``_apply_backoff_or_giveup`` — a straight extraction of the
+        pre-#206 inline logic, including the ``_ChannelAuthFailure`` fast
+        path checked BEFORE FloodWait, unchanged)."""
+        if last_seen_id <= 0:
+            async for sig in self._pull_channel_cold_start(
+                ctx=ctx, handle=handle, since=since, cfg=cfg,
+            ):
+                yield sig
+            return
+
+        async for sig in self._pull_channel_catchup(
+            ctx=ctx, handle=handle, last_seen_id=last_seen_id, cfg=cfg,
+            persist_cursor=persist_cursor,
+        ):
+            yield sig
+
+    async def _pull_channel_cold_start(
+        self,
+        *,
+        ctx: SourceContext,
+        handle: str,
+        since: datetime,
+        cfg: TelegramChannelSourceConfig,
+    ) -> AsyncIterator[Signal]:
+        """First-ever pull for a channel — original newest-first walk,
+        UNCHANGED from pre-#206 behavior. Bounded by ``lookback_hours`` /
+        ``since``, one page of ``per_channel_message_limit`` messages."""
+        entity = await self._resolve_entity_with_retry(ctx=ctx, handle=handle, cfg=cfg)
+        channel_info = self._extract_channel_info(entity, handle)
+
+        async def _fetch() -> AsyncIterator[Signal]:
+            count = 0
+            async for msg in self._client.iter_messages(
+                entity, limit=cfg.per_channel_message_limit,
+            ):
+                if count >= cfg.per_channel_message_limit:
+                    break
+                # Older than lower bound → stop walking (newest-first).
+                msg_date = self._normalize_msg_date(msg)
+                if msg_date is not None and msg_date < since:
+                    break
+                msg_id = getattr(msg, "id", None)
+                if msg_id is None:
+                    continue
+                count += 1
+                yield self._to_signal(
+                    msg=msg, channel_info=channel_info, ctx=ctx, cfg=cfg,
+                )
+
+        async for sig in self._run_with_retry(
+            ctx=ctx, handle=handle, cfg=cfg, fetch=_fetch,
+        ):
+            yield sig
+
+    async def _pull_channel_catchup(
+        self,
+        *,
+        ctx: SourceContext,
+        handle: str,
+        last_seen_id: int,
+        cfg: TelegramChannelSourceConfig,
+        persist_cursor: Callable[[int], Awaitable[None]] | None,
+    ) -> AsyncIterator[Signal]:
+        """Task #206 — bounded forward catch-up: page with min_id + reverse.
+
+        Walks OLDEST-to-newest starting just after ``last_seen_id``.
+        Telethon's ``iter_messages(..., min_id=N, reverse=True)`` excludes
+        messages with id <= N and returns ascending order (its docstring:
+        "min_id becomes equivalent to offset_id ... since messages are
+        returned in ascending order") — exactly the semantics needed to walk
+        forward from a cursor without skipping anything.
+
+        One page (one ``iter_messages`` call, retried independently via
+        ``_run_with_retry``) at a time, each capped at
+        ``per_channel_message_limit``. After every page that yields at least
+        one message, the cursor advances to that page's max message id and
+        is persisted immediately via ``persist_cursor`` — so a crash between
+        pages loses no progress, and a poll that hits the page cap below
+        resumes on the NEXT poll exactly where it left off (the persisted
+        cursor already reflects every page fully drained this poll).
+
+        Flood-cap: hard-stops after ``catchup_max_pages_per_channel`` pages
+        regardless of remaining backlog — a catastrophic gap (a channel
+        unreachable for weeks) can never flood a single poll. A short page
+        (fewer messages than ``per_channel_message_limit``) means the walk
+        has reached "now" — no need to burn the remaining page budget."""
+        cursor = last_seen_id
+        for page_num in range(1, cfg.catchup_max_pages_per_channel + 1):
+            entity = await self._resolve_entity_with_retry(
+                ctx=ctx, handle=handle, cfg=cfg,
+            )
+            channel_info = self._extract_channel_info(entity, handle)
+            page_cursor = cursor
+
+            async def _fetch(_cursor: int = cursor) -> AsyncIterator[Signal]:
+                # Defensive explicit count guard — mirrors the cold-start
+                # walk's own ``count >= limit: break`` (never trust
+                # ``iter_messages(limit=...)`` alone to bound the yielded
+                # count; the cold-start path never has, and a client whose
+                # ``limit`` handling differs — e.g. a lazily-truncating or
+                # simply non-conforming client — must not be able to smuggle
+                # more than one page's worth past the flood-cap accounting
+                # below, which counts on ``len(page_msgs)`` being an honest
+                # per-page size).
                 count = 0
                 async for msg in self._client.iter_messages(
                     entity,
                     limit=cfg.per_channel_message_limit,
+                    min_id=_cursor,
+                    reverse=True,
                 ):
                     if count >= cfg.per_channel_message_limit:
                         break
-                    # Older than lower bound → stop walking (newest-first).
-                    msg_date = self._normalize_msg_date(msg)
-                    if msg_date is not None and msg_date < since:
-                        break
-                    # Cursor short-circuit: messages strictly newer than
-                    # last_seen_id only.
                     msg_id = getattr(msg, "id", None)
                     if msg_id is None:
                         continue
-                    if msg_id <= last_seen_id:
-                        continue
                     count += 1
                     yield self._to_signal(
-                        msg=msg,
-                        channel_info=channel_info,
-                        ctx=ctx,
-                        cfg=cfg,
+                        msg=msg, channel_info=channel_info, ctx=ctx, cfg=cfg,
                     )
-                return  # done with this channel
+
+            page_msgs: list[Signal] = [
+                sig async for sig in self._run_with_retry(
+                    ctx=ctx, handle=handle, cfg=cfg, fetch=_fetch,
+                )
+            ]
+
+            for sig in page_msgs:
+                mid = int(sig.payload.get("message_id", 0))
+                if mid > page_cursor:
+                    page_cursor = mid
+                yield sig
+
+            if page_cursor > cursor:
+                cursor = page_cursor
+                if persist_cursor is not None:
+                    # Unconditional call (not gated on comparing against the
+                    # OUTER pull()-loop's own cursors[handle] tracking) —
+                    # pull()'s per-signal `cursors[handle] = mid` update has
+                    # ALREADY run for every message in this page by the time
+                    # control returns here (each `yield sig` above suspends
+                    # into that outer consuming loop, which updates its
+                    # local `cursors` dict before resuming this generator).
+                    # A gate comparing against that same dict would always
+                    # see "already caught up" and silently never persist —
+                    # persist_cursor's OWN internal state_store.set() is what
+                    # must fire once per page; it is idempotent (re-writing
+                    # the same already-current value is harmless).
+                    await persist_cursor(cursor)
+
+            if len(page_msgs) < cfg.per_channel_message_limit:
+                return  # short page — caught up to "now"
+
+            ctx.logger.info(
+                "telegram_channel: %s catchup page %d/%d full (cursor now "
+                "%d) — continuing",
+                handle, page_num, cfg.catchup_max_pages_per_channel, cursor,
+            )
+
+        ctx.logger.warning(
+            "telegram_channel: %s catchup hit the %d-page flood-cap "
+            "(cursor at %d) — remaining backlog resumes next poll",
+            handle, cfg.catchup_max_pages_per_channel, cursor,
+        )
+
+    async def _resolve_entity_with_retry(
+        self, *, ctx: SourceContext, handle: str, cfg: TelegramChannelSourceConfig,
+    ) -> Any:
+        """Resolve the channel entity, retrying transient failures with the
+        same backoff policy ``_run_with_retry`` applies to a page fetch."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return await self._client.get_entity(handle)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                fw_cls = _flood_wait_error_class()
-                if fw_cls is not None and isinstance(exc, fw_cls):
-                    wait = getattr(exc, "seconds", 0) or 0
-                    if wait > cfg.flood_wait_cap_seconds:
-                        raise _ChannelGiveUp(
-                            f"FloodWait {wait}s exceeds cap "
-                            f"{cfg.flood_wait_cap_seconds}s"
-                        ) from exc
-                    ctx.logger.info(
-                        "telegram_channel: %s flood-wait %ds (attempt %d)",
-                        handle, wait, attempt,
-                    )
-                    await asyncio.sleep(wait)
-                    # FloodWait does not consume a retry budget — the API
-                    # told us exactly how long to wait, not that we failed.
-                    continue
-                if attempt >= cfg.max_retries_per_channel:
-                    raise _ChannelGiveUp(
-                        f"max retries ({cfg.max_retries_per_channel}) "
-                        f"exhausted: {exc!r}"
-                    ) from exc
-                backoff = min(
-                    cfg.backoff_base_seconds * (2 ** (attempt - 1)),
-                    30.0,
+                await self._apply_backoff_or_giveup(
+                    ctx=ctx, handle=handle, cfg=cfg, attempt=attempt, exc=exc,
                 )
-                ctx.logger.info(
-                    "telegram_channel: %s attempt %d failed (%r); "
-                    "backing off %.1fs",
-                    handle, attempt, exc, backoff,
+
+    async def _run_with_retry(
+        self,
+        *,
+        ctx: SourceContext,
+        handle: str,
+        cfg: TelegramChannelSourceConfig,
+        fetch: Callable[[], AsyncIterator[Signal]],
+    ) -> AsyncIterator[Signal]:
+        """Run ``fetch()`` (one bounded ``iter_messages`` walk) with the
+        SAME exponential-backoff + FloodWait + auth-failure retry policy the
+        pre-#206 code applied inline — extracted so both the cold-start walk
+        and each catch-up page share one policy instead of two copies
+        drifting apart. A retry re-runs ``fetch()`` from scratch (Telethon
+        has no partial-page resume) — this matches the pre-#206 handler's own
+        documented invariant ("re-emission of overlapping windows is
+        allowed (dedupe is downstream, per KC-3 / L-151)"), not a new
+        behavior; ``fetch`` closures are cheap to re-invoke — they open no
+        state of their own beyond the bound ``min_id``/``limit``, which are
+        unaffected by a mid-page retry (the caller only advances its cursor
+        on a page that fully returns from this generator)."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                async for sig in fetch():
+                    yield sig
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await self._apply_backoff_or_giveup(
+                    ctx=ctx, handle=handle, cfg=cfg, attempt=attempt, exc=exc,
                 )
-                await asyncio.sleep(backoff)
-                # Drop and rebuild the client connection between retries
-                # on the chance the underlying transport is unhealthy.
-                with suppress(Exception):
-                    await self._client.disconnect()
-                with suppress(Exception):
-                    await self._client.connect()
-                continue
+
+    async def _apply_backoff_or_giveup(
+        self,
+        *,
+        ctx: SourceContext,
+        handle: str,
+        cfg: TelegramChannelSourceConfig,
+        attempt: int,
+        exc: Exception,
+    ) -> None:
+        """Shared auth-failure/FloodWait/backoff policy — pre-#206 logic,
+        UNCHANGED (same check ORDER: auth failure first, then FloodWait,
+        then attempt-exhaustion backoff), extracted so the cold-start and
+        catch-up retry loops share ONE copy. Returns normally to signal
+        "retry"; raises :class:`_ChannelAuthFailure` (systemic,
+        non-retryable — the whole session is revoked/expired) or
+        :class:`_ChannelGiveUp` (per-channel, retries exhausted) to signal
+        "abandon this channel for this poll" — any cursor/page progress
+        already made (and, for catch-up, already persisted) stands; nothing
+        already-yielded is undone."""
+        auth_cls = _auth_error_classes()
+        if auth_cls and isinstance(exc, auth_cls):
+            # SESSION-level auth failure — the MTProto session is revoked /
+            # expired / deauthorized. Retrying cannot fix it and only hammers
+            # the API further (which is exactly what gets the account
+            # bot-flagged). Fail this channel fast with a distinct,
+            # NON-retryable signal so pull() can surface a dead session as an
+            # honest error rather than a silent empty.
+            raise _ChannelAuthFailure(f"session auth failed: {exc!r}") from exc
+        fw_cls = _flood_wait_error_class()
+        if fw_cls is not None and isinstance(exc, fw_cls):
+            wait = getattr(exc, "seconds", 0) or 0
+            if wait > cfg.flood_wait_cap_seconds:
+                raise _ChannelGiveUp(
+                    f"FloodWait {wait}s exceeds cap "
+                    f"{cfg.flood_wait_cap_seconds}s"
+                ) from exc
+            ctx.logger.info(
+                "telegram_channel: %s flood-wait %ds (attempt %d)",
+                handle, wait, attempt,
+            )
+            await asyncio.sleep(wait)
+            # FloodWait does not consume a retry budget — the API told us
+            # exactly how long to wait, not that we failed.
+            return
+        if attempt >= cfg.max_retries_per_channel:
+            raise _ChannelGiveUp(
+                f"max retries ({cfg.max_retries_per_channel}) "
+                f"exhausted: {exc!r}"
+            ) from exc
+        backoff = min(cfg.backoff_base_seconds * (2 ** (attempt - 1)), 30.0)
+        ctx.logger.info(
+            "telegram_channel: %s attempt %d failed (%r); backing off %.1fs",
+            handle, attempt, exc, backoff,
+        )
+        await asyncio.sleep(backoff)
+        # Drop and rebuild the client connection between retries on the
+        # chance the underlying transport is unhealthy.
+        with suppress(Exception):
+            await self._client.disconnect()
+        with suppress(Exception):
+            await self._client.connect()
 
     # --- Health ---------------------------------------------------------
 
@@ -607,6 +1019,100 @@ class TelegramChannelSourceHandler:
                 detail=detail,
             )
 
+    async def _record_pull_health(
+        self, ctx: SourceContext, stats: _PullStats,
+    ) -> None:
+        """Persist this pull's health under ``health_state_key`` (FIX 1).
+
+        The source actor (``_record_poll_outcome``) reads this record for a
+        non-productive poll and turns ``degraded`` / ``unhealthy`` into an
+        ``error`` outcome — the ONLY way a handler-SWALLOWED systemic failure
+        (a revoked session, which the per-channel isolation above would
+        otherwise return as a clean 0-yield 'empty') becomes visible to
+        ``source_poll_outcomes`` + the liveness watchdog.
+
+        Decision (SYSTEMIC vs per-channel):
+
+          * ``unhealthy`` — auth failed AND no channel succeeded AND EVERY
+            failure was an auth failure: the session is revoked/expired. Honest
+            error, degrade-not-break (we still don't fabricate signals).
+          * ``degraded`` — auth failures alongside successes / other failures:
+            visible without over-claiming a full revocation.
+          * ``healthy`` — no auth failures. A per-channel flood-wait, give-up,
+            or genuinely empty channel is NOT a source-level error.
+        """
+        auth_failed = len(stats.channels_auth_failed)
+        other_failed = len(stats.channels_failed)
+        ok = len(stats.channels_ok)
+        now = datetime.now(tz=timezone.utc)
+
+        if auth_failed and ok == 0 and other_failed == 0:
+            await self._record_health(
+                ctx,
+                state="unhealthy",
+                last_error=(
+                    f"telegram session auth failed on all {auth_failed} "
+                    f"channel(s) — session likely revoked/expired: "
+                    f"{stats.last_error}"
+                ),
+                detail={
+                    "reason": "session_revoked",
+                    "auth_failed_channels": sorted(stats.channels_auth_failed),
+                },
+            )
+            return
+
+        if auth_failed:
+            await self._record_health(
+                ctx,
+                state="degraded",
+                last_success_at=now if ok else None,
+                last_error=f"telegram partial auth failures: {stats.last_error}",
+                detail={
+                    "reason": "partial_auth_failure",
+                    "auth_failed_channels": sorted(stats.channels_auth_failed),
+                    "channels_ok": ok,
+                },
+            )
+            return
+
+        await self._record_health(
+            ctx,
+            state="healthy",
+            last_success_at=now if (stats.yielded or ok) else self._last_success_at,
+            last_error=None,
+            detail={
+                "channels_ok": ok,
+                "channels_failed": sorted(stats.channels_failed),
+                "yielded": stats.yielded,
+            },
+        )
+
+    async def _record_health(
+        self,
+        ctx: SourceContext,
+        *,
+        state: str,
+        last_success_at: datetime | None = None,
+        last_error: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Write a health record to the state store (mirror of rss._record_health)."""
+        record = {
+            "state": state,
+            "last_success_at": (
+                last_success_at.astimezone(timezone.utc).isoformat()
+                if last_success_at is not None
+                else None
+            ),
+            "last_error": last_error,
+            "detail": detail or {},
+        }
+        try:
+            await ctx.state_store.set(_HEALTH_KEY, record)
+        except Exception:  # pragma: no cover
+            ctx.logger.warning("telegram.health.persist_failed", exc_info=True)
+
     # --- Helpers --------------------------------------------------------
 
     async def _build_client(self) -> Any:
@@ -627,8 +1133,31 @@ class TelegramChannelSourceHandler:
             raise RuntimeError(
                 "_build_client called before session materialized"
             )
+        _tame_telethon_loggers()
+        cfg = self._config
+        # H1: bound the transport reconnect so a dead/expired session cannot
+        # busy-loop. `auto_reconnect=False` stops telethon's background
+        # reconnect task from hot-looping; our per-channel retry (with
+        # deliberate disconnect+reconnect) remains the reconnection path.
+        auto_reconnect = getattr(cfg, "auto_reconnect", False) if cfg else False
+        connection_retries = (
+            getattr(cfg, "connection_retries", 3) if cfg else 3
+        )
+        retry_delay = (
+            getattr(cfg, "connect_retry_delay_seconds", 5.0) if cfg else 5.0
+        )
+        connect_timeout = (
+            getattr(cfg, "connect_timeout_seconds", 15.0) if cfg else 15.0
+        )
         return telethon.TelegramClient(
-            self._session_path, self._api_id, self._api_hash
+            self._session_path,
+            self._api_id,
+            self._api_hash,
+            auto_reconnect=auto_reconnect,
+            connection_retries=connection_retries,
+            request_retries=connection_retries,
+            retry_delay=retry_delay,
+            timeout=connect_timeout,
         )
 
     async def _disconnect(self) -> None:
@@ -823,6 +1352,16 @@ class TelegramChannelSourceHandler:
 
 class _ChannelGiveUp(Exception):
     """Per-channel give-up signal — caught inside ``pull``."""
+
+
+class _ChannelAuthFailure(Exception):
+    """Per-channel SESSION-level auth failure — caught inside ``pull``.
+
+    Distinct from :class:`_ChannelGiveUp`: an auth failure is NON-retryable and
+    systemic (the whole session is revoked/expired), so pull() aggregates these
+    separately and, when they cover every channel, records an ``unhealthy``
+    health state → an honest ``error`` poll outcome (never a silent ``empty``).
+    """
 
 
 __all__ = [

@@ -393,8 +393,8 @@ async def test_relevance_floor_drops_below_score_chunk_client_side():
     )
     chunks = await resolver.resolve_world_context("q", limit=30)
     assert [c.chunk_id for c in chunks] == ["hi"]
-    # The server-side floor was still requested (default 0.65 post DQ Phase-2 tune).
-    assert resolver._qdrant.last_call["score_threshold"] == 0.65  # type: ignore[union-attr]
+    # The server-side floor was still requested (default 0.55, M22-recalibrated).
+    assert resolver._qdrant.last_call["score_threshold"] == 0.55  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -466,7 +466,7 @@ async def test_meta_no_target_run_applies_no_country_filter():
     # No country filter → BOTH countries' chunks are eligible.
     assert {c.chunk_id for c in chunks} == {"a", "b"}
     assert qdrant.last_call["query_filter"] is None
-    assert qdrant.last_call["score_threshold"] == 0.65
+    assert qdrant.last_call["score_threshold"] == 0.55
 
 
 @pytest.mark.asyncio
@@ -499,11 +499,11 @@ def test_world_context_country_filter_values_helper():
 def test_world_context_min_score_env_override(monkeypatch):
     """The floor is env-overridable; a blank / malformed value falls back."""
     monkeypatch.delenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", raising=False)
-    assert world_context_min_score() == 0.65
+    assert world_context_min_score() == 0.55
     monkeypatch.setenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", "0.62")
     assert world_context_min_score() == 0.62
     monkeypatch.setenv("LEGBA_WORLD_CONTEXT_MIN_SCORE", "not-a-float")
-    assert world_context_min_score() == 0.65
+    assert world_context_min_score() == 0.55
 
 
 # ---------------------------------------------------------------------------
@@ -588,15 +588,73 @@ async def test_hook_background_priors_below_authoritative_and_records_ids():
     assert out.index("AUTHORITATIVE CURRENT CONTEXT") < out.index("BACKGROUND PRIORS")
     # The retrieved chunk id was recorded into the caller's trace sink.
     assert sink == ["chunk-xyz"]
-    # The RAG query led with the unit's bounded-question proxy (descriptor name)
-    # plus the target-geo candidates (the S5-T3 query recipe: question + target +
-    # slice entities). The query TEXT is what we embedded; the vector reached qdrant.
+    # M22 FOCUSED query recipe: "<target country> <theme>" — the target country
+    # LEADS (its Factbook chunks are the retrieval target), the theme is the
+    # corpus-facet phrase (here derived from the descriptor name, no rag_theme set),
+    # and the noisy unit-name + person-entity pile is DROPPED. The query TEXT is
+    # what we embedded; the vector reached qdrant.
     assert len(embedder.embedded) == 1
     rag_query = embedder.embedded[0]
-    assert rag_query.startswith("Leadership-Transition Risk Unit")
-    assert "united states" in rag_query.lower()
+    assert rag_query.startswith("United States")
+    assert "leadership transition" in rag_query.lower()
+    # No unit-name noise, no person-entity dilution in the focused query.
+    assert "Risk Unit" not in rag_query
     assert qdrant.last_call is not None
     assert qdrant.last_call["collection_name"] == "world_context"
+
+
+@pytest.mark.asyncio
+async def test_per_run_kill_switch_env_stops_injection_without_rebuild(monkeypatch):
+    """FIX A (M22): a rollback via the env pin suppresses vector:world_context on the
+    SAME cached hook's NEXT run — no rebuild / restart / deps eviction. The pre-fix
+    build-time-only check would keep injecting until an unrelated restart."""
+    monkeypatch.delenv("LEGBA_WORLD_CONTEXT_DISABLED_UNITS", raising=False)
+    monkeypatch.delenv("LEGBA_RAG_ROLLBACK_STATE", raising=False)
+    pool = _StubPool(fetch_rows={"facts": [_US_FACT_ROW], "nexuses": []})
+    qdrant = _FakeQdrant([_chunk_point(id="chunk-xyz")])
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["substrate", "vector:world_context"]),
+        pg_pool=pool, embedder=_StubEmbedder(), qdrant=qdrant,
+    )
+    assert hook is not None
+    # Run 1 — enabled: BACKGROUND PRIORS injected.
+    out1 = await hook([_signal(geo=["United States"])], {"target_id": "country_g20_us"})
+    assert "BACKGROUND PRIORS (context, not evidence — do not cite)" in out1
+    # Roll the unit back (as rag_watch --enforce would) WITHOUT rebuilding the hook.
+    monkeypatch.setenv("LEGBA_WORLD_CONTEXT_DISABLED_UNITS", "leadership_transition")
+    # Run 2 — SAME cached closure, next run: no BACKGROUND PRIORS; substrate intact.
+    out2 = await hook([_signal(geo=["United States"])], {"target_id": "country_g20_us"})
+    assert "AUTHORITATIVE CURRENT CONTEXT" in out2
+    assert "BACKGROUND PRIORS" not in out2
+    # And re-enabling (clear the pin) resumes injection on the very same closure.
+    monkeypatch.delenv("LEGBA_WORLD_CONTEXT_DISABLED_UNITS", raising=False)
+    out3 = await hook([_signal(geo=["United States"])], {"target_id": "country_g20_us"})
+    assert "BACKGROUND PRIORS (context, not evidence — do not cite)" in out3
+
+
+@pytest.mark.asyncio
+async def test_per_run_kill_switch_via_record_rollback_state_file(monkeypatch, tmp_path):
+    """FIX A (M22): the FULL actuator loop — rag_rollback.record_rollback writes the
+    persisted state, and the SAME cached hook stops injecting on its next run (the
+    path rag_watch --enforce / an auto-trigger drives)."""
+    from legba.runtime.rag_rollback import record_rollback
+
+    state = tmp_path / "rag_rollback.json"
+    monkeypatch.setenv("LEGBA_RAG_ROLLBACK_STATE", str(state))
+    monkeypatch.delenv("LEGBA_WORLD_CONTEXT_DISABLED_UNITS", raising=False)
+    hook = _build_grounding_hook(
+        _descriptor_with_grounding(["substrate", "vector:world_context"]),
+        pg_pool=_StubPool(fetch_rows={"facts": [_US_FACT_ROW], "nexuses": []}),
+        embedder=_StubEmbedder(), qdrant=_FakeQdrant([_chunk_point(id="chunk-xyz")]),
+    )
+    assert hook is not None
+    out1 = await hook([_signal(geo=["United States"])], {"target_id": "country_g20_us"})
+    assert "BACKGROUND PRIORS" in out1
+    # Auto-rollback fires (the actuator persists the unit) — no hook rebuild.
+    assert record_rollback("leadership_transition", reasons=["faith -0.09"]) == str(state)
+    out2 = await hook([_signal(geo=["United States"])], {"target_id": "country_g20_us"})
+    assert "AUTHORITATIVE CURRENT CONTEXT" in out2
+    assert "BACKGROUND PRIORS" not in out2
 
 
 @pytest.mark.asyncio

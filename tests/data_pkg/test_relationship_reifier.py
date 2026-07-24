@@ -44,12 +44,39 @@ from legba.data.provenance import AnalystContext, NexusPayload, write_nexus
 
 
 class _CannedTyperLLM:
+    """Returns ``obj`` verbatim for EVERY call by default — fine when the test
+    seeds exactly one candidate pair (the historical shape).
+
+    ``run_method``'s candidate reader (``_read_candidates``) pulls from the
+    LIVE, UNSCOPED ``proposed_edges`` table (shared session DB across the
+    whole suite), so if any OTHER test file leaves an open (un-nexused)
+    ``co_occurs`` edge at/above ``MIN_EDGE_CONFIDENCE`` when this test runs,
+    that unrelated pair can also land in the SAME run's candidate window
+    (``deps.max_candidates``). A pair-agnostic stub would then answer that
+    unrelated pair with THIS object too, writing a second/third nexus row
+    that overwrites the intended (subject, object) — caught live 2026-07-23
+    while verifying TEST_DEBT_RECON.md Bucket H under the full suite.
+    ``only_for=(source, target)`` scopes the canned response to ONLY the
+    prompt naming that exact "Entity A"/"Entity B" pair (matches
+    ``_build_user_prompt``'s first two lines); any other pair gets a neutral
+    ``{"related": False}`` (a no-op per ``_coerce_typing``), so an unrelated
+    candidate sharing the run never gets mistyped into this test's nexus.
+    """
+
     subprovider = "stub"
 
-    def __init__(self, obj: dict[str, Any], *, pt: int = 11, ct: int = 7) -> None:
+    def __init__(
+        self,
+        obj: dict[str, Any],
+        *,
+        pt: int = 11,
+        ct: int = 7,
+        only_for: tuple[str, str] | None = None,
+    ) -> None:
         self._obj = obj
         self._pt = pt
         self._ct = ct
+        self._only_for = only_for
         self.calls: list[dict[str, Any]] = []
 
     async def chat_complete(
@@ -62,8 +89,19 @@ class _CannedTyperLLM:
         **kwargs: Any,
     ) -> Any:
         self.calls.append({"system": system, "max_tokens": max_tokens})
-        obj = self._obj
         pt, ct = self._pt, self._ct
+        if self._only_for is not None:
+            source, target = self._only_for
+            prompt = str(messages[0].get("content") or "") if messages else ""
+            if (
+                f"Entity A: {source}" not in prompt
+                or f"Entity B: {target}" not in prompt
+            ):
+                obj: dict[str, Any] = {"related": False}
+            else:
+                obj = self._obj
+        else:
+            obj = self._obj
 
         class _Usage:
             prompt_tokens = pt
@@ -211,17 +249,43 @@ async def _seed_proposed_edge(pool, *, src: str, tgt: str, conf: float = 0.6):
 @pytest.mark.asyncio
 async def test_reifier_types_and_writes_nexus(pg_pool):
     await _seed_proposed_edge(pg_pool, src="IranUNIQ", tgt="IsraelUNIQ", conf=0.7)
-    llm = _CannedTyperLLM({
-        "related": True,
-        "subject": "IranUNIQ",
-        "object": "IsraelUNIQ",
-        "intermediary": "HamasUNIQ",
-        "rel_type": "SuppliesWeaponsTo",
-        "polarity": -1,
-        "intent": "hostile",
-        "channel": "proxy",
-        "confidence": 0.8,
-    })
+    # _coerce_typing's SELECT-or-null intermediary hardening (#99 proxy-chain,
+    # see test_coerce_typing_intermediary_select_or_null) only keeps an
+    # LLM-returned intermediary if it was OFFERED as a candidate by
+    # _intermediary_candidates_for — which requires a co_occurs edge between
+    # the intermediary and BOTH endpoints. Seed those so "HamasUNIQ" is a real
+    # candidate, not silently dropped to null (TEST_DEBT_RECON.md Bucket H).
+    # Confidence is DELIBERATELY BELOW MIN_EDGE_CONFIDENCE (0.45 in
+    # relationship_reifier.py) so _read_candidates() does NOT also surface
+    # these two edges as their OWN top-level candidate pairs — if it did, the
+    # canned stub LLM (which always answers subject=IranUNIQ/object=IsraelUNIQ
+    # verbatim, regardless of which pair is actually being typed) would write
+    # a SECOND/THIRD nexus row targeting the same (IranUNIQ, IsraelUNIQ)
+    # subject/object, superseding the first write with intermediary=None
+    # (HamasUNIQ is not a valid self-intermediary for its own pair).
+    # _intermediary_candidates_for has no confidence filter, so this edge is
+    # still found there.
+    await _seed_proposed_edge(pg_pool, src="IranUNIQ", tgt="HamasUNIQ", conf=0.3)
+    await _seed_proposed_edge(pg_pool, src="IsraelUNIQ", tgt="HamasUNIQ", conf=0.3)
+    # only_for scopes the canned response to the IranUNIQ/IsraelUNIQ pair only
+    # (see _CannedTyperLLM docstring) — _read_candidates() reads the LIVE
+    # shared-session proposed_edges table unscoped, so an unrelated open
+    # co_occurs edge left by another test file could otherwise ride along in
+    # this run's candidate window and get mistyped into this test's nexus.
+    llm = _CannedTyperLLM(
+        {
+            "related": True,
+            "subject": "IranUNIQ",
+            "object": "IsraelUNIQ",
+            "intermediary": "HamasUNIQ",
+            "rel_type": "SuppliesWeaponsTo",
+            "polarity": -1,
+            "intent": "hostile",
+            "channel": "proxy",
+            "confidence": 0.8,
+        },
+        only_for=("IranUNIQ", "IsraelUNIQ"),
+    )
     deps = ReifierDeps(llm=llm, pg_pool=pg_pool, max_candidates=10)
 
     result = await run_method(

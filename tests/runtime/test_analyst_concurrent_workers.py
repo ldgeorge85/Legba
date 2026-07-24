@@ -772,3 +772,154 @@ async def test_coalesced_fire_without_target_falls_back_to_primary(monkeypatch):
 
 async def _forbid_reminder(*args, **kwargs):  # pragma: no cover — guard
     raise AssertionError("worker actors must NOT register a reminder")
+
+
+# ---------------------------------------------------------------------------
+# C1 — gather_only must NOT NOOP at the ACTOR-level no_inputs gate.
+# ---------------------------------------------------------------------------
+
+
+class _ReachedDispatch(Exception):
+    """Sentinel raised by the recorder run_method to prove the actor reached
+    dispatch (past the no_inputs gate) without traversing the heavy downstream."""
+
+
+def _build_gather_only_descriptor() -> AnalystDescriptor:
+    """A META inline_target that OPTS IN to gather_only — NO subscription.targets,
+    substrate carries ``gather_only: true`` (the corpus_researcher shape)."""
+    return AnalystDescriptor(
+        identity=AnalystIdentity(
+            id="corpus_researcher",
+            name="corpus researcher (gather_only test)",
+            schema_uri="legba/analyst/1.0.0",
+            version="0" * 64,
+            kind=AnalystKind.INLINE_TARGET,
+            type_signature=TypeSignature(
+                input_type="legba.runtime.SignalList",
+                output_type="legba.runtime.Finding",
+            ),
+            state=LifecycleState.ACTIVE,
+            owner="stage4_test",
+        ),
+        subscription=SubscriptionBlock(
+            targets=None,
+            substrate={"direct_queries": True, "gather_only": True},
+        ),
+        mapping=MappingBlock(),
+        method=MethodBlock(
+            kind="llm_single_turn",
+            prompt_module="legba.runtime.analyst_method:_DEFAULT_SYSTEM",
+            llm={
+                "primary": Property.StackRef(
+                    raw="llm.primary.openai_compat",
+                    expected_family="llm_provider",
+                ).model_dump(),
+                "max_tokens": 1024,
+            },
+        ),
+        cadence=CadenceBlock(
+            fallback_schedule="*/10 * * * *",
+            cooldown_seconds=300,
+        ),
+        outputs=[],
+    )
+
+
+async def test_actor_gather_only_empty_slice_reaches_dispatch():
+    """C1 (BLOCKER): the ACTOR-level no_inputs gate must NOT short-circuit a
+    gather_only descriptor. With ``_read_substrate_slice`` returning [], the actor
+    must FALL THROUGH and dispatch run_method(inputs=[], options.gather_only=True)
+    instead of returning NOOP/no_inputs — otherwise the corpus_researcher NOOPs
+    every tick forever and its whole gather_only path is dead code. Exercised over
+    the real AnalystActor.run seam (NOT a direct run_method call)."""
+    descriptor = _build_gather_only_descriptor()
+
+    reached: dict[str, Any] = {"called": False}
+
+    async def _recorder_run_method(inputs, options):
+        # kind_deps is None in this stub → _invoke_run_method uses the 2-arg call.
+        reached["called"] = True
+        reached["inputs"] = list(inputs)
+        reached["gather_only"] = options.get("gather_only")
+        # Short-circuit the heavy post-dispatch write/emit path — the C1 claim is
+        # only that DISPATCH was reached, which is now recorded.
+        raise _ReachedDispatch()
+
+    deps = _AnalystDeps.model_construct(
+        descriptor=descriptor,
+        deps=_FakeStandardDeps(),
+        run_method=_recorder_run_method,
+        kind_deps=None,
+        output_kind=dapr_actors.OutputKind.FINDING,
+        budget=None,
+        fallback_run_method=None,
+        fallback_kind_deps=None,
+        primary_llm_ref="",
+        fallback_llm_ref="",
+        receipt_chain=None,
+        read_slice=_empty_read_slice,
+    )
+
+    async def resolver(actor_id: str):
+        return deps
+
+    dapr_actors.register_analyst_deps_resolver(resolver)
+
+    actor = _make_actor("analyst::corpus_researcher::" + "0" * 16)
+    # Seed the ACTIVE meta/primary record _on_activate would have written (this
+    # test bypasses activation), so run() proceeds past the no_state / lifecycle /
+    # cooldown guards to the no_inputs gate — the seam under test.
+    await actor._set_record({
+        "actor_id": actor.id.id,
+        "actor_kind": "analyst",
+        "descriptor_id": "corpus_researcher",
+        "descriptor_version": "0" * 64,
+        "lifecycle": ACTIVE,
+        "last_run_at": None,
+        "last_outcome": None,
+        "cooldown_until": None,
+        "error_count": 0,
+        "last_error": None,
+    })
+
+    result: Any = None
+    try:
+        result = await actor.run({"trigger_kind": "cadence"})
+    except _ReachedDispatch:
+        pass
+    except Exception:
+        # Downstream hard-fail handling over the fake conn/state may raise AFTER
+        # dispatch; the C1 assertion is that dispatch was REACHED (recorder set).
+        pass
+
+    assert reached["called"] is True, (
+        "gather_only descriptor NOOPed at the actor gate — run_method was never "
+        "dispatched (C1 regression: the feature is dead)"
+    )
+    assert reached["inputs"] == []          # dispatched with the empty slice
+    assert reached["gather_only"] is True   # the flag threaded through options
+    if result is not None:
+        assert result.get("reason") != "no_inputs"
+
+
+async def test_actor_non_gather_only_empty_slice_still_noops():
+    """Control for C1: a NORMAL (non-gather_only) descriptor with an empty slice
+    still NOOPs at the actor gate — the fall-through is scoped to gather_only."""
+    descriptor = _build_descriptor()  # no gather_only substrate
+
+    async def _forbid_run_method(*args, **kwargs):  # pragma: no cover — guard
+        raise AssertionError("normal empty-slice run must NOOP, not dispatch")
+
+    deps = _make_deps(descriptor, read_slice=_empty_read_slice)
+    object.__setattr__(deps, "run_method", _forbid_run_method)
+
+    async def resolver(actor_id: str):
+        return deps
+
+    dapr_actors.register_analyst_deps_resolver(resolver)
+
+    actor = _make_actor(_worker_actor_id("country_assessor", "brazil"))
+    result = await actor.run({"trigger_kind": "cadence", "target_filter": "brazil"})
+
+    assert result["outcome"] == dapr_actors.ActorRunOutcome.NOOP.value
+    assert result["reason"] == "no_inputs"

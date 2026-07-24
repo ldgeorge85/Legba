@@ -225,6 +225,9 @@ describe('ConsultPanel (chat)', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
+      // `readErrorBody` reads the body ONCE via `res.text()` (api.ts) — the stub
+      // must expose it, else the error path throws `res.text is not a function`.
+      text: async () => JSON.stringify({ detail: 'kaboom' }),
       json: async () => ({ detail: 'kaboom' }),
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -241,5 +244,47 @@ describe('ConsultPanel (chat)', () => {
     expect(screen.getByTestId('consult-error')).toHaveTextContent(/500/)
     // The user turn is appended optimistically; the composer clears on submit.
     expect(screen.getByTestId('consult-turn-user')).toHaveTextContent('will this work')
+  })
+})
+
+describe('ConsultPanel (F1 model picker)', () => {
+  it('renders the model dropdown defaulting to opus and sends model on submit', async () => {
+    const fetchMock = answerOnce('ok')
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    const select = screen.getByTestId('consult-model') as HTMLSelectElement
+    expect(select.value).toBe('opus')
+
+    fireEvent.change(screen.getByTestId('consult-question'), { target: { value: 'q' } })
+    fireEvent.click(screen.getByTestId('consult-submit'))
+    await waitFor(() => expect(screen.getByTestId('consult-answer')).toBeInTheDocument())
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.model).toBe('opus')
+  })
+
+  it('sends the chosen plane, persists it, and surfaces the answered plane', async () => {
+    const fetchMock = answerOnce('ok', { model: 'core' })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    fireEvent.change(screen.getByTestId('consult-model'), { target: { value: 'core' } })
+    expect(localStorage.getItem('legba_consult_model')).toBe('core')
+
+    fireEvent.change(screen.getByTestId('consult-question'), { target: { value: 'q' } })
+    fireEvent.click(screen.getByTestId('consult-submit'))
+    await waitFor(() => expect(screen.getByTestId('consult-answer')).toBeInTheDocument())
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.model).toBe('core')
+    // The plane that answered surfaces on the assistant turn.
+    expect(screen.getByTestId('consult-answer-model')).toHaveTextContent('via core')
+  })
+
+  it('restores the persisted plane on mount', () => {
+    localStorage.setItem('legba_consult_model', 'core')
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('core')
   })
 })

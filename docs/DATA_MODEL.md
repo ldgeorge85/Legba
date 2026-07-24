@@ -64,13 +64,13 @@ chain — see "The journal — off-chain by design"); the consult audit trail
 | **Target descriptor** | `target_descriptors` | Registry | **append-only** (versioned, `is_head`) |
 | **Fan-out / subscription** | *(none — in-memory + NATS)* | subscription engine + per-target JetStream consumer | **ephemeral-routing** (no per-target row; signal never copied) |
 | **TargetActor runtime** | Dapr `actor_state` | TargetActor | **mutate-in-place** FSM; passive subscriber = NOOP on tick |
-| **Facts** | `facts` (0001/0032; `source_credibility` 0054; contested-claims markers 0055) | `fact_extractor` (ingestion) + `write_fact` (agent/seed) | **supersession-versioned** (open-only unique index; decay mutates open rows). Under `LEGBA_FACT_CONTENTION` a fuzzy-distinct same-tier value coexists open instead of superseding (#101) |
+| **Facts** | `facts` (0001/0032; `source_credibility` 0054; contested-claims markers 0055) | `fact_extractor` (ingestion) + `write_fact` (agent/seed) | **supersession-versioned** (open-only unique index; decay mutates open rows). A write-path **relation-direction / demonym / relative-temporal junk gate** now rejects inversions (*NATO member of Turkiye*) and non-entity subjects, with adjective-nationality VALUE normalization scoped to geographic/relational predicates only (*Kyiv capital of Russian* → Russia; *speaks Russian* untouched); 0077 closed the historical strays. Under `LEGBA_FACT_CONTENTION` a fuzzy-distinct same-tier value coexists open instead of superseding (#101) |
 | **Contention sidecar** (derived) | `fact_contention` + `fact_contention_values` (0055) | `fact_contention_arbiter` (deterministic META, hourly :37, **detect-only** B15) | **derived / recomputable** from open `facts`; arbiter only sets the sidecar + the 3 `facts` markers, never mutates a fact |
-| **Entities** | `entity_profiles` (0001/0035) + `entity_profile_versions` | `entity_resolution` | **mutate-in-place** + append-only version history |
-| **Nexuses** | `nexuses` (0033) | `relationship_reifier` (`write_nexus`); `proposed_edge_governance` promotion | **supersession-versioned** (closes on polarity/label change; decay mutates open) |
+| **Entities** | `entity_profiles` (0001/0035) + `entity_profile_versions` | `entity_resolution` | **mutate-in-place** + append-only version history. Pre-lookup is now **alias/article-aware + class-guarded** with a junk gate (numeric/quantity/possessive surfaces rejected; a fallback-elected keeper is never class-mutated) so post-merge re-fragmentation (*the Strait of Hormuz* vs *Strait of Hormuz*) no longer forks; 0076 re-folded the strays |
+| **Nexuses** | `nexuses` (0033) | `relationship_reifier` (`write_nexus`); `proposed_edge_governance` promotion | **supersession-versioned** (closes on polarity/label change; decay mutates open). Write-path **junk/vague-endpoint** gate (relative-time + vague-bloc/adjective singletons) at both producers, a same-referent **self-edge** gate, and demonym/plural **dyad canonicalization** (so *Russia\|Russian × Ukraine\|Ukrainian* stops inflating dyad counts); 0078 closed the historical strays |
 | **Proposed edges** | `proposed_edges` (0001) | `entity_resolution` (co-occurrence) | **mutate-in-place** (status + confidence accrual; no version chain) |
 | **Analyst outputs** | `analyst_outputs` (0011) | `write_analyst_output` | **append-only** (kind-routed across 12 `OutputKind`s incl. `finding` / `meta_finding` / `scorecard`; validation fail → DLQ) |
-| **Scorecard** | `analyst_outputs` (kind=`scorecard`) | `scorecard_producer` (deterministic META, daily, pure SQL) | **append-only** — ONE banded row per active **g20/watch-tagged desk** (19 G20 + 6 watch = 25) over already-verified claims in a **14-day band window**; every band names its verified-claim basis id; a dimension with no qualifying verified claim reads `insufficient-evidence` (never fabricated) |
+| **Scorecard** | `analyst_outputs` (kind=`scorecard`) | `scorecard_producer` (deterministic META, daily, pure SQL) | **append-only** — ONE banded row per active **g20/watch-tagged desk** (19 G20 + 13 watch = 32) over already-verified claims in a **14-day band window**; every band names its verified-claim basis id; a dimension with no qualifying verified claim reads `insufficient-evidence` (never fabricated) |
 | **Acute forecasts** (pilot) | `acute_forecasts` (0047) | `forecast_scoreboard` (deterministic META, weekly) | **append** (idempotent weekly issue) + **resolution mutate-in-place** (graded EXOGENOUSLY when the forward window closes). ISOLATED from the findings feed; surfaced only on the calibration scoreboard; reports NO proven skill today (honest — a degenerate p-vector abstains, zero rows) |
 | **Unit gold set** | `unit_reference_labels` (0057) | the labels API (`registry/labels_api.py`) | **append-only** — one `(unit, target)` gold answer grounded to `canonical_source_ids`; the per-unit correctness scorer joins live unit output against it. Tiny today (n≈1 → correctness reports insufficient-sample) |
 | **Hypotheses** | `hypotheses` (0004, ACH) | `competing_hypotheses` (TRACE_ONLY) | **append** rows + **status transitions mutate-in-place** |
@@ -109,10 +109,11 @@ the TargetActor's lifecycle/cursor `actor_state`. A non-discovery target is a
 **passive subscriber** — NOOP on tick.
 
 A *target* here is a **scoped subject / desk** — a named scope-frame a set of
-analysts work — **not** a surveilled entity. The trusted spine covers **25
+analysts work — **not** a surveilled entity. The trusted spine covers **32
 desks** selected by a coverage tag: the 19 G20 country desks (tag `g20`) plus a
-6-desk high-consequence **watch** tier — Israel, Iran, Ukraine, Taiwan, North
-Korea, Pakistan (descriptor ids `country_watch_il/ir/ua/tw/kp/pk`, tag `watch`). The seven
+13-desk high-consequence **watch** tier — Israel, Iran, Ukraine, Taiwan, North
+Korea, Pakistan, and the escalation-risk band Sudan, Mali, Burkina Faso, Niger,
+DR Congo, Myanmar, Haiti (descriptor ids `country_watch_<iso2>`, tag `watch`). The seven
 units + `country_composition` subscribe on `has_tag("g20") or has_tag("watch")`
 and the scorecard enumerates any active desk tagged either — so adding a country
 is **register-a-target, no code**. (The composition tower adds the 5 `region_*`
@@ -180,7 +181,7 @@ Some units score genuinely low, and the read surfaces that rather than hiding it
 it lands in the generic `analyst_outputs` table (`kind='scorecard'`), written by
 `scorecard_producer` (a deterministic META analyst; daily; pure SQL, no LLM,
 `$0`). Each tick it writes **exactly one banded row per active g20/watch desk**
-(19 G20 + 6 watch = 25) from a few high-precision RULES over that desk's
+(19 G20 + 13 watch = 32) from a few high-precision RULES over that desk's
 **already-verified** claims (the seven unit findings + the `country_composition`)
 inside a **14-day band window**. It is a *perspective over* verified sub-claims,
 never a fresh judgment:
@@ -201,19 +202,36 @@ scorecard reports that rather than inventing a verdict).
 
 ## The contested-claims fact model
 
-Task #101 Holes-B (migrations 0054 + 0055; the current migration head is
-**0060**) turns "two credible
+Task #101 Holes-B (migrations 0054 + 0055) turns "two credible
 sources disagree on one `(subject, predicate)` value" from an invisible race into
 a **first-class, derived, recomputable** state — without ever letting a machine
 overwrite the disputed facts. The substrate change is small and almost entirely
 *additive*; the behaviour is gated OFF by default.
+
+> **Migration head — now `0085` (signal-content-depth wave on top of the
+> 2026-07-06 audit-remediation wave).** On top of
+> the write-path gates documented below, successive migrations advanced the head
+> `0060 → 0085`. Five reversible data-hygiene migrations make up the
+> 2026-07-06 audit sub-range (`0076 → 0080`): `0076` entity re-fold + junk close
+> (`entity_profiles` 12,257 → 12,144), `0077` semantic / demonym / relative-temporal
+> junk facts closed (reversible `valid_until`), `0078` nexus junk & self-edge close
+> + demonym/plural dyad canonicalization (reversible), `0079` a `cross_correlator`
+> stale-head sweep (reversible), and `0080` a state-media `source_credibility` seed
+> + a cross-target mislabel close. These close junk rows / seed credibility — they
+> are data-hygiene closes, not schema changes. Migrations `0081 → 0085` are the
+> signal-content-depth corpus/embedding markers (signal_summarized / indexed /
+> reindex / embedding / reenriched) recording the full-body corpus, OpenSearch
+> index, and Qdrant embedding backfill state.
 
 **Per-fact credibility — `facts.source_credibility real` (0054).** A 0..1 trust
 score of the most credible source backing this fact, propagated down from
 `signals.source_credibility` so the arbiter has a per-fact credibility term to
 weight competing values by. Resolved at write time as the **MAX over the backing
 signals'** `source_credibility`, else the **source-tier nominal** (seed/curated
-`0.9`, agent/ingestion `0.5`). `NULL` = *unknown* (a pre-0054 row, or a write with
+`0.9`, agent/ingestion `0.5`). State/social outlets are now seeded *below* that
+`0.5` ingestion nominal (0080 — presstv `0.25`, irna `0.30`, ukrinform `0.45`,
+telegram/`t.me` `0.30`) so a state-affiliated source no longer out-credits its
+peers. `NULL` = *unknown* (a pre-0054 row, or a write with
 no resolvable credibility) — the arbiter treats `NULL` as unknown, **never as
 zero**. Two earlier Holes-A write-path fixes ship with this wave: the ingestion
 fact-writer now passes `incoming_source_type` (so the tier guard that protects a
@@ -322,8 +340,15 @@ edges; `honesty_flags` are forced deterministically from substrate metrics, and
 every row is part of the same hash-chained receipt machinery as the rest of the
 analysts.
 
-**Two tiers, one kind.** `entry_kind` discriminates `entry` (append-only, the
-12h field-notes tier) from `consolidation` (the daily distillation tier).
+**Several tiers, one kind.** `entry_kind` discriminates the append-only tiers —
+`entry` (the 12h field-notes beat), `chronicle` (the weekly third-person
+public-record tier), `lens` (weekly faculty reads: four analyst ids —
+`lens_trend`, `lens_baserate`, `lens_capability`, `lens_intent` — each carrying
+one declared falsifiable prior over the verified tower top, asserting no new
+fact), and `lens_diff` (the chorus pass that narrates where the four faculty
+reads agree, split, or outlie — it never merges them) — from `consolidation`
+(the daily distillation tier). The `/journal` default stream carries all append
+tiers; consolidation remains slot-only.
 A consolidation **supersession-versions** exactly like `facts`/`nexuses`:
 `supersede_prior_consolidation` closes the prior open row
 (`valid_until`/`superseded_by` stamped at the new id) **before** inserting the

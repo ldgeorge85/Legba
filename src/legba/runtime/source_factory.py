@@ -85,6 +85,7 @@ _SOURCE_MODULE_TABLE: tuple[tuple[str, str], ...] = (
     ("mediacloud",     "MediaCloudSourceHandler"),
     ("opensanctions",  "OpenSanctionsSourceHandler"),
     ("gdelt",          "GDELTBigQuerySourceHandler"),
+    ("gdelt_files",    "GDELTFilesSourceHandler"),
     ("scraper",        "ScraperSourceHandler"),
     ("firecrawl",      "FirecrawlSourceHandler"),
     ("discord",        "DiscordWebhookSourceHandler"),

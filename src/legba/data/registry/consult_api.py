@@ -96,6 +96,85 @@ DAPR_SIDECAR_URL_DEFAULT = "http://dapr-sidecar:3500"
 DAPR_INVOKE_TIMEOUT_SECONDS = 300.0
 
 
+# F1 model picker — the SMALL server-side allowlist mapping the operator's
+# FRIENDLY choice to a sanctioned LLM stack-component id. The client NEVER passes
+# a raw component id; it sends ``model`` = "opus" | "core" (or nothing → the
+# default), and we map here. "opus" = the billed Anthropic Opus plane
+# (``llm.anthropic.opus_4_7``) — TODAY'S default, so no selection preserves
+# current behavior; "core" = the free self-hosted core (openai_compat) plane.
+# Any other value is rejected by the pydantic ``Literal`` (422) before it reaches
+# this map. The two ids MUST stay in sync with the runtime allowlist
+# (:data:`legba.data.analysts.consult_on_demand.LLM_OVERRIDE_ALLOWLIST`).
+CONSULT_MODEL_ALLOWLIST: dict[str, str] = {
+    "opus": "llm.anthropic.opus_4_7",
+    "core": "llm.primary.openai_compat",
+}
+#: The default plane when the request omits ``model`` (or sends null) — Opus, so
+#: the picker is default-preserving. When the chosen plane is the default we do
+#: NOT thread an override (the cached ACTIVATE-time primary handler is used
+#: unchanged); the override key is threaded ONLY for a non-default choice.
+DEFAULT_CONSULT_MODEL = "opus"
+
+
+def resolve_consult_model_override(model: str | None) -> tuple[str, str | None]:
+    """``(friendly, component_id_override_or_None)`` for a request's ``model``.
+
+    Returns the normalized friendly value (``model`` or the default) plus the
+    stack-component id to thread as ``llm_component_override`` — ``None`` when the
+    choice IS the default plane (so the run keeps the cached primary handler
+    unchanged, the default-preserving contract). Shared by the chat + deep front
+    doors so both map identically off the ONE allowlist.
+    """
+    friendly = model or DEFAULT_CONSULT_MODEL
+    if friendly == DEFAULT_CONSULT_MODEL:
+        return friendly, None
+    return friendly, CONSULT_MODEL_ALLOWLIST[friendly]
+
+
+# H4(a) — provider/plane error surfacing. When the actor surfaces a plane outage
+# (the Anthropic credit-balance / auth / rate-limit error on Opus, or a core /
+# F-A fail-closed "llm plane ... unavailable"), the front door returns a graceful
+# 503 with an ACTIONABLE message naming the OTHER plane so the operator can switch
+# + retry — instead of a bare 502. A case-insensitive substring match keeps this
+# robust to provider-specific wording.
+
+#: Markers that mean "this is a provider / plane error at all" (else: keep 502).
+_PROVIDER_ERROR_MARKERS = (
+    "credit balance", "unavailable", "llm plane", "authentication",
+    "unauthorized", "401", "402", "429",
+)
+#: Markers that pin the outage to the Anthropic (Opus) plane → suggest core. The
+#: Opus component id ("anthropic"/"opus") appearing in a fail-closed message also
+#: routes here. Everything else that matched routes to the core plane.
+_OPUS_PLANE_MARKERS = ("anthropic", "opus", "credit balance", "claude")
+
+
+def _classify_provider_error(text: str | None) -> str | None:
+    """Return an actionable 503 message when ``text`` names a provider/plane
+    outage, else ``None`` (the caller keeps the existing 502).
+
+    ``text`` is the actor's surfaced error/reason/detail (any casing). We first
+    confirm it LOOKS like a provider/plane error, then name the OTHER plane so
+    the operator can retry on it: Anthropic/Opus markers → the Opus plane is
+    down → suggest core; everything else that matched (core / vllm /
+    openai_compat / a fail-closed "llm plane ...") → the core plane is down →
+    suggest Opus.
+    """
+    t = (text or "").lower()
+    if not any(m in t for m in _PROVIDER_ERROR_MARKERS):
+        return None
+    reason = (text or "").strip() or "provider error"
+    if any(m in t for m in _OPUS_PLANE_MARKERS):
+        return (
+            f"The Anthropic (Opus) plane is unavailable: {reason}. "
+            f"Retry, or select the Core model."
+        )
+    return (
+        f"The Core plane is unavailable: {reason}. "
+        f"Retry, or select the Opus model."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Request / response shapes
 # ---------------------------------------------------------------------------
@@ -117,6 +196,11 @@ class ConsultRequest(BaseModel):
     max_tool_rounds: int = Field(default=10, ge=1, le=30)
     # Chat = no finding, response in the envelope; deep = persist a finding (D3/D4).
     mode: Literal["chat", "deep"] = "chat"
+    # F1 model picker — which registered LLM plane answers this request. None /
+    # absent ⇒ "opus" (the billed Anthropic Opus plane, TODAY'S default). "core"
+    # routes to the free self-hosted core plane. Any other value 422s (the
+    # Literal). Mapped friendly→component id server-side (never a raw id).
+    model: Literal["opus", "core"] | None = None
     # Prior turns the client holds + resends (the client also re-seeds these
     # when continuing a persisted session).
     messages: list[ConsultMessage] = Field(default_factory=list)
@@ -161,6 +245,10 @@ class ConsultResponse(BaseModel):
     # The persisted audit-trail session id (0038). Echoed back so the client
     # can thread the next turn under the same conversation (continue / history).
     session_id: str | None = None
+    # F1 model picker — the FRIENDLY plane that answered ("opus"/"core"), echoed
+    # so the UI can surface which model produced the answer. Mirrors the request's
+    # chosen ``model`` (default "opus"), independent of chat/deep transport.
+    model: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +320,7 @@ def _project_consult_response(
     derived_from: list[str],
     receipt_hash: str | None = None,
     session_id: str | None = None,
+    model: str | None = None,
 ) -> ConsultResponse:
     """Project a ConsultResponsePayload dict into the SPA's ConsultResponse.
 
@@ -282,6 +371,7 @@ def _project_consult_response(
         uncertainty=uncertainty,
         unanswered_aspects=unanswered,
         session_id=session_id,
+        model=model,
     )
 
 
@@ -390,18 +480,27 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         # client-supplied id so the browser can subscribe BEFORE it POSTs
         # (subscribe-before-publish), else mint one.
         request_id = body.request_id or str(uuid4())
+        # F1 model picker: normalize the friendly choice + resolve the plane
+        # override. ``override`` is None when the choice is the default (Opus) —
+        # in that case we DO NOT thread the key, so the run keeps the cached
+        # ACTIVATE-time primary handler unchanged (default-preserving). For "core"
+        # the sanctioned component id is threaded and the kind resolves it fresh.
+        chosen_model, llm_component_override = resolve_consult_model_override(
+            body.model,
+        )
+        first_input: dict[str, Any] = {
+            "question": body.question,
+            "scope_predicate": body.scope_predicate,
+            "max_tool_rounds": body.max_tool_rounds,
+            "mode": body.mode,
+            "request_id": request_id,
+            "messages": [m.model_dump() for m in body.messages],
+        }
+        if llm_component_override is not None:
+            first_input["llm_component_override"] = llm_component_override
         invoke_body = {
             "trigger_kind": "method",
-            "inputs": [
-                {
-                    "question": body.question,
-                    "scope_predicate": body.scope_predicate,
-                    "max_tool_rounds": body.max_tool_rounds,
-                    "mode": body.mode,
-                    "request_id": request_id,
-                    "messages": [m.model_dump() for m in body.messages],
-                }
-            ],
+            "inputs": [first_input],
         }
 
         # Audit trail (0038): open a session on the first turn (or reuse the
@@ -470,6 +569,14 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 "consult.invoke.bad_status actor_id=%s status=%d body=%s",
                 actor_id, dapr_response.status_code, dapr_response.text[:512],
             )
+            # H4(a): a plane outage bubbled through the sidecar body → graceful
+            # 503 naming the other plane; else the existing 502.
+            provider_msg = _classify_provider_error(dapr_response.text)
+            if provider_msg is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=provider_msg,
+                )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=(
@@ -503,6 +610,26 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 "reason": actor_result.get("reason"),
                 "detail": actor_result.get("detail"),
             }
+            # H4(a): classify a plane outage (Anthropic credit / auth / rate
+            # limit, or a core / F-A fail-closed "llm plane unavailable") across
+            # the actor's error/reason/detail text and return a graceful 503
+            # naming the OTHER plane so the operator can switch + retry.
+            provider_msg = _classify_provider_error(
+                " ".join(
+                    str(v)
+                    for v in (
+                        actor_result.get("error"),
+                        actor_result.get("reason"),
+                        actor_result.get("detail"),
+                    )
+                    if v
+                )
+            )
+            if provider_msg is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=provider_msg,
+                )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=detail,
@@ -524,6 +651,7 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
                 finding_id=None,
                 derived_from=derived_from,
                 session_id=session_id,
+                model=chosen_model,
             )
             await _persist_assistant_turn(
                 pg, session_id, projected,
@@ -601,6 +729,7 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
             derived_from=derived_from,
             receipt_hash=receipt_hash,
             session_id=session_id,
+            model=chosen_model,
         )
         await _persist_assistant_turn(
             pg, session_id, projected,
@@ -613,10 +742,13 @@ def build_consult_router(deps: RegistryAPIDeps) -> APIRouter:
 
 __all__ = [
     "CONSULT_ANALYST_ID",
+    "CONSULT_MODEL_ALLOWLIST",
+    "DEFAULT_CONSULT_MODEL",
     "ConsultCitedRef",
     "ConsultMessage",
     "ConsultRequest",
     "ConsultResponse",
     "ConsultToolCall",
     "build_consult_router",
+    "resolve_consult_model_override",
 ]

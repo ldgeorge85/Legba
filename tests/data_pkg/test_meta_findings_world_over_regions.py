@@ -498,3 +498,77 @@ async def test_world_run_no_gaps_stamps_coverage_without_block_or_gaps_key():
     assert "REGION COVERAGE" not in llm.calls[-1]["messages"][0]["content"]
     assert result.finding.data["region_coverage"] == coverage
     assert "region_gaps" not in result.finding.data
+
+
+# ---------------------------------------------------------------------------
+# H-3c — a DECLARED thematic lane floored/absent is a NAMED gap, not silent
+# ---------------------------------------------------------------------------
+
+
+def _thematic_row(*, uid: UUID, analyst_id: str, title: str) -> dict[str, Any]:
+    """A target-LESS cross-region THEMATIC head row (e.g. escalation_composition)
+    as the verify-floored world fetch returns it."""
+    row = _region_head_row(uid=uid, region_id="", title=title)
+    row["analyst_id"] = analyst_id
+    row["target_id"] = None
+    return row
+
+
+@pytest.mark.asyncio
+async def test_declared_thematic_lane_floored_out_is_named_gap():
+    """H-3c — escalation_composition is DECLARED in the world roster but produced
+    ZERO admitted rows this cycle (floored out on faithfulness). It must surface
+    as a NAMED thematic gap in coverage + the aperture prose, never silently."""
+    heads = [
+        _region_head_row(uid=uuid4(), region_id=r["descriptor_id"], title=r["name"])
+        for r in _ROSTER
+    ]
+    conn = _WorldConn(roster=_ROSTER, region_head_rows=heads)
+    rows = await synth._assemble_world_region_slice(
+        conn,
+        region_analyst_ids=["region_composition", "escalation_composition"],
+        time_window_hours=24,
+        limit=100,
+        verify_floor=0.5,
+    )
+    cov = rows[0]["_region_coverage"]
+    tgaps = [c for c in cov if c["mode"] == synth.REGION_MODE_THEMATIC_GAP]
+    assert len(tgaps) == 1
+    assert tgaps[0]["region_id"] == "thematic:escalation_composition"
+    assert tgaps[0]["input_count"] == 0
+    # The FRAME producers (region/country composition) are never counted as gaps.
+    assert all(
+        c["region_id"] != "thematic:region_composition" for c in cov
+    )
+    # The aperture prose NAMES the floored lane (absence honesty).
+    block = synth._render_world_aperture_block(cov)
+    assert "floored/absent thematic lane(s)" in block
+    assert "Thematic lane NOT available this cycle" in block
+    assert "escalation_composition" in block
+
+
+@pytest.mark.asyncio
+async def test_present_thematic_lane_is_not_a_gap():
+    """A thematic head that SURVIVES the verify floor is a present block (mode
+    thematic), NOT a thematic gap — the gap fires only on a floored/absent lane."""
+    heads = [
+        _region_head_row(uid=uuid4(), region_id=r["descriptor_id"], title=r["name"])
+        for r in _ROSTER
+    ]
+    heads.append(
+        _thematic_row(uid=uuid4(), analyst_id="escalation_composition", title="Escalation")
+    )
+    conn = _WorldConn(roster=_ROSTER, region_head_rows=heads)
+    rows = await synth._assemble_world_region_slice(
+        conn,
+        region_analyst_ids=["region_composition", "escalation_composition"],
+        time_window_hours=24,
+        limit=100,
+        verify_floor=0.5,
+    )
+    cov = rows[0]["_region_coverage"]
+    assert not [c for c in cov if c["mode"] == synth.REGION_MODE_THEMATIC_GAP]
+    present = [c for c in cov if c["mode"] == synth.REGION_MODE_THEMATIC]
+    assert len(present) == 1
+    assert present[0]["region_id"] == "thematic:escalation_composition"
+    assert present[0]["input_count"] == 1

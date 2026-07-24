@@ -83,6 +83,45 @@ def _preserve_process_env():
                 os.environ[key] = value
 
 
+@pytest.fixture(autouse=True)
+def _preserve_analyst_kind_registry():
+    """Restore the process-wide ``ANALYST_KIND_REGISTRY`` extension set after
+    each test (TEST_DEBT_RECON.md Bucket I).
+
+    Same class of bug as ``_preserve_process_env`` above, one layer deeper:
+    ``DescriptorRegistry.start()`` / ``.sync_analyst_kinds()`` calls
+    ``ANALYST_KIND_REGISTRY.replace_extensions(...)`` — a full REPLACE (not a
+    union) sourced from whatever that registry's own ``vocabulary_entries``
+    table happens to contain. In a fresh single-session test DB that table has
+    no ``analyst_kind`` rows, so ANY test anywhere in the suite that
+    constructs a real ``DescriptorRegistry`` and calls ``.start()`` /
+    ``.sync_analyst_kinds()`` wipes the in-code extension-kind registrations
+    ``legba.data.analysts`` does at import time (``journal_assessor`` /
+    ``entity_researcher`` / ``signal_salience``) for the REMAINDER of the
+    single-process full-suite run — poisoning any later test/file that
+    assumes those kinds validate, regardless of whether that later test
+    itself re-imports ``legba.data.analysts`` (the module-level registration
+    only fires on first import; it's already cached).
+
+    Several individual fixtures across the suite (``test_registry_descriptor_
+    integration.py``'s ``registry``/``registry_no_nats``, and similar
+    ``DescriptorRegistry(...).start()`` fixtures in other files) snapshot +
+    restore this locally, but new ones keep appearing — centralizing the
+    guard here closes the leak for the whole suite in one place, the same
+    way ``_preserve_process_env`` centralizes the env-var class of this bug.
+    Does not change any test's own behaviour — within a test the registry
+    holds whatever that test/fixture set it to; the snapshot/restore happens
+    only at the test boundary.
+    """
+    from legba.data.schemas import ANALYST_KIND_REGISTRY
+
+    saved = ANALYST_KIND_REGISTRY.extension_values()
+    try:
+        yield
+    finally:
+        ANALYST_KIND_REGISTRY.replace_extensions(saved)
+
+
 # ---------------------------------------------------------------------------
 # C-1 strict mode — LEGBA_TEST_STRICT=1 turns INFRA-GATED skips into failures
 # ---------------------------------------------------------------------------

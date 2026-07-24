@@ -115,9 +115,13 @@ def load_models():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Loading models on device: {device}")
 
-    # 1. NLLB-200 translation
-    logger.info("Loading NLLB-200-distilled-600M ...")
-    nllb_id = "facebook/nllb-200-distilled-600M"
+    # 1. NLLB-200 translation — upgraded 600M-distilled -> 1.3B-distilled
+    #    (2026-07-09) for higher proper-noun / place-name fidelity on the
+    #    non-Latin war-beat (ru/ar/uk/he/fa/…). Better translation directly
+    #    lifts downstream spaCy-NER entity yield (that pipeline is translate->
+    #    English->NER). ~+1.4GB VRAM in fp16; T4 GPU0 has ~6.5GB headroom.
+    logger.info("Loading NLLB-200-distilled-1.3B ...")
+    nllb_id = "facebook/nllb-200-distilled-1.3B"
     MODELS["nllb_tokenizer"] = AutoTokenizer.from_pretrained(nllb_id)
     MODELS["nllb_model"] = AutoModelForSeq2SeqLM.from_pretrained(nllb_id).half().to(device)
 
@@ -245,6 +249,15 @@ class Triple(BaseModel):
     subject: str
     predicate: str
     object: str
+    # Character offsets in the input text (Optional for backwards compatibility:
+    # older clients ignore unknown fields; new clients can use these directly
+    # instead of re-locating the entity via substring search). When the spaCy
+    # entity that contributed the head/tail can be identified by token span,
+    # these are set to its `start_char` / `end_char`; otherwise None.
+    subject_start: Optional[int] = None
+    subject_end: Optional[int] = None
+    object_start: Optional[int] = None
+    object_end: Optional[int] = None
 
 
 class ExtractResponse(BaseModel):
@@ -412,15 +425,20 @@ async def extract(req: ExtractRequest):
         return ExtractResponse(triples=[], ms=0.0)
 
     # Step 1: spaCy NER to get entities and tokens
-    doc = nlp(req.text[:2000])
+    input_text = req.text[:2000]
+    doc = nlp(input_text)
     tokens = [token.text for token in doc]
 
     # Build NER list in GLiREL format: [start_tok, end_tok (inclusive), TYPE, text]
+    # and an index from (start_tok, end_tok_inclusive) -> spaCy Span so we can
+    # recover character offsets + verbatim source text from GLiREL output.
     ner = []
+    span_by_toks: dict[tuple[int, int], "spacy.tokens.Span"] = {}
     for ent in doc.ents:
         start_tok = ent.start
         end_tok = ent.end - 1  # GLiREL uses inclusive end index
         ner.append([start_tok, end_tok, ent.label_, ent.text])
+        span_by_toks[(start_tok, end_tok)] = ent
 
     if len(ner) < 2:
         ms = (time.perf_counter() - t0) * 1000
@@ -438,15 +456,50 @@ async def extract(req: ExtractRequest):
             top_k=1,
         )
 
-    # Step 3: Convert to Triple format
+    # Step 3: Convert to Triple format.
+    #
+    # GLiREL returns each relation with head/tail represented as a list of
+    # token strings (head_text/tail_text) and the corresponding token-index
+    # span (head_pos/tail_pos = [start_tok, end_tok_inclusive]). We resolve
+    # those back to the originating spaCy entity so we can return the verbatim
+    # source-text substring (preserves punctuation/whitespace fidelity, unlike
+    # `" ".join(tokens)`) plus exact character offsets.
+    #
+    # Fallback path for any future GLiREL versions that omit *_pos: match the
+    # joined token-text against the ner list we just built. As a last resort
+    # we fall back to the historical `" ".join(...)` form so callers still get
+    # a non-empty subject/object.
+    def _resolve_entity(rel: dict, slot: str):
+        pos_key, text_key = f"{slot}_pos", f"{slot}_text"
+        pos = rel.get(pos_key)
+        if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+            try:
+                key = (int(pos[0]), int(pos[1]))
+            except (TypeError, ValueError):
+                key = None
+            if key and key in span_by_toks:
+                span = span_by_toks[key]
+                return span.text, span.start_char, span.end_char
+        # Fallback: match joined token text against the input ner list.
+        raw = rel.get(text_key)
+        joined = " ".join(raw) if isinstance(raw, list) else (raw or "")
+        for (s_tok, e_tok), span in span_by_toks.items():
+            if span.text == joined:
+                return span.text, span.start_char, span.end_char
+        return joined, None, None
+
     triples = []
     for rel in sorted(relations, key=lambda x: x["score"], reverse=True):
-        head_text = " ".join(rel["head_text"]) if isinstance(rel["head_text"], list) else rel["head_text"]
-        tail_text = " ".join(rel["tail_text"]) if isinstance(rel["tail_text"], list) else rel["tail_text"]
+        subj_text, subj_start, subj_end = _resolve_entity(rel, "head")
+        obj_text, obj_start, obj_end = _resolve_entity(rel, "tail")
         triples.append(Triple(
-            subject=head_text,
+            subject=subj_text,
             predicate=rel["label"],
-            object=tail_text,
+            object=obj_text,
+            subject_start=subj_start,
+            subject_end=subj_end,
+            object_start=obj_start,
+            object_end=obj_end,
         ))
 
     ms = (time.perf_counter() - t0) * 1000

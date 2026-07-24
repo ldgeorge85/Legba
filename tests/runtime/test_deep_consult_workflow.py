@@ -366,6 +366,58 @@ async def test_empty_question_plan_skip() -> None:
 
 
 # ---------------------------------------------------------------------------
+# F1 model picker — the kind shim threads the plane override into the workflow
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deep_consult_kind_threads_model_override() -> None:
+    """The deep_consult kind's schedule shim stamps an allowlisted
+    ``llm_component_override`` into the workflow input's ``llm_component_id`` (so
+    the workflow's stage deps + BudgetEnforcer key off the chosen plane). Absent
+    / not-allowlisted ⇒ the descriptor primary, unchanged."""
+    from legba.data.analysts.deep_consult import DeepConsultKindDeps, run_method
+
+    captured: dict[str, Any] = {}
+
+    class _FakeClient:
+        async def start_deep_consult_workflow(self, wf_input, *, workflow_id):
+            captured["wf_input"] = wf_input
+            return "task-1"
+
+    deps = DeepConsultKindDeps(
+        workflow_client=_FakeClient(),
+        llm_component_id="llm.anthropic.opus_4_7",
+    )
+
+    # Override to the free core plane → stamped into the workflow input.
+    await run_method(
+        [{"question": "q", "llm_component_override": "llm.primary.openai_compat"}],
+        {"analyst_id": "deep_consult", "run_id": str(uuid4())},
+        deps,
+    )
+    assert captured["wf_input"].llm_component_id == "llm.primary.openai_compat"
+
+    # No override ⇒ the descriptor primary is used unchanged.
+    captured.clear()
+    await run_method(
+        [{"question": "q"}],
+        {"analyst_id": "deep_consult", "run_id": str(uuid4())},
+        deps,
+    )
+    assert captured["wf_input"].llm_component_id == "llm.anthropic.opus_4_7"
+
+    # A non-allowlisted id is refused (defense in depth) ⇒ primary unchanged.
+    captured.clear()
+    await run_method(
+        [{"question": "q", "llm_component_override": "llm.evil.backdoor"}],
+        {"analyst_id": "deep_consult", "run_id": str(uuid4())},
+        deps,
+    )
+    assert captured["wf_input"].llm_component_id == "llm.anthropic.opus_4_7"
+
+
+# ---------------------------------------------------------------------------
 # Client contract — detached submit (no result() await) + get_status surface
 # ---------------------------------------------------------------------------
 
@@ -470,3 +522,208 @@ def test_worker_registers_both_workflows_by_function_name(monkeypatch) -> None:
     for act in ("plan_activity", "acquire_activity", "analyze_activity",
                 "synthesize_activity"):
         assert act in registered_activities, act
+
+
+# ---------------------------------------------------------------------------
+# W1-T1. Govern deep_consult — acquire routes through the agency binding.
+# ---------------------------------------------------------------------------
+
+
+from legba.data.analysts.agency.agency import AgencyOutcome  # noqa: E402
+from legba.data.analysts.agency.tools import ToolResult  # noqa: E402
+
+
+class _RecordingBinding:
+    """A recording AgencyToolBinding double — captures the governed calls and
+    returns an admitted outcome carrying a fixed output (rows + refs)."""
+
+    def __init__(self, output: dict[str, Any]) -> None:
+        self._output = output
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def run_tool(self, tool_name: str, args: dict[str, Any], **kw: Any) -> AgencyOutcome:
+        self.calls.append((tool_name, dict(args)))
+        return AgencyOutcome(
+            admitted=True,
+            pack_id="substrate_read",
+            tool_name=tool_name,
+            tool_result=ToolResult(status="ok", output=dict(self._output)),
+        )
+
+
+class _BlockingBinding:
+    """A binding double that BLOCKS every call (gate denial)."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def run_tool(self, tool_name: str, args: dict[str, Any], **kw: Any) -> AgencyOutcome:
+        self.calls.append(tool_name)
+        return AgencyOutcome(
+            admitted=False,
+            pack_id="substrate_read",
+            tool_name=tool_name,
+            block_cause="not_granted",
+            detail="test-denied",
+        )
+
+
+def test_stage_deps_carries_agency_binding() -> None:
+    """The stage-deps bundle carries the (optional) agency binding, default None."""
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(DeepConsultStageDeps)}
+    assert "agency_binding" in fields
+    deps = DeepConsultStageDeps(llm=object(), substrate=object())
+    assert deps.agency_binding is None
+    b = _RecordingBinding({"rows": [], "refs": []})
+    deps2 = DeepConsultStageDeps(llm=object(), substrate=object(), agency_binding=b)
+    assert deps2.agency_binding is b
+
+
+@pytest.mark.asyncio
+async def test_acquire_routes_through_binding_not_direct_port() -> None:
+    """With a binding present, acquire drives binding.run_tool and NEVER touches
+    the substrate port directly; scope_predicate is injected into the governed
+    args; refs are lifted from the governed output."""
+    ref = uuid4()
+    binding = _RecordingBinding({"rows": [{"id": str(ref)}], "refs": [str(ref)]})
+    substrate = _SubstrateStub(signal_refs=[ref])  # must stay UNTOUCHED
+    llm = _ScriptedLLM([_plan_json()])
+    deps = DeepConsultStageDeps(llm=llm, substrate=substrate, agency_binding=binding)
+
+    plan = await _run_plan(_input(scope_predicate="country == 'br'"), deps)
+    acquired = await _run_acquire(plan, deps)
+
+    # The governed binding ran the call, not the direct port dispatcher.
+    assert binding.calls, "binding.run_tool was not invoked"
+    assert binding.calls[0][0] == "search_signals"
+    assert substrate.calls == [], "direct substrate port was dispatched despite a binding"
+    # scope_predicate was injected (caller-pinned) into the governed args.
+    assert binding.calls[0][1].get("scope_predicate") == "country == 'br'"
+    # refs from the governed output were lifted into lineage.
+    assert str(ref) in acquired["cited_substrate_refs"]
+
+
+@pytest.mark.asyncio
+async def test_acquire_binding_none_falls_back_to_direct_port() -> None:
+    """binding-None (tests / embedders) keeps the direct-port dispatch path."""
+    ref = uuid4()
+    substrate = _SubstrateStub(signal_refs=[ref])
+    llm = _ScriptedLLM([_plan_json()])
+    deps = DeepConsultStageDeps(llm=llm, substrate=substrate, agency_binding=None)
+
+    plan = await _run_plan(_input(), deps)
+    acquired = await _run_acquire(plan, deps)
+
+    # The direct port dispatcher was used (no binding to route through).
+    assert any(c[0] == "search_signals" for c in substrate.calls)
+    assert str(ref) in acquired["cited_substrate_refs"]
+
+
+@pytest.mark.asyncio
+async def test_acquire_binding_block_folds_error_no_direct_dispatch() -> None:
+    """A gate denial folds into an {"error": ...} evidence row and NEVER falls
+    through to the direct port (a block must not silently bypass the gate)."""
+    ref = uuid4()
+    binding = _BlockingBinding()
+    substrate = _SubstrateStub(signal_refs=[ref])
+    llm = _ScriptedLLM([_plan_json()])
+    deps = DeepConsultStageDeps(llm=llm, substrate=substrate, agency_binding=binding)
+
+    plan = await _run_plan(_input(), deps)
+    acquired = await _run_acquire(plan, deps)
+
+    assert binding.calls == ["search_signals"]
+    assert substrate.calls == [], "a blocked call fell through to the direct port"
+    result0 = acquired["evidence"][0]["result"]
+    assert "tool_blocked" in str(result0.get("error"))
+
+
+@pytest.mark.asyncio
+async def test_analyze_threads_agency_binding_into_consult_deps(monkeypatch) -> None:
+    """W1-T1: the re-entrant synthesis loop is governed too — _run_analyze must
+    pass deps.agency_binding into the ConsultOnDemandDeps it builds for
+    consult_run_method (pins the pass-through against regression)."""
+    from legba.data.analysts import consult_on_demand as _cod
+
+    captured: dict[str, Any] = {}
+    orig_run_method = _cod.run_method
+
+    async def _capturing(*args: Any, **kwargs: Any):
+        deps_arg = kwargs.get("deps")
+        captured["agency_binding"] = getattr(deps_arg, "agency_binding", "MISSING")
+        return await orig_run_method(*args, **kwargs)
+
+    # _run_analyze does `from ...consult_on_demand import run_method` at call time,
+    # so patching the module attribute is picked up by the local import.
+    monkeypatch.setattr(_cod, "run_method", _capturing)
+
+    ref = uuid4()
+    binding = _RecordingBinding({"rows": [{"id": str(ref)}], "refs": [str(ref)]})
+    substrate = _SubstrateStub(signal_refs=[ref])
+    llm = _ScriptedLLM([_plan_json(), _final_json(refs=[str(ref)]), _candidates_json()])
+    deps = DeepConsultStageDeps(llm=llm, substrate=substrate, agency_binding=binding)
+
+    plan = await _run_plan(_input(), deps)
+    acquired = await _run_acquire(plan, deps)
+    await _run_analyze(acquired, deps)
+
+    # The re-entrant consult synthesis loop received the SAME binding.
+    assert captured["agency_binding"] is binding
+
+
+@pytest.mark.asyncio
+async def test_resolver_raises_when_pack_unfetchable() -> None:
+    """The worker-local binding builder is FAIL-LOUD: an unfetchable
+    substrate_read pack RAISES (no silent fall-through to ungoverned dispatch)."""
+    from legba.runtime.dapr_workflow.deep_consult_workflow import (
+        _build_worker_agency_binding,
+    )
+
+    class _BrokenRegistry:
+        async def get_descriptor(self, pack_id: str, *, family: str) -> Any:
+            raise RuntimeError("registry down")
+
+    with pytest.raises(RuntimeError, match="substrate_read_pack_unavailable"):
+        await _build_worker_agency_binding(
+            registry_client=_BrokenRegistry(),
+            substrate=_SubstrateStub(),
+            pg_pool=_FakePool(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_worker_agency_binding_built_with_self_allow(monkeypatch) -> None:
+    """On a successful pack fetch the builder wires the self-allow no-target
+    surface: substrate_read granted + allowed under GLOBAL scope, requested_by =
+    analyst::deep_consult, ToolContext carries the substrate port already built."""
+    import legba.runtime.dapr_workflow.deep_consult_workflow as dcw
+    from legba.data.analysts.agency.binding import GLOBAL_SCOPE
+    from legba.data.schemas.action_pack import ActionPackRef
+
+    sentinel_pack = object()
+
+    async def _fake_fetch(registry_client: Any, pack_id: str) -> Any:
+        return sentinel_pack
+
+    # Patch the fetch the builder imports locally from the binding module.
+    monkeypatch.setattr(
+        "legba.data.analysts.agency.binding.fetch_action_pack", _fake_fetch,
+    )
+
+    substrate = _SubstrateStub()
+    binding = await dcw._build_worker_agency_binding(
+        registry_client=object(),
+        substrate=substrate,
+        pg_pool=_FakePool(),
+    )
+
+    assert binding.pack is sentinel_pack
+    assert binding.requested_by == "analyst::deep_consult"
+    assert binding.scope is GLOBAL_SCOPE
+    assert binding.tool_context.substrate is substrate
+    grant_ids = {g.pack_id for g in binding.analyst_grants if isinstance(g, ActionPackRef)}
+    allow_ids = {a.pack_id for a in binding.target_allows if isinstance(a, ActionPackRef)}
+    assert grant_ids == {"substrate_read"}
+    assert allow_ids == {"substrate_read"}

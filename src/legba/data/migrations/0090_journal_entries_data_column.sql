@@ -1,0 +1,36 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0090_journal_entries_data_column.sql
+--
+-- VOICES LV-1 (planning/VOICES_PLAN_2026-07-21.md, DL-1). Free-form `data`
+-- column on journal_entries — the home for the lens tier's per-row metadata
+-- (the faculty's lens_id) and the diff pass's structured agreement matrix. The
+-- lens tier rides the EXISTING journal_assessor kind + JournalPayload shape (the
+-- chronicle pattern), so it needs NO new OutputKind/table — only this one
+-- additive column for the metadata the diary/consolidation/chronicle rows never
+-- carried.
+--
+-- Every existing entry/consolidation/chronicle row is unaffected: no write path
+-- touched `data` before LV-1, and the DEFAULT backfills every historical row to
+-- an empty object. Read sites can therefore skip a null-check.
+--
+-- WHY NOT NULL DEFAULT '{}': matches the table's own idiom — journal_entries
+-- already declares `claims JSONB NOT NULL DEFAULT '[]'::jsonb`
+-- (0048_journal.sql). A NOT-NULL default lets the lens/lens_diff read + diff
+-- paths read `row["data"]` unconditionally, and the task-brief's plain
+-- `data jsonb NULL` alternative would force a null-guard at every read site for
+-- no benefit (deviation recorded in VOICES_BUILD_DESIGN §1). No index — LV-1 has
+-- no query that filters on `data` contents; the diff pass selects by
+-- `entry_kind` + `analyst_id` + a produced_at window, all plain columns.
+--
+-- IDEMPOTENT: ADD COLUMN IF NOT EXISTS, so a re-run against an already-migrated
+-- DB (the live dev rig) is a clean no-op. Routed through the filename-gated
+-- migration runner (ONE txn + ledger row per file, migrate.py `_apply_file`; NO
+-- inline BEGIN/COMMIT).
+--
+-- DISCOVERY: automatic — the runner globs migrations/*.sql and keeps
+-- digit-leading stems; dropping this file is the whole registration step.
+
+ALTER TABLE public.journal_entries
+    ADD COLUMN IF NOT EXISTS data jsonb NOT NULL DEFAULT '{}'::jsonb;

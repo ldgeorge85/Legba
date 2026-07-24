@@ -1,0 +1,110 @@
+# reenrich_ner — ONE-TIME NER backfill over the pre-fix historical signal backlog.
+#
+# A `deterministic`-kind META analyst over the SHARED raw signal pool. The
+# multilingual/telegram NER fix (NERMultilingualHandler M11 translate-then-NER +
+# M12 telegram payload.text) landed AFTER ~9,143 signals were already ingested, so
+# those rows carry 0 entities forever — the FORWARD fix only runs at ingest and
+# never revisits a persisted signal. Every time this analyst fires it re-runs the
+# SAME LIVE handler over the next batch of candidate signals (no entities AND from
+# telegram OR a non-Latin-script language), draining the ~9,143 backlog over a few
+# hours. The handler is fully built at
+# legba.data.analysts.deterministic_handlers.reenrich_ner and REUSES the production
+# NERMultilingualHandler (it never reimplements translate/NER).
+#
+# Target-agnostic + META: re-enrichment is an observation-level property of the
+# shared pool, not a per-target interpretation. The subscription declares NO
+# `targets` selector, so the cadence heartbeat is a SINGLE global sweep per tick (not
+# a per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets. The handler
+# pulls candidate signals directly via deps.pg_pool (it ignores the materialized
+# input slice / time window).
+#
+# Method:
+#   * kind = deterministic — the deterministic kind dispatcher module:run_method.
+#     NO LLM block and no per-day token budget — the run is pure Python over signals
+#     plus the SELF-HOSTED hosted NLP plane (nlp.local.legba_models → /translate +
+#     /extract, $0). The runtime threads the process-lifetime hosted NlpServiceClient
+#     onto deps.extras["reenrich_ner_nlp"] whenever the bound sub_handler is
+#     reenrich_ner; if it isn't wired (models-host unreachable at deps-build) the
+#     sweep no-ops that tick (skipped_no_nlp).
+#   * sub_handler = reenrich_ner — injected into the run options at fire time. The
+#     sweep is idempotent + forward-progressing (stamps signals.reenriched_at on
+#     every examined row; a row that GAINS entities also gets payload.entities +
+#     entity_classes promoted + entities_resolved_at reset so entity_resolution
+#     re-folds it), so re-runs are safe.
+#
+# The per-run summary FindingPayload (examined / reenriched / entities_added /
+# failures) is the cadence receipt — exactly how entity_resolution / signal_embedder
+# keep a summary while side-writing directly. reenrich_ner is marked TRACE_ONLY in
+# deterministic.py (its real product is the side-written signal enrichment), so the
+# receipt lands in the trace, not in analyst_outputs.
+#
+# Registered via scripts/bringup_register_reenrich_ner.py or the registry REST API.
+# Migration 0085_signal_reenriched_marker.sql adds the reenriched_at marker column +
+# the partial scan index over the un-re-enriched candidate pool.
+#
+# ONE-TIME: once the ~9,143 backlog drains (no new candidates arrive — the forward
+# fix enriches every new signal at ingest), this analyst idles cheaply (examined=0
+# per tick). It may be retired via PUT /descriptors once the backlog is confirmed
+# empty, or left running as a self-healing backstop.
+
+identity:
+  id: reenrich_ner
+  name: NER Backfill (multilingual/telegram)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: reenrich_ner
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared signal pool, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: reenrich_ner
+  # Deterministic kind, NO LLM block: this sweep uses the hosted NLP plane
+  # (nlp.local.legba_models → /translate + /extract), not an LLM. The runtime
+  # deps-builder resolves the process-lifetime hosted NlpServiceClient and threads it
+  # into deps.extras["reenrich_ner_nlp"] whenever the bound sub_handler is
+  # reenrich_ner; degrade-not-break if it can't be wired (the sweep no-ops that tick).
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # method.kind=deterministic carries no LLM block and no budget_tokens_per_day
+  # (re-enrichment spends zero LLM tokens; the hosted NER/translate plane is
+  # self-hosted / $0). META analyst: no subscription.targets, so the cadence
+  # heartbeat is a SINGLE global sweep per tick, NOT a fan-out. Each re-enriched row
+  # is a bounded hosted translate+/extract round-trip, so the sweep bounds its
+  # per-tick batch (max_reenrich, default 500) rather than draining in one shot.
+  #
+  # fallback_schedule = "9-59/15 * * * *" — every 15 min (fires :09/:24/:39/:54),
+  # OFFSET from the other maintenance crons so they never fire on the same tick:
+  #   entity_resolution "*/10"        · situation_clustering "5-59/20"
+  #   hypothesis_lifecycle "10-59/20" · integrity_sweep "41 */1"
+  #   fact_contention_arbiter "37 */1"· fact_decay "23 */8"
+  #   signal_summarizer "13-59/15"    · corpus_indexer "7-59/15"
+  #   signal_embedder "11-59/15"      · reenrich_ner (this) "9-59/15"
+  fallback_schedule: "9-59/15 * * * *"
+  # Idempotent forward-progressing sweep — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND writes a
+# per-run summary finding (suppressed to the trace via the TRACE_ONLY map). The
+# re-enriched entities land directly on the signals rows (payload.entities +
+# entity_classes), and the reset entities_resolved_at re-enters them into the
+# entity_resolution sweep.
+outputs: []

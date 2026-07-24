@@ -275,6 +275,163 @@ def test_default_mode_is_chat(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# F1 model picker — friendly→component-id allowlist mapping + threading
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_consult_model_override_mapping():
+    """The allowlist maps friendly→component id; the default plane threads NO
+    override (default-preserving)."""
+    assert consult_api.resolve_consult_model_override(None) == ("opus", None)
+    assert consult_api.resolve_consult_model_override("opus") == ("opus", None)
+    assert consult_api.resolve_consult_model_override("core") == (
+        "core", "llm.primary.openai_compat",
+    )
+    assert consult_api.CONSULT_MODEL_ALLOWLIST["opus"] == "llm.anthropic.opus_4_7"
+
+
+def _chat_envelope() -> dict[str, Any]:
+    return {
+        "outcome": "success",
+        "mode": "chat",
+        "consult_response": {"question": "q", "answer": "a"},
+        "derived_from": [],
+    }
+
+
+def test_model_core_threads_override_and_echoes(monkeypatch):
+    """model='core' → the sanctioned component id is threaded into the invoke
+    body, and the response echoes the chosen friendly plane."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(_chat_envelope(), captured)
+    )
+    app = _build_app(_NoReadBackPg())
+    client = TestClient(app)
+    r = client.post("/api/v1/consult", json={"question": "q", "model": "core"})
+    assert r.status_code == 200, r.text
+    assert (
+        captured["body"]["inputs"][0]["llm_component_override"]
+        == "llm.primary.openai_compat"
+    )
+    assert r.json()["model"] == "core"
+
+
+def test_model_default_omits_override(monkeypatch):
+    """No model (or model='opus') → NO override key is threaded (the run keeps the
+    cached Opus primary), and the response echoes 'opus'."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(_chat_envelope(), captured)
+    )
+    app = _build_app(_NoReadBackPg())
+    client = TestClient(app)
+    r = client.post("/api/v1/consult", json={"question": "q"})
+    assert r.status_code == 200, r.text
+    assert "llm_component_override" not in captured["body"]["inputs"][0]
+    assert r.json()["model"] == "opus"
+
+    captured.clear()
+    r2 = client.post("/api/v1/consult", json={"question": "q", "model": "opus"})
+    assert r2.status_code == 200
+    assert "llm_component_override" not in captured["body"]["inputs"][0]
+    assert r2.json()["model"] == "opus"
+
+
+def test_model_invalid_value_422(monkeypatch):
+    """A raw / unsanctioned model value is rejected by the Literal (422) before
+    it can reach the allowlist map — the client can never pass a raw id."""
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(_chat_envelope(), {})
+    )
+    app = _build_app(_NoReadBackPg())
+    client = TestClient(app)
+    r = client.post(
+        "/api/v1/consult",
+        json={"question": "q", "model": "llm.anthropic.opus_4_7"},
+    )
+    assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# H4(a) — graceful provider/plane-error surfacing (503 naming the other plane)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_provider_error_routes_to_other_plane():
+    # Anthropic credit-balance outage → name the OTHER (core) plane.
+    opus = consult_api._classify_provider_error(
+        "Your credit balance is too low to access the Anthropic API"
+    )
+    assert opus is not None
+    assert "Opus) plane is unavailable" in opus
+    assert "Core model" in opus
+
+    # Core / F-A fail-closed outage → name the OTHER (opus) plane.
+    core = consult_api._classify_provider_error(
+        "requested llm plane 'llm.primary.openai_compat' is unavailable: boom"
+    )
+    assert core is not None
+    assert "Core plane is unavailable" in core
+    assert "select the Opus model" in core
+
+    # A non-provider error keeps the existing 502 (helper returns None).
+    assert (
+        consult_api._classify_provider_error("dapr actor returned unexpected shape")
+        is None
+    )
+    assert consult_api._classify_provider_error(None) is None
+
+
+def test_core_unavailable_returns_503_naming_opus(monkeypatch):
+    """A core / F-A fail-closed outcome surfaces as 503 with an actionable
+    message pointing at the Opus plane (not a bare 502)."""
+    envelope = {
+        "outcome": "hard_fail",
+        "error": (
+            "requested llm plane 'llm.primary.openai_compat' is unavailable: "
+            "connection refused"
+        ),
+    }
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(envelope, {})
+    )
+    app = _build_app(_NoReadBackPg())
+    r = TestClient(app).post(
+        "/api/v1/consult", json={"question": "q", "model": "core"},
+    )
+    assert r.status_code == 503, r.text
+    assert "select the Opus model" in r.json()["detail"]
+
+
+def test_opus_credit_error_returns_503_naming_core(monkeypatch):
+    """An Anthropic credit-balance failure on the Opus plane surfaces as 503
+    pointing the operator at the free core plane."""
+    envelope = {
+        "outcome": "hard_fail",
+        "error": "Your credit balance is too low to access the Anthropic API",
+    }
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(envelope, {})
+    )
+    app = _build_app(_NoReadBackPg())
+    r = TestClient(app).post("/api/v1/consult", json={"question": "q"})
+    assert r.status_code == 503, r.text
+    assert "Core model" in r.json()["detail"]
+
+
+def test_non_provider_failure_keeps_502(monkeypatch):
+    """A non-provider actor failure still returns the existing 502 detail dict."""
+    envelope = {"outcome": "hard_fail", "error": "unexpected shape"}
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(envelope, {})
+    )
+    app = _build_app(_NoReadBackPg())
+    r = TestClient(app).post("/api/v1/consult", json={"question": "q"})
+    assert r.status_code == 502, r.text
+
+
+# ---------------------------------------------------------------------------
 # S8-T6 — the ReAct step trace threads into consult_turns.steps
 # ---------------------------------------------------------------------------
 

@@ -1,0 +1,234 @@
+# Stage 4 (signal-content-depth) — CROSS-DOCUMENT CORROBORATOR.
+#
+# A "unit" in the P2-T2 sense: NOT a new Python kind module — just an
+# inline_target DESCRIPTOR carrying its OWN method.system_prompt + eval.rubric.
+# The descriptor-supplied prompt drives synthesis; the cite-the-prose [N] markers
+# + the faithfulness-verify gate already cover inline_target findings for free, so
+# this unit inherits provenance + verify with ZERO new code (the corpus_researcher
+# precedent — sibling descriptor, same kind).
+#
+# WHAT IT IS: the SECOND Stage-4 mining analyst. Where corpus_researcher picks THE
+# most significant development and synthesizes a research finding, THIS analyst does
+# one thing the fixed-slice units never do — it CROSS-CHECKS a specific claim across
+# MULTIPLE INDEPENDENT documents. Each tick it picks one significant, checkable claim
+# from the recent pool and asks: how many INDEPENDENT sources actually report this,
+# do they AGREE on the specifics, and WHERE do they conflict? It uses semantic
+# retrieval (vector_search over Qdrant legba_signals — catches the SAME event worded
+# differently by a different outlet, which BM25 misses) + lexical retrieval
+# (search_corpus over the ~106k-doc OpenSearch corpus) + read_document to pull the
+# full bodies, then emits ONE cited finding on the corroboration status: corroborated
+# by N independent sources / single-sourced (a flag) / contradicted.
+#
+# WHY IT MATTERS: single-sourced and contradicted claims are the ones that poison a
+# synthesis tower. This analyst surfaces them explicitly, cited, verify-passed.
+#
+# META analyst (NO `subscription.targets` => `_cadence_targets` returns None => one
+# global sweep per cadence, `target_filter=None`). The GATHER binding self-allows
+# `substrate_read` under GLOBAL_SCOPE on the META path (actor_output_emit
+# ._gather_binding_for_target — the journal_assessor / corpus_researcher precedent),
+# so the agentic loop gets its tools without a per-target allow-list.
+#
+# CORE plane only ($0, self-hosted) — NEVER Anthropic (consult/deep_consult are the
+# only sanctioned Opus users). Mirrors corpus_researcher's proven-working V1 config:
+# gather_only=false (a global recent slice anchors the claim selection; the GATHER
+# tools reach BEYOND the slice into the full corpus for the independent corroboration
+# that is this unit's whole point).
+
+identity:
+  id: cross_doc_corroborator
+  name: Cross-Document Corroborator
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: stage4_mining
+
+subscription:
+  # NO `targets` block => META analyst (single global sweep; _cadence_targets
+  # returns None). Mirrors corpus_researcher / competing_hypotheses.
+  substrate:
+    direct_queries: true
+    # gather_only=false (V1): the analyst gets a global recent-signal slice to
+    # ANCHOR claim selection, then reaches beyond it via the GATHER tools
+    # (vector_search / search_corpus / read_document) for the independent
+    # cross-document corroboration that is this unit's purpose. The empty-slice
+    # (gather_only=true) synthesis is unreliable on the CORE plane — the same
+    # deferral documented on corpus_researcher.
+    gather_only: false
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# No per-target grounding preamble: a META corroborator has no target_geo, and it
+# assembles its own comparison set via the GATHER tools rather than an injected slice.
+grounding:
+  enabled: false
+
+method:
+  kind: llm_planner
+  # Corroboration prompt. It (1) PICKS one significant, checkable claim from the
+  # working set, (2) actively RETRIEVES independent coverage of it across the full
+  # corpus (semantic + lexical), (3) judges corroboration vs conflict vs
+  # single-sourced, (4) emits ONE STRICT-JSON FindingPayload with cite-the-prose [N]
+  # markers so the verify gate grounds every claim against the REAL source bodies.
+  system_prompt: |
+    You are the CROSS-DOCUMENT CORROBORATOR. You are NOT scoped to one country and
+    you do NOT write general research summaries. You do ONE thing: take a specific
+    claim and CROSS-CHECK it across MULTIPLE INDEPENDENT documents.
+
+    The signals provided to you are your working set — recent coverage. Number them
+    [1], [2], [3]… in the order given and treat them as your starting evidence.
+
+    STEP 1 — PICK ONE CLAIM. From the working set, choose the SINGLE most significant
+    specific, checkable factual claim (a concrete assertion of who / what / when /
+    how many — e.g. "Country X struck facility Y on date Z", "official A said B",
+    "N casualties"). Prefer claims that MATTER and that could be contested,
+    thinly-sourced, or high-stakes. Avoid vague, trivial, or purely opinion claims.
+
+    STEP 2 — GO FIND INDEPENDENT COVERAGE. Do NOT stop at the working set. Actively
+    retrieve OTHER documents about the SAME claim, especially from DIFFERENT outlets:
+    - vector_search(query) — semantic similarity search. USE THIS FIRST to DISCOVER
+      candidate documents: it finds the same event worded differently by a different
+      outlet, which keyword search misses. Search the claim as a natural-language
+      sentence. It returns candidate signal_id values (NOT the full bodies) — to read
+      and then CITE a promising hit, call read_document(signal_id) on it.
+    - search_corpus(query, [filters], [size]) — BM25 keyword search over the FULL
+      body of every ingested signal (~106k docs). Use specific names/places/numbers
+      from the claim. Its rows carry the body and are directly citable.
+    - read_document(doc_id) — fetch one document's full body by its id. Use it on the
+      signal_id values vector_search returns, and to re-read any working-set or
+      search_corpus hit in full.
+    - search_signals / query_facts / list_situations — supporting corroboration and
+      context (a fact/situation row is NOT directly citable — read_document the
+      underlying signal if you want to cite it).
+
+    CITATION RULE: only FULL-BODY reads are numbered [N] and citable — the working-set
+    signals [1..], search_corpus rows, and read_document results. A vector_search hit
+    is NOT citable until you read_document it. NEVER cite a document whose body you did
+    not actually read.
+
+    STEP 3 — JUDGE CORROBORATION. Determine, from the documents you actually read:
+    - How many INDEPENDENT sources report the claim? INDEPENDENCE MATTERS: the same
+      wire story republished by ten aggregators is ONE source, not ten. Trace a story
+      back to its ORIGINATING outlet and count only distinct origins (distinct outlet
+      / byline / first-report). LIST each independent outlet by name in your finding —
+      if you cannot name at least two distinct originating outlets, the claim is
+      single-sourced, not corroborated.
+    - Do the independent sources AGREE on the specifics (numbers, attribution,
+      timing, location), or do they DIVERGE? Name the specific agreements and the
+      specific conflicts, each cited.
+    - Is the claim CORROBORATED (≥2 independent sources agree), SINGLE-SOURCED (only
+      one independent origin — a flag), or CONTRADICTED (independent sources
+      disagree on a material fact)?
+
+    Every key statement MUST cite the document(s) it rests on with bracketed markers
+    like [2] or [1][4]. Uncited key statements are not allowed. Separate evidence
+    from inference: prefix every inferred judgement with "Assessed:". Never state
+    something as established fact unless a cited document actually reports it. Do NOT
+    claim corroboration that the cited documents do not actually contain.
+
+    Produce EXACTLY ONE finding. Respond with STRICT JSON and nothing else — no prose
+    before or after, no code fences:
+    {
+      "title": "<short headline: the claim + its corroboration verdict, e.g. 'Strike on Facility Y — corroborated by 3 independent outlets' or 'Casualty figure N — single-sourced'>",
+      "body": "<github-markdown. Begin with a one-line **BLUF:** stating the claim
+        and the corroboration verdict (corroborated by N independent sources /
+        single-sourced / contradicted). Then a `### Corroboration` section: which
+        INDEPENDENT sources report it and what they agree on, each cited [N]. Then a
+        `### Conflicts` section: where independent sources diverge on specifics (or
+        'None found' if they agree), cited. Then an `### Assessment` section: your
+        reading, every inferred judgement prefixed 'Assessed:', an explicit note if
+        the claim is single-sourced or contradicted, and the confidence rationale.
+        Keep it tight and fully cited.>",
+      "confidence": 0.0,
+      "evidence": ["<the signal id (the doc_id from search_corpus / read_document, or the working-set signal id) for each [N] you cited, IN ORDER: [1] -> evidence[0], [2] -> evidence[1], …>"],
+      "tags": ["severity:low", "topic:cross_doc_corroboration"]
+    }
+    The "evidence" array MUST list the real signal id backing each [N] marker, in
+    marker order, so the faithfulness gate can ground each claim against the source
+    body. "confidence" is your calibrated 0.0-1.0 confidence that the corroboration
+    verdict is correct given the strength and INDEPENDENCE of the cited sources — a
+    well-corroborated claim earns high confidence; a single-sourced or contradicted
+    claim earns LOW confidence in the underlying claim (state that plainly). "tags"
+    MUST contain EXACTLY ONE severity tag from severity:low | severity:moderate |
+    severity:elevated | severity:high | severity:critical (reflecting how significant
+    / actionable the corroboration result is — a contradicted high-stakes claim is
+    elevated+) PLUS the topic tag topic:cross_doc_corroboration; you may add other
+    short topical tags (e.g. topic:<country>, topic:<theme>, or a status tag like
+    topic:single_sourced / topic:contradicted). If you cannot find any independent
+    coverage to cross-check, say so plainly, set a low confidence, and tag
+    severity:low.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Faithfulness VERIFY judge — the SAME core reasoning model (gpt-oss-120B) that
+    # writes the finding (the leadership_transition / corpus_researcher precedent; a
+    # weaker cross-family judge proved harsh + mis-aimed). Gated by
+    # LEGBA_VERIFY_LLM_JUDGE; soft-fails to the deterministic citation-presence floor
+    # if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Larger than the fixed-slice units (4096): a multi-round corroboration folds
+    # several tool results + a few full document bodies into the synthesis context.
+    max_tokens: 6144
+  # S5 GATHER: MULTI-ROUND. A corroborator needs to search -> semantic-search ->
+  # read -> compare across several documents before it can judge corroboration.
+  gather:
+    # 5 rounds: vector_search -> 1-2 search_corpus -> read_document(s) -> compare.
+    # Bounded [N] gathered-block rendering (_GATHER_MAX_CITED_SIGNALS) keeps the
+    # synthesis context coherent even across several pulled documents.
+    max_rounds: 5
+  # Per-day CORE-plane token cap (24h bucket). A META analyst fires ONCE per cadence
+  # tick (not a per-target fan-out), so a few multi-round runs/day fit comfortably.
+  budget_tokens_per_day: 500000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # 2x/day at :17 (offset from corpus_researcher's :37 and the country units' :00 and
+  # the maintenance sweeps' :11-:59/15), so the shared CORE gateway never stacks
+  # the corroborator onto another fan-out tick. A META single-sweep => 2 runs/day.
+  fallback_schedule: "17 5,17 * * *"
+  # 11h — below the 12h interval (leaves a 1h margin so the per-run cooldown never
+  # lands past the next scheduled fire and silently halves the cadence).
+  cooldown_seconds: 39600
+
+# THE AGENCY GRANT — grants the substrate_read pack so the GATHER loop can call
+# vector_search / search_corpus / read_document / search_signals / …. On the META
+# path the binding self-allows this pack under GLOBAL_SCOPE (the grant leg stays
+# real; the allow leg is self-satisfied for the no-target run). Without this grant
+# the loop runs single-shot with no tools.
+action_packs:
+  - pack_id: substrate_read
+
+outputs:
+  - kind: nats_stream
+    config:
+      channel: findings
+
+# eval.rubric — REQUIRED (the critic hard-fails without it) and the faithfulness
+# verify pass grades against it. Scoped to cross-document corroboration quality.
+# Weights sum to 1.0.
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "corroboration_rigor",
+       "weight": 0.45,
+       "description": "Did the analyst actually CROSS-CHECK the claim across MULTIPLE INDEPENDENT documents rather than restate a single source? Are the corroborating / contradicting documents genuinely independent (distinct originating outlets, not the same wire republished) and correctly cited to bodies that actually support the stated agreement or conflict? Penalize treating republications as independent corroboration, and penalize any claimed corroboration not present in the cited documents."},
+      {"name": "claim_selection",
+       "weight": 0.25,
+       "description": "Is the chosen claim a SPECIFIC, checkable factual assertion (who/what/when/how-many) that is significant and worth corroborating (contested, thinly-sourced, or high-stakes)? Penalize vague, trivial, or opinion claims that cannot be cross-checked."},
+      {"name": "discrimination_calibration",
+       "weight": 0.30,
+       "description": "Does the finding correctly DISTINGUISH corroborated vs single-sourced vs contradicted, flag single-sourced/contradicted claims explicitly, label inference with 'Assessed:' rather than asserting it as fact, and set confidence + the single severity tag to match the strength and independence of the cited evidence? Penalize calling a single-sourced claim corroborated, and both over- and under-confidence."}
+    ], "scale": "0.0-1.0"}

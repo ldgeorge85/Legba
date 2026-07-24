@@ -178,6 +178,17 @@ async def _read_substrate_slice(
     predictor with a 336h window was emitting `no_inputs` because the
     slice reader was looking at 24h instead.
     """
+    # Piece 2 (gather_only): an analyst that OPTS IN via
+    # ``subscription.substrate.gather_only`` does NOT consume this coarse cadence
+    # slice — it gathers its own evidence live through the GATHER read tools
+    # (search_corpus over the full corpus, list_situations, …). Return [] so the
+    # run reaches GATHER with an empty slice instead of a firehose recency pool.
+    # Safe: ONLY a gather_only descriptor opts in; every other analyst is
+    # byte-for-byte unchanged (the flag defaults absent/false).
+    _sub = getattr(descriptor, "subscription", None)
+    if (getattr(_sub, "substrate", {}) or {}).get("gather_only"):
+        return []
+
     # Read time_window off the descriptor (default 24h). The field is declared
     # on subscription.targets (SubscriptionTargets.time_window, e.g. "336h");
     # earlier code read it off the block, which has no such attribute, so EVERY
@@ -296,7 +307,7 @@ async def _read_substrate_slice(
         f"""
         SELECT id, source_id, source_version, canonical_url,
                payload, language, geo, tags, fetched_at, derived_from,
-               entity_classes, source_credibility, modality
+               entity_classes, source_credibility, modality, salience
         FROM signals
         {where}
         ORDER BY fetched_at DESC

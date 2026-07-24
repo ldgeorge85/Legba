@@ -1,0 +1,107 @@
+# signal_embedder — async embedding of signals into the Qdrant vector plane.
+#
+# A `deterministic`-kind META analyst over the SHARED raw signal pool. Every time
+# it fires it embeds the next batch of un-embedded signals into the Qdrant
+# `legba_signals` collection (1024-dim BGE-M3 cosine) — the VECTOR PLANE of the
+# signal-content-depth program (a semantic-retrieval substrate that lights up
+# `vector_search`, which no-ops today because the collection holds 0 points).
+# Signals already live structured in Postgres and, for the lexical mining
+# substrate, in the OpenSearch corpus; this is the third leg — semantic nearest-
+# neighbour retrieval + payload-facet filtering over the whole signal body. The
+# handler is fully built at
+# legba.data.analysts.deterministic_handlers.signal_embedder.
+#
+# Target-agnostic + META: embedding is an observation-level property of the shared
+# pool, not a per-target interpretation. The subscription declares NO `targets`
+# selector, so the cadence heartbeat is a SINGLE global sweep per tick (not a
+# per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets. The handler
+# pulls un-embedded signals directly via deps.pg_pool (it ignores the materialized
+# input slice / time window) and embeds ALL modalities that carry a usable body.
+#
+# Method:
+#   * kind = deterministic — the deterministic kind dispatcher module:run_method.
+#     NO LLM block and no per-day token budget — the run is pure Python over
+#     signals → the Qdrant vector plane. The embed compute is the SELF-HOSTED
+#     hosted embedding service (embed.primary.openai_compat → bge-m3, $0), which
+#     the runtime threads from the process-lifetime embedding_service handle the
+#     host built at bring-up — NOT a descriptor method.llm ref.
+#   * sub_handler = signal_embedder — injected into the run options at fire time.
+#     The sweep is idempotent + forward-progressing (stamps signals.embedding_ref
+#     on every examined row; the Qdrant point `_id` = the signal id, so a re-embed
+#     overwrites in place), so re-runs are safe. The runtime deps-builder connects
+#     a QdrantStore into deps.extras["signal_embedder_qdrant"] and threads the
+#     hosted embedder into deps.extras["signal_embedder_embedder"]; if either
+#     isn't wired (dep missing / gateway unreachable) the sweep no-ops that tick.
+#
+# The per-run summary FindingPayload (examined / embedded / failures) is the
+# cadence receipt — exactly how entity_resolution / signal_summarizer /
+# corpus_indexer keep a summary while side-writing directly. signal_embedder is
+# marked TRACE_ONLY in deterministic.py (its real product is the Qdrant write), so
+# the receipt lands in the trace, not in analyst_outputs.
+#
+# Registered via scripts/bringup_register_signal_embedder.py or the registry
+# REST API. Migration 0084_signal_embedding_marker.sql adds the partial scan index
+# over the un-embedded pool (the embedding_ref marker column already exists in the
+# baseline).
+
+identity:
+  id: signal_embedder
+  name: Signal Embedder
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: signal_embedder
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared signal pool, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: signal_embedder
+  # Deterministic kind, NO LLM block: this sweep uses the Qdrant vector plane +
+  # the hosted embedding service, not an LLM. The runtime deps-builder connects a
+  # QdrantStore into deps.extras["signal_embedder_qdrant"] and threads the process-
+  # lifetime hosted embedder (embed.primary.openai_compat) into
+  # deps.extras["signal_embedder_embedder"] whenever the bound sub_handler is
+  # signal_embedder; degrade-not-break if either can't be wired (the sweep no-ops
+  # that tick).
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # method.kind=deterministic carries no LLM block and no budget_tokens_per_day
+  # (embedding spends zero LLM tokens; the hosted embedder is self-hosted / $0).
+  # META analyst: no subscription.targets, so the cadence heartbeat is a SINGLE
+  # global sweep per tick, NOT a fan-out. Embedding is a bounded hosted GPU call,
+  # so the sweep bounds its per-tick batch (max_embeds) rather than draining in
+  # one shot like the lexical corpus_indexer.
+  #
+  # fallback_schedule = "11-59/15 * * * *" — every 15 min (fires :11/:26/:41/:56),
+  # OFFSET from the other maintenance crons so they never fire on the same tick:
+  #   entity_resolution "*/10"        · situation_clustering "5-59/20"
+  #   hypothesis_lifecycle "10-59/20" · integrity_sweep "41 */1"
+  #   fact_contention_arbiter "37 */1"· fact_decay "23 */8"
+  #   signal_summarizer "13-59/15"    · corpus_indexer "7-59/15"
+  #   signal_embedder (this) "11-59/15"
+  fallback_schedule: "11-59/15 * * * *"
+  # Idempotent forward-progressing sweep — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND writes a
+# per-run summary finding (suppressed to the trace via the TRACE_ONLY map). The
+# embedded points land directly in the Qdrant legba_signals collection.
+outputs: []

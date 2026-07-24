@@ -66,9 +66,20 @@ method:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat  # the gpt-oss / vLLM plane — the GATHER plane
       expected_family: llm_provider
+    verify:
+      # V1 (journal verify profile, 2026-07-16): the chronicle-gate judge —
+      # cited FACT claims are graded post-persist by the standard faithfulness
+      # pass (perspective exempt, entry never mutated; critique row lands with
+      # analyzed_output_id = the entry id). $0 core plane.
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
     narrate:
       factory_kind: stack_ref
-      raw: llm.anthropic.opus_4_7     # Anthropic plane (Opus 4.8) — the deep meta VOICE
+      # Operator decision 2026-07-06: the journal runs FULLY on the core
+      # plane — Anthropic is reserved for the on-demand consult/deep_consult
+      # features only. Voice now shares the GATHER plane (no second plane).
+      raw: llm.primary.openai_compat  # core plane — the meta VOICE (was Opus)
       expected_family: llm_provider
     # Opus 4.8 deprecates temperature → the handler drops it for the
     # claude-opus-4-8 prefix; we still declare a default for non-Opus stacks.

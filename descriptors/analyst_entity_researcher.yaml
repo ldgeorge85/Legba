@@ -1,0 +1,122 @@
+# entity_researcher — the E4 entity de-fragmentation analyst.
+#
+# A global META analyst kind (no subscription.targets => single global sweep per
+# tick, the relationship_reifier / meta_synthesizer precedent). Each tick it:
+#   1. BLOCKS candidate merge pairs over entity_profiles (E3, Postgres-native:
+#      exact block-key + trigram, banded auto_merge/gray, hard-negatives),
+#   2. ADJUDICATES the gray band via the LLM provider plane (the $0 core plane,
+#      gpt-oss-120b — same/not_same/unsure + justification; NEVER Anthropic),
+#      recording each verdict in entity_judgement (audit + re-adjudication cache),
+#   3. EXECUTES merges (tombstone + redirect via merged_into, folding the loser
+#      surface into the keeper's aliases) for confident 'same' verdicts + the
+#      deterministic auto_merge band — REVERSIBLE, ledgered (MP:DEC-B).
+#
+# merge_mode gates the ONLY mutating behavior. It is now 'apply' (LIVE MERGES),
+# flipped 2026-07-12 after the E5 compaction gate + a clean dry-run (32 auto +
+# 37 LLM-'same', all correct) + the E1 write-path proof. 'adjudicate_only' is a
+# full dry-run (adjudicates + reports, mutates nothing) to revert to if needed.
+# The per-run summary is a cadence receipt (TRACE_ONLY, in analyst_traces.
+# output_payload); the tombstone+redirect merges are the real product, drained
+# by entity_gc's compaction sweep (E5) which re-points the graph edges.
+#
+# Also runs the E6c reclassify pass (LLM-corrects a mis-typed 'person' row into
+# its true class) and, since #219 (2026-07-23, SHIPPED OFF), the SAME pass over
+# the generic 'entity' bucket — the two share reclassify_max (split, not added
+# to); see reclass_entity_share below.
+
+identity:
+  id: entity_researcher
+  name: Entity De-fragmentation Researcher (LLM-adjudicated merges)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: entity_researcher
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: phase_e_entity_program
+
+subscription:
+  # No `targets` block => META analyst (single global sweep; _cadence_targets
+  # returns None). The researcher reads entity_profiles directly via
+  # deps.pg_pool (the relationship_reifier precedent); it does NOT consume a
+  # per-target signal slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true        # reads/writes entity_profiles via deps.pg_pool
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # method.kind is a constrained Literal; runtime dispatch is on identity.kind
+  # (entity_researcher). llm_planner matches the single-turn chat_complete
+  # adjudication shape the kind uses (same as relationship_reifier).
+  kind: llm_planner
+  # The OPERATIVE adjudication prompt is _ADJ_SYSTEM in entity_researcher.py
+  # (run_method hardcodes it, so the two never drift); this block only documents
+  # the task + satisfies the schema's "llm_planner requires system_prompt" guard.
+  system_prompt: |
+    ENTITY MERGE ADJUDICATOR. Given numbered candidate entity-name PAIRS, decide
+    per pair whether the two names denote the SAME real-world entity (a surface
+    variant / alias / acronym / honorific / transliteration of ONE entity) and
+    return a JSON array of {n, verdict: same|not_same|unsure, confidence, why}.
+    Be conservative: two different people sharing a surname (Ali vs Mojtaba
+    Khamenei), a part vs its whole, a member vs its group, or different classes
+    are NOT same; default to unsure, never guess same. (The authoritative prompt
+    with worked examples lives in code as _ADJ_SYSTEM.)
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1400           # one batched verdict array per ~10 pairs
+    temperature: 0.0           # deterministic adjudication
+    # --- kind-specific options (read by _build_entity_researcher) ------------
+    merge_mode: apply             # LIVE MERGES (flipped 2026-07-12 after E5 gate + clean dry-run + E1 proof)
+    max_pairs: 80                 # hard per-run candidate cap (incremental sweep;
+                                  # ~8 LLM batches — bounded actor-run time)
+    trgm_limit: 0                 # 0 => exact-block-key ONLY (the trgm self-join
+                                  # is ~61s over the live graph; bounded per-record
+                                  # trgm blocking is E3.1). exact = fast + precise.
+    same_min_confidence: 0.75     # a 'same' verdict below this is not merged
+    batch_size: 10                # pairs per LLM adjudication call
+    # --- E6c reclassify pass (the person-skew fix) --------------------------
+    reclassify_max: 150           # suspect person-rows LLM-reclassified per tick.
+                                  # LIVE at 150 (2026-07-12) after a controlled
+                                  # reclassify_max=10 first run scored 8/8 correct
+                                  # on the live gpt-oss classifier; drains the
+                                  # ~1,552 suspect pool over ~5 days. Respects the
+                                  # SAME apply flag as merges. Reversible via
+                                  # data.reclass (UPDATE entity_class =
+                                  # data->'reclass'->>'from'). 0 = OFF.
+    reclass_min_confidence: 0.75  # below this a proposed class change is skipped
+    # --- #219 generic-entity extension (2026-07-23; SHIPPED OFF) -------------
+    reclass_entity_share: 0.0     # fraction of reclassify_max split to the
+                                  # generic 'entity' bucket (DQ M6: ~29.5% of
+                                  # entity_profiles fall here; R-2/6f270a2 made
+                                  # it WORSE by demoting article-prefixed
+                                  # person->entity). SPLITS reclassify_max,
+                                  # never adds to it: entity gets
+                                  # round(reclassify_max * share), person gets
+                                  # the remainder. 0.0 = OFF (100% person, the
+                                  # pre-#219 behavior byte-for-byte) — flip via
+                                  # a descriptor PUT after a controlled small-
+                                  # batch check, same precedent as
+                                  # reclassify_max's own 0->150 flip
+                                  # (`9b53f00`). NOT flipped tonight per the
+                                  # live-stack freeze; integration flips it.
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Twice daily, OFFSET after entity_resolution / relationship_reifier (:45) so a
+  # settled entity_profiles + a fresh candidate set is present.
+  fallback_schedule: "20 */12 * * *"
+  cooldown_seconds: 39600        # 11h (below the 12h interval)
+
+outputs: []

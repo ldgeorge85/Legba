@@ -92,6 +92,7 @@ from ..data.provenance.output_graph import make_conn_age_output_hook
 from ..data.provenance.receipts import RuntimeReceiptChain
 from ..data.analysts.deterministic_handlers.finding_supersession import (
     fold_prior_composition_heads,
+    fold_prior_correlation_heads,
 )
 from ..data.provenance.writes import write_analyst_output
 from ..data.schemas.analyst import AnalystDescriptor
@@ -629,6 +630,97 @@ def evict_analyst_deps_for_descriptor(descriptor_id: str) -> int:
             descriptor_id, len(stale),
         )
     return len(stale)
+
+
+def _cached_pack_refs(deps: "_AnalystDeps") -> dict[str, str]:
+    """Collect ``{pack_id: cached_version}`` baked into one cached deps entry's
+    GATHER bindings (``gather_binding`` / ``gather_write_bindings`` /
+    ``escalation``). Best-effort attribute probing — a binding shape this
+    function doesn't recognize is silently skipped, never raised (this is a
+    diagnostic sweep, not a correctness gate)."""
+    out: dict[str, str] = {}
+
+    def _stamp(binding: Any) -> None:
+        pack = getattr(binding, "pack", None)
+        identity = getattr(pack, "identity", None)
+        pack_id = getattr(identity, "id", None)
+        version = getattr(identity, "version", None)
+        if pack_id and version:
+            out[str(pack_id)] = str(version)
+
+    _stamp(deps.gather_binding)
+    write = deps.gather_write_bindings or {}
+    for binding in (write.get("bindings") or {}).values():
+        _stamp(binding)
+    escalation = deps.escalation
+    if escalation is not None:
+        _stamp(getattr(escalation, "binding", None))
+    return out
+
+
+async def warn_stale_pack_deps(
+    fetch_pack_version: Callable[[str], Awaitable[str | None]],
+) -> int:
+    """Diagnostic sweep (RIDER #236): a pack PUT (e.g. ``PUT
+    /descriptors/action_pack/journal_read``) mints a new head version but has
+    NO actor lifecycle of its own — ``action_pack`` is not in the reconciler's
+    resolvable family set (``dapr_host.desired_resolver``'s ``_FAMILIES =
+    ("target", "analyst", "source")``), so nothing ever calls
+    :func:`evict_analyst_deps_for_descriptor` for the ANALYSTS that merely
+    *reference* the pack. A cached ``_AnalystDeps`` entry (built once, kept
+    forever per :func:`_resolve_analyst_deps`) keeps serving the OLD pack
+    snapshot — the exact live shape that broke ``lens_diff`` on 2026-07-24
+    (``Tool get_lens_reads not found`` until its OWN descriptor head was also
+    bumped, which is what incidentally evicted it).
+
+    This does NOT evict or rebuild anything (a live eviction needs a
+    reverse index from pack_id -> dependent analyst actor_ids that does not
+    exist yet — see the task #236 report for the fuller recipe). It only
+    WARNS so the drift is diagnosable instead of silent. Wired into
+    :class:`legba.runtime.reconcile.ReconcileLoop`'s periodic resync (every
+    ``resync_interval``, default 5 min) via the same optional best-effort
+    callback slot as the orphan-reminder GC — never the per-run hot path.
+
+    ``fetch_pack_version`` resolves ONE pack id to its current head version
+    string (or ``None`` on a miss) — injected so this stays pure I/O-free
+    besides that one call, and trivially fakeable in tests. Returns the
+    number of stale (actor_id, pack_id) pairs found.
+    """
+    # Snapshot first — a pack id can be referenced by many cached actors, so
+    # resolve each UNIQUE pack id's head version only once per sweep.
+    per_actor: dict[str, dict[str, str]] = {
+        aid: refs for aid, ad in _ANALYST_DEPS.items()
+        if (refs := _cached_pack_refs(ad))
+    }
+    unique_pack_ids = {pid for refs in per_actor.values() for pid in refs}
+    head_versions: dict[str, str | None] = {}
+    for pack_id in unique_pack_ids:
+        try:
+            head_versions[pack_id] = await fetch_pack_version(pack_id)
+        except Exception as exc:  # best-effort — one bad fetch must not sink the sweep
+            logger.warning(
+                "dapr_actors.pack_staleness.fetch_failed pack_id=%s err=%s",
+                pack_id, exc,
+            )
+            head_versions[pack_id] = None
+
+    stale_count = 0
+    for actor_id, refs in per_actor.items():
+        for pack_id, cached_version in refs.items():
+            head_version = head_versions.get(pack_id)
+            if head_version is not None and head_version != cached_version:
+                stale_count += 1
+                logger.warning(
+                    "dapr_actors.pack_staleness.stale actor_id=%s pack_id=%s "
+                    "cached_version=%s head_version=%s — this analyst's cached "
+                    "deps still bind the OLD pack snapshot; a PUT to the pack "
+                    "descriptor does not evict dependent analysts' deps cache "
+                    "(no reverse index yet — see task #236). Bump the analyst's "
+                    "OWN descriptor (or restart the runtime) to pick up the new "
+                    "pack head.",
+                    actor_id, pack_id, cached_version[:16], head_version[:16],
+                )
+    return stale_count
 
 
 # ---------------------------------------------------------------------------
@@ -1855,7 +1947,23 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         descriptor=deps_bundle.descriptor,
                         target_filter=target_filter,
                     )
-                if not inputs:
+                # Stage 4 (gather_only): a gather_only analyst (corpus_researcher)
+                # EXPECTS an empty coarse slice — ``_read_substrate_slice`` returns
+                # [] for it by design and it assembles its own evidence live in the
+                # GATHER tool loop. Do NOT short-circuit the actor here (that would
+                # NOOP it every tick, forever, and its whole run_method gather_only
+                # path would be dead); fall through and dispatch run_method with
+                # inputs=[] so its gather_only branch runs. run_method still NOOPs
+                # gracefully when no GATHER binding is engaged (never a tool-less
+                # synthesis on an empty slice) and when GATHER gathers nothing. The
+                # flag defaults absent/false → every other analyst is unchanged.
+                _descriptor_gather_only = bool(
+                    (
+                        getattr(deps_bundle.descriptor.subscription, "substrate", {})
+                        or {}
+                    ).get("gather_only")
+                )
+                if not inputs and not _descriptor_gather_only:
                     rec["last_run_at"] = now.isoformat()
                     rec["last_outcome"] = ActorRunOutcome.NOOP.value
                     await self._set_record(rec)
@@ -1880,11 +1988,45 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 #       - dlq → BUDGET_THROTTLED + DLQ tag.
                 #   * throttle (projected overrun) → cooldown + BUDGET_THROTTLED
                 #         without an exhaustion audit row (nothing exhausted yet).
-                if deps_bundle.budget is not None:
-                    decision = await deps_bundle.budget.precall_check(
+                #
+                # F1 model picker: when a consult / deep_consult request carries an
+                # LLM plane override, the budget precheck + accounting must key off
+                # the CHOSEN plane, not the cached primary (Opus). ``core``
+                # (llm.primary.openai_compat → vllm) is free ($0 in the price
+                # table); ``opus`` / no override keeps the cached enforcer unchanged
+                # (default-preserving). We re-key only when the override's
+                # subprovider differs from the cached enforcer's provider — so the
+                # default path is byte-for-byte unchanged.
+                active_budget = deps_bundle.budget
+                if (
+                    active_budget is not None
+                    and inputs_override
+                    and deps_bundle.descriptor.identity.kind
+                    in ("consult_on_demand", "deep_consult")
+                ):
+                    _override_cid = inputs_override[0].get("llm_component_override")
+                    if _override_cid:
+                        from .analyst_deps_builder import infer_llm_subprovider
+
+                        _override_provider = infer_llm_subprovider(
+                            str(_override_cid), endpoint="",
+                        )
+                        if _override_provider != active_budget.provider:
+                            active_budget = BudgetEnforcer(
+                                analyst_id=active_budget.analyst_id,
+                                analyst_version=active_budget.analyst_version,
+                                budget_tokens_per_day=active_budget.budget_tokens_per_day,
+                                provider=_override_provider,
+                                model="",
+                                estimated_tokens_per_run=(
+                                    active_budget.estimated_tokens_per_run
+                                ),
+                            )
+                if active_budget is not None:
+                    decision = await active_budget.precall_check(
                         conn,
                         estimated_tokens=getattr(
-                            deps_bundle.budget, "estimated_tokens_per_run", 0,
+                            active_budget, "estimated_tokens_per_run", 0,
                         ),
                     )
                     if decision.outcome in ("exhausted", "global_exhausted"):
@@ -1893,7 +2035,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         is_global = decision.outcome == "global_exhausted"
                         # Audit row first — independent of strategy.
                         try:
-                            await deps_bundle.budget.record_demotion(
+                            await active_budget.record_demotion(
                                 conn,
                                 cause=decision.cause or ("global" if is_global else "per_analyst"),
                                 primary_llm=deps_bundle.primary_llm_ref,
@@ -2000,6 +2142,20 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     "analyst_version": deps_bundle.descriptor.identity.version,
                     "run_id": run_id,
                 }
+                # Stage 4 (gather_only): thread the descriptor's
+                # ``subscription.substrate.gather_only`` flag so the inline_target
+                # run_method PROCEEDS into GATHER on an (expected) empty slice for
+                # the autonomous corpus_researcher instead of NOOPing — it gathers
+                # its own evidence via the substrate_read tools. run_method still
+                # NOOPs gracefully when the GATHER binding is not engaged (never a
+                # tool-less synthesis on an empty slice). False for every other
+                # analyst → unchanged.
+                options["gather_only"] = bool(
+                    (
+                        getattr(deps_bundle.descriptor.subscription, "substrate", {})
+                        or {}
+                    ).get("gather_only")
+                )
                 # DQ P6 — a target-LESS verify-declaring COMPOSITION (world_assessor
                 # / escalation_composition): a GLOBAL/thematic META run whose
                 # second-order finding describes the whole world (or a cross-desk
@@ -2270,8 +2426,12 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         for d in explicit_derived
                     ]
 
-                if deps_bundle.budget is not None and method_result.usage:
-                    await deps_bundle.budget.record(
+                # F1: record against ``active_budget`` — the CHOSEN plane's
+                # enforcer for a consult/deep override (else the cached primary),
+                # so a free-core run is metered at $0 and never billed to the Opus
+                # ledger. Default path: active_budget IS deps_bundle.budget.
+                if active_budget is not None and method_result.usage:
+                    await active_budget.record(
                         conn,
                         prompt_tokens=int(method_result.usage.get("prompt_tokens", 0)),
                         completion_tokens=int(method_result.usage.get("completion_tokens", 0)),
@@ -2487,6 +2647,34 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                                 "dapr_actors.composition_fold.failed run_id=%s "
                                 "err=%s", run_id, exc,
                             )
+                        # M17 — the cross_analyst_correlator carries an ``xcorr:``
+                        # signature (NOT ``composition:``), so the composition fold
+                        # above no-ops it. Fold prior same-signature correlation
+                        # heads + decay stale blind_spots SYNCHRONOUSLY at write, so
+                        # its meta-observations supersede cleanly instead of
+                        # accumulating a live head per cycle. The fold's own prefix
+                        # guard makes this a no-op for every non-correlator finding.
+                        if (
+                            deps_bundle.descriptor.identity.kind
+                            == "cross_analyst_correlator"
+                        ):
+                            try:
+                                from ..data.analysts.cross_analyst_correlator import (
+                                    _BLIND_SPOT_DECAY_TTL_HOURS,
+                                )
+
+                                await fold_prior_correlation_heads(
+                                    conn,
+                                    analyst_id=analyst_ctx.analyst_id,
+                                    raw_signature=_comp_sig,
+                                    new_head_id=output_row.id,
+                                    blind_spot_ttl_hours=_BLIND_SPOT_DECAY_TTL_HOURS,
+                                )
+                            except Exception as exc:  # pragma: no cover - defensive
+                                logger.warning(
+                                    "dapr_actors.correlation_fold.failed run_id=%s "
+                                    "err=%s", run_id, exc,
+                                )
 
                 # Extend the per-analyst receipt chain (L-107 §7) when one
                 # is wired. The chain INSERT lands in ``analyst_traces``
@@ -2602,12 +2790,29 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 if (
                     not trace_only
                     and output_row is not None
-                    and output_kind == OutputKind.FINDING
                     and (
-                        deps_bundle.descriptor.identity.kind == "inline_target"
+                        (
+                            output_kind == OutputKind.FINDING
+                            and (
+                                deps_bundle.descriptor.identity.kind == "inline_target"
+                                or (
+                                    deps_bundle.descriptor.identity.kind
+                                    in ("meta_findings_synthesizer", "cross_analyst_correlator")
+                                    and _descriptor_declares_verify(deps_bundle.descriptor)
+                                )
+                            )
+                        )
+                        # V1 (journal verify profile, the chronicle gate): the
+                        # JOURNAL output kind — both journal tiers share
+                        # identity.kind — opted in via the SAME method.llm.verify
+                        # declaration the compositions carry. The helper reshapes
+                        # the entry's cited FACT claims into the standard [N] +
+                        # bridge form; perspective claims never enter (§10). The
+                        # critique lands with analyzed_output_id = the journal
+                        # ENTRY id; the entry row itself is NEVER mutated.
                         or (
-                            deps_bundle.descriptor.identity.kind
-                            == "meta_findings_synthesizer"
+                            output_kind == OutputKind.JOURNAL
+                            and deps_bundle.descriptor.identity.kind == "journal_assessor"
                             and _descriptor_declares_verify(deps_bundle.descriptor)
                         )
                     )
@@ -2619,6 +2824,11 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             finding_id=output_row.id,
                             finding_payload=output_payload,
                             run_id=run_id,
+                            # M15: the run's target id feeds the cross-target guard
+                            # (a per-country desk finding naming ONLY other
+                            # countries is flagged). None for a meta/global run →
+                            # guard no-ops.
+                            target_id=options.get("target_id"),
                         )
                     except Exception as exc:  # pragma: no cover — never break a run
                         logger.warning(
@@ -3017,4 +3227,6 @@ __all__ = [
     "register_target_deps",
     "register_target_deps_resolver",
     "verify_inline_target_finding",
+    "_cached_pack_refs",
+    "warn_stale_pack_deps",
 ]

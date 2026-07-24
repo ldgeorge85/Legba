@@ -112,7 +112,9 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
         principal: str = Depends(require_bearer),
     ) -> EntitiesPage:
         limit = _validate_limit(limit)
-        where: list[str] = []
+        # E5: exclude merged-loser tombstones (merged_into set) so a folded
+        # fragment never surfaces as a separate entity or inflates the count.
+        where: list[str] = ["ep.merged_into IS NULL"]
         args: list[Any] = []
         if q:
             args.append(f"%{q}%")
@@ -135,7 +137,8 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
         """
         async with deps.descriptor_registry.pg.acquire() as conn:
             rows = await conn.fetch(sql, *args)
-            total = await conn.fetchval("SELECT count(*) FROM entity_profiles")
+            total = await conn.fetchval(
+                "SELECT count(*) FROM entity_profiles WHERE merged_into IS NULL")
         return EntitiesPage(data=[_node(r) for r in rows], total=int(total or 0))
 
     @router.get("/entities/graph", response_model=EntityGraph)
@@ -194,6 +197,7 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
                       FROM entity_profiles ep
                       LEFT JOIN signal_entity_links sel ON sel.entity_id = ep.id
                      WHERE lower(ep.canonical_name) = ANY($1::text[])
+                       AND ep.merged_into IS NULL   -- E5: hide merged tombstones
                      GROUP BY ep.id
                     """,
                     [n.lower() for n in names],
@@ -221,7 +225,7 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
                    count(sel.signal_id) AS mentions
               FROM entity_profiles ep
               LEFT JOIN signal_entity_links sel ON sel.entity_id = ep.id
-             WHERE {pred}
+             WHERE ({pred}) AND ep.merged_into IS NULL   -- E5: hide tombstones
              GROUP BY ep.id
         """
         async with deps.descriptor_registry.pg.acquire() as conn:

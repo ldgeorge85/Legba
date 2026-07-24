@@ -77,6 +77,7 @@ const SystemEntities = lazy(() => import('@/panels/system/Entities'))
 const SystemEntityGraph = lazy(() => import('@/panels/system/EntityGraph'))
 const SystemNotableStructure = lazy(() => import('@/panels/system/NotableStructure'))
 const SystemAlertCenter = lazy(() => import('@/panels/system/AlertCenter'))
+const SystemEscalations = lazy(() => import('@/panels/system/Escalations'))
 const SystemReportExport = lazy(() => import('@/panels/system/ReportExport'))
 
 // The Inspector — unified detail surface (redesign Move 1, the keystone).
@@ -292,6 +293,14 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'system.alert_center': {
     definition: def('system.alert_center', 'system_alert_center', 'system', null, 'Alert Center', false, ['personal', 'cis'], 'Bell'),
     Component: SystemAlertCenter,
+  },
+  // Escalation Deliveries — the human-visible alert edge (audit finding C3 /
+  // decision D1). Renders alert_sink_deliveries: did each escalation LAND
+  // (delivered) or go NOWHERE (failed / logged_only)? Live route
+  // (`GET /api/v1/v3/system/escalations`), so NOT a preview surface.
+  'system.escalations': {
+    definition: def('system.escalations', 'system_escalations', 'system', null, 'Escalation Deliveries', false, ['personal', 'cis'], 'Siren'),
+    Component: SystemEscalations,
   },
   'system.report_export': {
     definition: def('system.report_export', 'system_report_export', 'system', null, 'Report Export', false, ['personal', 'cis'], 'FileDown'),

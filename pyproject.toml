@@ -20,6 +20,11 @@ dependencies = [
     "asyncpg>=0.29",
     "croniter>=2.0",
     "qdrant-client>=1.9",
+    # Signal-content-depth INDEX PLANE — the OpenSearch full-text corpus client
+    # (ships `opensearchpy.AsyncOpenSearch`). Async I/O runs over aiohttp (already
+    # a base dep, above). The corpus_indexer deterministic sweep + backfill_corpus
+    # write here; the module soft-imports so a host without the dep still boots.
+    "opensearch-py[async]>=2.4",
     "pynacl>=1.5",
     "python-dotenv>=1.0",
     "nats-py>=2.7",
@@ -144,6 +149,7 @@ dev = [
 data = [
     "asyncpg>=0.29",
     "qdrant-client>=1.9",
+    "opensearch-py[async]>=2.4",
     "redis[hiredis]>=5.0",
     "nats-py>=2.7",
     "pydantic>=2.0",

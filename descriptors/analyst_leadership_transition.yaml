@@ -65,6 +65,10 @@ grounding:
   # (task #176). internal_stability stays flipped (it passed: +0.035).
   sources: [substrate, situations, graph_structure]
   max_facts: 30
+  # M22 — FOCUSED world_context RAG query theme (kept ready for a future re-flip;
+  # inert while vector:world_context is absent from sources above). Keyed on the
+  # corpus's government/political-structure facets, not the abstract risk label.
+  rag_theme: "government structure, political system, and leadership"
 
 method:
   kind: llm_planner

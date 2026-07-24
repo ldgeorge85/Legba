@@ -105,6 +105,84 @@ def test_streak_window_exceeds_threshold():
 
 
 # ---------------------------------------------------------------------------
+# T-4(a): last_signal bound — a STALE error (at/before the source's newest
+# produced signal) must NOT count. The ukrinform/nasa fossil-latch class:
+# the source produced signals AFTER those errors, but productive polls write no
+# outcome row, so old errors sit at the top of the outcome window forever.
+# ---------------------------------------------------------------------------
+
+
+def _err_at(source_id: str, t: datetime, *, last_signal=None) -> dict:
+    row = {"source_id": source_id, "outcome": "error", "occurred_at": t}
+    if last_signal is not None:
+        row["last_signal"] = last_signal
+    return row
+
+
+def test_streak_stale_errors_before_last_signal_do_not_count():
+    # The source produced a signal AFTER its whole error run → all errors are
+    # stale evidence, so the streak is 0 and it is NOT re-latched (the fossil fix).
+    base = datetime(2026, 7, 22, 0, 0, tzinfo=timezone.utc)
+    last_signal = base + timedelta(hours=1)  # newer than every error below
+    rows = [
+        _err_at("source.ukrinform.all", base - timedelta(hours=i),
+                last_signal=last_signal)
+        for i in range(entity_gc._SOURCE_FAILURE_THRESHOLD + 5)
+    ]
+    assert entity_gc._consecutive_error_streaks(
+        rows, threshold=entity_gc._SOURCE_FAILURE_THRESHOLD
+    ) == []
+
+
+def test_streak_errors_after_last_signal_still_count():
+    # Errors NEWER than the last produced signal are the live run → still paused.
+    base = datetime(2026, 7, 22, 0, 0, tzinfo=timezone.utc)
+    last_signal = base - timedelta(days=30)  # production long predates the errors
+    n = entity_gc._SOURCE_FAILURE_THRESHOLD
+    rows = [
+        _err_at("source.dead.feed", base - timedelta(hours=i), last_signal=last_signal)
+        for i in range(n)
+    ]
+    out = entity_gc._consecutive_error_streaks(rows, threshold=n)
+    assert out == [("source.dead.feed", n)]
+
+
+def test_streak_bound_stops_at_first_stale_error():
+    # The bound cuts the run at the first error at/before last_signal: 3 fresh
+    # errors, then last_signal, then more (stale) errors → streak is exactly 3.
+    base = datetime(2026, 7, 22, 0, 0, tzinfo=timezone.utc)
+    last_signal = base - timedelta(hours=3, minutes=30)
+    rows = [
+        _err_at("source.x", base - timedelta(hours=i), last_signal=last_signal)
+        for i in range(entity_gc._SOURCE_FAILURE_THRESHOLD + 5)
+    ]
+    # errors at base, -1h, -2h, -3h postdate last_signal (-3h30m) → 4 count.
+    assert entity_gc._consecutive_error_streaks(rows, threshold=4) == [("source.x", 4)]
+    assert entity_gc._consecutive_error_streaks(rows, threshold=5) == []
+
+
+def test_streak_no_last_signal_key_unchanged():
+    # Back-compat: rows without last_signal behave exactly as before (a source
+    # that keeps erroring and never produced is exactly what auto-pause is for).
+    n = entity_gc._SOURCE_FAILURE_THRESHOLD
+    rows = [_row("source.never.produced", "error") for _ in range(n)]
+    assert entity_gc._consecutive_error_streaks(rows, threshold=n) == [
+        ("source.never.produced", n)
+    ]
+
+
+async def test_pause_query_carries_last_signal_bound():
+    # The corrected SQL must surface the per-source newest signal so the streak
+    # can be bounded (mirrors liveness_watchdog._fetch_source_empty_streak_rows).
+    conn = _FakeConn(fetch_rows=[])
+    await entity_gc._pause_failing_sources(_FakePool(conn))
+    sql = conn.fetched[0]
+    assert "last_signal" in sql
+    assert "max(s.fetched_at)" in sql
+    assert "FROM signals s" in sql
+
+
+# ---------------------------------------------------------------------------
 # Fake asyncpg pool/conn — capture SQL + args, drive the corrected leg.
 # ---------------------------------------------------------------------------
 

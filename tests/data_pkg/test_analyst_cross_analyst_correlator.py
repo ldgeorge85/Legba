@@ -33,9 +33,11 @@ from legba.data.analysts.cross_analyst_correlator import (
     _DEFAULT_SYSTEM_PROMPT,
     _coerce_correlation,
     _coerce_uuid,
+    _dedupe_live_heads,
     _orient,
     _output_row_summary,
     _render_user_prompt,
+    _situation_signature,
     run_method,
 )
 from legba.data.provenance.models import FindingPayload
@@ -719,3 +721,224 @@ async def test_run_method_strips_hallucinated_uuids_end_to_end(
     result = await run_method(three_analyst_slice, {"analyst_id": "c"}, deps)
     assert bogus not in result.finding.data["referenced_outputs"]
     assert "phantom_analyst" not in result.finding.data["referenced_analyst_ids"]
+
+
+# ---------------------------------------------------------------------------
+# M17 — situation_signature derivation + stamping (supersession key)
+# ---------------------------------------------------------------------------
+
+
+def test_situation_signature_encodes_type_and_sorted_targets() -> None:
+    """Signature = xcorr:<type>:<sorted target set>. Order-insensitive, stable."""
+    a = _situation_signature("contradiction", ["country_g20_tr", "country_g20_us"])
+    b = _situation_signature("contradiction", ["country_g20_us", "country_g20_tr"])
+    assert a == b, "the target set must be sorted so the key is order-insensitive"
+    assert a == "xcorr:contradiction:country_g20_tr,country_g20_us"
+
+
+def test_situation_signature_discriminates_type_and_targets() -> None:
+    """Different correlation_type OR different target set → different signature."""
+    base = _situation_signature("blind_spot", ["country_watch_ir"])
+    assert base != _situation_signature("contradiction", ["country_watch_ir"])
+    assert base != _situation_signature("blind_spot", ["country_g20_us"])
+    # Empty target set (all-global reads) collapses to a single _global head.
+    g1 = _situation_signature("blind_spot", [])
+    g2 = _situation_signature("blind_spot", ["", None])  # type: ignore[list-item]
+    assert g1 == g2 == "xcorr:blind_spot:_global"
+
+
+def test_situation_signature_hashes_a_very_long_target_set() -> None:
+    """A huge joined target list is replaced by a short stable hash (index-safe)."""
+    many = [f"country_x{i:03d}" for i in range(50)]
+    sig = _situation_signature("agreement", many)
+    assert sig.startswith("xcorr:agreement:")
+    token = sig.split(":", 2)[2]
+    assert len(token) == 16 and "," not in token  # sha1[:16], not the raw join
+
+
+def _projected_slice() -> list[dict[str, Any]]:
+    """Projected rows (the _orient output shape) with target_ids + bodies."""
+    return [
+        {
+            "output_id": str(_OUTPUT_ID_AGREE_A),
+            "analyst_id": "energy_security",
+            "target_id": "country_g20_us",
+            "title": "US energy read",
+            "body": "US pipeline throughput nominal.",
+        },
+        {
+            "output_id": str(_OUTPUT_ID_CONTRA),
+            "analyst_id": "escalation",
+            "target_id": "country_g20_tr",
+            "title": "Turkey escalation read",
+            "body": "Turkey border tension elevated.",
+        },
+    ]
+
+
+def test_coerce_correlation_stamps_signature_from_referenced_targets() -> None:
+    """The finding carries data['situation_signature'] derived from the cited
+    outputs' target_ids so successive runs over the same targets supersede."""
+    projected = _projected_slice()
+    raw = json.dumps({
+        "correlation_type": "contradiction",
+        "title": "US vs Turkey read tension",
+        "body": (
+            "energy_security reports US throughput nominal [[ref:1]] while "
+            "escalation flags Turkey border tension [[ref:2]]."
+        ),
+        "referenced_outputs": [str(_OUTPUT_ID_AGREE_A), str(_OUTPUT_ID_CONTRA)],
+        "referenced_analyst_ids": ["energy_security", "escalation"],
+        "confidence": 0.8,
+    })
+    f = _coerce_correlation(
+        raw,
+        fallback_title="fb",
+        valid_output_ids={str(_OUTPUT_ID_AGREE_A), str(_OUTPUT_ID_CONTRA)},
+        valid_analyst_ids={"energy_security", "escalation"},
+        projected=projected,
+    )
+    assert f.data["situation_signature"] == (
+        "xcorr:contradiction:country_g20_tr,country_g20_us"
+    )
+
+
+def test_coerce_correlation_builds_ref_citations_for_verify() -> None:
+    """M16 — [[ref:N]] markers resolve into data['citations'] (ref_kind=finding +
+    evidence_text) so the composition faithfulness verify can grade + clamp."""
+    projected = _projected_slice()
+    raw = json.dumps({
+        "correlation_type": "contradiction",
+        "title": "t",
+        "body": "US nominal [[ref:1]]; Turkey elevated [[ref:2]]; bogus [[ref:9]].",
+        "referenced_outputs": [str(_OUTPUT_ID_AGREE_A), str(_OUTPUT_ID_CONTRA)],
+        "referenced_analyst_ids": ["energy_security", "escalation"],
+        "confidence": 0.8,
+    })
+    f = _coerce_correlation(
+        raw,
+        fallback_title="fb",
+        valid_output_ids={str(_OUTPUT_ID_AGREE_A), str(_OUTPUT_ID_CONTRA)},
+        valid_analyst_ids={"energy_security", "escalation"},
+        projected=projected,
+    )
+    cites = f.data["citations"]
+    # Two in-range markers resolved; the out-of-range [[ref:9]] is dropped.
+    assert [c["ordinal"] for c in cites] == [1, 2]
+    assert all(c["ref_kind"] == "finding" for c in cites)
+    assert cites[0]["ref_id"] == str(_OUTPUT_ID_AGREE_A)
+    assert "throughput nominal" in cites[0]["evidence_text"]
+    assert cites[0]["marker"] == "[[ref:1]]"
+
+
+def test_coerce_correlation_no_projected_still_stamps_signature() -> None:
+    """Back-compat: without a projected slice there are no citations, but the
+    signature (from the empty target set) is still stamped so heads can fold."""
+    raw = json.dumps({
+        "correlation_type": "blind_spot",
+        "title": "t", "body": "no coverage of X",
+        "referenced_outputs": [], "referenced_analyst_ids": [],
+        "confidence": 0.6,
+    })
+    f = _coerce_correlation(
+        raw, fallback_title="fb",
+        valid_output_ids=set(), valid_analyst_ids=set(),
+    )
+    assert f.data["situation_signature"] == "xcorr:blind_spot:_global"
+    assert "citations" not in f.data
+
+
+# ---------------------------------------------------------------------------
+# M18(a) — dedupe sequential same-signature heads before correlation
+# ---------------------------------------------------------------------------
+
+
+def test_dedupe_live_heads_collapses_same_signature_to_newest() -> None:
+    """Two SEQUENTIAL world_assessor snapshots (same signature, 12h apart) must
+    collapse to the NEWEST before the correlator sees them — else it diffs a head
+    against its own predecessor as a false contradiction."""
+    older = {
+        "id": uuid4(), "analyst_id": "world_assessor", "target_id": None,
+        "situation_signature": "sit:composition:world_assessor:world",
+        "produced_at": "2026-07-05T12:00:00Z", "title": "world t-12h",
+    }
+    newer = {
+        "id": uuid4(), "analyst_id": "world_assessor", "target_id": None,
+        "situation_signature": "sit:composition:world_assessor:world",
+        "produced_at": "2026-07-06T00:00:00Z", "title": "world t-0",
+    }
+    unit = {
+        "id": uuid4(), "analyst_id": "escalation", "target_id": "country_g20_us",
+        "situation_signature": None, "produced_at": "2026-07-06T01:00:00Z",
+        "title": "unit — no signature, passes through",
+    }
+    out = _dedupe_live_heads([older, newer, unit])
+    ids = {r["id"] for r in out}
+    assert newer["id"] in ids
+    assert older["id"] not in ids, "the superseded-lag predecessor is dropped"
+    assert unit["id"] in ids, "signature-less unit findings pass through untouched"
+
+
+def test_dedupe_reads_nested_data_signature() -> None:
+    """The signature may live at data->data->situation_signature (the persisted
+    correlator/composition payload shape), not just the column."""
+    a = {
+        "id": uuid4(), "analyst_id": "cross_correlator", "target_id": "",
+        "data": {"data": {"situation_signature": "xcorr:blind_spot:_global"}},
+        "produced_at": "2026-07-05T00:00:00Z",
+    }
+    b = {
+        "id": uuid4(), "analyst_id": "cross_correlator", "target_id": "",
+        "data": {"data": {"situation_signature": "xcorr:blind_spot:_global"}},
+        "produced_at": "2026-07-06T00:00:00Z",
+    }
+    out = _dedupe_live_heads([a, b])
+    assert len(out) == 1 and out[0]["id"] == b["id"]
+
+
+# ---------------------------------------------------------------------------
+# M19 — read-slice repoint (descriptor points at the LIVE layer)
+# ---------------------------------------------------------------------------
+
+
+def test_descriptor_repointed_to_live_composition_and_unit_layer() -> None:
+    """The correlator's subscription.other_analysts must name the LIVE layer, NOT
+    the retired country_assessor / country_predictor."""
+    import pathlib
+
+    import yaml
+
+    descriptor_path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "descriptors"
+        / "analyst_cross_correlator.yaml"
+    )
+    doc = yaml.safe_load(descriptor_path.read_text())
+    ids = {o["id"] for o in doc["subscription"]["other_analysts"]}
+    # Retired producers are gone.
+    assert "country_assessor" not in ids
+    assert "country_predictor" not in ids
+    # The live composition + unit layer is present.
+    for live in (
+        "country_composition", "region_composition", "world_assessor",
+        "energy_security", "escalation", "leadership_transition",
+        "economic_coercion", "internal_stability", "military_posture",
+        "narrative_coordination", "proliferation_watch",
+    ):
+        assert live in ids, f"expected live producer {live!r} in the read-slice"
+
+
+def test_descriptor_declares_verify_block() -> None:
+    """M16 — the descriptor must declare method.llm.verify (the verify opt-in)."""
+    import pathlib
+
+    import yaml
+
+    descriptor_path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "descriptors"
+        / "analyst_cross_correlator.yaml"
+    )
+    doc = yaml.safe_load(descriptor_path.read_text())
+    verify = doc["method"]["llm"].get("verify")
+    assert isinstance(verify, dict) and verify.get("raw")

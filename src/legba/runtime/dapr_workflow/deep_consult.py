@@ -124,6 +124,15 @@ class DeepConsultStageDeps:
     pg_pool: Any | None = None              # asyncpg.Pool — synthesize writes
     budget: Any | None = None               # BudgetEnforcer | None — analyze gates
     publish_fn: Any | None = None           # NatsPublishFn | None — write-path emit
+    # W1-T1: the worker-local agency binding for the ``substrate_read`` pack.
+    # When set, acquire routes EVERY tool call through ``Agency.run_pack_tool``
+    # (resolve ∩ allow ∩ applicability → governor → dispatch → settle →
+    # ``action_pack_invocations`` ledger) instead of the direct port dispatcher,
+    # and analyze threads it into the re-entrant consult synthesis loop so its
+    # tools are governed too. None = direct port dispatch (tests / non-runtime
+    # embedders that hand-build deps; the production resolver ALWAYS binds it and
+    # fails loud if it can't). Mirrors ConsultOnDemandDeps.agency_binding.
+    agency_binding: Any | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +149,7 @@ Respond with ONLY strict JSON, no prose:
    "tool_plan": [{"tool": "search_signals", "args": {"query": "..."}}, ...]}
 Tools available to the acquire stage:
   Finished intelligence — the platform's OWN prior products; reach for these FIRST so the analysis builds on (and reconciles against) earlier work rather than re-deriving from the raw firehose:
-  - list_findings([target_id], [analyst_id], [severity], [since_hours], [limit]) — recent assessments/findings (analyst products; effective_confidence already folds in the critic). Cite the output_id.
+  - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit]) — recent LIVE assessments/findings (analyst products; superseded revisions excluded unless include_superseded=true; effective_confidence already folds in the critic). Cite the output_id.
   - list_situations([status], [target_id], [since_hours], [limit]) — ongoing clustered situation frames (analysis-derived). A situation_id pairs with query_hypotheses to pull its ACH rows.
   - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method='naive_mean' = no trend fit, low-confidence; 'auto_arima' = fitted). Cite the output_id.
   - list_targets() — the monitored targets and their ids (e.g. country_g20_ir); resolve a place/topic to a valid target_id before list_findings / query_hypotheses.
@@ -246,6 +255,65 @@ def _coerce_tool_plan(raw: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+async def _acquire_one_call(
+    deps: DeepConsultStageDeps,
+    *,
+    name: str,
+    args: Mapping[str, Any],
+    scope_predicate: str | None,
+    dispatch: Any,
+) -> dict[str, Any]:
+    """Execute ONE acquire tool call — governed via the binding when present,
+    else the direct port dispatcher (the binding-None fallback).
+
+    Mirrors :func:`consult_on_demand._run_one_call`'s governed branch: the
+    binding shapes the :class:`ToolCall` and runs the full hard-gate pipeline
+    (resolve ∩ allow ∩ applicability → governor → ledger); ``scope_predicate``
+    is INJECTED into the args here (caller-pinned) so the planner cannot override
+    an operator scope. NEVER raises — any failure (block / dispatch error) is
+    folded into the returned dict as ``{"error": ...}`` so one call cannot abort
+    the acquire round (exactly as the historical direct dispatcher behaved).
+    """
+    if deps.agency_binding is not None:
+        try:
+            outcome = await deps.agency_binding.run_tool(
+                name,
+                {**dict(args), "scope_predicate": scope_predicate},
+            )
+        except Exception as exc:  # noqa: BLE001 — one call's failure ≠ round failure
+            logger.warning(
+                "deep_consult.acquire.governed_error tool=%s err=%s", name, exc,
+            )
+            return {"error": f"tool_failed: {exc!s}"}
+        if not outcome.admitted:
+            return {"error": f"tool_blocked: {outcome.block_cause}: {outcome.detail}"}
+        if outcome.tool_result is None or outcome.tool_result.status == "failed":
+            err = (
+                outcome.tool_result.error
+                if outcome.tool_result is not None
+                else "tool produced no result"
+            )
+            return {"error": f"tool_failed: {err}"}
+        return dict(outcome.tool_result.output)
+
+    # UNGOVERNED direct-port dispatch. Reachable only from hand-constructed deps
+    # (tests / non-runtime embedders) — the production resolver ALWAYS binds the
+    # substrate_read pack and fails loud when it can't. Log at WARNING so this can
+    # never be a *silent* bypass if it ever appears on a production path.
+    logger.warning(
+        "deep_consult.acquire.UNGOVERNED tool=%s — agency_binding not wired; "
+        "dispatching direct at the substrate port (expected only for "
+        "tests/embedders, never the runtime)",
+        name,
+    )
+    return await dispatch(
+        deps.substrate,
+        name=name,
+        args=args,
+        scope_predicate=scope_predicate,
+    )
+
+
 async def _run_acquire(
     plan: dict[str, Any], deps: DeepConsultStageDeps,
 ) -> dict[str, Any]:
@@ -256,6 +324,13 @@ async def _run_acquire(
     :class:`PostgresQdrantSubstrateQueryPort`.  ``scope_predicate`` threads
     through unchanged.  NO new query code — every row comes back through the
     existing four-tool surface.
+
+    W1-T1: when ``deps.agency_binding`` is wired (the runtime path), every call
+    routes through the governed binding (:meth:`AgencyToolBinding.run_tool` →
+    ``Agency.run_pack_tool`` → the ``action_pack_invocations`` ledger), mirroring
+    :func:`consult_on_demand._run_one_call`'s governed branch — result-shape
+    handling included. The direct :func:`_dispatch_tool` stays ONLY as the
+    binding-None fallback (tests / non-runtime embedders), exactly as consult.
     """
     from ...data.analysts.consult_on_demand import _dispatch_tool
 
@@ -271,11 +346,12 @@ async def _run_acquire(
     for call in tool_plan[: wf_input.max_acquire_rounds]:
         name = str(call.get("tool") or "")
         args = call.get("args") if isinstance(call.get("args"), Mapping) else {}
-        result = await _dispatch_tool(
-            deps.substrate,
+        result = await _acquire_one_call(
+            deps,
             name=name,
             args=args,
             scope_predicate=scope_predicate,
+            dispatch=_dispatch_tool,
         )
         # Lift any substrate refs (lineage) — same shape consult reads.
         for ref in (result.get("refs") or []) if isinstance(result, Mapping) else []:
@@ -390,6 +466,10 @@ async def _run_analyze(
         substrate=deps.substrate,
         max_tokens=int(wf_input.max_analyze_tokens),
         max_rounds=int(wf_input.max_acquire_rounds),
+        # W1-T1: govern the re-entrant synthesis loop's tool calls too — the SAME
+        # worker-local substrate_read binding acquire uses. None (tests) ⇒ the
+        # consult loop falls back to its own direct-port dispatch, unchanged.
+        agency_binding=deps.agency_binding,
     )
     try:
         method_result = await consult_run_method(

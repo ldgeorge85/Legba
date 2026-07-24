@@ -1,0 +1,124 @@
+# Shared SourceDescriptor: source.gdelt.files — GDELT 2.0 15-minute file dump
+# (kind: gdelt_files).
+#
+# Replacement acquisition path for GDELT. The prior keyless approach
+# (source.gdelt.doc_api, kind json_api against the DOC 2.0 API) started
+# 429-ing at the IP level even for small, spaced queries (verified
+# 2026-07-21) and is paused. GDELT also publishes its raw 2.0 event stream
+# as a rolling set of files updated every 15 minutes with NO API and NO
+# rate limit — this descriptor reaches that path instead. Handler:
+# src/legba/data/sources/gdelt_files.py (GDELTFilesSourceHandler, config
+# schema GDELTFilesConfig).
+#   Index:  http://data.gdeltproject.org/gdeltv2/lastupdate.txt
+#   Docs:   http://data.gdeltproject.org/documentation/GDELT-Event_Codebook-V2.0.pdf
+#
+# GDELT is a firehose (the raw worldwide events export runs tens of
+# thousands of rows per 15-minute file); the handler filters HARD before any
+# Signal is constructed — see the four gates under config below. Expected
+# volume with these defaults: low hundreds to low thousands of signals/day
+# (a documented expectation to verify against live traffic post-deploy, NOT
+# a measured guarantee — see docs/DATA_SOURCES.md §7 for the math).
+#
+# NOT ACTIVE — ships DRAFT (S-2 convention, same as source_gdelt_bigquery.yaml):
+#   * identity.state is draft — registers as a descriptor, no live actor
+#     until an operator flips it (runtime/dapr_host.py skips draft/configured).
+#   * No credentials needed (the file dump is fully anonymous HTTP), so the
+#     flip is a pure activation decision, not a creds-provisioning one — an
+#     operator should eyeball the filter thresholds below (or run health_check
+#     once configured) before going active, since this is a brand-new
+#     acquisition path replacing a paused one.
+#
+# OPERATOR FLIP (to go live):
+#   1. Review/tune the filter thresholds under config (event_root_codes /
+#      min_num_mentions / goldstein_max / actor_country_fips) for the desired
+#      volume — defaults target the conflict/coercion CAMEO band worldwide.
+#   2. Register/refresh this descriptor, then transition:
+#        POST {registry}/api/v1/registry/descriptors/source/source.gdelt.files/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+#   3. Once active, consider pausing/retiring source.gdelt.doc_api (still
+#      paused from the 429 incident) to avoid double-counting GDELT-derived
+#      signals — dedupe absorbs overlap either way (both use the
+#      GLOBALEVENTID+DATEADDED content-hash identity), but there's no reason
+#      to run both acquisition paths at once.
+
+identity:
+  id: source.gdelt.files
+  name: GDELT 2.0 — 15-minute file dump (keyless, no rate limit)
+  kind: gdelt_files
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft                       # NEW acquisition path — operator flips deliberately
+  owner: source_bringup
+  created: "2026-07-23T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [news, events, geopolitical, structured, global, conflict]
+  source_class: reporting          # news-derived structured event stream (same class as gdelt_query)
+
+acquisition: poll
+
+cadence:
+  # GDELT publishes a new export file every 15 minutes; poll at the same
+  # cadence so the cursor never falls more than one file behind under
+  # normal operation. */15 with the handler's own high-water cursor means
+  # each tick either finds nothing new (healthy no-op) or exactly one file.
+  schedule:
+    factory_kind: cron
+    raw: "*/15 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  # --- hard filter thresholds (conflict/geopolitics narrowing — the
+  # primary volume control; see gdelt_files.py module docstring for the
+  # full rationale) ---
+  event_root_codes:
+    factory_kind: text            # list[str], validated 2-digit CAMEO codes
+    raw: ["14", "15", "16", "17", "18", "19", "20"]
+  min_num_mentions:
+    factory_kind: number
+    raw: 10
+  goldstein_max:
+    factory_kind: number
+    raw: -2.0
+  # actor_country_fips intentionally omitted (worldwide) — narrow to a
+  # FIPS 10-4 allowlist (NOT ISO 3166) if an operator wants to scope this
+  # source geographically rather than by event type alone.
+
+  # --- bounding ---
+  max_files_per_pull:
+    factory_kind: number
+    raw: 2
+  max_rows_per_file:
+    factory_kind: number
+    raw: 75000
+  max_signals_per_pull:
+    factory_kind: number
+    raw: 2000
+  lookback_minutes:
+    factory_kind: number
+    raw: 15
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # GLOBALEVENTID+DATEADDED canonical (matches gdelt_query)
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: geocode                  # refine from ActionGeo lat/long
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

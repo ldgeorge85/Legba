@@ -134,7 +134,14 @@ class _StubTelegramClient:
             raise err
         return state.entity
 
-    async def iter_messages(self, entity: _StubEntity, limit: int = 100):
+    async def iter_messages(
+        self,
+        entity: _StubEntity,
+        limit: int = 100,
+        *,
+        min_id: int = 0,
+        reverse: bool = False,
+    ):
         self.iter_calls.append(entity.username)
         # Find the channel state matching this entity.
         state = next(
@@ -146,8 +153,16 @@ class _StubTelegramClient:
             err = state.error_script.pop(0)
             if err is not None:
                 raise err
-        # Telethon returns newest-first by default.
-        for msg in sorted(state.messages, key=lambda m: m.id, reverse=True):
+        # Task #206 — real Telethon min_id + reverse semantics (verified
+        # against the installed telethon package's iter_messages docstring):
+        # min_id EXCLUDES messages with id <= min_id; with reverse=True the
+        # walk is oldest-to-newest ("min_id becomes equivalent to offset_id
+        # ... since messages are returned in ascending order"). Without
+        # reverse, Telethon's default is newest-first (unchanged from the
+        # pre-#206 stub behavior).
+        pool = [m for m in state.messages if m.id > min_id]
+        ordered = sorted(pool, key=lambda m: m.id, reverse=not reverse)
+        for msg in ordered:
             yield msg
 
 
@@ -752,6 +767,467 @@ async def test_env_secret_resolver_raises_on_missing(monkeypatch):
     monkeypatch.delenv("LEGBA_TELEGRAM_MISSING", raising=False)
     with pytest.raises(KeyError):
         await _env_resolver("creds.telegram.missing")
+
+
+# ---------------------------------------------------------------------------
+# FIX 1 — honest session-revoked health (fail-loud, no silent 'empty')
+#
+# A revoked / expired MTProto session fails AUTH on every channel. The
+# per-channel try/except isolation would otherwise return a clean 0-yield pull
+# that the source actor records as 'empty', hiding the dead session. The
+# handler now records a health state under ``health_state_key`` that
+# SourceActor._record_poll_outcome turns into an honest 'error' outcome. These
+# tests assert the RECORDED HEALTH STATE (the observable input to that mapping);
+# 'degraded'/'unhealthy' → 'error', 'healthy' → not-an-error.
+# ---------------------------------------------------------------------------
+
+
+_HEALTH_KEY = TelegramChannelSourceHandler.health_state_key
+
+
+@pytest.mark.asyncio
+async def test_pull_session_revoked_records_unhealthy_health(monkeypatch):
+    """All channels auth-fail (session revoked) → 'unhealthy' health state.
+
+    The source actor maps 'unhealthy' → an 'error' poll outcome, so the dead
+    session is finally visible in source_poll_outcomes + the liveness watchdog
+    instead of masquerading as a silent 'empty'. No signals are fabricated.
+    """
+    from legba.data.sources import telegram as tg_mod
+
+    class FakeAuthError(Exception):
+        """Stand-in for telethon's AuthKeyUnregisteredError / SessionRevokedError."""
+
+    # Mirror the FloodWait pattern: monkeypatch the module-level class lookup so
+    # our fake is treated as a session-level auth error (no telethon needed).
+    monkeypatch.setattr(tg_mod, "_auth_error_classes", lambda: (FakeAuthError,))
+
+    cfg = _make_config(
+        channels=["@a", "@b"],
+        max_retries_per_channel=5,
+        backoff_base_seconds=0.0,
+    )
+    now = datetime.now(tz=timezone.utc)
+    sa = _StubChannelState(
+        entity=_StubEntity(username="a", id=1, title="A"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+        next_error=FakeAuthError("AUTH_KEY_UNREGISTERED"),
+    )
+    sb = _StubChannelState(
+        entity=_StubEntity(username="b", id=2, title="B"),
+        messages=[_StubMessage(id=2, text="y", date=now)],
+        next_error=FakeAuthError("AUTH_KEY_UNREGISTERED"),
+    )
+    client = _StubTelegramClient({"a": sa, "b": sb})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+
+    # A dead session yields NOTHING (no fabrication).
+    assert out == []
+    # Auth failure is NON-retryable: exactly one get_entity call per channel —
+    # no backoff/retry hammering (the retry storm is what got the account
+    # bot-flagged and the session revoked in the first place).
+    assert sorted(client.get_entity_calls) == ["a", "b"]
+
+    health = await store.get(_HEALTH_KEY)
+    assert health is not None, "handler must record health, not stay silent"
+    assert health["state"] == "unhealthy"
+    assert health["detail"]["reason"] == "session_revoked"
+    assert sorted(health["detail"]["auth_failed_channels"]) == ["a", "b"]
+    # This is exactly what SourceActor._record_poll_outcome maps to 'error'.
+    assert health["state"] in ("degraded", "unhealthy")
+
+
+@pytest.mark.asyncio
+async def test_pull_single_channel_floodwait_is_not_a_source_error(monkeypatch):
+    """A single-channel flood-wait (even one exceeding the cap → give-up) is a
+    TRANSIENT per-channel condition, NOT a revoked session. Health stays
+    'healthy' so the poll is not falsely reported as a source error."""
+    from legba.data.sources import telegram as tg_mod
+
+    class FakeFloodWait(Exception):
+        def __init__(self, seconds: int) -> None:
+            super().__init__(f"flood {seconds}s")
+            self.seconds = seconds
+
+    monkeypatch.setattr(tg_mod, "_flood_wait_error_class", lambda: FakeFloodWait)
+
+    cfg = _make_config(channels=["@warnews"], flood_wait_cap_seconds=2)
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=1, text="ok", date=now)],
+        error_script=[FakeFloodWait(seconds=999)],  # exceeds cap → give-up
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert out == []
+
+    health = await store.get(_HEALTH_KEY)
+    assert health is not None
+    assert health["state"] == "healthy"
+    # NOT one of the states the source actor turns into an 'error' outcome.
+    assert health["state"] not in ("degraded", "unhealthy")
+
+
+@pytest.mark.asyncio
+async def test_pull_empty_channel_is_not_a_source_error():
+    """A channel that resolves but has no new messages is a legitimate empty
+    poll — health stays 'healthy', never an error."""
+    cfg = _make_config(channels=["@warnews"])
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[],  # resolves fine, nothing to yield
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert out == []
+
+    health = await store.get(_HEALTH_KEY)
+    assert health is not None
+    assert health["state"] == "healthy"
+    assert health["state"] not in ("degraded", "unhealthy")
+
+
+@pytest.mark.asyncio
+async def test_pull_partial_auth_failure_records_degraded_not_full_revoke(monkeypatch):
+    """One channel auth-fails while another succeeds — NOT a confirmed full
+    revocation. Recorded 'degraded' (visible) but NOT the systemic 'unhealthy';
+    the good channel's signals still flow (degrade-not-break), so the actor's
+    poll outcome is driven by those written signals rather than the health key."""
+    from legba.data.sources import telegram as tg_mod
+
+    class FakeAuthError(Exception):
+        pass
+
+    monkeypatch.setattr(tg_mod, "_auth_error_classes", lambda: (FakeAuthError,))
+
+    cfg = _make_config(channels=["@dead", "@live"], lookback_hours=48)
+    now = datetime.now(tz=timezone.utc)
+    dead = _StubChannelState(
+        entity=_StubEntity(username="dead", id=1, title="D"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+        next_error=FakeAuthError("AUTH_KEY_UNREGISTERED"),
+    )
+    live = _StubChannelState(
+        entity=_StubEntity(username="live", id=2, title="L"),
+        messages=[_StubMessage(id=99, text="ok", date=now)],
+    )
+    client = _StubTelegramClient({"dead": dead, "live": live})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    # The reachable channel still delivers.
+    assert [s.payload["channel"]["username"] for s in out] == ["live"]
+
+    health = await store.get(_HEALTH_KEY)
+    assert health is not None
+    assert health["state"] == "degraded"
+    assert "dead" in health["detail"]["auth_failed_channels"]
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 — descriptor footprint softening (anti-bot-flag)
+# ---------------------------------------------------------------------------
+
+
+def test_descriptor_cadence_and_limit_soften_footprint():
+    """The committed descriptor widens the cadence + jitter (the real
+    anti-bot-flag levers: request FREQUENCY + jitter) to reduce the flagging
+    that revokes the session — while KEEPING per_channel_message_limit at 50
+    (the message cap is a runaway-pull safety belt, not a footprint lever:
+    Telethon fetches ≤100 msgs per getHistory request, so 25 vs 50 is the same
+    single API call — lowering it would only cost war-beat coverage). The
+    softened config still parses through the production unwrap → config-schema
+    path."""
+    from pathlib import Path
+
+    import yaml
+    from legba.runtime.source_factory import _unwrap_factory_dict
+
+    repo_root = Path(__file__).resolve().parents[2]
+    body = yaml.safe_load(
+        (repo_root / "descriptors" / "source_telegram_monitor.yaml").read_text()
+    )
+
+    # Cadence widened */15 → */30 (poll rate halved); jitter widened 60 → 120.
+    assert body["cadence"]["schedule"]["raw"] == "*/30 * * * *"
+    assert body["cadence"]["jitter_seconds"] == 120
+
+    # per_channel_message_limit kept at 50 (NOT a footprint lever — see docstring).
+    assert body["config"]["per_channel_message_limit"]["raw"] == 50
+
+    # The softened config still parses through the production unwrap + schema.
+    cfg = TelegramChannelSourceConfig(**_unwrap_factory_dict(body["config"]))
+    assert cfg.per_channel_message_limit == 50
+    # Lookback stays FAR wider than the 30-min cadence gap → nothing missed on
+    # the cursor-less first pull (steady-state is bounded by the id cursor).
+    assert cfg.lookback_hours == 12
+    assert len(cfg.channels) >= 1
+    # #206 rides the SAME softened descriptor — no explicit override needed,
+    # the field's own default (10 pages/poll) applies; asserting it here so a
+    # future descriptor edit can't silently regress cadence-soften's intent
+    # (a huge catchup_max_pages_per_channel would defeat the point of a
+    # halved poll rate by flooding right back on resume).
+    assert cfg.catchup_max_pages_per_channel == 10
+
+
+# ---------------------------------------------------------------------------
+# #206 — bounded backlog catch-up (min_id + reverse)
+# ---------------------------------------------------------------------------
+#
+# The bug: a channel that produced MORE than per_channel_message_limit
+# messages since the last cursor used to silently DROP the excess — a single
+# newest-first page only ever returns the latest per_channel_message_limit
+# messages, so anything OLDER than that (but still newer than the cursor)
+# was skipped, and the cursor then advanced past the gap forever (permanent,
+# unrecoverable loss). test_pull_respects_per_channel_message_limit (above,
+# unmodified) demonstrates the PRE-#206 behavior on a COLD START (no cursor)
+# — that case is intentionally UNCHANGED (bounded by lookback_hours, not a
+# gap). These tests exercise the RESUMED-poll path (last_seen_id > 0), where
+# #206 now pages forward instead of dropping.
+
+
+@pytest.mark.asyncio
+async def test_catchup_small_gap_single_short_page_matches_old_semantics():
+    """A gap smaller than one page (the everyday, non-catch-up case) still
+    yields exactly the new messages in one short page — the SAME set the
+    pre-#206 single-page code would have produced, just via the new
+    min_id+reverse walk instead of a newest-first walk. No behavior change
+    for the common case."""
+    cfg = _make_config(channels=["@warnews"], per_channel_message_limit=200)
+    now = datetime.now(tz=timezone.utc)
+    # cursor at id=2; 3 new messages (ids 3,4,5) — well under the 200 cap.
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[
+            _StubMessage(id=1, text="old", date=now - timedelta(hours=5)),
+            _StubMessage(id=2, text="seen", date=now - timedelta(hours=4)),
+            _StubMessage(id=3, text="new1", date=now - timedelta(hours=3)),
+            _StubMessage(id=4, text="new2", date=now - timedelta(hours=2)),
+            _StubMessage(id=5, text="new3", date=now - timedelta(hours=1)),
+        ],
+    )
+    handler = TelegramChannelSourceHandler(
+        client_factory=lambda **_: _StubTelegramClient({"warnews": state}),
+    )
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore({"telegram_cursor": {"warnews": 2}})
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert sorted(s.payload["message_id"] for s in out) == [3, 4, 5]
+    cursors = await store.get("telegram_cursor")
+    assert cursors == {"warnews": 5}
+
+
+@pytest.mark.asyncio
+async def test_catchup_gap_exceeding_one_page_drains_across_pages_no_skip():
+    """THE #206 regression case: a channel produced MORE than
+    per_channel_message_limit messages since the cursor. The pre-#206 code
+    would return only the newest `limit` (dropping the rest permanently);
+    #206 pages forward and returns EVERY message in the gap, in order, none
+    skipped."""
+    cfg = _make_config(channels=["@warnews"], per_channel_message_limit=5)
+    now = datetime.now(tz=timezone.utc)
+    # cursor at id=0 (simulated as if some earlier state existed) — 23
+    # messages total in the backlog, cap=5/page → needs 5 pages (5*4=20, +3
+    # on the 5th, short page) to fully drain.
+    messages = [
+        _StubMessage(id=i, text=f"m{i}", date=now - timedelta(minutes=(23 - i)))
+        for i in range(1, 24)
+    ]
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=messages,
+    )
+    handler = TelegramChannelSourceHandler(
+        client_factory=lambda **_: _StubTelegramClient({"warnews": state}),
+    )
+    await _configure_handler(handler, cfg)
+    # last_seen_id=0 (dispatch check is `<= 0`) would take the cold-start
+    # path (unchanged pre-#206 behavior, bounded by lookback_hours) — a
+    # DIFFERENT scenario than what #206 fixes. Seed cursor=1 to simulate a
+    # RESUMED poll (message id 1 already seen; ids start at 1 in Telethon,
+    # so this is the smallest realistic positive cursor) and exercise the
+    # catch-up path specifically.
+    store = InMemoryStateStore({"telegram_cursor": {"warnews": 1}})
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    # Cursor was 1 → messages 2..23 are the gap (22 messages), ALL must be
+    # present, in ascending id order across the page boundaries, none
+    # skipped and none duplicated.
+    ids = [s.payload["message_id"] for s in out]
+    assert ids == list(range(2, 24))
+    cursors = await store.get("telegram_cursor")
+    assert cursors == {"warnews": 23}
+
+
+@pytest.mark.asyncio
+async def test_catchup_flood_cap_bounds_pages_per_poll_and_resumes_next_poll():
+    """A CATASTROPHIC backlog (far exceeding catchup_max_pages_per_channel *
+    per_channel_message_limit) must NEVER flood one poll — it hard-stops at
+    the page cap, and the cursor lands exactly at the boundary the SECOND
+    poll resumes from (no gap, no re-emission of already-drained pages)."""
+    cfg = _make_config(
+        channels=["@warnews"],
+        per_channel_message_limit=3,
+        catchup_max_pages_per_channel=2,  # cap: at most 2*3=6 msgs/poll
+    )
+    now = datetime.now(tz=timezone.utc)
+    # 50 messages in backlog — WAY more than the 6/poll the cap allows.
+    messages = [
+        _StubMessage(id=i, text=f"m{i}", date=now - timedelta(minutes=(50 - i)))
+        for i in range(1, 51)
+    ]
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=messages,
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    # last_seen_id=0 (dispatch check `<= 0`) would take the cold-start path
+    # (unchanged pre-#206 behavior, bounded by lookback_hours) — seed
+    # cursor=1 to simulate a RESUMED poll and exercise catch-up specifically.
+    poll1_store = InMemoryStateStore({"telegram_cursor": {"warnews": 1}})
+    out1 = [s async for s in handler.pull(_ctx_with_state(poll1_store))]
+    ids1 = [s.payload["message_id"] for s in out1]
+    # Exactly the flood-cap worth of messages (2 pages * 3/page = 6),
+    # starting right after the cursor, in ascending order.
+    assert ids1 == [2, 3, 4, 5, 6, 7]
+    cursor_after_poll1 = (await poll1_store.get("telegram_cursor"))["warnews"]
+    assert cursor_after_poll1 == 7
+
+    # Second poll resumes exactly where the first left off — no gap, no
+    # re-emission of ids 2-7.
+    out2 = [s async for s in handler.pull(_ctx_with_state(poll1_store))]
+    ids2 = [s.payload["message_id"] for s in out2]
+    assert ids2 == [8, 9, 10, 11, 12, 13]
+    assert ids2[0] == ids1[-1] + 1  # perfectly contiguous, no gap
+
+
+@pytest.mark.asyncio
+async def test_catchup_persists_cursor_after_each_page_not_just_at_the_end():
+    """Durability: the cursor must be written to state_store incrementally,
+    per page — not only once after the whole multi-page walk finishes. This
+    proves a crash mid-catch-up would lose at most the CURRENT in-flight
+    page's messages already yielded to the consumer (still safe: dedupe /
+    re-yield is the documented invariant), never a page already fully
+    drained and persisted."""
+    cfg = _make_config(
+        channels=["@warnews"], per_channel_message_limit=3,
+        catchup_max_pages_per_channel=5,
+    )
+    now = datetime.now(tz=timezone.utc)
+    messages = [
+        _StubMessage(id=i, text=f"m{i}", date=now - timedelta(minutes=(12 - i)))
+        for i in range(1, 13)  # 12 messages, cap 3/page -> 4 pages exactly
+    ]
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=messages,
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore({"telegram_cursor": {"warnews": 1}})
+    cursor_snapshots: list[int] = []
+    orig_set = store.set
+
+    async def _tracking_set(key, value):
+        await orig_set(key, value)
+        if key == "telegram_cursor" and "warnews" in value:
+            cursor_snapshots.append(value["warnews"])
+
+    store.set = _tracking_set  # type: ignore[method-assign]
+
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert len(out) == 11  # ids 2..12
+    # The cursor was persisted MULTIPLE times during the walk (once per
+    # completed page), not just once at pull()'s very end — proving
+    # per-page durability, not end-of-pull-only durability.
+    assert len(cursor_snapshots) >= 3
+    # Snapshots are monotonically non-decreasing (never regresses mid-walk).
+    assert cursor_snapshots == sorted(cursor_snapshots)
+    assert cursor_snapshots[-1] == 12
+
+
+@pytest.mark.asyncio
+async def test_catchup_respects_max_retries_and_gives_up_cleanly():
+    """A channel that errors on every catch-up page attempt still gives up
+    per the existing max_retries_per_channel policy (shared via
+    _apply_backoff_or_giveup) — #206 must not create an infinite retry loop
+    on a persistently-failing catch-up page."""
+    cfg = _make_config(
+        channels=["@warnews"], per_channel_message_limit=3,
+        max_retries_per_channel=2, backoff_base_seconds=0.0,
+    )
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=i, text=f"m{i}", date=now) for i in range(1, 6)],
+        error_script=[RuntimeError("boom1"), RuntimeError("boom2"), RuntimeError("boom3")],
+    )
+    handler = TelegramChannelSourceHandler(
+        client_factory=lambda **_: _StubTelegramClient({"warnews": state}),
+    )
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore({"telegram_cursor": {"warnews": 1}})
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    # Gives up cleanly — no signals, no cursor advance, no unhandled raise.
+    assert out == []
+    cursors = await store.get("telegram_cursor")
+    assert cursors.get("warnews", 1) == 1  # unchanged — give-up leaves cursor alone
+
+
+@pytest.mark.asyncio
+async def test_catchup_auth_failure_is_not_retried_even_mid_catchup(monkeypatch):
+    """#204's systemic-auth-failure fast path must still short-circuit a
+    catch-up page immediately (no wasted retries hammering a revoked
+    session), exactly as it does for the cold-start path."""
+    from legba.data.sources import telegram as tg_mod
+
+    class FakeAuthError(Exception):
+        pass
+
+    monkeypatch.setattr(tg_mod, "_auth_error_classes", lambda: (FakeAuthError,))
+
+    cfg = _make_config(
+        channels=["@warnews"], per_channel_message_limit=3,
+        max_retries_per_channel=5, backoff_base_seconds=0.0,
+    )
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=i, text=f"m{i}", date=now) for i in range(1, 6)],
+        error_script=[FakeAuthError("AUTH_KEY_UNREGISTERED")],
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore({"telegram_cursor": {"warnews": 1}})
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert out == []
+    # Exactly ONE iter_messages attempt — the auth failure short-circuits
+    # immediately, never entering the backoff/retry loop.
+    assert client.iter_calls == ["warnews"]
+
+    health = await store.get(_HEALTH_KEY)
+    assert health["state"] == "unhealthy"
+    assert health["detail"]["reason"] == "session_revoked"
 
 
 # ---------------------------------------------------------------------------

@@ -189,7 +189,40 @@ def _rss_descriptor(source_id: str, url: str, *, media: str = "reference") -> So
 
 
 @pytest.mark.asyncio
-async def test_poll_source_pulls_writes_canonical_and_publishes(pool, nats_publish, feed_url):
+async def test_poll_source_pulls_writes_canonical_and_publishes(
+    pool, nats_publish, feed_url, monkeypatch
+):
+    # TEST_DEBT_RECON.md Bucket J: this test's `feed_url` fixture stands up a
+    # real local HTTP server on 127.0.0.1 and polls it through the REAL RSS
+    # fetch path. SsrfGuardedTransport (src/legba/data/sources/_egress.py)
+    # correctly blocks loopback/RFC1918/link-local addresses unconditionally
+    # (see the sibling direct unit test
+    # tests/data_pkg/test_source_egress_guard.py::test_guarded_transport_rejects_private_url)
+    # — there is no env var / config flag / injection kwarg in _egress.py for a
+    # caller to legitimately bypass the guard for a local fixture server.
+    # Test-side fix ONLY: monkeypatch the ONE call site
+    # (RSSSourceHandler._get_or_create_client, src/legba/data/sources/rss.py)
+    # to build a client with the plain (unguarded) default httpx transport,
+    # scoped to this test via `monkeypatch` (auto-reverts at teardown) — never
+    # loosen the guard itself, which would reopen the exact SSRF hole it exists
+    # to close.
+    import httpx
+
+    from legba.data.sources.rss import RSSSourceHandler
+
+    async def _unguarded_get_or_create_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=self._config.timeout_seconds,
+                headers={"User-Agent": self._config.user_agent},
+            )
+        return self._client
+
+    monkeypatch.setattr(
+        RSSSourceHandler, "_get_or_create_client", _unguarded_get_or_create_client
+    )
+
     publish, js, stream = nats_publish
     source_id = f"source.test.rss_{uuid4().hex[:8]}"
     sd = _rss_descriptor(source_id, feed_url)

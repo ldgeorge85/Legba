@@ -21,6 +21,7 @@ from .chunker import Chunk, chunk_text, estimate_tokens
 from .lane4_loader import (
     CORPUS_COLLECTIONS,
     VectorLoadResult,
+    contextual_embedding_input,
     load_vector_batch,
 )
 
@@ -30,5 +31,6 @@ __all__ = [
     "estimate_tokens",
     "CORPUS_COLLECTIONS",
     "VectorLoadResult",
+    "contextual_embedding_input",
     "load_vector_batch",
 ]

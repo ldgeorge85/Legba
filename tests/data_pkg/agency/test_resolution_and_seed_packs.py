@@ -33,6 +33,8 @@ _SEED_PACKS = [
      ["search_signals", "query_facts", "inspect_entity", "vector_search",
       # S5-T4 — RAG over the curated Lane-4 reference corpora.
       "search_context",
+      # Stage 1 — OpenSearch full-text corpus readers.
+      "search_corpus", "read_document",
       "query_nexuses", "query_hypotheses", "get_timeline", "compare_targets",
       # #99 — graph query tools over the reified nexus property graph.
       "query_paths", "find_proxy_chains", "query_brokers",
@@ -182,7 +184,9 @@ def test_escalate_pack_gate_config_and_channel():
     assert esc.config["severity_gate"] == "high"
     assert float(esc.config["confidence_gate"]) == 0.85
     assert [c.name for c in pack.channels] == ["escalations"]
-    assert pack.applies_to_tags == ["g20"]
+    # audit C2 (commit 5d8de32): the escalate pack applies to the g20 tier AND the
+    # watch tier so watch desks (Israel/Iran/Ukraine/Taiwan/NKorea) can escalate.
+    assert pack.applies_to_tags == ["g20", "watch"]
 
 
 def test_incident_pack_has_channels():

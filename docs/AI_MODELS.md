@@ -30,11 +30,16 @@ The three roles are:
    fans out.
 2. **LLM providers + embeddings** — the analysis plane. A self-hosted vLLM LLM
    (gpt-oss-120b) is the **core analyst plane** ($0, self-hosted) that runs the
-   seven bounded reasoning units and the composition tower; a hosted Anthropic model
+   seven bounded reasoning units, the composition tower, and **every scheduled
+   analyst** — including the first-person journal, whose voice phase moved fully
+   onto this plane on 2026-07-06; a hosted Anthropic model
    (Claude Opus 4.8) is reserved for the **consult / deep-consult** kinds only
-   (billed, used sparingly); an OpenAI-compatible embeddings model (`BAAI/bge-m3`,
+   (billed, used sparingly) — it is the **default** plane for those two kinds, but
+   each request may instead pick the free core plane (the model picker, §5); an
+   OpenAI-compatible embeddings model (`BAAI/bge-m3`,
    1024-dim) shares the vLLM box — it is also the embedder-through-port that backs the
-   live `world_context` / `tradecraft` RAG corpora and ingest-dedupe vectors. `AnalystActor`s and the consult engine reach these
+   `world_context` (a guarded, measured pilot — §7) / `tradecraft` RAG corpora and
+   ingest-dedupe vectors. `AnalystActor`s and the consult engine reach these
    through provider handlers bound to stack-component descriptors.
 3. **The faithfulness verify judge** — an LLM that scores each cited finding for
    *faithfulness*: does each claim actually follow from its cited evidence? It
@@ -264,10 +269,15 @@ hosted Claude model, purely by which component its descriptor references —
 no code change.
 
 **Plane split (live policy).** The hosted Anthropic plane (`claude-opus-4-8`) is
-reserved for the **consult / deep-consult** kinds only (billed — used sparingly).
+reserved for the **consult / deep-consult** kinds only (billed — used sparingly),
+and even there it is only the *default* choice: each consult/deep-consult request
+may pick the free core plane instead (the model picker — §5).
 **Every scheduled analyst** — the seven bounded reasoning units, the per-country /
 per-region / world composition tower (plus the thematic `escalation_composition`),
-the critic, and the deterministic maintenance analysts —
+the critic, the deterministic maintenance analysts, and the first-person **journal**
+(both its GATHER and VOICE phases — the journal's voice phase previously ran on
+Anthropic Opus, but as of 2026-07-06 runs fully on the core plane, leaving Anthropic
+for the on-demand consult/deep-consult kinds only) —
 runs on the core OpenAI-compatible plane (`llm.primary.openai_compat`,
 gpt-oss-120b). The critic runs there with `allow_self_correlated=true` (it is no
 longer a cross-provider check; the faithfulness verify pass in §3 is now the
@@ -382,6 +392,13 @@ Bearer header; the response's `data[0].embedding` vector is returned.
   (`docs/SEAMS.md`): no production deps wire a vector store into the consult
   analyst today, so the tool is not live — it is the landing zone for
   embedding-backed retrieval when a vector store is wired in.
+- **`world_context` / `tradecraft` RAG corpora.** The same `bge-m3` embedder
+  backs the curated reference corpora — retrieved as a non-citable grounding
+  preamble for the units (a **guarded, measured pilot** on `internal_stability`
+  only; see §7) and as cited chunks for the consult `search_context` tool (§5).
+  The 293-point `world_context` corpus was re-embedded in place during the
+  2026-07-06 recalibration; the embedder was fine, the fixes were in retrieval
+  usage (§7).
 
 > **Future seam.** A vector-search path over the substrate's signal embeddings
 > is the natural home for additional embedding-backed retrieval; the embedding
@@ -398,6 +415,21 @@ has **no cadence** — it is dispatched on demand via an A2A skill
 operator panel, each carrying a free-form `question` plus an optional
 `scope_predicate`. Consult (and deep-consult) is the one place the hosted
 Claude Opus 4.8 plane is used, so it is billed and used sparingly.
+
+**Model picker (per request).** Each consult / deep-consult request may choose which
+registered LLM plane answers it — **`opus`** (the hosted Anthropic Opus plane,
+billed, **the default** — omitting the choice preserves the prior behavior) or
+**`core`** (the free self-hosted core plane). A **server-side allowlist** maps the
+friendly value → a stack-component id, so the client never names a component
+directly. The selection is **fail-closed**: if a chosen non-default plane cannot be
+honored the run **raises** rather than silently falling back to (and billing) the
+default. A provider outage surfaces as a **graceful HTTP 503** that names the *other*
+plane (e.g. "The Core plane is unavailable … select the Opus model"), not a bare
+502. The Consult and DeepConsult UI panels carry a model dropdown (labels
+"Opus (Anthropic · billed)" default / "Core (free)") that remembers the last choice —
+the neutral "Core (free)" label lands once the UI image is redeployed. Budget
+accounting keys off the chosen plane, and the shared per-day consult token cap still
+binds on **both** planes.
 
 It runs a single-turn ReAct loop, capped at `MAX_TOOL_ROUNDS = 6` rounds plus
 one forced final-synthesis turn:
@@ -509,8 +541,9 @@ integrates substrate state over time, not just today's headline slice. The per-c
 per-region, and world compositions do **not** ground directly; they compose over the units'
 already-verified, already-grounded sub-claims. The retired `country_assessor`
 monolith carried grounding too, but it is out of the active set (nothing in the
-trusted product reads it). Tier-2 vector `world_context` is now **live** and staggered on
-for `leadership_transition` + `internal_stability`.
+trusted product reads it). Tier-2 vector `world_context` runs as a **guarded, measured
+pilot on the `internal_stability` unit only** (recalibrated 2026-07-06); the earlier
+`leadership_transition` RAG was **rolled back** and is now **off** (caveat 3).
 
 Why this is the right place to explain it relative to the model:
 
@@ -534,16 +567,32 @@ as current as the last seed run. (2) **Bare-QID skip** — when Wikidata's label
 service can't resolve an entity (the live case is Q22686 / Donald Trump, which has no
 English label), the seed adapter resolves it via a `wbgetentities` label lookup with
 an enwiki-sitelink fallback, and the resolver *skips any value that is still a bare
-`Qxxxx`* so the model is never handed an unreadable id. (3) **Tier 2 is now LIVE** —
-the vector `world_context` collection for free-text background the structured facts
-can't carry is wired (the embedder-through-port L-114 landed) and pre-declarable on the
-descriptor (`sources: [..., vector:world_context]`): the resolver retrieves from the
-curated `world_context` Qdrant corpus (~293 chunks; a `tradecraft` corpus of ~1716
+`Qxxxx`* so the model is never handed an unreadable id. (3) **Tier 2 is a guarded
+pilot** — the vector `world_context` collection for free-text background the structured
+facts can't carry is wired (the embedder-through-port L-114 landed) and pre-declarable
+on the descriptor (`sources: [..., vector:world_context]`): the resolver retrieves from
+the curated `world_context` Qdrant corpus (~293 chunks; a `tradecraft` corpus of ~1716
 chunks also exists) through the stack embedder port (bge-m3, 1024-dim) as a separate,
-non-citable preamble — opportunistic, relevance-floored, country-filtered,
-degrade-not-drop when the corpus is empty. It is **staggered on** — enabled today for
-`leadership_transition` + `internal_stability`; the other units resolve only the
-structured `substrate` source, pending review-gated expansion.
+**non-citable** preamble (fenced background, no `[N]` ids) — opportunistic,
+relevance-floored, country-filtered, degrade-not-drop when the corpus is empty. After a
+2026-07-06 recalibration it is **enabled on the `internal_stability` unit only**, as a
+*measured pilot*; the earlier `leadership_transition` RAG was rolled back and is now
+off; the other units resolve only the structured `substrate` source, pending
+review-gated expansion. The embedder (`bge-m3`) was never the problem — the
+recalibration fixed **retrieval usage**: a focused `"<country> <theme>"` query
+(replacing a diluted unit-name + entity blob), the 293-point corpus re-embedded in
+place with a `"<Country> — <section>"` contextual lead
+(`scripts/reembed_world_context.py`), and the relevance floor lowered `0.65 → 0.55`
+(on-target scores now ~0.6, off-target ~0.42). A **real per-run auto-rollback guard**
+(`src/legba/runtime/rag_rollback.py`, actuated by `scripts/rag_watch.py --enforce`)
+re-checks a disabled-units env (`LEGBA_WORLD_CONTEXT_DISABLED_UNITS`) and a persisted
+state file (`LEGBA_RAG_ROLLBACK_STATE`) on **every** run, so a triggered rollback (on a
+faithfulness drop, a low-faith ratio, or a ≥35% token-cost rise) suppresses injection on
+the *next* run without a restart; per-run traces record `world_context_top_score` /
+`retained` / `min_score` so the measurement stays honest. **Known limit:** firing RAG has
+historically thickened the low-faithfulness *tail* even with the non-citable header, so
+the guard reverts if that recurs; the pilot's rollback-state file currently lives at an
+**ephemeral path** (move it to a volume for persistence).
 
 The mechanism (the `GroundingBlock` descriptor field, the `SubstrateGroundingResolver`,
 the `inline_target` GROUND phase, the seed adapters) is described in `DESIGN.md` §3.4
@@ -579,8 +628,10 @@ vault ids, endpoints are config fields.
 | Flag / env var | Effect |
 |----------------|--------|
 | `LEGBA_VERIFY_LLM_JUDGE` | Gates the optional LLM judge ON (currently the core `llm.primary.openai_compat` model, §3); off → verify pass runs the deterministic citation-presence floor only (labelled `judge-unavailable`) |
-| `LEGBA_CONSULT_MODEL_NAME` | Overrides the consult/deep model name (default `claude-opus-4-8`) |
+| `LEGBA_CONSULT_MODEL_NAME` | Overrides the model name for the consult/deep `opus` (Anthropic) plane — the default plane for those kinds (default `claude-opus-4-8`). The per-request `opus`/`core` plane picker (§5) is a server-side allowlist, not an env var |
 | `LEGBA_LLM_INPUT_TOKEN_BUDGET` | Caps the core-plane prompt **input** (default `32000`); the core plane sends no `max_tokens` on output |
+| `LEGBA_WORLD_CONTEXT_DISABLED_UNITS` | Per-unit kill-switch for Tier-2 `world_context` RAG injection (§7). The auto-rollback guard writes to this (and the state file below) to suppress injection on the next run without a restart |
+| `LEGBA_RAG_ROLLBACK_STATE` | Path to the persisted RAG rollback-state file the guard (`src/legba/runtime/rag_rollback.py`) re-reads on every run (§7). Currently an **ephemeral path** — move to a volume for persistence |
 
 ---
 

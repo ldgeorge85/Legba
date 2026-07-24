@@ -398,8 +398,18 @@ async def test_relation_backend_writes_ingestion_facts(pg_pool):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_extract_fallback_when_no_entities(pg_pool):
+    # Subject/predicate/object DELIBERATELY distinct from
+    # test_writes_fact.py's "Berlin"/"capital of"/"Germany" fixture: both
+    # files share the same session-scoped migrated_pg DB, and the ingestion
+    # write path's identical-triple dedupe (fact_extractor.py ~L1760,
+    # "PIECE B data quality" — collapses the valid_from dimension for
+    # SAME-value open rows, UNCONDITIONAL, not gated on
+    # LEGBA_FACT_CONTENTION) would otherwise noisy-OR-merge this test's write
+    # into that other file's open row regardless of test order, corrupting
+    # both tests' confidence assertions (caught live 2026-07-23 while
+    # verifying TEST_DEBT_RECON.md Bucket B/E under the full suite).
     client = _build_nlp_client(_extract_handler([
-        {"subject": "Berlin", "predicate": "capital of", "object": "Germany"},
+        {"subject": "Canberra", "predicate": "capital of", "object": "Australia"},
     ]))
     handler = FactExtractorHandler(
         FactExtractorConfig(backend="relation"),
@@ -407,17 +417,17 @@ async def test_extract_fallback_when_no_entities(pg_pool):
         nlp_client=client,
     )
     await handler.on_activate(_ctx())
-    sig = _signal(title="Berlin is the capital of Germany")  # no entities
+    sig = _signal(title="Canberra is the capital of Australia")  # no entities
 
     await handler.transform(sig, _ctx())
     async with pg_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT subject, predicate, value FROM facts "
-            "WHERE lower(subject)='berlin'"
+            "WHERE lower(subject)='canberra'"
         )
     assert row is not None
     assert row["predicate"] == "capital of"
-    assert row["value"] == "Germany"
+    assert row["value"] == "Australia"
 
 
 @pytest.mark.integration
@@ -579,10 +589,21 @@ async def test_idempotent_upsert(pg_pool):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_value_change_supersedes_prior(pg_pool):
+async def test_value_change_supersedes_prior(pg_pool, monkeypatch):
     """PIECE B auto-supersession: a NEW value for the same (subject, predicate)
     closes the prior open row (valid_until + superseded_by) and opens the new
-    one as the single canonical (open) row."""
+    one as the single canonical (open) row.
+
+    Pin LEGBA_FACT_CONTENTION=0: same coexist-affected write path as
+    tests/data_pkg/test_writes_fact.py::test_write_fact_value_change_supersedes_prior,
+    reached here via the INGESTION write path
+    (FactExtractorHandler.transform -> _insert_ingestion_fact ->
+    supersede_prior_facts) rather than the analyst path — same root function,
+    different caller. Under the live deploy's default ON setting, "Alice"/"Bob"
+    (same-tier, fuzzy-distinct, no shared tokens) COEXIST instead of the prior
+    closing.
+    """
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION", "0")
     h = FactExtractorHandler(FactExtractorConfig(), pg_pool=pg_pool)
     await h.on_activate(_ctx())
 
@@ -693,12 +714,20 @@ async def test_ingestion_confidence_not_all_one(pg_pool):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_identical_triple_dedupe_across_event_times(pg_pool):
+async def test_identical_triple_dedupe_across_event_times(pg_pool, monkeypatch):
     """Phase B item 3: the SAME (subject, predicate, value) re-ingested from two
     signals with DIFFERENT event-times must collapse to ONE open row (the 0032
     index keys on valid_from too, so without the dedupe each event-time would
     accumulate a separate open row — the live 'Russian located in UK' ×8 bug).
-    A DIFFERENT value still supersedes (the dedupe does not break that)."""
+    A DIFFERENT value still supersedes (the dedupe does not break that).
+
+    Pin LEGBA_FACT_CONTENTION=0: this asserts the pre-Wave-4 dedupe ("the dedupe
+    does not break [supersession]") on the ingestion write path. Under the live
+    deploy's default ON setting, a same-tier fuzzy-distinct value-change
+    (UK -> France here) COEXISTS rather than superseding, so the open-value set
+    would be {'France', 'UK'} instead of collapsing to {'France'}.
+    """
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION", "0")
     h = FactExtractorHandler(FactExtractorConfig(backend="relation"), pg_pool=pg_pool)
     await h.on_activate(_ctx())
     subj = f"Dedupestan_{uuid4().hex[:8]}"

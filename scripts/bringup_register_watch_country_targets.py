@@ -35,7 +35,19 @@ from _p17_registrar import (  # noqa: E402
 from legba.data.schemas.target import TargetDescriptor  # noqa: E402
 
 # High-consequence non-G20 countries (ISO-3166-1 alpha-2). Extend to add more.
-WATCH_ISO2 = ["IL", "IR", "UA", "TW", "KP", "PK"]
+WATCH_ISO2 = [
+    "IL", "IR", "UA", "TW", "KP", "PK",
+    # A3 / DEC-C (operator-approved 2026-07-16): the escalation-risk sample —
+    # active-conflict / state-fragility desks. Watch-tier pattern (bounded
+    # units over shared news sources geo-narrowed), NOT the full G20 stack.
+    "SD",  # Sudan — civil war
+    "ML",  # Mali — Sahel insurgency
+    "BF",  # Burkina Faso — Sahel insurgency
+    "NE",  # Niger — Sahel band, post-coup
+    "CD",  # DR Congo — eastern conflict
+    "MM",  # Myanmar — civil war, sanctions regime
+    "HT",  # Haiti — state fragility / armed-group crisis
+]
 
 # Same geopolitical vocabulary the G20 targets reason over (validated against
 # vocabulary_entries).

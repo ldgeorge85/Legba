@@ -138,9 +138,20 @@ async def resolve_deep_consult_stage_deps(
         logger.info("deep_consult.deps.qdrant_unavailable err=%s", exc)
         qdrant_client = None
 
+    # Stage 1 — the OpenSearch full-text corpus store for search_corpus /
+    # read_document. Built GUARDED (opensearch-py may be absent, or the index
+    # unprovisioned); None keeps the honest no_corpus_wired fallback.
+    try:
+        from ...data.opensearch import OpenSearchStore
+
+        _os_store: Any | None = OpenSearchStore.from_env()
+    except Exception:
+        _os_store = None
+
     substrate = PostgresQdrantSubstrateQueryPort(
         pg_pool=pg_store.pool,
         qdrant_client=qdrant_client,
+        opensearch_store=_os_store,
     )
 
     vault = _build_vault(pg_store)
@@ -166,12 +177,85 @@ async def resolve_deep_consult_stage_deps(
     async def _publish(subject: str, payload: bytes) -> None:  # best-effort
         return None
 
+    # W1-T1 — the WORKER-LOCAL agency plane. deep_consult runs in the standalone
+    # workflow worker (LEGBA_EMBED_WORKFLOW_WORKER=0), where the runtime's
+    # AGENCY_HOLDER is EMPTY — so we build the Agency here rather than fetch a
+    # runtime-held one (the consult recipe in dapr_host._analyst_deps_resolver
+    # reaches into AGENCY_HOLDER, which is wrong for this worker). Every acquire /
+    # re-entrant-synthesis tool call then routes through Agency.run_pack_tool
+    # (resolve ∩ allow ∩ applicability → governor → the action_pack_invocations
+    # ledger) instead of the ungoverned direct dispatch.
+    agency_binding = await _build_worker_agency_binding(
+        registry_client=registry_client,
+        substrate=substrate,
+        pg_pool=pg_store.pool,
+    )
+
     return DeepConsultStageDeps(
         llm=llm,
         substrate=substrate,
         pg_pool=pg_store.pool,
         budget=budget,
         publish_fn=_publish,
+        agency_binding=agency_binding,
+    )
+
+
+async def _build_worker_agency_binding(
+    *,
+    registry_client: Any,
+    substrate: Any,
+    pg_pool: Any,
+) -> Any:
+    """Build the worker-local ``substrate_read`` :class:`AgencyToolBinding`.
+
+    Mirrors the consult binding in
+    :func:`legba.runtime.dapr_host._analyst_deps_resolver` (the self-allow model
+    for a no-target operator surface) but constructs the :class:`Agency` LOCALLY
+    from :func:`default_tool_registry` — the standalone workflow worker's
+    ``AGENCY_HOLDER`` is empty, so there is no runtime-held plane to fetch.
+
+    FAIL-LOUD: if the ``substrate_read`` pack can't be fetched / validated we
+    RAISE. deep_consult is an operator-billed surface; silently continuing to the
+    ungoverned direct dispatch is exactly the orphaned-agency-plane bug W1-T1
+    closes.
+    """
+    from ...data.analysts.agency import Agency
+    from ...data.analysts.agency.binding import (
+        AgencyToolBinding,
+        GLOBAL_SCOPE,
+        fetch_action_pack,
+    )
+    from ...data.analysts.agency.substrate_read import SUBSTRATE_READ_PACK_ID
+    from ...data.analysts.agency.tools import ToolContext, default_tool_registry
+    from ...data.schemas.action_pack import ActionPackRef
+
+    pack = await fetch_action_pack(registry_client, SUBSTRATE_READ_PACK_ID)
+    if pack is None:
+        raise RuntimeError(
+            "deep_consult.deps.substrate_read_pack_unavailable — the "
+            f"{SUBSTRATE_READ_PACK_ID!r} action pack could not be fetched from "
+            "the registry; register it (bringup_register_action_packs) before "
+            "running deep_consult. Refusing to fall back to ungoverned dispatch.",
+        )
+
+    return AgencyToolBinding(
+        agency=Agency(tool_registry=default_tool_registry()),
+        pack=pack,
+        pg_pool=pg_pool,
+        # No queue / emit — the read-only substrate_read pack only needs the
+        # SubstrateQueryPort already built here (the same instance acquire reads).
+        tool_context=ToolContext(substrate=substrate),
+        # The no-target operator surface self-satisfies BOTH legs of the gate:
+        # the grant leg is a real ActionPackRef (so resolve_pack sees it granted,
+        # not a resolution bypass) and the read-only pack is allowed by
+        # construction under the synthetic GLOBAL scope (mirrors the consult
+        # binding's self-allow — deep_consult, like consult, carries no target).
+        analyst_grants=[ActionPackRef(pack_id=SUBSTRATE_READ_PACK_ID)],
+        target_allows=[ActionPackRef(pack_id=SUBSTRATE_READ_PACK_ID)],
+        scope=GLOBAL_SCOPE,
+        requested_by="analyst::deep_consult",
+        budget_account="deep_consult",
     )
 
 

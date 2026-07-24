@@ -1,0 +1,73 @@
+# lens_capability — the material/capability-weigher faculty (VOICES LV-1; build
+# spec planning/VOICES_BUILD_DESIGN.md §4, plan planning/VOICES_PLAN_2026-07-21.md).
+#
+# One of FOUR function-typed faculty ids on the journal_assessor kind (DL-1/DL-3).
+# The kind module maps this id → entry_kind='lens' in journal_entries — append-
+# only, OFF the fact/finding/nexus chain, V1 faithfulness verify fires on every
+# read (keyed on identity.kind, not id). It reads the VERIFIED tower top through
+# ONE declared falsifiable prior and writes an interpretive read; it never asserts
+# a new fact. The designed OPPOSITE of lens_intent (capability↔intent split). NO
+# publish edge.
+#
+# The declared prior LIVES in the persona module (legba.prompts.lens_capability) —
+# the descriptor content hash IS the prior version (DL-2).
+#
+# Cadence: WEEKLY, staggered AFTER lens_baserate (§4.1). Model plane: $0 core.
+
+identity:
+  id: lens_capability
+  name: "Voices — Material-Capability Faculty"
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: journal_assessor             # SAME kind module; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: voices_build
+
+subscription:
+  other_analysts: []
+  substrate:
+    direct_queries: false
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  prompt_module: "legba.prompts.lens_capability:LENS_SYSTEM"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 12288
+  budget_tokens_per_day: 600000
+  gather:
+    max_rounds: 6
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "30 7 * * 1"     # weekly — Mondays 07:30 UTC (staggered, §4.1)
+  cooldown_seconds: 518400            # 6d — below the 7d interval
+
+grounding:
+  enabled: false
+
+action_packs:
+  - pack_id: journal_read
+
+outputs: []

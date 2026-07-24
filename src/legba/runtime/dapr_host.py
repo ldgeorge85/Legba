@@ -26,6 +26,7 @@ dapr up -d``; daprd will then route to this process's port 6090.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal as signalmod
@@ -570,16 +571,22 @@ class _RuntimeHandles:
             await self.registry_client.close()
         except Exception as exc:                                # pragma: no cover
             logger.warning("registry_client.close err=%s", exc)
-        # W-1: close qdrant + embedding service if built. Both stored
-        # via getattr — formal _RuntimeHandles fields list doesn't yet
-        # carry them.
-        qdrant = getattr(self, "qdrant_client", None)
+        # W-1 / #235: close qdrant + embedding service if built. Both stored
+        # via getattr as LAZY HOLDERS (not raw clients) — formal
+        # _RuntimeHandles fields list doesn't yet carry them. Reading
+        # `.cached` (rather than a boot-time snapshot local) means a client
+        # that resolved LATE via lazy re-resolution (after the boot-time
+        # attempt failed) still gets closed here — no leak on the recovery
+        # path.
+        qdrant_holder = getattr(self, "qdrant_client_holder", None)
+        qdrant = qdrant_holder.cached if qdrant_holder is not None else None
         if qdrant is not None:
             try:
                 await qdrant.close()
             except Exception as exc:                            # pragma: no cover
                 logger.warning("qdrant_client.close err=%s", exc)
-        embedding = getattr(self, "embedding_service", None)
+        embedding_holder = getattr(self, "embedding_service_holder", None)
+        embedding = embedding_holder.cached if embedding_holder is not None else None
         if embedding is not None:
             try:
                 await embedding.aclose()
@@ -926,21 +933,20 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         register_target_deps_resolver,
     )
     from .deps import StandardDeps
-    from .embedding_factory import (
-        EmbeddingFactoryError,
-        build_embedding_service_from_stack_component,
-    )
+    from .embedding_factory import EmbeddingFactoryError
     from .nlp_client_factory import (
         DEFAULT_NLP_COMPONENT_ID,
         LazyNlpClient,
         NlpClientFactoryError,
     )
     from .pipeline import PipelineRunner, build_filter_handler
-    from .qdrant_factory import (
-        QdrantFactoryError,
-        build_qdrant_client_from_stack_component,
-    )
+    from .qdrant_factory import QdrantFactoryError
     from .source_factory import _unwrap_factory_dict, build_source_handler
+    from .substrate_singleton_factory import (
+        LazyEmbeddingService,
+        LazyQdrantClient,
+        LazySubstrateQueryPort,
+    )
     from .dapr_workflow.client import build_dapr_workflow_client
     from .dapr_workflow.worker import build_workflow_runtime
 
@@ -1051,53 +1057,103 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         component_id=DEFAULT_NLP_COMPONENT_ID,
     )
 
-    # W-1 Qdrant client — pre-built; dedupe_tier_3 filter consumes it.
-    qdrant_client: Any | None
-    try:
-        qdrant_client = await build_qdrant_client_from_stack_component(
-            os.environ.get(
-                "LEGBA_DATA_DEFAULT_VECTOR_STORE",
-                "vector.qdrant.cluster_main",
-            ),
-            registry_client=registry_client,
-        )
-        logger.info("dapr_host.qdrant_client.built")
-    except QdrantFactoryError as exc:
-        logger.warning(
-            "dapr_host.qdrant_client.unavailable err=%s "
-            "(dedupe_tier_3 filters will be uninstalliable)", exc,
-        )
-        qdrant_client = None
+    # W-1 / #235 Qdrant client + hosted embedding service — LAZILY resolved.
+    # dedupe_tier_3, signal_embedder, cross_source_coalesce/dedup, the
+    # grounding RAG, and the SubstrateQueryPort (below) all consume these.
+    #
+    # #235 (2026-07-23 ~18:54 outage): these used to be built ONCE at
+    # bootstrap inside a try/except that swallowed a ConnectError and cached
+    # `None` — permanently. A deploy that recreated the registry and the
+    # runtime simultaneously raced the ONE-SHOT lookup here against the
+    # registry's readiness; the runtime lost the race, pinned both clients
+    # None for the rest of the process's lifetime, and — because
+    # substrate_query_port (below) was built ONLY when qdrant_client was
+    # already non-None at THIS moment — every consult_on_demand activation
+    # 502'd "no deps registered for actor_id" for ~3h until an operator
+    # restarted the runtime. LazyQdrantClient / LazyEmbeddingService mirror
+    # LazyNlpClient exactly (#91 §2.3, just above): resolve on FIRST use,
+    # RE-resolve on every subsequent call while unresolved (backed off to at
+    # most once per DEFAULT_RETRY_COOLDOWN_SECONDS so a burst of callers
+    # during an outage doesn't hammer the registry), cache a SUCCESS
+    # permanently, NEVER cache a FAILURE. Every consumer below reads through
+    # `.get()` (or a resolved-per-deps-build snapshot pulled from `.get()`)
+    # rather than a closed-over boot-time local, so a registry that recovers
+    # moments after this function returns heals the vector plane on the next
+    # USE — no restart required.
+    _lazy_qdrant_client = LazyQdrantClient(
+        registry_client=registry_client,
+        component_id=os.environ.get(
+            "LEGBA_DATA_DEFAULT_VECTOR_STORE", "vector.qdrant.cluster_main",
+        ),
+    )
+    _lazy_embedding_service = LazyEmbeddingService(
+        registry_client=registry_client,
+        secrets_resolve=_secrets_resolve,
+        component_id=os.environ.get(
+            "LEGBA_DATA_DEFAULT_EMBEDDING", "embed.primary.openai_compat",
+        ),
+    )
 
-    # W-1 Embedding service — pre-built; dedupe_tier_3 + future
-    # cross-target semantic correlators consume it.
-    embedding_service: Any | None
-    try:
-        embedding_service = await build_embedding_service_from_stack_component(
-            os.environ.get(
-                "LEGBA_DATA_DEFAULT_EMBEDDING",
-                "embed.primary.openai_compat",
-            ),
-            registry_client=registry_client,
-            secrets_resolve=_secrets_resolve,
-        )
-        logger.info("dapr_host.embedding_service.built")
-    except EmbeddingFactoryError as exc:
-        logger.warning(
-            "dapr_host.embedding_service.unavailable err=%s "
-            "(dedupe_tier_3 + semantic-correlator analysts uninstalliable)",
-            exc,
-        )
-        embedding_service = None
+    async def _resolve_qdrant_client() -> Any | None:
+        """Best-effort snapshot of the qdrant client for THIS deps build.
+
+        Never raises — an unresolved/unreachable vector plane degrades the
+        caller (dedupe_tier_3 refuses loud at filter-build time per its own
+        contract; every other consumer treats ``None`` as "vector plane
+        absent this run" and falls back to its documented unavailable
+        shape). The point of going through ``.get()`` here (rather than
+        reading a boot-time local) is that EVERY call retries while
+        unresolved, so a recovered registry heals on the next analyst/source
+        deps build without a restart.
+        """
+        try:
+            return await _lazy_qdrant_client.get()
+        except QdrantFactoryError as exc:
+            logger.warning(
+                "dapr_host.qdrant_client.unavailable err=%s "
+                "(attempt=%d; dedupe_tier_3 + vector-backed reads degrade "
+                "this build — retried on the NEXT deps resolution)",
+                exc, _lazy_qdrant_client.attempt_count,
+            )
+            return None
+
+    async def _resolve_embedding_service() -> Any | None:
+        """Best-effort snapshot of the embedding client for THIS deps build.
+
+        Mirrors :func:`_resolve_qdrant_client` — never raises, retried on
+        every subsequent deps build while unresolved.
+        """
+        try:
+            return await _lazy_embedding_service.get()
+        except EmbeddingFactoryError as exc:
+            logger.warning(
+                "dapr_host.embedding_service.unavailable err=%s "
+                "(attempt=%d; dedupe_tier_3 + semantic-correlator + "
+                "grounding-RAG analysts degrade this build — retried on "
+                "the NEXT deps resolution)",
+                exc, _lazy_embedding_service.attempt_count,
+            )
+            return None
+
+    # Resolve ONCE now so boot behaviour is unchanged when the registry is
+    # reachable (the common case — this succeeds on the first try exactly as
+    # the old eager build did) and so `standard_deps.extras` starts wired.
+    # `_analyst_deps_resolver` (below) re-resolves + re-stamps `extras` on
+    # EVERY analyst deps build (cache miss), so a failure here is not sticky.
+    qdrant_client = await _resolve_qdrant_client()
+    embedding_service = await _resolve_embedding_service()
 
     # Thread the substrate-wide vector ports onto the analyst deps bundle so
     # deterministic-kind analysts that coalesce/correlate over embeddings can
     # reach them (P2 cross_source_coalesce reuses these; cross_source_dedup's
     # best-effort semantic pass also reads deps.extras['qdrant']). The bundle's
-    # ``extras`` is the same dict passed into every analyst deps build; mutating
-    # it here (before any actor activates) keeps StandardDeps' shape unwidened.
-    # Both may be None — the coalesce handler degrades-not-drops + refuses loud
-    # (SEAM #19) when a required port is missing.
+    # ``extras`` is the same dict object every deterministic-kind actor's
+    # cached `kind_deps` refers to (mutated in place, not replaced) — so a
+    # LATER successful lazy resolution (stamped by `_analyst_deps_resolver`
+    # on its next call, per #235) is visible to an ALREADY-cached actor's next
+    # scheduled run too, not just to brand-new actor activations. Both may be
+    # None on this first attempt — the coalesce handler degrades-not-drops +
+    # refuses loud (SEAM #19) when a required port is missing.
     if isinstance(standard_deps.extras, dict):
         standard_deps.extras["qdrant"] = qdrant_client
         standard_deps.extras["embedding_service"] = embedding_service
@@ -1163,35 +1219,123 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         deep_consult_client = None
         workflow_runtime = None
 
-    # W-3 SubstrateQueryPort — pg+qdrant backing for consult_on_demand.
-    # Built only if qdrant_client is available (vector_search degrades to
-    # the documented `unavailable` Protocol shape otherwise).
-    substrate_query_port: Any | None
-    if qdrant_client is not None:
-        from ..data.config import QdrantConfig
-        from .substrate_query_port import PostgresQdrantSubstrateQueryPort
-        _qdrant_cfg = QdrantConfig.from_env()
-        substrate_query_port = PostgresQdrantSubstrateQueryPort(
-            pg_pool=pg_store.pool,
-            qdrant_client=qdrant_client,
-            # L-114 — thread the hosted embedder so free-text vector_search
-            # embeds-then-searches; None keeps the honest no_embedder_wired
-            # fallback (seam #11).
-            embedder=embedding_service,
-            # S5-T4 — the two Lane-4 RAG corpora search_context reads (S5-T2).
-            world_context_collection=_qdrant_cfg.world_context_collection,
-            tradecraft_collection=_qdrant_cfg.tradecraft_collection,
-        )
-        logger.info(
-            "dapr_host.substrate_query_port.built embedder=%s",
-            "wired" if embedding_service is not None else "absent",
-        )
-    else:
+    # W-3 / #235 SubstrateQueryPort — pg+qdrant backing for consult_on_demand.
+    #
+    # #235: this used to be built ONCE, gated on `qdrant_client is not None`
+    # AT THIS EXACT MOMENT — the same one-shot snapshot problem as the
+    # qdrant/embedding clients above (and the direct cause of the outage:
+    # `qdrant_client` was `None` here, so the port was never built, so every
+    # consult_on_demand activation failed closed for ~3h). `LazySubstrateQueryPort`
+    # re-attempts qdrant resolution (via `_lazy_qdrant_client`, already lazy)
+    # on every `.get()` until it succeeds, THEN constructs the port once —
+    # threaded (not the possibly-None snapshot) into `_analyst_deps_resolver`
+    # below so a registry that recovers seconds after this function returns
+    # still heals consult_on_demand on the actor's next activation.
+    from ..data.config import QdrantConfig
+    _qdrant_cfg = QdrantConfig.from_env()
+    # Stage 1 — the OpenSearch full-text corpus store for search_corpus /
+    # read_document. Built GUARDED (opensearch-py may be absent, or the
+    # single-node index unprovisioned); None keeps the honest
+    # no_corpus_wired fallback (mirrors the embedder's seam #11 contract).
+    # Unlike qdrant/embedding this is not registry-backed (OpenSearchStore.
+    # from_env() reads only local env vars), so it isn't subject to the same
+    # boot-race and doesn't need its own lazy holder.
+    try:
+        from ..data.opensearch import OpenSearchStore
+        _os_store = OpenSearchStore.from_env()
+    except Exception:
+        _os_store = None
+
+    _lazy_substrate_query_port = LazySubstrateQueryPort(
+        pg_pool=pg_store.pool,
+        qdrant_holder=_lazy_qdrant_client,
+        embedding_holder=_lazy_embedding_service,
+        world_context_collection=_qdrant_cfg.world_context_collection,
+        tradecraft_collection=_qdrant_cfg.tradecraft_collection,
+        opensearch_store=_os_store,
+    )
+
+    async def _resolve_substrate_query_port() -> Any | None:
+        """Best-effort snapshot of the substrate port for THIS deps build.
+
+        Never raises — mirrors :func:`_resolve_qdrant_client`. A consumer
+        that receives ``None`` here (``consult_on_demand``'s deps builder)
+        already fails loud on ``None`` per its own no-stubs contract
+        (:class:`AnalystDepsBuildError`); the retry lives in re-attempting
+        THIS resolution on the actor's next activation, not in silently
+        downgrading consult's own port-required contract.
+        """
+        try:
+            return await _lazy_substrate_query_port.get()
+        except QdrantFactoryError as exc:
+            logger.warning(
+                "dapr_host.substrate_query_port.unavailable err=%s "
+                "(attempt=%d; consult_on_demand activations fail loud this "
+                "build — retried on the NEXT deps resolution)",
+                exc, _lazy_substrate_query_port.attempt_count,
+            )
+            return None
+
+    # Resolve ONCE now — unchanged boot behaviour when the registry answers
+    # on the first try. `_analyst_deps_resolver` re-resolves on every
+    # analyst deps build (cache miss) via the SAME holder, so a first-attempt
+    # failure here is not sticky.
+    substrate_query_port: Any | None = await _resolve_substrate_query_port()
+    if substrate_query_port is None:
         logger.warning(
             "dapr_host.substrate_query_port.unavailable "
-            "(no qdrant_client; consult_on_demand uninstalliable)",
+            "(no qdrant_client; consult_on_demand uninstalliable this build)",
         )
-        substrate_query_port = None
+
+    # #235 — durable visibility for "consult_on_demand is uninstallable
+    # because the substrate port is absent". Before this, the ONLY trace of
+    # the 2026-07-23 outage was a per-request 502 + an
+    # `analyst_deps_resolver.build_failed` log line — nothing durable, so
+    # "is consult broken right now" was unanswerable without live-tailing
+    # runtime logs (exactly the operator-visibility gap the liveness
+    # watchdog's B0-12 fix closed for pipeline stalls). Mirrors
+    # liveness_watchdog._record_stall_delivery: ONE `alert_sink_deliveries`
+    # row (status='logged_only' — recorded, not externally delivered) per
+    # BOOT, not per request — a 502 storm during an outage must not spam the
+    # table. The in-process flag resets on every restart (intentional: a
+    # restart is itself operator-visible + a fresh boot deserves a fresh
+    # signal if the condition recurs).
+    _consult_uninstallable_alerted = False
+
+    async def _record_consult_uninstallable_once(detail: str) -> None:
+        nonlocal _consult_uninstallable_alerted
+        if _consult_uninstallable_alerted:
+            return
+        _consult_uninstallable_alerted = True
+        try:
+            async with pg_store.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO alert_sink_deliveries (
+                        channel_name, sink_kind, sink_target, severity,
+                        attempt_number, status, payload_summary
+                    ) VALUES ($1, $2, $3, $4, 1, $5, $6::jsonb)
+                    """,
+                    "consult_uninstallable",   # channel_name
+                    "runtime",                 # sink_kind
+                    "operator",                # sink_target
+                    "high",                    # severity
+                    "logged_only",             # status: durable, not externally delivered
+                    json.dumps(
+                        {
+                            "kind": "consult_uninstallable",
+                            "detail": detail[:2000],
+                        },
+                        separators=(",", ":"),
+                    ),
+                )
+            logger.error(
+                "dapr_host.consult_uninstallable.recorded detail=%s", detail,
+            )
+        except Exception as exc:  # pragma: no cover — never crash the resolver
+            logger.warning(
+                "dapr_host.consult_uninstallable.record_failed err=%s", exc,
+            )
 
     # L-175 — tools registry for analyst kinds with a tools_whitelist.
     # The mapping is name → async callable taking the LLM-emitted args
@@ -1351,6 +1495,28 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 actor_id, exc,
             )
             return None
+
+        # #235: re-resolve the lazy qdrant/embedding/substrate-port singletons
+        # on EVERY deps build (this resolver runs on every actor cache-miss —
+        # a brand-new actor, an actor evicted by a descriptor-version bump, or
+        # the FIRST activation attempt after a boot race). Shadowing the outer
+        # `qdrant_client` / `embedding_service` / `substrate_query_port` names
+        # here means every site below this point (the consult/GATHER agency
+        # bindings' ToolContext.substrate, the grounding hook's embedder/qdrant,
+        # and the build_analyst_run_method kwargs) sees the FRESH snapshot for
+        # THIS build, not the frozen boot-time value — the direct fix for the
+        # 2026-07-23 outage (a consult actor that failed to activate during the
+        # race gets a real port on its NEXT activation attempt, no restart).
+        # Also re-stamp `standard_deps.extras` in place (same dict object every
+        # already-cached deterministic-kind actor's `kind_deps` refers to), so
+        # a recovered vector plane reaches cross_source_coalesce/dedup + the
+        # signal_embedder sweep on their next scheduled tick too.
+        qdrant_client = await _resolve_qdrant_client()
+        embedding_service = await _resolve_embedding_service()
+        substrate_query_port = await _resolve_substrate_query_port()
+        if isinstance(standard_deps.extras, dict):
+            standard_deps.extras["qdrant"] = qdrant_client
+            standard_deps.extras["embedding_service"] = embedding_service
 
         # A-3a (review G2): the consult kind's tool calls route through the
         # agency plane. Build the substrate_read binding BEFORE the kind
@@ -1594,6 +1760,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 substrate_query_port=substrate_query_port,  # W-3
                 embedding_service=embedding_service,  # L-114 — grounding embedder
                 qdrant_client=qdrant_client,  # S5-T3 — vector:world_context RAG
+                nlp_client=_lazy_nlp_client,  # reenrich_ner — NER-backfill sweep source
                 tools_registry=tools_registry,      # L-175
                 consult_agency_binding=consult_agency_binding,
                 # S5: the GATHER binding is passed so the runner engages the
@@ -1605,6 +1772,17 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 "analyst_deps_resolver.build_failed actor_id=%s err=%s",
                 actor_id, exc,
             )
+            # #235: the specific "consult_on_demand is uninstallable because
+            # the substrate port is absent" case deserves a DURABLE, once-
+            # per-boot operator signal — every other AnalystDepsBuildError
+            # (a malformed LLM ref, an unknown kind, ...) is an operator-
+            # authored descriptor problem the existing ERROR log already
+            # covers, so we scope this narrowly rather than durably
+            # recording every deps-build failure.
+            if ad.identity.kind == "consult_on_demand" and substrate_query_port is None:
+                await _record_consult_uninstallable_once(
+                    f"actor_id={actor_id} err={exc}"
+                )
             return None
 
         # Pull budget params from the descriptor's method block. Default
@@ -1758,6 +1936,26 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             alert_publish=nats_store.publish_json,
         )
 
+    # Task #236 RIDER: ``action_pack`` descriptors have no actor lifecycle
+    # (excluded from desired_resolver's ``_FAMILIES`` above), so a pack PUT
+    # never triggers dapr_actors.evict_analyst_deps_for_descriptor for the
+    # analysts that merely GRANT the pack — their cached deps keep serving
+    # the pre-PUT tool set until their OWN descriptor head also bumps (the
+    # live 2026-07-24 lens_diff "Tool get_lens_reads not found" incident).
+    # This WARNS on the drift every resync rather than silently serving it;
+    # see dapr_actors.warn_stale_pack_deps for the fuller recipe toward a
+    # real fix (a pack_id -> dependent-analyst reverse index).
+    async def _pack_version(pack_id: str) -> str | None:
+        from ..data.analysts.agency.binding import fetch_action_pack
+
+        pack = await fetch_action_pack(registry_client, pack_id)
+        return pack.identity.version if pack is not None else None
+
+    async def _pack_staleness_sweep() -> Any:
+        from .dapr_actors import warn_stale_pack_deps
+
+        return await warn_stale_pack_deps(_pack_version)
+
     reconcile_loop = ReconcileLoop(
         state_store=state_store,
         desired_resolver=desired_resolver,
@@ -1771,6 +1969,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             "source": TargetReconciler(),
         },
         reminder_gc=_reminder_gc_sweep,
+        pack_staleness_check=_pack_staleness_sweep,
     )
     # NOTE: the loop is CONSTRUCTED here but STARTED below, AFTER the
     # source-first planes populate AGENCY_HOLDER. A consult analyst's deps
@@ -1802,6 +2001,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # fact_extractor uses it only as an optional /extract fallback.
     _NLP_REQUIRED_KINDS = {"ner_multilingual", "classify"}
     _NLP_OPTIONAL_KINDS = {"fact_extractor"}
+    #: The only enrichment kind that hard-requires BOTH qdrant + embedding
+    #: (pipeline.py raises building it without them) — see pipeline.py's
+    #: "dedupe_tier_3" branch.
+    _VECTOR_REQUIRED_KINDS = {"dedupe_tier_3"}
 
     async def _source_enrichment_factory(sd: Any):
         enrichment = list(getattr(sd.pipeline, "enrichment", []) or [])
@@ -1833,6 +2036,38 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                     getattr(getattr(sd, "identity", None), "id", "?"), exc,
                 )
 
+        # #235: mirror the NLP pattern above for the qdrant/embedding pair —
+        # lazily (re-)resolve ONLY if this descriptor's chain needs them
+        # (dedupe_tier_3). Every other source's enrichment chain (the vast
+        # majority — language_detect/geocode/ner_multilingual/classify never
+        # touch the vector plane) pays zero extra registry round-trips and
+        # rides the boot-time snapshot unchanged (byte-for-byte the pre-#235
+        # behaviour for every non-vector chain). Named distinctly from the
+        # outer `qdrant_client` / `embedding_service` (rather than shadowing
+        # them) so there is no risk of an UnboundLocalError on the no-vectors
+        # path — Python would otherwise treat a conditionally-assigned same-
+        # named local as local for the WHOLE function body.
+        needs_vectors = bool(kinds & _VECTOR_REQUIRED_KINDS)
+        source_qdrant_client = qdrant_client
+        source_embedding_service = embedding_service
+        if needs_vectors:
+            source_qdrant_client = await _resolve_qdrant_client()
+            source_embedding_service = await _resolve_embedding_service()
+            if source_qdrant_client is None or source_embedding_service is None:
+                # A descriptor genuinely requiring dedupe_tier_3 must fail
+                # loud (build_filter_handler itself raises without both) —
+                # NOT degrade silently. Neither resolve call above caches a
+                # failure, so the NEXT source-deps resolution retries.
+                raise RuntimeError(
+                    "source_enrichment: dedupe_tier_3 requires BOTH a "
+                    f"qdrant_client (got {source_qdrant_client is not None}) "
+                    "and an embedding_service "
+                    f"(got {source_embedding_service is not None}) — neither "
+                    "was reachable when this source's enrichment chain was "
+                    "built. A later source-deps resolution will retry once "
+                    "the vector plane heals."
+                )
+
         def _nlp_client_factory() -> NlpServiceClient:
             if resolved_nlp_client is None:
                 raise RuntimeError(
@@ -1856,8 +2091,8 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                     if resolved_nlp_client is not None
                     else None
                 ),
-                qdrant_client=qdrant_client,
-                embedding_service=embedding_service,
+                qdrant_client=source_qdrant_client,
+                embedding_service=source_embedding_service,
                 secrets_resolve=_secrets_resolve,
                 # PIECE 2: the fact_extractor 'llm' backend routes through the
                 # analyst LLM plane; the relation backend ignores both. AGE
@@ -2044,9 +2279,19 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # temporal, audit_checkpointer. None of these are formal fields on
     # _RuntimeHandles (they were added incrementally); the lifespan +
     # SIGTERM path closes them best-effort via getattr() lookups.
+    #
+    # #235: stash the LAZY HOLDERS, not the boot-time qdrant_client /
+    # embedding_service snapshot locals. If the boot-time attempt failed
+    # (snapshot is None) but a LATER lazy resolution inside
+    # _analyst_deps_resolver succeeded, the snapshot locals stay stuck at
+    # None for the rest of bring_up_production_runtime's scope — reading
+    # them here would silently skip closing a client that IS live by the
+    # time the process shuts down (a connection/socket leak on every
+    # lazy-recovery event). `.cached` on each holder always reflects
+    # whatever actually got built, whenever it got built.
     handles.redis_store = redis_store  # type: ignore[attr-defined]
-    handles.qdrant_client = qdrant_client  # type: ignore[attr-defined]
-    handles.embedding_service = embedding_service  # type: ignore[attr-defined]
+    handles.qdrant_client_holder = _lazy_qdrant_client  # type: ignore[attr-defined]
+    handles.embedding_service_holder = _lazy_embedding_service  # type: ignore[attr-defined]
     handles.temporal_client = temporal_client  # type: ignore[attr-defined]
     handles.workflow_runtime = workflow_runtime  # type: ignore[attr-defined]
     handles.audit_checkpointer = audit_checkpointer  # type: ignore[attr-defined]

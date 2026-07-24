@@ -71,12 +71,20 @@ except Exception:  # pragma: no cover — dotenv optional
 import asyncpg
 
 from legba.data.config import PostgresConfig
+from legba.runtime.rag_rollback import (
+    DEFAULT_TOKEN_RISE_FRAC,
+    RollbackWindow,
+    evaluate_rollback,
+    record_rollback,
+)
 
 # The bounded RAG-expansion candidate units: grounding-enabled per-target
 # assessment units that emit citable product findings (kind='finding',
-# target_id set). Only `leadership_transition` is currently flipped on
-# (`vector:world_context` in its grounding.sources); the rest are the staggered
-# flip cohort this watch guards. Override with --units.
+# target_id set). LIVE STATE (2026-07-06): only `internal_stability` is currently
+# flipped on (`vector:world_context` in its grounding.sources);
+# `leadership_transition` was flipped then ROLLED BACK on 2026-07-03 (it is NOT
+# on now — only in its descriptor comments); `proliferation_watch` is off. The
+# rest are the staggered flip cohort this watch guards. Override with --units.
 BOUNDED_UNITS: tuple[str, ...] = (
     "leadership_transition",
     "escalation",
@@ -222,34 +230,46 @@ def _print_window(label: str, s: WindowStats, window: int) -> None:
     print(f"    avg latency/run            : {_fmt_latency(s)}")
 
 
+def _to_window(s: WindowStats) -> RollbackWindow:
+    """Adapt the watch's WindowStats to the shared rag_rollback.RollbackWindow so
+    the RULE lives in ONE place (legba.runtime.rag_rollback.evaluate_rollback)."""
+    return RollbackWindow(
+        n=s.n,
+        mean_faith=s.mean_faith,
+        low_faith_rate=s.low_faith_rate,
+        low_faith_count=s.low_faith_count,
+        tokens_mean=s.tokens_mean,
+    )
+
+
 def _evaluate_rollback(
     before: WindowStats, after: WindowStats, window: int
-) -> None:
-    """Print the DELTA + the pre-registered rollback verdict (a) OR (b)."""
+) -> "object":
+    """Print the DELTA + the pre-registered rollback verdict, and RETURN the shared
+    :class:`RollbackDecision` (so ``--enforce`` can actuate it). The rule itself is
+    :func:`legba.runtime.rag_rollback.evaluate_rollback` — the SAME code the runtime
+    guard uses, so the reporting verdict and the auto-rollback can never diverge."""
     print("  DELTA (after - before):")
     if before.mean_faith is not None and after.mean_faith is not None:
-        d_faith = after.mean_faith - before.mean_faith
-        print(f"    faithfulness   : {d_faith:+.3f}")
+        print(f"    faithfulness   : {after.mean_faith - before.mean_faith:+.3f}")
     else:
-        d_faith = None
         print("    faithfulness   : n/a (a window is empty)")
-    # low-faith rate ratio
     if before.low_faith_rate is not None and after.low_faith_rate is not None:
         if before.low_faith_rate > 0:
-            ratio = after.low_faith_rate / before.low_faith_rate
-            ratio_s = f"x{ratio:.2f}"
+            ratio_s = f"x{after.low_faith_rate / before.low_faith_rate:.2f}"
         else:
-            ratio = None
             ratio_s = (
                 "x inf (baseline low-faith rate is 0)"
                 if after.low_faith_rate > 0 else "x1.00 (both 0)"
             )
         print(f"    low-faith rate : {ratio_s}")
     else:
-        ratio = None
         print("    low-faith rate : n/a")
     if before.tokens_mean is not None and after.tokens_mean is not None:
-        print(f"    tokens/run     : {after.tokens_mean - before.tokens_mean:+,.0f}")
+        rise = ""
+        if before.tokens_mean > 0:
+            rise = f"  ({(after.tokens_mean - before.tokens_mean) / before.tokens_mean * 100:+.0f}%)"
+        print(f"    tokens/run     : {after.tokens_mean - before.tokens_mean:+,.0f}{rise}")
     else:
         print("    tokens/run     : n/a")
     if before.latency_mean is not None and after.latency_mean is not None:
@@ -257,23 +277,13 @@ def _evaluate_rollback(
     else:
         print("    latency/run    : n/a")
 
-    # Trigger (a): faithfulness drop >= 0.08 absolute.
-    trig_a = (
-        before.mean_faith is not None
-        and after.mean_faith is not None
-        and (before.mean_faith - after.mean_faith) >= FAITH_DROP_TRIGGER
+    decision = evaluate_rollback(
+        _to_window(before), _to_window(after), window=window,
     )
-    # Trigger (b): low-faith rate more than doubles. Zero-baseline noise guard:
-    # a clean baseline (rate 0) fires only with >= 2 post-flip low-faith rows.
-    if before.low_faith_rate is None or after.low_faith_rate is None:
-        trig_b = False
-    elif before.low_faith_rate > 0:
-        trig_b = after.low_faith_rate > 2.0 * before.low_faith_rate
-    else:
-        trig_b = after.low_faith_rate > 0 and after.low_faith_count >= 2
-
-    filled = before.n >= window and after.n >= window
     print("  ROLLBACK CHECK (rule: planning/RAG_EXPANSION_WATCH_2026-07-03.md):")
+    trig_a = any("faithfulness dropped" in r for r in decision.reasons)
+    trig_b = any("low-faith rate" in r for r in decision.reasons)
+    trig_c = any("tokens/run" in r for r in decision.reasons)
     da = (
         f"{before.mean_faith - after.mean_faith:+.3f} drop"
         if (before.mean_faith is not None and after.mean_faith is not None)
@@ -282,12 +292,12 @@ def _evaluate_rollback(
     print(f"    (a) faithfulness drop >= {FAITH_DROP_TRIGGER:.2f}? "
           f"{'YES' if trig_a else 'no'}  [{da}]")
     print(f"    (b) low-faith rate > 2x baseline? {'YES' if trig_b else 'no'}")
-    if trig_a or trig_b:
-        verdict = "ROLLBACK TRIGGERED"
-    else:
-        verdict = "PASS (no trigger)"
-    suffix = "" if filled else "  [PROVISIONAL — a window is UNDER-FILLED (< %d)]" % window
+    print(f"    (c) avg tokens/run rise >= {DEFAULT_TOKEN_RISE_FRAC * 100:.0f}%? "
+          f"{'YES' if trig_c else 'no'}")
+    verdict = "ROLLBACK TRIGGERED" if decision.triggered else "PASS (no trigger)"
+    suffix = "  [PROVISIONAL — a window is UNDER-FILLED (< %d)]" % window if decision.provisional else ""
     print(f"    => {verdict}{suffix}")
+    return decision
 
 
 def _parse_cutoff(raw: str) -> datetime:
@@ -300,6 +310,7 @@ def _parse_cutoff(raw: str) -> datetime:
 
 async def _report_unit(
     conn: asyncpg.Connection, unit: str, *, cutoff_raw: str | None, window: int,
+    enforce: bool = False,
 ) -> None:
     records = await conn.fetch(_ROWS_SQL, unit)
     rows = [
@@ -341,7 +352,22 @@ async def _report_unit(
     after = _stats(after_all[-window:])     # most recent N after the flip
     _print_window("BEFORE (pre-flip)", before, window)
     _print_window("AFTER  (post-flip)", after, window)
-    _evaluate_rollback(before, after, window)
+    decision = _evaluate_rollback(before, after, window)
+    # --enforce: ACTUATE a triggered rollback — persist the unit into the
+    # rag_rollback kill-switch so the runtime suppresses its BACKGROUND PRIORS
+    # block on the next grounding build (auto-revert, no descriptor PUT). Read-only
+    # against the substrate; the only write is the local rollback state file.
+    if enforce and getattr(decision, "triggered", False):
+        path = record_rollback(unit, reasons=list(getattr(decision, "reasons", [])))
+        if path:
+            print(f"  ENFORCE: recorded rollback for {unit!r} -> {path}")
+            print(f"           (runtime suppresses vector:world_context for {unit!r} on "
+                  "its NEXT run — the grounding hook re-checks per run, no restart needed)")
+        else:
+            print(f"  ENFORCE: rollback for {unit!r} NOT persisted — set "
+                  "LEGBA_RAG_ROLLBACK_STATE (or pin via LEGBA_WORLD_CONTEXT_DISABLED_UNITS)")
+    elif enforce:
+        print(f"  ENFORCE: no trigger — {unit!r} left enabled.")
 
 
 async def _amain(args: argparse.Namespace) -> int:
@@ -355,11 +381,14 @@ async def _amain(args: argparse.Namespace) -> int:
         if args.all_units:
             units = list(args.units) if args.units else list(BOUNDED_UNITS)
             for unit in units:
-                await _report_unit(conn, unit, cutoff_raw=None, window=args.n)
+                await _report_unit(
+                    conn, unit, cutoff_raw=None, window=args.n, enforce=args.enforce,
+                )
                 print()
         else:
             await _report_unit(
                 conn, args.unit, cutoff_raw=args.cutoff, window=args.n,
+                enforce=args.enforce,
             )
     finally:
         await conn.close()
@@ -380,6 +409,11 @@ def main() -> int:
                    help="comma-separated unit override for --all-units")
     p.add_argument("--n", type=int, default=DEFAULT_WINDOW,
                    help=f"trailing window size N (default {DEFAULT_WINDOW}; rule needs >=15)")
+    p.add_argument("--enforce", action="store_true",
+                   help="ACTUATE a triggered rollback: persist the unit into the "
+                        "rag_rollback kill-switch (needs LEGBA_RAG_ROLLBACK_STATE) so "
+                        "the runtime auto-reverts its world_context flip. Read-only "
+                        "against the substrate; without it the watch only reports.")
     args = p.parse_args()
     if args.units:
         args.units = [u.strip() for u in args.units.split(",") if u.strip()]

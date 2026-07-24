@@ -1,0 +1,91 @@
+# chronicle_assessor — the public-record tier: The Legba Report from inside the
+# platform (operator GO 2026-07-21; build spec planning/CHRONICLE_BUILD_2026-07-21.md).
+#
+# THIRD analyst id on the journal_assessor kind (the consolidator pattern):
+# ``_distill_tier`` maps this id → entry_kind='chronicle' in journal_entries —
+# append-only, OFF the fact/finding/nexus chain, V1 faithfulness verify fires on
+# every entry (the chronicle gate), judge-down honesty applies. NO publish edge
+# exists (the Ghost sink is deliberately absent — entries accumulate internally;
+# nothing leaves the rig).
+#
+# Voice: detached third-person chronicler (legba.prompts.chronicle_assessor) —
+# no first person, no apparatus, every factual assertion cited [[ref:uuid]].
+# Cadence: WEEKLY, Monday 06:00 UTC — deliberately OFF the 00:00/12:00 cadence
+# burst implicated in the actor-plane wedge (B0-13).
+# Model plane: $0 core for gather/voice/verify (the 2026-07-14 hard rule —
+# Anthropic is consult/deep_consult only).
+
+identity:
+  id: chronicle_assessor
+  name: Chronicle — The Public Record (The Legba Report)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: journal_assessor             # SAME kind module; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: chronicle_build
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick.
+  other_analysts: []
+  substrate:
+    direct_queries: false            # reads via granted packs only, governed
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  # COLON form ('module:ATTR') — a dotted path silently falls back to the kind
+  # default system prompt and loses the entire chronicler voice.
+  prompt_module: "legba.prompts.chronicle_assessor:CHRONICLE_SYSTEM"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the GATHER investigation
+      expected_family: llm_provider
+    verify:
+      # The chronicle gate: cited FACT claims graded post-persist by the V1
+      # faithfulness pass (perspective exempt, entry never mutated; critique
+      # row lands with analyzed_output_id = the entry id). $0 core plane.
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the chronicler VOICE
+      expected_family: llm_provider
+    max_tokens: 16384                 # a ~1,000-word entry + citations
+  budget_tokens_per_day: 1000000      # weekly deep agent — modest daily ceiling
+  gather:
+    max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling)
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "0 6 * * 1"      # weekly — Mondays 06:00 UTC, off the burst
+  cooldown_seconds: 518400            # 6d — below the 7d interval (the §11 trap)
+
+grounding:
+  enabled: true
+  scope: [slice_entities]             # global, like the journal/world tiers
+  sources: [substrate, situations, graph_structure]
+  static_candidates: [Iran, United States, Israel, Russia, Ukraine, China, Gaza, Sudan]
+  max_facts: 30
+
+# Grant invariant (§7.6): both packs are non-write-fact. journal_read = the
+# tower-top read surface (assessments, findings, situations, contentions,
+# journal delta); substrate_read adds the corpus citations lane
+# (search_corpus / read_document) so entries cite source documents. NO
+# journal_propose (the chronicle proposes nothing) and NO publish sink.
+action_packs:
+  - pack_id: journal_read
+  - pack_id: substrate_read
+
+outputs: []                           # JournalPayload → journal_entries
+                                      # (entry_kind='chronicle'); no sinks in v1

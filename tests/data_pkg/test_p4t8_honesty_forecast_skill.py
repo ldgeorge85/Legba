@@ -94,7 +94,14 @@ def _calibration_endpoint(fake_deps):
 
 
 def _fake_deps(data: dict):
-    row = {"id": "cal-1", "produced_at": "2026-06-30T00:00:00+00:00", "data": data}
+    # B0-3 (read-truth): the row's ``data`` column is the WHOLE FindingPayload
+    # dump as calibration_tracking writes it — the metrics blob sits one JSONB
+    # level down at ``data.data`` (the re-pointed route reads the nested dict).
+    row = {
+        "id": "cal-1",
+        "produced_at": "2026-06-30T00:00:00+00:00",
+        "data": {"title": "Calibration", "body": "…", "data": data},
+    }
     return SimpleNamespace(
         descriptor_registry=SimpleNamespace(pg=_FakePool(row))
     )

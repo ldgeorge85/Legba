@@ -6,19 +6,38 @@
 # was dispatchable but had NO active descriptor, so it never fired (D2: a built
 # deterministic leg with no cadence is a dark leg).
 #
-# The handler performs five non-destructive maintenance operations over the LIVE
+# The handler performs seven non-destructive maintenance operations over the LIVE
 # substrate via deps.pg_pool:
 #   1. mark entities with no signal_entity_links in 30d as gc_status=dormant
 #   2. flag trigram-similar co-occurring entity pairs as duplicate_candidate
 #   3. delete orphan signal_entity_links (rows pointing at a missing entity, or
 #      at an entity already merged away)
-#   4. auto-pause sources past the consecutive-failure threshold
+#   4. auto-pause sources past the consecutive-failure threshold (bound by the
+#      source's last PRODUCED signal, not raw poll-outcome rows — T-4a)
 #   5. (D25) quarantine orphan proposed_edges — flip `pending` edges whose
 #      source/target entity is absent from entity_profiles.canonical_name to
 #      status='orphaned'. These are exactly the rows integrity_sweep COUNTS as
 #      orphan_proposed_edges_source / _target (406/678 and rising) but never
 #      acted on; they can never promote, so they accreted forever. entity_gc now
 #      ACTS on the drift integrity_sweep flags.
+#   6. (E5) compact merged-entity edges — re-point a merged loser's OPEN
+#      nexus/fact endpoints onto the keeper's canonical_name (merge_pair only
+#      sets merged_into + folds aliases; the graph edges still carry the loser
+#      surface until this sweep re-points them).
+#   7. auto-unpause re-probe — sources op 4 auto-paused >= 24h ago get a
+#      CONTENT-FRESHNESS probe (walks the real handler's pull() through the
+#      same build_source_handler factory + SSRF-guarded fetch the live poll
+#      path uses, then reads each yielded Signal's own published_at — never
+#      HTTP status alone). A source only auto-unpauses when its newest item is
+#      BOTH newer than the auto-pause time AND within a 14-day recency window,
+#      mirroring the op-4 pause write in reverse (direct state flip + body key
+#      strip, never an API PUT) on success. Complementary self-heal for the
+#      latch that never re-probed (ukrinform/nasa.eonet — 8d+ lost to
+#      transient blips). Status-only gating was rejected live: voa.africa
+#      answers HTTP 200 with a well-formed, current-looking feed while every
+#      item has been frozen for 16 months (2026-07-23 night diagnostics) — an
+#      unpause on HTTP success alone would have resurrected a fossil and, on
+#      its cursor-less first poll, ingested all its stale items as "fresh".
 #
 # Modeled on analyst_integrity_sweep.yaml — a target-agnostic META deterministic
 # analyst: NO `targets` selector, so the cadence heartbeat is a SINGLE global run

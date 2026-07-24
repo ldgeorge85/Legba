@@ -98,6 +98,13 @@ _COMPOSITION_ANALYST_IDS = frozenset({
     "region_composition",
     "escalation_composition",
     "world_assessor",
+    # M18 (2026-07-06) — the cross_analyst_correlator is a META report producer
+    # too (analysis-of-analysis): its findings are contradiction/agreement/
+    # blind_spot meta-observations, NOT evolving situation frames. Exclude it from
+    # the situation clusterer for the SAME reason as the compositions (a report is
+    # not a situation) — its supersession is the dedicated write-path
+    # :func:`fold_prior_correlation_heads`, mirroring the composition fold.
+    "cross_correlator",
 })
 
 # Only findings produced no earlier than this many days ago are considered for
@@ -435,6 +442,145 @@ async def fold_prior_composition_heads(
         )
         closed += 1
     return closed
+
+
+# ---------------------------------------------------------------------------
+# M17 — LIVE cross_correlator-head fold (+ blind_spot decay)
+# ---------------------------------------------------------------------------
+#
+# The cross_analyst_correlator (like the compositions) is EXCLUDED from the
+# situation clusterer, so nothing folded its heads LIVE — every cadence left
+# ANOTHER open meta-observation head (the ~32-stale-head symptom, incl a now-false
+# blind_spot). Its findings carry a stable ``data['situation_signature']`` of the
+# form ``xcorr:<correlation_type>:<sorted target set>`` (derived by the kind). This
+# runs at the correlator WRITE path: (1) stamps the new head's column + closes
+# every OTHER open head of the SAME (analyst, xcorr-signature); (2) DECAYS stale
+# ``blind_spot`` heads — a blind_spot the correlator has STOPPED asserting (never
+# gets a same-signature successor) ages past a TTL and is retired to the new head.
+# APPEND-ONLY + idempotent (guarded by superseded_by IS NULL + ON CONFLICT).
+
+#: The raw data-payload signature prefix the correlator stamps — the guard that
+#: keeps this fold from ever touching a composition or first-order finding.
+_CORRELATION_RAW_SIG_PREFIX = "xcorr:"
+
+_CORRELATION_FOLD_PRODUCED_BY = "correlation_head_fold"
+
+
+async def fold_prior_correlation_heads(
+    conn: Any,
+    *,
+    analyst_id: str | None,
+    raw_signature: str | None,
+    new_head_id: Any,
+    blind_spot_ttl_hours: int | None = None,
+    reason: str = "correlation head supersession (M17)",
+) -> tuple[int, int]:
+    """Stamp the new correlator head's signature column, close prior SAME-signature
+    heads, and decay stale ``blind_spot`` heads. Returns ``(folded, decayed)``.
+
+    ``raw_signature`` is the ``xcorr:<correlation_type>:<targets>`` value the kind
+    stamps onto ``FindingPayload.data['situation_signature']``. Prior open heads
+    are matched on the PERSISTED payload (``data->'data'->>'situation_signature'``,
+    COALESCE the top level). No-op when an arg is missing or the signature is not a
+    correlation signature (so a composition / first-order finding is never touched).
+    """
+    if not (analyst_id and raw_signature and new_head_id):
+        return 0, 0
+    if not str(raw_signature).startswith(_CORRELATION_RAW_SIG_PREFIX):
+        return 0, 0
+    column_sig = f"{_COMPOSITION_SIG_COLUMN_PREFIX}{raw_signature}"
+    # Stamp the NEW head's column (the write path leaves it NULL for findings).
+    await conn.execute(
+        """
+        UPDATE analyst_outputs
+           SET situation_signature = $2
+         WHERE id = $1 AND situation_signature IS DISTINCT FROM $2
+        """,
+        new_head_id, column_sig,
+    )
+    # (1) Same-signature supersession — close every OTHER open head of this
+    #     analyst carrying the SAME xcorr signature.
+    prior = await conn.fetch(
+        """
+        SELECT id
+          FROM analyst_outputs
+         WHERE analyst_id = $1
+           AND kind = 'finding'
+           AND superseded_by IS NULL
+           AND id <> $2
+           AND COALESCE(
+                   data->'data'->>'situation_signature',
+                   data->>'situation_signature'
+               ) = $3
+        """,
+        analyst_id, new_head_id, raw_signature,
+    )
+    folded = 0
+    for row in prior:
+        await _link_supersession(
+            conn,
+            superseded_id=row["id"],
+            superseding_id=new_head_id,
+            situation_signature=column_sig,
+            reason=reason,
+            score=_EXACT_SCORE,
+            produced_by=_CORRELATION_FOLD_PRODUCED_BY,
+        )
+        folded += 1
+
+    # (2) blind_spot decay — retire an OLD open blind_spot head ONLY when its SCOPE
+    #     WAS REVISITED. The correlator emits exactly ONE finding per run by strict
+    #     priority (contradiction > blind_spot > agreement), so a STILL-OPEN gap
+    #     that keeps getting preempted by contradictions/agreements is never
+    #     re-emitted — a blanket age-sweep would then silently CLOSE a real,
+    #     still-open gap (adversarial FIX #1). Instead, a stale blind_spot H is
+    #     decayed only if a NEWER live cross_correlator head N exists whose
+    #     referenced-target set is a SUPERSET of (or equal to) H's — evidence the
+    #     correlator LOOKED at that scope again and did NOT re-raise the gap. An
+    #     un-revisited standing gap stays LIVE (age alone never closes it). The TTL
+    #     is the secondary floor. (Same-signature re-assertion is already step 1.)
+    decayed = 0
+    ttl = int(blind_spot_ttl_hours) if blind_spot_ttl_hours else 0
+    if ttl > 0:
+        stale = await conn.fetch(
+            """
+            SELECT h.id
+              FROM analyst_outputs h
+             WHERE h.analyst_id = $1
+               AND h.kind = 'finding'
+               AND h.superseded_by IS NULL
+               AND h.id <> $2
+               AND h.produced_at < NOW() - make_interval(hours => $3)
+               AND COALESCE(
+                       h.data->'data'->>'correlation_type',
+                       h.data->>'correlation_type'
+                   ) = 'blind_spot'
+               AND EXISTS (
+                   SELECT 1
+                     FROM analyst_outputs n
+                    WHERE n.analyst_id = $1
+                      AND n.kind = 'finding'
+                      AND n.superseded_by IS NULL
+                      AND n.id <> h.id
+                      AND n.produced_at > h.produced_at
+                      AND COALESCE(h.data->'data'->'xcorr_targets', '[]'::jsonb)
+                          <@ COALESCE(n.data->'data'->'xcorr_targets', '[]'::jsonb)
+               )
+            """,
+            analyst_id, new_head_id, ttl,
+        )
+        for row in stale:
+            await _link_supersession(
+                conn,
+                superseded_id=row["id"],
+                superseding_id=new_head_id,
+                situation_signature=column_sig,
+                reason="blind_spot decay (M17)",
+                score=_EXACT_SCORE,
+                produced_by=_CORRELATION_FOLD_PRODUCED_BY,
+            )
+            decayed += 1
+    return folded, decayed
 
 
 async def _fetch_findings(

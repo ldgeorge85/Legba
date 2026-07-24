@@ -51,16 +51,14 @@ def test_empty_host_blocked():
         assert_public_host("", 80)
 
 
-def test_guarded_transport_rejects_private_url():
+@pytest.mark.asyncio
+async def test_guarded_transport_rejects_private_url():
     import httpx
 
     from legba.data.sources._egress import SsrfGuardedTransport
 
     transport = SsrfGuardedTransport()
     req = httpx.Request("GET", "http://169.254.169.254/latest/meta-data/")
-    import asyncio
 
     with pytest.raises(EgressBlockedError):
-        asyncio.get_event_loop().run_until_complete(
-            transport.handle_async_request(req)
-        )
+        await transport.handle_async_request(req)

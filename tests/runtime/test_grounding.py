@@ -822,6 +822,31 @@ async def test_resolver_facts_sql_left_joins_contention_sidecar():
     assert "source_type = ANY($2::text[])" in facts_sql
 
 
+def test_preamble_includes_current_officeholder_anchor():
+    """M13(a): the curated current-officeholder anchor heads every built preamble
+    so a grounded assessor never mis-states the SITTING US president as former —
+    independent of whether "United States" is a resolved grounding candidate."""
+    f = GroundingFact(
+        subject="Iran", predicate="head of government", value="Masoud Pezeshkian",
+        valid_from=datetime(2024, 7, 28, tzinfo=timezone.utc),
+        source_type="seed", confidence=0.9,
+    )
+    preamble = build_grounding_preamble(
+        [f], [], now=datetime(2026, 7, 6, tzinfo=timezone.utc),
+    )
+    assert preamble is not None
+    assert "Donald Trump" in preamble
+    assert "do NOT refer to him as a" in preamble
+    # The anchor heads the fact list (before the resolved Iran fact).
+    assert preamble.index("Donald Trump") < preamble.index("Masoud Pezeshkian")
+
+
+def test_preamble_still_none_when_no_facts_or_nexuses():
+    """M13(a) must not change the empty-candidate contract — no facts AND no
+    nexuses still yields NO preamble (the anchor never emits a lone block)."""
+    assert build_grounding_preamble([], []) is None
+
+
 def test_grounding_fact_render_surfaced_winner_is_annotated():
     f = GroundingFact(
         subject="Country X", predicate="capital", value="Alpha",

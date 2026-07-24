@@ -27,6 +27,10 @@ import {
   ApiError,
   listConsultSessions,
   loadConsultSession,
+  loadConsultModel,
+  saveConsultModel,
+  CONSULT_MODEL_OPTIONS,
+  type ConsultModel,
   type ConsultSessionSummary,
 } from '@/lib/api'
 import { RecordLink } from '@/components/inspector/RecordLink'
@@ -56,6 +60,8 @@ interface ConsultResponse {
   uncertainty?: number | null
   unanswered_aspects?: string[]
   session_id?: string | null
+  // F1: which LLM plane answered ("opus"/"core"), echoed by the server.
+  model?: string | null
 }
 
 /** One streamed ReAct step frame off the SSE relay. */
@@ -79,6 +85,7 @@ interface ChatTurn {
   unansweredAspects?: string[]
   findingId?: string | null
   deep?: boolean
+  model?: string | null
 }
 
 const CONSULT_PATH = '/consult'
@@ -114,6 +121,8 @@ export default function ConsultPanel({ registration }: PanelProps) {
   const [question, setQuestion] = useState('')
   const [scope, setScope] = useState('')
   const [maxRounds, setMaxRounds] = useState(DEFAULT_ROUNDS)
+  // F1 model picker — the LLM plane this chat runs on; persisted across opens.
+  const [model, setModel] = useState<ConsultModel>(() => loadConsultModel())
   const [transcript, setTranscript] = useState<ChatTurn[]>([])
   const [liveSteps, setLiveSteps] = useState<StepFrame[]>([])
   const [loading, setLoading] = useState(false)
@@ -240,6 +249,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
         scope_predicate: scope.trim() || null,
         max_tool_rounds: maxRounds,
         mode,
+        model,
         request_id: requestId,
         messages: priorMessages,
         session_id: sessionId,
@@ -261,6 +271,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
           unansweredAspects: resp.unanswered_aspects,
           findingId: resp.finding_id,
           deep: mode === 'deep',
+          model: resp.model ?? model,
         },
       ])
     } catch (err) {
@@ -441,6 +452,15 @@ export default function ConsultPanel({ registration }: PanelProps) {
                   <div key={i} className="space-y-2" data-testid="consult-turn-assistant">
                     <div className="text-[11px] text-slate-400 flex items-center gap-2">
                       <span>Answer</span>
+                      {turn.model && (
+                        <span
+                          className="font-mono text-slate-500"
+                          data-testid="consult-answer-model"
+                          title="the LLM plane that produced this answer"
+                        >
+                          via {turn.model}
+                        </span>
+                      )}
                       {typeof turn.uncertainty === 'number' && (
                         <span className="font-mono text-slate-500">
                           uncertainty={turn.uncertainty.toFixed(2)}
@@ -594,6 +614,29 @@ export default function ConsultPanel({ registration }: PanelProps) {
               {error}
             </div>
           )}
+          {/* F1 model picker — which LLM plane answers this chat. */}
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <label htmlFor="consult-model" className="shrink-0">
+              Model
+            </label>
+            <select
+              id="consult-model"
+              value={model}
+              onChange={(e) => {
+                const m = e.target.value as ConsultModel
+                setModel(m)
+                saveConsultModel(m)
+              }}
+              className="bg-surface-200 border border-slate-700 rounded px-1.5 py-0.5 text-[11px]"
+              data-testid="consult-model"
+            >
+              {CONSULT_MODEL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="flex items-end gap-2">
             <textarea
               className="flex-1 bg-surface-200 border border-slate-700 rounded p-2 text-sm resize-none"

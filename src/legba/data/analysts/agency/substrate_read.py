@@ -51,6 +51,11 @@ SUBSTRATE_READ_TOOLS = (
     # tradecraft) via the port embedder (S5-T1) + S5-T2 collections. Read-only
     # BACKGROUND/method knowledge, not live substrate.
     "search_context",
+    # Stage 1 — the OpenSearch full-text corpus (index legba_signals_corpus):
+    # BM25 lexical search over the WHOLE raw body of every ingested signal +
+    # a by-id fetch of one signal's full indexed doc. Makes the corpus AGENTIC.
+    "search_corpus",
+    "read_document",
     "query_nexuses",
     "query_hypotheses",
     "get_timeline",
@@ -115,6 +120,16 @@ async def _call_port(
                 corpus=args.get("corpus"),
                 country=args.get("country"),
                 k=int(args.get("k", 6)),
+            )
+        elif name == "search_corpus":
+            out = await port.search_corpus(
+                query=str(args.get("query", "")),
+                filters=args.get("filters"),
+                size=int(args.get("size", 10)),
+            )
+        elif name == "read_document":
+            out = await port.read_document(
+                doc_id=str(args.get("doc_id", "")),
             )
         elif name == "query_nexuses":
             out = await port.query_nexuses(
@@ -181,6 +196,11 @@ async def _call_port(
                     if args.get("since_hours") is not None
                     else None
                 ),
+                # R1 / W2-T1: superseded findings excluded by default; opt in
+                # for history/audit reads.
+                include_superseded=str(
+                    args.get("include_superseded", False)
+                ).lower() in ("true", "1"),
                 limit=int(args.get("limit", 20)),
             )
         elif name == "list_situations":
@@ -246,6 +266,18 @@ async def search_context_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
     return await _call_port(call, ctx, "search_context")
+
+
+async def search_corpus_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "search_corpus")
+
+
+async def read_document_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "read_document")
 
 
 async def query_nexuses_tool(
@@ -328,6 +360,9 @@ def register_substrate_read_tools(registry: ToolRegistry) -> None:
     registry.register("vector_search", vector_search_tool)
     # S5-T4 — RAG over the curated reference corpora.
     registry.register("search_context", search_context_tool)
+    # Stage 1 — OpenSearch full-text corpus readers.
+    registry.register("search_corpus", search_corpus_tool)
+    registry.register("read_document", read_document_tool)
     registry.register("query_nexuses", query_nexuses_tool)
     registry.register("query_hypotheses", query_hypotheses_tool)
     registry.register("get_timeline", get_timeline_tool)
@@ -354,6 +389,8 @@ __all__ = [
     "inspect_entity_tool",
     "vector_search_tool",
     "search_context_tool",
+    "search_corpus_tool",
+    "read_document_tool",
     "query_nexuses_tool",
     "query_hypotheses_tool",
     "get_timeline_tool",

@@ -130,6 +130,42 @@ MAX_EVIDENCE_ITEMS: int = 3
 MAX_EVIDENCE_TEXT_CHARS: int = 600
 
 
+# F-1 (MASTER_PLAN 2026-07-13) — COMPOSE-TIME HEAD RE-RESOLUTION (freshness).
+#
+# The direct inputs a composition reads are ALWAYS current heads (the deduped
+# read gates ``f.superseded_by IS NULL``). But a composition head freezes its
+# lower-tier CITATIONS at its own tick: if a sub-finding it cited later REVERSES
+# (is superseded by a materially different current head), that reversal does not
+# propagate up until every intervening tier re-composes. The Italy staleness race
+# (2026-07-13): escalation ``ed158597`` (conf 0.90, "expulsions drive escalation
+# risk") reversed to ``f0cd1c87`` (conf 0.30, "no signs of near-term escalation")
+# at 00:44; the country→region→world heads composed before the propagation caught
+# up, so the world assessment cited the SUPERSEDED high-escalation reading.
+#
+# The fix: at compose time, walk each input head's ``derived_from`` lineage
+# (bounded) and flag any sub-finding SUPERSEDED by a materially-different head
+# AFTER the citing tier composed (a genuine post-hoc reversal, not routine
+# re-run churn). Surface the flags as a directive FRESHNESS ADVISORY prepended to
+# the prompt (the model demotes/caveats the stale framing) + a trace ledger.
+# Strictly ADDITIVE and FAIL-SAFE — a freshness-pass error never breaks a compose.
+FRESHNESS_MAX_DEPTH: int = 4
+"""How many lineage hops down from an input head the freshness walk descends
+(world → region → country → unit reaches the unit findings at depth 3)."""
+
+FRESHNESS_MAX_NODES: int = 400
+"""Hard cap on total lineage findings the walk fetches per slice (bounds cost;
+signal/fact lineage ids never match the ``kind='finding'`` fetch and drop out)."""
+
+FRESHNESS_MATERIAL_CONF_DELTA: float = 0.25
+"""A superseded sub-finding is a MATERIAL stale-root only if its current
+successor's confidence differs by at least this much — filters routine re-run
+churn (stable confidence) from genuine reversals (Italy was 0.90 → 0.30)."""
+
+FRESHNESS_MAX_ADVISORY: int = 6
+"""Cap on the compact per-target advisory rendered into the prompt (the full,
+per-(unit,target) ledger still lands in the trace ``data.freshness``)."""
+
+
 # P3 per-COUNTRY composition — verify-floor gate.
 #
 # When this synth runs TARGET-SCOPED (a per-country composition descriptor with a
@@ -225,6 +261,23 @@ REGION_MODE_COUNTRY_FALLBACK: str = "country_fallback"
 
 REGION_MODE_GAP: str = "gap"
 """No region read AND no country reads → an honest, NAMED gap."""
+
+REGION_MODE_THEMATIC: str = "thematic"
+"""B0-4 (MASTER_PLAN 2026-07-10): a target-LESS cross-region thematic head
+(e.g. escalation_composition) admitted into the world slice as a labeled
+cross-region block — the world's one LEGAL way to carry a claim spanning
+regions. Verify-floored like every other input; a weak thematic head is
+floored out, never injected."""
+
+REGION_MODE_THEMATIC_GAP: str = "thematic_gap"
+"""H-3c (MASTER_PLAN 2026-07-10 F/H/S, audit W6): a DECLARED thematic analyst
+(in the world's ``other_analysts`` roster, e.g. escalation_composition) that
+produced ZERO admitted rows this cycle — its head was floored out on
+faithfulness (a weak synthesis, correctly withheld) or is simply absent. Before
+H-3c this vanished SILENTLY (no coverage entry), so the world composed as if the
+thematic lane had never been wired. Now it is a NAMED gap — the same
+absence-honesty idiom as :data:`REGION_MODE_GAP` — so the world prose
+acknowledges the floored lane instead of implying full thematic coverage."""
 
 
 # S2-T4 THEMATIC composition — fuse ONE unit dimension across ALL desks.
@@ -644,6 +697,128 @@ def _coerce_uuid(raw: Any) -> UUID | None:
         return None
 
 
+def _extract_input_salience(row: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The stamped ``salience`` dict of a composition INPUT finding.
+
+    A finding's ``data`` column is the FindingPayload ENVELOPE, so the stamped
+    ``FindingPayload.data['salience']`` lands at ``data -> data -> salience``.
+    Returns that dict, or ``None`` when the input is unstamped / malformed (it
+    then contributes nothing to the sort or the propagation)."""
+    env = row.get("data")
+    if not isinstance(env, Mapping):
+        return None
+    inner = env.get("data")
+    if not isinstance(inner, Mapping):
+        return None
+    sal = inner.get("salience")
+    return sal if isinstance(sal, Mapping) else None
+
+
+def _input_salience_magnitude(row: Mapping[str, Any]) -> float:
+    """S-2b sort primary: the consequence magnitude stamped on a composition
+    input finding, or ``-1.0`` when unstamped (sorts LAST — unscored, never
+    mistaken for low-consequence). See ``signal_salience.magnitude_of``."""
+    from .signal_salience import magnitude_of
+
+    return magnitude_of(_extract_input_salience(row))
+
+
+def _render_salience_lead_block(sliced: Sequence[Mapping[str, Any]]) -> str:
+    """S-2b: a compact directive telling the composition model its sub-claim
+    blocks are ordered by CONSEQUENCE and to LEAD with the most consequential
+    development (or say why not). Returns ``""`` when NO input is scored (nothing
+    to order by yet — before S-1d propagates, the compose is byte-for-byte)."""
+    top_mag = -1.0
+    for row in sliced:
+        m = _input_salience_magnitude(row)
+        if m > top_mag:
+            top_mag = m
+    if top_mag < 0.0:
+        return ""
+    return (
+        "SALIENCE ORDERING — the sub-claim blocks below are ordered by "
+        "CONSEQUENCE (the `salience=` value on each attribution line, 0=trivial, "
+        "1=world-moving); block [[ref:1]] is the highest-consequence read this "
+        "cycle. LEAD your BLUF with the most consequential development, or state "
+        "explicitly why the lead sits elsewhere (e.g. a higher-consequence read "
+        "that is lower-confidence, or the top read being stale). Do NOT bury a "
+        "high-salience development beneath routine ones just because more blocks "
+        "mention the routine matter — magnitude is not vote-count."
+    )
+
+
+# S-3: the magnitude gap between the top input and the LEAD-cited input beyond
+# which the advisory flags a BURIED lead. 0.30 ≈ one full consequence band (e.g.
+# a kinetic 0.9 lead vs a routine-procurement 0.2 lead) — a real burial, not
+# ordinary hedging. Advisory-only; NEVER gates.
+_SALIENCE_LEAD_GAP: float = 0.30
+
+
+def _build_salience_check(
+    comp_salience: Mapping[str, Any],
+    sliced: Sequence[Mapping[str, Any]],
+    resolved_ords: Sequence[int],
+) -> dict | None:
+    """S-3 ADVISORY salience judge — did the composition's LEAD open on its
+    highest-consequence input?
+
+    ``_orient`` sorts the inputs by salience, so the top-magnitude input is
+    ``[[ref:1]]`` and ``comp_salience.magnitude`` is that top magnitude. The lead
+    citation is ``resolved_ords[0]`` (the FIRST in-range ``[[ref:N]]`` the body
+    cites, in first-appearance order). We compare the lead-cited input's
+    magnitude to the top; a gap beyond ``_SALIENCE_LEAD_GAP`` flags a BURIED lead
+    — the flattening/burial class j5 caught (a routine development led while a
+    world-moving one sat lower). This ABSORBS F-1's deferred semantic role: F-1's
+    Δconfidence proxy could not read consequence; this reads it directly.
+
+    ADVISORY: the verdict is a stamp on ``data.eval.salience_check`` — it NEVER
+    gates, floors, or alters confidence. Returns ``None`` (no stamp) only when
+    the composition carries no scored top input; an uncited lead yields a
+    ``pass=None`` (not-judgeable) verdict, not a silent skip."""
+    from .signal_salience import magnitude_of
+
+    top_mag = magnitude_of(comp_salience)
+    if top_mag < 0.0:
+        return None
+    top_title = comp_salience.get("top_title")
+    top_title = top_title[:160] if isinstance(top_title, str) else None
+    if not resolved_ords:
+        return {
+            "pass": None,
+            "top_magnitude": round(top_mag, 3),
+            "top_title": top_title,
+            "lead_ref": None,
+            "lead_magnitude": None,
+            "gap": None,
+            "reason": "no resolvable [[ref:N]] citation — the lead is not judgeable",
+        }
+    lead_ref = int(resolved_ords[0])
+    lead_row = sliced[lead_ref - 1] if 1 <= lead_ref <= len(sliced) else None
+    lead_mag_raw = _input_salience_magnitude(lead_row) if lead_row is not None else -1.0
+    lead_mag = None if lead_mag_raw < 0.0 else lead_mag_raw
+    gap = (top_mag - lead_mag) if lead_mag is not None else None
+    passed = (gap is None) or (gap <= _SALIENCE_LEAD_GAP)
+    if lead_mag is None:
+        reason = "lead citation carries no salience — not judged against consequence"
+    elif passed:
+        reason = f"lead opens on a top-consequence input (gap {round(gap, 3)})"
+    else:
+        reason = (
+            f"lead opens on ref {lead_ref} (magnitude {round(lead_mag, 3)}); a "
+            f"higher-consequence input exists (magnitude {round(top_mag, 3)}, "
+            f"gap {round(gap, 3)}) — possible burial"
+        )
+    return {
+        "pass": bool(passed),
+        "top_magnitude": round(top_mag, 3),
+        "top_title": top_title,
+        "lead_ref": lead_ref,
+        "lead_magnitude": (round(lead_mag, 3) if lead_mag is not None else None),
+        "gap": (round(gap, 3) if gap is not None else None),
+        "reason": reason,
+    }
+
+
 def _orient(
     inputs: Sequence[Mapping[str, Any]],
     *,
@@ -670,17 +845,26 @@ def _orient(
     contributes to the prompt because the LLM doesn't need the UUID. The
     lineage walker tolerates partial ``derived_from`` lists.
     """
-    # Newest-first; None timestamps sort last. Coerce produced_at to a string so
-    # a NULL/str value can never collide with datetime rows under `<` — the
-    # heterogeneous-key TypeError that hard-froze the inline_target assessors.
-    def _sort_key(row: Mapping[str, Any]) -> str:
+    # S-2b: order by CONSEQUENCE first, recency second. Primary = the input
+    # finding's stamped salience magnitude (max input salience, propagated up the
+    # tower); secondary = produced_at. An UNSTAMPED input gets magnitude -1.0 → it
+    # sorts LAST but keeps recency order within the unscored tail, so before S-1d
+    # stamps anything the order is byte-for-byte the prior newest-first behavior.
+    # produced_at is coerced to a string so a NULL/str value can never collide
+    # with datetime rows under `<` (the heterogeneous-key TypeError that once
+    # hard-froze the assessors). Both descend under reverse=True (highest
+    # magnitude, then newest, leads — so [[ref:1]] is the top-consequence input).
+    def _sort_key(row: Mapping[str, Any]) -> tuple[float, str]:
+        mag = _input_salience_magnitude(row)
         v = row.get("produced_at")
         if v is None:
-            return ""
-        if isinstance(v, str):
-            return v
-        iso = getattr(v, "isoformat", None)
-        return iso() if callable(iso) else str(v)
+            rec = ""
+        elif isinstance(v, str):
+            rec = v
+        else:
+            iso = getattr(v, "isoformat", None)
+            rec = iso() if callable(iso) else str(v)
+        return (mag, rec)
 
     ordered = sorted(inputs, key=_sort_key, reverse=True)
     if len(ordered) > cap:
@@ -783,9 +967,15 @@ def _render_user_prompt(
             eff = row.get("effective_confidence")
             conf_val = eff if eff is not None else confidence
             fid_part = f"finding_id={uid} " if uid is not None else ""
+            # S-2b: expose the input's CONSEQUENCE magnitude (0..1) so the model
+            # can distinguish a world-moving read from a routine one — the blocks
+            # are salience-ordered ([[ref:1]] = the top), and this makes the WHY
+            # legible. Omitted for an unstamped input (no consequence claim).
+            _sal_mag = _input_salience_magnitude(row)
+            sal_part = f" salience={_sal_mag:.2f}" if _sal_mag >= 0.0 else ""
             attribution = (
                 f"      analyst_id={analyst_id} {fid_part}"
-                f"effective_confidence={conf_val} produced_at={produced_at}"
+                f"effective_confidence={conf_val}{sal_part} produced_at={produced_at}"
             )
         else:
             attribution = (
@@ -1145,6 +1335,292 @@ async def read_other_analyst_findings(
 
 
 # ---------------------------------------------------------------------------
+# F-1 — compose-time head re-resolution (transitive freshness)
+# ---------------------------------------------------------------------------
+
+
+_FRESHNESS_FETCH_SQL: str = """
+    SELECT id, analyst_id, target_id, confidence, produced_at, superseded_by,
+           derived_from, left(title, 200) AS title
+      FROM analyst_outputs
+     WHERE id = ANY($1::uuid[]) AND kind = 'finding'
+"""
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """ISO-8601 a datetime-ish value; ``None``/malformed → ``None``."""
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        return iso()
+    return None
+
+
+async def _detect_stale_inputs(
+    conn,  # type: ignore[no-untyped-def]
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    max_depth: int = FRESHNESS_MAX_DEPTH,
+    max_nodes: int = FRESHNESS_MAX_NODES,
+    min_delta: float = FRESHNESS_MATERIAL_CONF_DELTA,
+) -> dict[str, Any] | None:
+    """Walk each input head's lineage for MATERIALLY-reversed sub-findings (F-1).
+
+    Bounded BFS over ``derived_from`` (findings only — signal/fact ids drop out
+    on the ``kind='finding'`` fetch). A lineage finding is a *stale-root* iff it
+    was SUPERSEDED and its current successor's confidence differs by
+    ``>= min_delta`` AND the supersession happened AFTER the finding that CITES
+    it composed (``succ.produced_at > parent.produced_at``) — i.e. a genuine
+    post-hoc reversal the citing tier could not have known about, not routine
+    re-run churn the read gate already resolved.
+
+    Returns a freshness dict ``{inputs_as_of, stale_roots, advisory}`` (or
+    ``None`` when there is nothing to report). The caller denormalizes it onto
+    every input row (mirroring ``_region_coverage``) so the DB-less ``_run`` can
+    render + trace it. NEVER mutates the substrate.
+    """
+    if not rows:
+        return None
+
+    # Seed the frontier with each input head's direct lineage children, tagged
+    # with the citing parent's produced_at (the input head itself).
+    frontier: list[tuple[UUID, Any]] = []
+    for row in rows:
+        parent_at = row.get("produced_at")
+        for child in (row.get("derived_from") or []):
+            uid = _coerce_uuid(child)
+            if uid is not None:
+                frontier.append((uid, parent_at))
+
+    visited: set[UUID] = set()
+    superseded_nodes: list[dict[str, Any]] = []
+    node_budget = max_nodes
+    depth = 0
+
+    while frontier and depth < max_depth and node_budget > 0:
+        # Collapse this level to unique, unvisited ids, keeping the EARLIEST
+        # citing-parent produced_at per node. If a finding is cited by both an
+        # early and a late parent, the EARLY citer is the one whose framing can
+        # be stale — so flag if the reversal postdates ANY citer (surfacing
+        # staleness beats suppressing it; the pass is advisory-only, never gates).
+        level_parent: dict[UUID, Any] = {}
+        for uid, parent_at in frontier:
+            if uid in visited:
+                continue
+            if uid not in level_parent:
+                level_parent[uid] = parent_at
+            else:
+                prev = level_parent[uid]
+                if parent_at is not None and (prev is None or parent_at < prev):
+                    level_parent[uid] = parent_at
+        if not level_parent:
+            break
+        level_ids = list(level_parent.keys())[:node_budget]  # hard budget cap
+        node_budget -= len(level_ids)
+        visited.update(level_ids)
+
+        fetched = await conn.fetch(_FRESHNESS_FETCH_SQL, level_ids)
+        next_frontier: list[tuple[UUID, Any]] = []
+        for r in fetched:
+            rid = r["id"] if isinstance(r["id"], UUID) else _coerce_uuid(r["id"])
+            if r["superseded_by"] is not None:
+                superseded_nodes.append(
+                    {
+                        "id": r["id"],
+                        "analyst_id": r["analyst_id"],
+                        "target_id": r["target_id"],
+                        "confidence": r["confidence"],
+                        "produced_at": r["produced_at"],
+                        "title": r["title"],
+                        "superseded_by": r["superseded_by"],
+                        "parent_at": level_parent.get(rid),
+                    }
+                )
+            # Descend regardless — a still-current node may cite a deeper reversal.
+            for child in (r["derived_from"] or []):
+                cuid = _coerce_uuid(child)
+                if cuid is not None and cuid not in visited:
+                    next_frontier.append((cuid, r["produced_at"]))
+        frontier = next_frontier
+        depth += 1
+
+    if not superseded_nodes:
+        return None
+
+    # Resolve each superseded node to its TERMINAL current head by hopping the
+    # supersession chain (not just ONE hop): a unit that re-reverses within the
+    # window (A → A' → A'') must be judged against A'' (the CURRENT reading) so
+    # the Δconfidence + the "reversed to" title reflect where the claim actually
+    # landed, not an intermediate. Bounded per hop, batched, cycle-safe.
+    chain_rows: dict[str, Any] = {}
+    to_fetch: list[UUID] = sorted(
+        {
+            _coerce_uuid(n["superseded_by"])
+            for n in superseded_nodes
+            if _coerce_uuid(n["superseded_by"]) is not None
+        },
+        key=str,
+    )
+    for _hop in range(max_depth + 2):  # a couple more than lineage depth = ample
+        pending = [u for u in to_fetch if str(u) not in chain_rows]
+        if not pending:
+            break
+        next_fetch: list[UUID] = []
+        for r in await conn.fetch(_FRESHNESS_FETCH_SQL, pending):
+            chain_rows[str(r["id"])] = r
+            if r["superseded_by"] is not None:
+                nxt = _coerce_uuid(r["superseded_by"])
+                if nxt is not None and str(nxt) not in chain_rows:
+                    next_fetch.append(nxt)
+        to_fetch = next_fetch
+
+    def _terminal_head(succ_uid: UUID | None) -> Any:
+        """Follow the supersession chain from ``succ_uid`` to the current head."""
+        if succ_uid is None:
+            return None
+        seen: set[str] = set()
+        cur = str(succ_uid)
+        last = chain_rows.get(cur)
+        while cur in chain_rows and cur not in seen:
+            seen.add(cur)
+            row = chain_rows[cur]
+            last = row
+            if row["superseded_by"] is None:
+                return row
+            nxt = _coerce_uuid(row["superseded_by"])
+            if nxt is None:
+                return row
+            cur = str(nxt)
+        return last  # deepest reachable (chain truncated by hop cap / cycle)
+
+    stale: list[dict[str, Any]] = []
+    for n in superseded_nodes:
+        succ = _terminal_head(_coerce_uuid(n["superseded_by"]))
+        if succ is None or succ["confidence"] is None:
+            continue  # can't judge materiality without the current head
+        parent_at = n["parent_at"]
+        succ_at = succ["produced_at"]
+        # Temporal gate: the reversal must post-date the finding that cites the
+        # superseded one, else the citer would have read the successor already.
+        if not (parent_at is not None and succ_at is not None and succ_at > parent_at):
+            continue
+        # Materiality gate — MAGNITUDE of the confidence swing only (a direction-
+        # agnostic proxy: an under-weighted risk that jumped up is as stale as an
+        # over-weighted one that dropped). It intentionally does NOT read semantic
+        # direction (a same-band re-scope with a big Δconf can trip it), so the
+        # advisory is CAPPED + per-target deduped to bound noise, and it only ever
+        # ANNOTATES (never gates). Semantic reversal detection is S-phase (salience).
+        old_conf = float(n["confidence"] or 0.0)
+        new_conf = float(succ["confidence"])
+        delta = abs(old_conf - new_conf)
+        if delta < min_delta:
+            continue
+        stale.append(
+            {
+                "unit": n["analyst_id"],
+                "target": n["target_id"],
+                "old_id": str(n["id"]),
+                "old_title": n["title"],
+                "old_confidence": round(old_conf, 3),
+                "new_id": str(succ["id"]),
+                "new_title": succ["title"],
+                "new_confidence": round(new_conf, 3),
+                "delta_confidence": round(delta, 3),
+                "superseded_at": _iso_or_none(succ_at),
+            }
+        )
+
+    if not stale:
+        return None
+
+    stale.sort(key=lambda s: s["delta_confidence"], reverse=True)
+    # Full ledger for the trace: dedupe by (unit, target), keep the sharpest.
+    seen_ut: set[tuple[Any, Any]] = set()
+    full: list[dict[str, Any]] = []
+    for s in stale:
+        key = (s["unit"], s["target"])
+        if key in seen_ut:
+            continue
+        seen_ut.add(key)
+        full.append(s)
+    # Compact prompt advisory: one line per TARGET (the sharpest reversal), capped.
+    seen_target: set[Any] = set()
+    advisory: list[dict[str, Any]] = []
+    for s in full:
+        if s["target"] in seen_target:
+            continue
+        seen_target.add(s["target"])
+        advisory.append(s)
+        if len(advisory) >= FRESHNESS_MAX_ADVISORY:
+            break
+
+    return {
+        "inputs_as_of": [
+            {
+                "id": str(_coerce_uuid(row.get("id")) or ""),
+                "as_of": _iso_or_none(row.get("produced_at")),
+            }
+            for row in rows
+        ],
+        "stale_roots": full,
+        "advisory": advisory,
+    }
+
+
+async def _attach_freshness(
+    conn,  # type: ignore[no-untyped-def]
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compose-time freshness re-resolution (F-1) — additive + fail-safe.
+
+    Denormalizes the freshness dict onto EVERY input row as ``_freshness`` (read
+    once from ``rows[0]`` by ``_run``, the ``_region_coverage`` precedent). On ANY
+    error the slice is returned unchanged — a composition is load-bearing and must
+    never break on the advisory pass.
+    """
+    if not rows:
+        return rows
+    try:
+        freshness = await _detect_stale_inputs(conn, rows)
+    except Exception:  # noqa: BLE001 — intentional fail-safe: never break a compose
+        logger.warning(
+            "meta_findings_synthesizer.freshness pass FAILED (non-fatal, "
+            "composition proceeds with no advisory)",
+            exc_info=True,
+        )
+        return rows
+    if freshness is not None:
+        for row in rows:
+            row["_freshness"] = freshness
+    return rows
+
+
+def _render_freshness_advisory_block(advisory: Sequence[Mapping[str, Any]]) -> str:
+    """Render the compact per-target stale-root advisory (F-1) for the prompt.
+
+    Directive, not decorative: the model is told to DEMOTE any framing resting on
+    the superseded reading. Empty advisory → empty string (no block, no data)."""
+    if not advisory:
+        return ""
+    lines = [
+        "FRESHNESS ADVISORY (compose-time re-resolution):",
+        "Since the findings below were composed, these underlying assessments were",
+        "SUPERSEDED by a materially different CURRENT head. Do NOT lead with, or",
+        "over-weight, any framing that rests on the superseded reading — prefer the",
+        "current reading and, if the earlier one shaped the inputs, say so plainly.",
+    ]
+    for s in advisory:
+        unit = str(s.get("unit") or "unit")
+        target = str(s.get("target") or "")
+        tgt = f" [{target}]" if target else ""
+        lines.append(
+            f'- {unit}{tgt}: "{s.get("old_title", "")}" (confidence '
+            f'{s.get("old_confidence")}) → SUPERSEDED by "{s.get("new_title", "")}" '
+            f"(confidence {s.get('new_confidence')}) at {s.get('superseded_at')}."
+        )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # T4 — CONTESTED FACTS read (world composition only)
 # ---------------------------------------------------------------------------
 #
@@ -1301,6 +1777,63 @@ def _render_region_coverage_block(coverage: Sequence[Mapping[str, Any]]) -> str:
         name = str(g.get("region_name") or g.get("region_id") or "(unknown region)")
         rid = str(g.get("region_id") or "")
         lines.append(f"- {name} ({rid}): no current read.")
+    return "\n".join(lines)
+
+
+def _render_world_aperture_block(coverage: Sequence[Mapping[str, Any]]) -> str:
+    """B0-10 — render the ALWAYS-ON aperture disclosure for the world compose.
+
+    The world view is composed from the platform's REGISTERED desk roster — a
+    bounded, operator-chosen sample (G20 + watch-tier states + any thematic
+    blocks) — not global coverage. Faithfulness verify is structurally silent
+    about what was never collected, so the sample bounds must be STATED in the
+    product, not implied. Unlike :func:`_render_region_coverage_block` (gaps
+    only), this renders whenever coverage exists: sample honesty is not an
+    exception path.
+    """
+    if not coverage:
+        return ""
+    regions = [
+        c for c in coverage
+        if str(c.get("mode")) in (REGION_MODE_REGION, REGION_MODE_COUNTRY_FALLBACK)
+    ]
+    gaps = [c for c in coverage if str(c.get("mode")) == REGION_MODE_GAP]
+    thematic = [c for c in coverage if str(c.get("mode")) == REGION_MODE_THEMATIC]
+    thematic_gaps = [
+        c for c in coverage if str(c.get("mode")) == REGION_MODE_THEMATIC_GAP
+    ]
+    lines = [
+        "",
+        "APERTURE (sample honesty — state this in the BLUF, do not imply "
+        "global coverage):",
+        f"- This view composes {len(regions)} grounded region read(s)"
+        + (f" + {len(thematic)} cross-region thematic block(s)" if thematic else "")
+        + (f", with {len(gaps)} named gap(s)" if gaps else "")
+        + (
+            f" and {len(thematic_gaps)} floored/absent thematic lane(s)"
+            if thematic_gaps
+            else ""
+        )
+        + ".",
+        "- The underlying sample is the platform's registered desk roster — a "
+        "bounded, operator-chosen set (G20 + watch-tier states), NOT global "
+        "coverage. Regions, crises, and states outside the roster are simply "
+        "not assessed here; say so rather than generalizing.",
+        "- Where a region is grounded by a single desk, describe THAT desk "
+        "(e.g. 'South Africa'), never the whole region.",
+    ]
+    # H-3c — a DECLARED cross-region thematic lane (e.g. escalation_composition)
+    # that produced no admitted read this cycle: its head was floored out on
+    # faithfulness (correctly withheld) or is absent. NAME it as unassessed so
+    # the world never implies a cross-region synthesis it does not have.
+    for tg in thematic_gaps:
+        name = str(tg.get("region_name") or tg.get("region_id") or "(thematic)")
+        lines.append(
+            f"- Thematic lane NOT available this cycle: {name} produced no "
+            "admitted read (its head was floored out on faithfulness, or is "
+            "absent). Do NOT infer or assert a cross-region synthesis for it; "
+            "name it as an unassessed lane."
+        )
     return "\n".join(lines)
 
 
@@ -1689,6 +2222,23 @@ async def _run(
                 desk_coverage = [c for c in dc if isinstance(c, Mapping)]
                 break
 
+    # F-1 (MASTER_PLAN 2026-07-13): the compose-time freshness re-resolution the
+    # READ_SLICE pass walked onto every input row (mirroring _region_coverage) —
+    # any lower-tier sub-finding SUPERSEDED by a materially different current head
+    # AFTER the tier that cited it composed (the Italy staleness race). Read once
+    # from the first row that carries it; harmlessly absent on a fresh/legacy slice.
+    freshness_meta: Mapping[str, Any] | None = None
+    for row in sliced:
+        fm = row.get("_freshness")
+        if isinstance(fm, Mapping):
+            freshness_meta = fm
+            break
+    freshness_advisory: list[Mapping[str, Any]] = []
+    if isinstance(freshness_meta, Mapping):
+        raw_adv = freshness_meta.get("advisory")
+        if isinstance(raw_adv, list):
+            freshness_advisory = [a for a in raw_adv if isinstance(a, Mapping)]
+
     # --- PLAN ----------------------------------------------------------
     user_prompt = _render_user_prompt(
         sliced, contributing_analysts, include_source_ids=is_composition
@@ -1699,10 +2249,34 @@ async def _run(
         _coverage_block = _render_region_coverage_block(region_coverage)
         if _coverage_block:
             user_prompt = user_prompt + "\n" + _coverage_block
+    # B0-10 (MASTER_PLAN 2026-07-10) — APERTURE honesty for the WORLD compose:
+    # the sample is the registered desk roster (operator-chosen), not global
+    # coverage. Rendered ALWAYS (not just on gaps) so the world prose names its
+    # own bounds — faithfulness verify is silent about what was never collected,
+    # so the aperture must be stated, not implied (review W8).
+    if world_composition and region_coverage:
+        _aperture_block = _render_world_aperture_block(region_coverage)
+        if _aperture_block:
+            user_prompt = user_prompt + "\n" + _aperture_block
     if desk_coverage:
         _desk_block = _render_desk_coverage_block(desk_coverage)
         if _desk_block:
             user_prompt = user_prompt + "\n" + _desk_block
+    # S-2b: PREPEND the salience-lead directive (composition only) so the model
+    # leads by CONSEQUENCE, not by which matter more blocks happen to mention.
+    # Prepended BEFORE the freshness block below, so the final order is
+    # [freshness → salience → findings] — freshness (demote stale) stays first.
+    if is_composition:
+        _sal_block = _render_salience_lead_block(sliced)
+        if _sal_block:
+            user_prompt = _sal_block + "\n\n" + user_prompt
+    # F-1: PREPEND the freshness advisory (a directive: demote/caveat any framing
+    # that rests on a since-superseded reading) so the model reads it BEFORE the
+    # findings — the earliest, highest-priority instruction in the user turn.
+    if freshness_advisory:
+        _fresh_block = _render_freshness_advisory_block(freshness_advisory)
+        if _fresh_block:
+            user_prompt = _fresh_block + "\n\n" + user_prompt
     steps: list[dict[str, Any]] = [
         {
             "phase": "orient",
@@ -1718,6 +2292,16 @@ async def _run(
             "prompt_chars": len(user_prompt),
             "prompt_module": PROMPT_MODULE_PATH,
             "composition": is_composition,
+        },
+        {
+            "phase": "freshness",
+            "kind": "reresolve_inputs",
+            "stale_roots": (
+                len(freshness_meta.get("stale_roots", []))
+                if isinstance(freshness_meta, Mapping)
+                else 0
+            ),
+            "advised": len(freshness_advisory),
         },
     ]
 
@@ -1771,6 +2355,37 @@ async def _run(
     # its clustering behavior is byte-for-byte unchanged.
     if composition_signature is not None:
         finding.data["situation_signature"] = composition_signature
+
+    # --- FRESHNESS LEDGER (F-1, composition only) ---------------------
+    # Record the compose-time re-resolution ledger — the input heads' as-of times
+    # + the superseded sub-findings we advised the model to demote — so verify /
+    # the journal / an operator can see the staleness the model was told about,
+    # whether or not the prose acted on it. Stamped only when a MATERIAL reversal
+    # was found (otherwise no key — the common fresh compose stays byte-for-byte).
+    if isinstance(freshness_meta, Mapping) and freshness_meta.get("stale_roots"):
+        finding.data["freshness"] = {
+            "inputs_as_of": freshness_meta.get("inputs_as_of", []),
+            "stale_roots": freshness_meta.get("stale_roots", []),
+            "advised": len(freshness_advisory),
+        }
+
+    # --- SALIENCE (S-1d, propagation) ---------------------------------
+    # Propagate CONSEQUENCE up the tower: this composition's salience = the MAX
+    # over its input findings' stamped ``data.salience`` (each already the max of
+    # ITS inputs, recursively down to the raw signal). The winner is forwarded
+    # unchanged, so the original top LEAF signal's identity (top_signal_id /
+    # top_title) reaches the world read — the S-3 judge can then ask "did the
+    # world lead with the highest-consequence event in the WHOLE tree". Fail-safe:
+    # unstamped inputs contribute nothing; if NONE is stamped, no key is written
+    # (byte-for-byte the pre-S compose).
+    from .signal_salience import max_salience as _max_salience
+
+    _input_saliences = [_extract_input_salience(row) for row in sliced]
+    _scored_inputs = [s for s in _input_saliences if s is not None]
+    _composition_salience = _max_salience(_scored_inputs)
+    if _composition_salience is not None:
+        _composition_salience["n_scored"] = len(_scored_inputs)
+        finding.data["salience"] = _composition_salience
 
     # --- CITE (composition only) --------------------------------------
     # Resolve the model's inline ``[[ref:N]]`` ORDINAL markers against the rendered
@@ -1846,6 +2461,29 @@ async def _run(
             "citations": len(citations),
             "refs_dropped": dropped_refs,
         })
+
+        # --- SALIENCE CHECK (S-3, advisory) ---------------------------
+        # Did the composition's LEAD open on its highest-consequence input? The
+        # inputs are salience-ordered so [[ref:1]] is the top; we compare the
+        # lead citation's magnitude to the top and stamp the verdict at
+        # data.eval.salience_check. ADVISORY — it never gates or alters the
+        # finding; it makes the burial/flattening class MEASURABLE per compose.
+        if _composition_salience is not None:
+            _salience_check = _build_salience_check(
+                _composition_salience, sliced, resolved_ords
+            )
+            if _salience_check is not None:
+                _eval_block = finding.data.get("eval")
+                if not isinstance(_eval_block, dict):
+                    _eval_block = {}
+                _eval_block["salience_check"] = _salience_check
+                finding.data["eval"] = _eval_block
+                steps.append({
+                    "phase": "salience_check",
+                    "kind": "advisory",
+                    "pass": _salience_check.get("pass"),
+                    "gap": _salience_check.get("gap"),
+                })
 
         # --- CORRELATION GUARD (S2-T4 T7) -----------------------------
         # Detect cited heads that rest on the SAME underlying wire signal (shared
@@ -2194,7 +2832,10 @@ async def _assemble_world_region_slice(
       * a present region head feeds the world directly (mode ``region``);
       * a region with NO head DEGRADES to its member country_composition heads
         (mode ``country_fallback``) — the same set the region compose would fuse;
-      * a region with neither is a GAP (mode ``gap``, 0 inputs).
+      * a region with neither is a GAP (mode ``gap``, 0 inputs);
+      * B0-4: a target-LESS head from a cross-region THEMATIC analyst in the
+        roster (e.g. escalation_composition) is admitted as a labeled block
+        (mode ``thematic``) — the world's one legal cited cross-region object.
 
     Every returned row is stamped with ``_region_id`` + ``_region_mode`` and — so
     the target-LESS world ``_run`` (which has NO DB access) can stamp the per-region
@@ -2223,9 +2864,19 @@ async def _assemble_world_region_slice(
         include_meta=True,
     )
     heads_by_region: dict[str, list[dict[str, Any]]] = {}
+    # B0-4 — target-LESS heads from cross-region THEMATIC analysts in the
+    # other_analysts roster (e.g. escalation_composition) are NOT dropped:
+    # they become a labeled thematic block, the world's one legal cited
+    # cross-region object. (Before B0-4 the `_is_region_target` filter
+    # silently discarded them after the verify-floored fetch.)
+    thematic_by_analyst: dict[str, list[dict[str, Any]]] = {}
     for r in region_rows:
         tid = str(r.get("target_id") or "")
         if not _is_region_target(tid):
+            aid = str(r.get("analyst_id") or "thematic")
+            r["_region_id"] = f"thematic:{aid}"
+            r["_region_mode"] = REGION_MODE_THEMATIC
+            thematic_by_analyst.setdefault(aid, []).append(r)
             continue
         r["_region_id"] = tid
         r["_region_mode"] = REGION_MODE_REGION
@@ -2301,6 +2952,46 @@ async def _assemble_world_region_slice(
     for tid, heads in heads_by_region.items():
         if tid not in roster_ids:
             combined.extend(heads)
+
+    # B0-4 — admit the cross-region THEMATIC heads (already verify-floored by
+    # the fetch) as labeled blocks + coverage entries. This is the tower top's
+    # one LEGAL cited cross-region object (e.g. escalation_composition): before
+    # this, a genuine world-level claim spanning regions had no input it could
+    # cite, so the world read was structurally anti-synthetic (review W1-W3).
+    for aid, rows in sorted(thematic_by_analyst.items()):
+        combined.extend(rows)
+        coverage.append(
+            {
+                "region_id": f"thematic:{aid}",
+                "region_name": f"{aid} (cross-region thematic)",
+                "mode": REGION_MODE_THEMATIC,
+                "input_count": len(rows),
+            }
+        )
+
+    # H-3c (MASTER_PLAN F/H/S, audit W6) — a DECLARED thematic analyst that
+    # produced ZERO admitted rows this cycle was floored out (weak faith) or is
+    # absent. It is NOT in ``thematic_by_analyst`` (no rows survived the fetch),
+    # so before H-3c it left NO trace and the world composed as if its lane
+    # (e.g. escalation_composition) had never been wired. Emit an HONEST, NAMED
+    # thematic gap — the same absence-honesty idiom as the region GAP above — so
+    # the aperture block names the floored lane instead of implying coverage.
+    # The region + country composition ids are the frame producers, not thematic
+    # lanes, so they are never counted as gaps here.
+    declared_thematic = [
+        aid for aid in region_analyst_ids
+        if aid not in (REGION_COMPOSITION_ANALYST_ID, COUNTRY_COMPOSITION_ANALYST_ID)
+    ]
+    for aid in sorted(set(declared_thematic)):
+        if aid not in thematic_by_analyst:
+            coverage.append(
+                {
+                    "region_id": f"thematic:{aid}",
+                    "region_name": f"{aid} (cross-region thematic)",
+                    "mode": REGION_MODE_THEMATIC_GAP,
+                    "input_count": 0,
+                }
+            )
 
     # Denormalize coverage onto every row so the DB-less world ``_run`` can read it.
     for row in combined:
@@ -2500,14 +3191,17 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # country_composition heads as a target-id SET (multi-country, world-shaped).
     if _is_region_target(target_filter):
         member_ids = await _resolve_region_member_target_ids(conn, str(target_filter))
-        return await read_other_analyst_findings(
+        return await _attach_freshness(
             conn,
-            analyst_ids=ids,
-            time_window_hours=time_window_hours,
-            limit=limit,
-            target_ids=member_ids,
-            verify_floor=_resolve_verify_floor(descriptor),
-            include_meta=True,
+            await read_other_analyst_findings(
+                conn,
+                analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                limit=limit,
+                target_ids=member_ids,
+                verify_floor=_resolve_verify_floor(descriptor),
+                include_meta=True,
+            ),
         )
 
     # THEMATIC branch (S2-T4) — a target-LESS run whose descriptor carries a
@@ -2518,13 +3212,16 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # presence is the discriminator; an early return leaves the world / per-country
     # / legacy switch below byte-for-byte. ``ids`` = other_analysts (the unit).
     if not target_filter and thematic_dimension(descriptor):
-        return await _assemble_thematic_unit_slice(
+        return await _attach_freshness(
             conn,
-            unit_analyst_ids=ids,
-            time_window_hours=time_window_hours,
-            limit=limit,
-            verify_floor=_resolve_verify_floor(descriptor),
-            desk_ids=thematic_desks(descriptor),   # S2-T5: dyad desk allow-list (None ⇒ all desks)
+            await _assemble_thematic_unit_slice(
+                conn,
+                unit_analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                limit=limit,
+                verify_floor=_resolve_verify_floor(descriptor),
+                desk_ids=thematic_desks(descriptor),   # S2-T5: dyad desk allow-list (None ⇒ all desks)
+            ),
         )
 
     # WORLD branch (S2-T3) — the target-LESS verify-declaring global meta = the
@@ -2533,12 +3230,15 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # gap), NOT the ~24 country heads directly. An early return, so the
     # per-country + legacy switch below is byte-for-byte the P3-T2 code.
     if not target_filter and _declares_verify(descriptor):
-        return await _assemble_world_region_slice(
+        return await _attach_freshness(
             conn,
-            region_analyst_ids=ids,
-            time_window_hours=time_window_hours,
-            limit=limit,
-            verify_floor=_resolve_verify_floor(descriptor),
+            await _assemble_world_region_slice(
+                conn,
+                region_analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                limit=limit,
+                verify_floor=_resolve_verify_floor(descriptor),
+            ),
         )
 
     # Two branches (BYTE-FOR-BYTE the P3-T2 per-country + legacy read):
@@ -2556,7 +3256,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         verify_floor = None
         include_meta = False
 
-    return await read_other_analyst_findings(
+    rows = await read_other_analyst_findings(
         conn,
         analyst_ids=ids,
         time_window_hours=time_window_hours,
@@ -2565,6 +3265,13 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         verify_floor=verify_floor,
         include_meta=include_meta,
     )
+    # F-1: annotate freshness for the PER-COUNTRY composition (``target_filter``
+    # set). The LEGACY global meta (``target_filter`` None here → ``target_id``
+    # None) stays byte-for-byte — no freshness pass, matching the standing
+    # "legacy read unchanged" discipline every branch above honors.
+    if target_filter:
+        rows = await _attach_freshness(conn, rows)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -2593,6 +3300,8 @@ __all__ = [
     "REGION_MODE_COUNTRY_FALLBACK",
     "REGION_MODE_GAP",
     "REGION_MODE_REGION",
+    "REGION_MODE_THEMATIC",
+    "REGION_MODE_THEMATIC_GAP",
     "REGION_TARGET_PREFIX",
     "SCHEMA_VERSION",
     "THEMATIC_DIMENSION_KEY",
@@ -2609,14 +3318,17 @@ __all__ = [
     "_WORLD_OVER_REGIONS_SYSTEM",
     "_assemble_thematic_unit_slice",
     "_assemble_world_region_slice",
+    "_attach_freshness",
     "_composition_signature",
     "_correlated_ordinal_components",
     "_correlation_guard",
     "_declares_verify",
+    "_detect_stale_inputs",
     "_extract_contested_markers",
     "_extract_ref_markers",
     "_is_region_target",
     "_render_contested_block",
+    "_render_freshness_advisory_block",
     "_render_desk_coverage_block",
     "_render_region_coverage_block",
     "_resolve_desk_roster",

@@ -117,6 +117,7 @@ Tests that actually compile the DSPy module use
 from __future__ import annotations
 
 import datetime
+import html
 import json
 import logging
 import os
@@ -132,6 +133,7 @@ from ..schemas.analyst import IndicatorEntry
 # S5 GATHER reuses consult's JSON-extraction + tool-ref helpers rather than
 # re-implementing them — same shape, one source of truth.
 from .consult_on_demand import (
+    _bounded_tool_json,
     _coerce_uuid_list,
     _extract_json,
     _refs_from_tool_result,
@@ -247,9 +249,36 @@ _MAX_INPUT_SIGNALS = 200        # hard backstop count (the token budget is the r
 _MAX_TITLE_CHARS = 200
 _MAX_SNIPPET_CHARS = 1500       # fuller per-article context (was 400)
 # #116(e): a COMPACT snippet persisted onto each citation entry (data['citations'])
-# — the verify judge's evidence text, kept far tighter than the prompt-render
-# snippet so the JSONB row and the judge prompt stay bounded.
-_CITATION_SNIPPET_CHARS = 300
+# — the verify judge's evidence text. It MUST cover everything the analyst could
+# have cited, so it tracks the render cap: now that fuller bodies (raw_body /
+# distilled_body) reach the prompt, a 300-char teaser-era cap would leave the judge
+# grading tail-of-body claims it cannot see → false faithfulness demotes. For the
+# ~97% teaser signals the body is shorter than this cap so nothing changes; the
+# extra length is spent only on the ~3% rich-body cited signals that need it.
+_CITATION_SNIPPET_CHARS = _MAX_SNIPPET_CHARS
+# Bounds on the GATHER-gathered [N] evidence rendered into the synthesis prompt
+# (Piece 1). A broad search_corpus can return 20+ rows; rendering them all as full
+# [N] blocks balloons the prompt so large the CORE plane returns an EMPTY synthesis
+# completion. Cap the citable/rendered gathered set + keep each block's preview
+# short (the FULL raw source_text stays in the citation entry for the verify judge).
+_GATHER_MAX_CITED_SIGNALS = 8
+_GATHER_BLOCK_SNIPPET_CHARS = 500
+# FAITHFULNESS TRUST BOUNDARY (2026-07): each citation ALSO carries the RAW
+# authoritative source text (``source_text``) so the verify judge can ground a
+# claim against the real article — NOT against ``distilled_body`` (the
+# signal_summarizer's LLM summary that the analyst reads via ``snippet``). Without
+# this, a summarizer hallucination (a claim present in distilled_body but absent
+# from the source) would be rubber-stamped, because the judge's evidence was built
+# with the SAME distilled-first precedence as the render. ``source_text`` is drawn
+# ONLY from the raw source — the SAME field the summarizer distilled from, widened
+# to cover message/full-text shapes (raw_body → text → body → content →
+# content_text → summary → description; NEVER distilled_body). It is carried only
+# for CITED signals (few per finding) so the generous cap is cheap. Sized to hold
+# most long-form articles WHOLE; when the cleaned source EXCEEDS the cap the
+# citation also carries ``source_truncated`` so the judge softens "absent =>
+# unsupported" to "contradicted => unsupported" on the excerpt. See
+# verify._marker_to_evidence.
+_SOURCE_TEXT_CHARS = 3200
 _DEFAULT_INPUT_TOKEN_BUDGET = 32000
 _CHARS_PER_TOKEN = 4            # rough estimate; we don't tokenize on the hot path
 # DQ P6 — cap on the grounding-preamble text persisted into the trace's
@@ -380,16 +409,43 @@ Respond with STRICT JSON, nothing else:
 )
 
 
+# Signal bodies from RSS content:encoded / full-text feeds arrive as raw HTML.
+# Strip to clean text at render (and in the citation-evidence snippet) so the LLM
+# reads prose, not markup, and the token budget isn't spent on tags. A light stdlib
+# strip is right here — these are feed-provided HTML fragments; full-page article
+# extraction (Stage 1/2) happens at fetch time via trafilatura, not here.
+_HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_WS_RE = re.compile(r"\s+")
+
+
+def _clean_body_text(text: str) -> str:
+    """Best-effort HTML→text: drop script/style, strip tags, unescape, collapse ws."""
+    if not text:
+        return ""
+    text = _HTML_SCRIPT_STYLE_RE.sub(" ", text)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    return _HTML_WS_RE.sub(" ", text).strip()
+
+
 def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     """Render ONE signal block (title + provenance + truncated snippet).
 
     Shared by the user-prompt renderer and the ORIENT token-budget estimator so
     the token accounting matches the bytes actually sent to the LLM.
     """
-    title = str(row.get("title") or "(untitled)")[:_MAX_TITLE_CHARS]
+    data = row.get("data")
+    # T-1b (M13): prefer the stored English translation (payload.title_en) over
+    # the raw title so a non-Latin signal renders English in the slice the LLM
+    # reads, not a transliterated surface. The slice reader carries the full
+    # payload under ``data``; a top-level ``title_en`` (agency read tools) wins too.
+    title_en = row.get("title_en") or (
+        data.get("title_en") if isinstance(data, dict) else None
+    )
+    title = str(title_en or row.get("title") or "(untitled)")[:_MAX_TITLE_CHARS]
     produced_at = row.get("produced_at")
     source = row.get("source_url") or ""
-    data = row.get("data")
     # `produced_at` is INGESTION (fetch) time, NOT the event date — label it
     # honestly and surface the article's own published date when present, so the
     # LLM can't read fetch-time as event-time (the world-assessor temporal-collapse
@@ -397,8 +453,15 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     published_at = data.get("published_at") if isinstance(data, dict) else None
     snippet = ""
     if isinstance(data, dict):
+        # Prefer a clean distilled derivative (Stage 2), then the fuller captured
+        # body (raw_body — content:encoded / full-text feeds carry the real article
+        # here, richer than the RSS teaser), falling back to the teaser. HTML-strip
+        # whichever we pick. `summary` stays in payload untouched; _marker_to_evidence
+        # uses this SAME precedence so the verify judge grades against what we render.
         snippet = (
-            data.get("summary")
+            data.get("distilled_body")
+            or data.get("raw_body")
+            or data.get("summary")
             or data.get("description")
             or data.get("content_text")
             or data.get("snippet")
@@ -406,7 +469,7 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
         )
         if not isinstance(snippet, str):
             snippet = str(snippet)
-        snippet = snippet[:_MAX_SNIPPET_CHARS]
+        snippet = _clean_body_text(snippet)[:_MAX_SNIPPET_CHARS]
     published_str = f" published={published_at}" if published_at else ""
     return (
         f"[{idx}] {title}\n"
@@ -473,6 +536,101 @@ def _normalize_citation_markers(text: str) -> str:
     return _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
 
 
+def _resolve_signal_id(raw_id: Any) -> str | None:
+    """Coerce a row's ``id`` to a canonical signal-UUID string, or ``None``.
+
+    A ``UUID`` is stringified directly; any other value is round-tripped through
+    ``UUID(str(...))`` (so a str id normalizes to canonical form) and yields
+    ``None`` when it is malformed / absent. A row with no resolvable id is still
+    indexed by the caller (id ``None``) so a marker counts as present-but-unmapped
+    rather than being silently swallowed — never a fabricated id.
+    """
+    if isinstance(raw_id, UUID):
+        return str(raw_id)
+    if raw_id is not None:
+        try:
+            return str(UUID(str(raw_id)))
+        except (ValueError, AttributeError):
+            return None
+    return None
+
+
+def _citation_entry(
+    *,
+    signal_id: str | None,
+    title: Any,
+    source: Any,
+    fields: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build ONE citation-index entry from a signal's id + title + source + body.
+
+    Shared by :func:`_build_citation_index` (the SLICE path — ``fields`` is the
+    signal row's ``data`` payload) and the GATHER citation-EXTENSION builder (the
+    CORPUS path — ``fields`` is an OpenSearch doc's flat ``_source``). Both field
+    maps carry the SAME body keys (distilled_body / raw_body / summary / …), so
+    the snippet + RAW source_text precedence is IDENTICAL — the faithfulness trust
+    boundary holds for a gathered corpus doc exactly as it does for a slice signal.
+
+    ``snippet`` is the analyst's WORKING text (distilled-first — what it read; the
+    #116(e) compact evidence text, same precedence + clean as ``_render_signal``).
+    ``source_text`` is the RAW authoritative source, DELIBERATELY excluding
+    ``distilled_body`` (our own LLM summary) so the verify judge grounds a claim
+    against the real article, catching a summarizer hallucination instead of
+    rubber-stamping it — the FAITHFULNESS TRUST BOUNDARY (see the note on
+    ``_SOURCE_TEXT_CHARS`` and ``verify._marker_to_evidence``).
+    """
+    snippet = ""
+    source_text = ""
+    source_truncated = False
+    if isinstance(fields, Mapping):
+        raw_snip = (
+            fields.get("distilled_body")
+            or fields.get("raw_body")
+            or fields.get("summary")
+            or fields.get("description")
+            or fields.get("content_text")
+            or fields.get("snippet")
+            or ""
+        )
+        if not isinstance(raw_snip, str):
+            raw_snip = str(raw_snip)
+        snippet = _clean_body_text(raw_snip)[:_CITATION_SNIPPET_CHARS]
+        # FAITHFULNESS TRUST BOUNDARY: the RAW authoritative source ONLY,
+        # DELIBERATELY excluding ``distilled_body``. The precedence covers the
+        # message/full-text shapes the summarizer distils from — raw_body (RSS
+        # content:encoded) → text (telegram, ~95% of volume) → body (discord /
+        # common_crawl) → content → content_text → summary → description — so the
+        # judge grounds on the SAME raw field. When the analyst read raw directly
+        # this coincides with ``snippet``; that's fine.
+        raw_source = (
+            fields.get("raw_body")
+            or fields.get("text")
+            or fields.get("body")
+            or fields.get("content")
+            or fields.get("content_text")
+            or fields.get("summary")
+            or fields.get("description")
+            or ""
+        )
+        if not isinstance(raw_source, str):
+            raw_source = str(raw_source)
+        cleaned_source = _clean_body_text(raw_source)
+        # Truncation-aware grounding (F1): flag when the cleaned source is longer
+        # than the cap, so the judge treats the stored text as an EXCERPT (a cited
+        # claim absent from the excerpt but present in the analyst summary is NOT
+        # demoted — the fuller article covered it). See _marker_to_evidence.
+        source_truncated = len(cleaned_source) > _SOURCE_TEXT_CHARS
+        source_text = cleaned_source[:_SOURCE_TEXT_CHARS]
+    return {
+        "signal_id": signal_id,
+        "title": str(title) if title is not None else None,
+        "source": str(source) if source else None,
+        "snippet": snippet or None,
+        "source_text": source_text or None,
+        "source_truncated": source_truncated,
+    }
+
+
 def _build_citation_index(
     sliced: list[Mapping[str, Any]],
 ) -> dict[int, dict[str, Any]]:
@@ -485,44 +643,20 @@ def _build_citation_index(
     chip without re-joining the substrate. Rows with no resolvable id are still
     indexed (id ``None``) so the parser can count a marker as present-but-unmapped
     rather than silently swallow it.
+
+    Each entry is built by :func:`_citation_entry` — the SAME builder the GATHER
+    citation-extension reuses for gathered corpus docs (Piece 1), keeping the
+    #116(e) snippet + FAITHFULNESS-TRUST-BOUNDARY source_text precedence in one
+    place. The slice row's body fields live under ``data``.
     """
     index: dict[int, dict[str, Any]] = {}
     for n, row in enumerate(sliced, start=1):
-        raw_id = row.get("id")
-        signal_id: str | None = None
-        if isinstance(raw_id, UUID):
-            signal_id = str(raw_id)
-        elif raw_id is not None:
-            try:
-                signal_id = str(UUID(str(raw_id)))
-            except (ValueError, AttributeError):
-                signal_id = None
-        title = row.get("title")
-        source = row.get("source_url")
-        # #116(e): capture a compact evidence SNIPPET (the signal's own
-        # summary/lede) alongside the title so the faithfulness judge can confirm
-        # a specific claim against the cited signal's CONTENT, not just its
-        # headline (a title alone is often too terse → a properly-cited clause is
-        # mis-graded down). Same field precedence _render_signal uses.
-        data = row.get("data")
-        snippet = ""
-        if isinstance(data, dict):
-            raw_snip = (
-                data.get("summary")
-                or data.get("description")
-                or data.get("content_text")
-                or data.get("snippet")
-                or ""
-            )
-            if not isinstance(raw_snip, str):
-                raw_snip = str(raw_snip)
-            snippet = raw_snip.strip()[:_CITATION_SNIPPET_CHARS]
-        index[n] = {
-            "signal_id": signal_id,
-            "title": str(title) if title is not None else None,
-            "source": str(source) if source else None,
-            "snippet": snippet or None,
-        }
+        index[n] = _citation_entry(
+            signal_id=_resolve_signal_id(row.get("id")),
+            title=row.get("title"),
+            source=row.get("source_url"),
+            fields=row.get("data"),
+        )
     return index
 
 
@@ -562,10 +696,20 @@ def _extract_citations(
             citation["title"] = entry["title"]
         if entry.get("source"):
             citation["source"] = entry["source"]
-        # #116(e): carry the compact evidence snippet so the verify judge sees the
-        # cited signal's CONTENT, not just its headline (see _marker_to_evidence).
+        # #116(e): carry the compact evidence snippet (the analyst's WORKING text,
+        # distilled-first) so the verify judge sees the cited signal's CONTENT, not
+        # just its headline (see _marker_to_evidence).
         if entry.get("snippet"):
             citation["snippet"] = entry["snippet"]
+        # FAITHFULNESS TRUST BOUNDARY: carry the RAW authoritative source text so the
+        # verify judge grounds a claim against the real article, not our distilled
+        # summary — catching a summarizer hallucination (see _marker_to_evidence).
+        # ``source_truncated`` rides along ONLY when True (payload-minimal; absent =>
+        # complete) so the judge softens "absent => unsupported" on an excerpt.
+        if entry.get("source_text"):
+            citation["source_text"] = entry["source_text"]
+            if entry.get("source_truncated"):
+                citation["source_truncated"] = True
         citations.append(citation)
     return citations, marker_count, len(citations)
 
@@ -1198,6 +1342,17 @@ GroundingHook = Callable[
 GROUNDING_RAG_CHUNK_SINK_KEY = "_grounding_rag_chunk_sink"
 
 
+# M22 — a SECOND per-run sink (a mutable dict) the grounding hook fills with the
+# opportunistic-RAG retrieval MEASUREMENT: ``world_context_retained`` (chunks that
+# cleared the floor), ``world_context_top_score`` (top retained cosine), and
+# ``world_context_min_score`` (the active floor). Folded into the ``inject_preamble``
+# trace event so the RAG retrieval distribution is auditable run-over-run (the
+# instrumentation #179 needs to re-measure the flip). Kept separate from the chunk-
+# id sink above so that sink's flat-id contract (and its tests) are unchanged; a
+# hook that ignores this key leaves the dict empty → no extra trace fields.
+GROUNDING_RAG_STATS_SINK_KEY = "_grounding_rag_stats_sink"
+
+
 # PER-PHASE LLM SPLIT — the gpt-oss "Reasoning: high" directive. vLLM does NOT
 # honor a ``reasoning_effort`` wire arg (vllm.py:106,:129); gpt-oss takes this
 # directive injected into the system/message content. It is prepended to the
@@ -1241,6 +1396,11 @@ _GATHER_SYSTEM_SUFFIX = (
     "ground your assessment. Each query must be a single strict-JSON object.\n"
     "Available tools:\n"
     "  - search_signals(query, [category], [limit]) — full-text signal search.\n"
+    "  - search_corpus(query, [filters], [size]) — BM25 keyword search over the "
+    "FULL raw body of every ingested signal (the whole corpus, not the recent "
+    "slice); a row's id is the signal id. Use it to FIND source documents.\n"
+    "  - read_document(doc_id) — the FULL stored body of ONE signal by its id "
+    "(a search_corpus / search_signals row id) when you need the whole article.\n"
     "  - query_facts([subject], [predicate], [value], [limit]) — fact store.\n"
     "  - inspect_entity(name) — entity profile + recent facts.\n"
     "  - query_nexuses([subject], [object], [rel_type], [polarity], [limit]) — "
@@ -1250,10 +1410,11 @@ _GATHER_SYSTEM_SUFFIX = (
     "  - get_timeline(subject, [limit]) — time-ordered facts ∪ signals.\n"
     "  - compare_targets(target_ids) — side-by-side substrate rollup.\n"
     "  - list_findings([target_id], [analyst_id], [severity], [since_hours], "
-    "[limit]) — the platform's OWN prior assessments/findings (analyst "
-    "products). Check these FIRST to build on and reconcile against earlier "
-    "work; cite the output_id. effective_confidence already folds in the "
-    "critic.\n"
+    "[include_superseded], [limit]) — the platform's OWN prior LIVE "
+    "assessments/findings (analyst products; superseded revisions are "
+    "excluded unless include_superseded=true). Check these FIRST to build on "
+    "and reconcile against earlier work; cite the output_id. "
+    "effective_confidence already folds in the critic.\n"
     "  - list_situations([status], [target_id], [since_hours], [limit]) — "
     "ongoing situation frames the platform has clustered (analysis-derived). "
     "Use a situation_id with query_hypotheses to pull its ACH rows.\n"
@@ -1264,7 +1425,11 @@ _GATHER_SYSTEM_SUFFIX = (
     "Protocol:\n"
     '  - To query, reply with strict JSON: {"tool": "<name>", "args": {...}}\n'
     '  - When you have gathered enough, reply with: {"done": true}\n'
-    "  - Do not write the finding yet — you will be asked for it after gathering."
+    "  - Do not write the finding yet — you will be asked for it after gathering.\n"
+    "  - The full-text source documents that search_corpus / read_document return "
+    "are added to your context NUMBERED [N] (continuing after the input signals). "
+    "In the finding you write next, cite each numbered source you rely on with [N] "
+    "exactly like the input signals, and list that source's signal id in `evidence`."
 )
 
 # SEAM #22 — external + write tool guidance, spliced into the GATHER suffix only
@@ -1296,6 +1461,14 @@ _WRITE_TOOLS_SUFFIX = (
 # GATHER read tools — the substrate_read pack's tool surface (S4).
 _GATHER_READ_TOOLS = (
     "search_signals",
+    # Stage 1 — OpenSearch full-text corpus readers. Both are in the
+    # substrate_read pack (SUBSTRATE_READ_TOOLS); listing them here is what makes
+    # the inline_target GATHER loop RECOGNIZE + read-route them, so a corpus-mining
+    # analyst (corpus_researcher) can actually search + read the full-text corpus.
+    # Their result signals are then numbered [N]-citable (see
+    # ``_gathered_signals_from_result``).
+    "search_corpus",
+    "read_document",
     "query_facts",
     "inspect_entity",
     "vector_search",
@@ -1335,6 +1508,77 @@ _GATHER_WRITE_TOOLS = (
 # substrate_read binding; a write/web tool with no binding is reported as an
 # unbound tool (a loud no-op folded back to the planner), never an ungoverned call.
 _GATHER_TOOLS = _GATHER_READ_TOOLS + _GATHER_WEB_TOOLS + _GATHER_WRITE_TOOLS
+
+
+# Piece 1 — GATHER tools whose result ROWS are substrate SIGNALS carrying a REAL
+# corpus BODY (a resolvable signal id + doc fields incl raw_body), so each
+# newly-seen result signal is numbered and becomes [N]-citable in the finding
+# (see ``_gathered_signals_from_result``). ONLY ``search_corpus`` /
+# ``read_document`` qualify — they are special-cased below because their doc
+# fields (with raw_body) sit under ``source`` / ``document``.
+#
+# ``_GATHER_SIGNAL_ROW_TOOLS`` (the generic rows-with-id numbering path) is
+# DELIBERATELY EMPTY. ``search_signals`` is EXCLUDED even though its rows carry a
+# signal id: its Postgres-FTS projection has NO body field (only id/title/category/
+# source_url/rank), so a numbered [N] citation to it would carry ``source_text=
+# None`` → a TITLE-ONLY citation → a spurious faithfulness DEMOTION for the live
+# agentic units that bind substrate_read + gather. So search_signals stays a
+# prose-summary tool exactly as before this change (no regression); it already
+# returns a ``refs`` list, so its rows still extend lineage the normal way. Every
+# OTHER read tool (query_facts / query_nexuses / list_situations / list_findings /
+# …) returns facts / relationships / products whose ids are NOT signal ids and
+# likewise stay UNnumbered — numbering one would fabricate an ungroundable citation.
+_GATHER_SIGNAL_ROW_TOOLS: tuple[str, ...] = ()
+
+
+def _gathered_signals_from_result(
+    tool_name: str, tool_result: Mapping[str, Any],
+) -> list[tuple[Any, Mapping[str, Any]]]:
+    """Extract ``(raw_signal_id, doc_fields)`` pairs from a SIGNAL-bearing tool
+    result, for numbering as [N]-citable gathered citations (Piece 1).
+
+    Per-tool result shapes (ONLY the corpus readers, which carry a REAL body):
+      * ``search_corpus`` — ``result['rows']``; each row is
+        ``{id, score, source: {…doc fields incl raw_body…}}`` (OpenSearch ``_source``).
+      * ``read_document`` — ``{status, doc_id, document: {…doc fields…}}``; mined
+        ONLY when ``status == 'found'``.
+      * the generic rows-with-id readers (:data:`_GATHER_SIGNAL_ROW_TOOLS`, now
+        EMPTY) — reserved extension point; ``search_signals`` is DELIBERATELY not
+        here (its FTS rows carry no body → a title-only citation would demote).
+
+    A non-signal tool (query_facts / list_situations / search_signals / …), an
+    errored result, or a corpus reader that returned no rows yields ``[]`` — it is
+    never numbered (it stays a prose summary in the GATHER preamble).
+    """
+    if not isinstance(tool_result, Mapping) or "error" in tool_result:
+        return []
+    out: list[tuple[Any, Mapping[str, Any]]] = []
+    if tool_name == "read_document":
+        if tool_result.get("status") == "found":
+            raw_id = tool_result.get("doc_id")
+            doc = tool_result.get("document")
+            if raw_id is not None:
+                out.append((raw_id, doc if isinstance(doc, Mapping) else {}))
+        return out
+    if tool_name == "search_corpus":
+        for row in tool_result.get("rows") or []:
+            if not isinstance(row, Mapping):
+                continue
+            raw_id = row.get("id")
+            if raw_id is None:
+                continue
+            src = row.get("source")
+            out.append((raw_id, src if isinstance(src, Mapping) else {}))
+        return out
+    if tool_name in _GATHER_SIGNAL_ROW_TOOLS:
+        for row in tool_result.get("rows") or []:
+            if not isinstance(row, Mapping):
+                continue
+            raw_id = row.get("id")
+            if raw_id is None:
+                continue
+            out.append((raw_id, row))
+    return out
 
 
 def _gather_system_suffix(
@@ -1493,7 +1737,10 @@ async def _gather(
     gather_system: str | None = None,
     extra_read_tools: tuple[str, ...] = (),
     extra_write_tools: tuple[str, ...] = (),
-) -> tuple[str, dict[str, int], list[UUID], list[dict[str, Any]]]:
+    base_offset: int = 0,
+) -> tuple[
+    str, dict[str, int], list[UUID], list[dict[str, Any]], dict[int, dict[str, Any]]
+]:
     """Run the bounded GATHER tool-call loop, returning the enrichment.
 
     Engages ONLY when ``binding`` is wired (the EFFECTIVE-pack opt-in — the
@@ -1514,7 +1761,18 @@ async def _gather(
     planner names without a wired binding is a clean "unbound" no-op folded back
     to the planner — never an ungoverned call.
 
-    Returns ``(gathered_context, usage, refs, gather_steps)``:
+    Piece 1 — CITE the gathered corpus: SIGNAL-bearing tool results
+    (``search_corpus`` / ``read_document`` / the rows-with-id readers) are mined
+    for their result signals via :func:`_gathered_signals_from_result`. Each
+    newly-seen signal is assigned a STABLE, dedup'd number ``N = base_offset +
+    running_index`` (1-based within gathered, continuing after the ``base_offset``
+    slice signals numbered ``[1..base_offset]``), rendered as a numbered ``[N]``
+    block in the preamble so the model can cite it, AND recorded in the returned
+    ``citation_extension`` (shaped exactly like ``_build_citation_index``'s
+    entries) so REFLECT can resolve the ``[N]`` marker back to the source. A
+    signal returned by two calls/rounds keeps its FIRST assigned N (no dup number).
+
+    Returns ``(gathered_context, usage, refs, gather_steps, citation_extension)``:
       * ``gathered_context`` — a "SUBSTRATE INVESTIGATION" preamble built from
         the tool results, to PREPEND to the synthesis prompt (empty string when
         nothing useful was gathered).
@@ -1522,11 +1780,23 @@ async def _gather(
         the run's total so the budget records it).
       * ``refs`` — substrate UUIDs the tools returned (extend ``derived_from``).
       * ``gather_steps`` — trace steps appended to ``intermediate_steps``.
+      * ``citation_extension`` — ``{N -> citation entry}`` for the gathered
+        signals (keyed ``[base_offset+1 ..]``); the caller MERGES it into the
+        slice-built citation index before ``_extract_citations`` so a ``[N]``
+        marker citing a gathered corpus doc resolves (the faithfulness fix).
     """
     aggregate_usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
     refs: list[UUID] = []
     gather_steps: list[dict[str, Any]] = []
     tool_summaries: list[str] = []
+    # Piece 1 — the [N]-citable gathered corpus. ``gathered_seen`` maps a gathered
+    # signal's id → its assigned N (stable, dedup'd, first-wins across rounds);
+    # ``citation_extension`` mirrors ``_build_citation_index``'s entry shape keyed
+    # by that N; ``gathered_blocks`` are the numbered ``[N] <title> — <snippet>``
+    # preamble lines the model reads so it can cite them.
+    gathered_seen: dict[str, int] = {}
+    citation_extension: dict[int, dict[str, Any]] = {}
+    gathered_blocks: list[str] = []
 
     # Budget gate BEFORE gather (degrade-not-drop): skip the extra rounds, not
     # the finding, when the per-day cap has no headroom.
@@ -1540,7 +1810,7 @@ async def _gather(
             step = {"phase": "gather", "kind": "skipped_budget"}
             steps.append(step)
             gather_steps.append(step)
-            return "", aggregate_usage, refs, gather_steps
+            return "", aggregate_usage, refs, gather_steps, citation_extension
 
     # A NEW llm_planner kind (the journal_assessor, plan §5/§4.9) reaches its
     # OWN read tools through this loop. Those tools are NOT in inline_target's
@@ -1702,7 +1972,8 @@ async def _gather(
                 {
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps(tool_result)[:4000],
+                    # R2 / W2-T3: JSON-safe cut + explicit truncated marker.
+                    "content": _bounded_tool_json(tool_result, 4000),
                 },
             ]
             continue
@@ -1751,7 +2022,56 @@ async def _gather(
         for r in new_refs:
             if r not in refs:
                 refs.append(r)
-        if ok:
+        # Piece 1 — number the SIGNAL-bearing results so they are [N]-citable. A
+        # newly-seen gathered signal gets the next N (continuing after the
+        # base_offset slice signals), a numbered preamble block, and a
+        # citation-extension entry; a signal seen in a prior call keeps its FIRST
+        # N (dedup). A non-signal tool (or a signal reader that returned no rows)
+        # falls through to the existing prose summary so the model still sees the
+        # query outcome.
+        signal_pairs = _gathered_signals_from_result(tool_name, tool_result)
+        for raw_id, fields in signal_pairs:
+            key = str(raw_id)
+            if key in gathered_seen:
+                continue
+            if len(gathered_seen) >= _GATHER_MAX_CITED_SIGNALS:
+                # BOUND the numbered/rendered gathered set. A broad search_corpus
+                # can return 20+ rows; rendering them ALL as full [N] blocks
+                # balloons the synthesis prompt so large the CORE plane returns an
+                # EMPTY completion (observed live). Cap the citable/rendered set to
+                # the top matches — extra results still informed the loop but are
+                # not cited. Applies across rounds (the guard re-checks each time).
+                break
+            n = base_offset + len(gathered_seen) + 1
+            gathered_seen[key] = n
+            sig_id = _resolve_signal_id(raw_id)
+            entry = _citation_entry(
+                signal_id=sig_id,
+                title=fields.get("title"),
+                source=fields.get("canonical_url") or fields.get("source_url"),
+                fields=fields,
+            )
+            citation_extension[n] = entry
+            # The preamble block is the model's PREVIEW to decide citations — keep
+            # it short (the FULL raw source_text is in ``entry`` for the verify
+            # judge). A long per-block snippet × many blocks is the context bloat.
+            gathered_blocks.append(
+                f"[{n}] {entry.get('title') or '(untitled)'} — "
+                f"{(entry.get('snippet') or '')[:_GATHER_BLOCK_SNIPPET_CHARS]}"
+            )
+            # L1 lineage: search_corpus / read_document carry NO ``refs`` key, so
+            # without this a [N]-cited corpus doc never reaches the finding's
+            # derived_from. A numbered gathered signal IS a real substrate ref the
+            # finding derives from — fold its id into refs (search_signals already
+            # returns refs and is not numbered, so it is unaffected).
+            if sig_id is not None:
+                try:
+                    _cuid = UUID(sig_id)
+                except (ValueError, TypeError):
+                    _cuid = None
+                if _cuid is not None and _cuid not in refs:
+                    refs.append(_cuid)
+        if ok and not signal_pairs:
             tool_summaries.append(
                 f"{tool_name}({json.dumps(dict(tool_args))[:200]}) -> "
                 f"{json.dumps(tool_result)[:600]}"
@@ -1761,19 +2081,34 @@ async def _gather(
             {
                 "role": "tool",
                 "name": tool_name,
-                "content": json.dumps(tool_result)[:4000],
+                # R2 / W2-T3: JSON-safe cut + explicit truncated marker — a
+                # blind [:4000] chop handed the model invalid mid-JSON with no
+                # way to tell rows were missing.
+                "content": _bounded_tool_json(tool_result, 4000),
             },
         ]
 
-    gathered_context = ""
+    # Assemble the preamble: the NUMBERED gathered source documents first (so the
+    # model can cite them [N]), then the non-signal tool prose summaries. Both
+    # carry the "SUBSTRATE INVESTIGATION" header; either section is omitted when
+    # empty (a read-only assessor that gathered only non-signal results is
+    # byte-for-byte the prior prose-summary shape).
+    sections: list[str] = []
+    if gathered_blocks:
+        sections.append(
+            "SUBSTRATE INVESTIGATION — numbered source documents you gathered. "
+            "Cite the ones you rely on in your finding with [N] (exactly like the "
+            "input signals) and list their signal ids in `evidence`:\n"
+            + "\n".join(gathered_blocks)
+        )
     if tool_summaries:
-        gathered_context = (
+        sections.append(
             "SUBSTRATE INVESTIGATION (results of your own pre-finding queries; "
             "ground the finding in these and cite returned UUIDs):\n"
             + "\n".join(f"- {s}" for s in tool_summaries)
-            + "\n"
         )
-    return gathered_context, aggregate_usage, refs, gather_steps
+    gathered_context = ("\n\n".join(sections) + "\n") if sections else ""
+    return gathered_context, aggregate_usage, refs, gather_steps, citation_extension
 
 
 async def run_method(
@@ -1802,6 +2137,13 @@ async def run_method(
 
     target_id = options.get("target_id")
     analyst_id = options.get("analyst_id")
+    # Piece 2 — a ``gather_only`` analyst (the autonomous corpus_researcher) does
+    # NOT consume a coarse per-target slice (``_read_substrate_slice`` returns []
+    # by design); it gathers its own evidence live via the GATHER tools. The flag
+    # lets an EXPECTED empty slice PROCEED into GATHER instead of NOOPing — but
+    # only when a GATHER binding is actually engaged (a tool-less synthesis on an
+    # empty slice would fabricate). Default False → every other analyst unchanged.
+    gather_only = bool(options.get("gather_only"))
     steps: list[dict[str, Any]] = []
 
     # --- WAKE ----------------------------------------------------------
@@ -1817,7 +2159,17 @@ async def run_method(
         "derived_count": len(derived_from),
     })
 
-    if not sliced:
+    # Piece 2 — the empty-slice NOOP. A normal analyst with no signals emits the
+    # diagnostic empty-slice finding. A ``gather_only`` analyst is DIFFERENT: its
+    # empty slice is EXPECTED (it gathers its own evidence), so it must proceed
+    # into GATHER — UNLESS no GATHER binding is engaged, in which case there are
+    # no tools to gather with and a tool-less synthesis on an empty slice would
+    # fabricate, so it still NOOPs gracefully. Resolve the binding the same way
+    # the GATHER phase does below.
+    gather_binding_engaged = (
+        options.get("agency_binding") or deps.agency_binding
+    ) is not None
+    if not sliced and (not gather_only or not gather_binding_engaged):
         # Empty input — the runtime would normally short-circuit before
         # calling us (see AnalystActor.run NOOP/no_inputs branch in
         # ``dapr_actors.py:649``), but be defensive: emit a minimal
@@ -1844,6 +2196,26 @@ async def run_method(
 
     # --- PLAN ----------------------------------------------------------
     user_prompt = _render_user_prompt(sliced, target_id)
+    # Piece 2 (gather_only): with an EMPTY slice the default render is
+    # "Number of signals: 0", which reads as "nothing to do" — the model then
+    # emits an unparseable/final response in GATHER round 1 instead of a tool call,
+    # so it gathers nothing and L2 NOOPs. Replace it with a GATHER-FIRST task so the
+    # model's first move is a tool call (list_situations → search_corpus), which is
+    # the whole point of a gather_only researcher.
+    if gather_only and not sliced:
+        # NEUTRAL task statement usable by BOTH phases: the GATHER phase (driven by
+        # the gather system suffix) reads it as "gather your own evidence", and the
+        # synthesis phase reads it as "produce the finding". It deliberately carries
+        # NO explicit tool-call instructions (those live in the gather suffix) —
+        # earlier tool-calling directives here contradicted the synthesis step and
+        # made the model return an EMPTY completion.
+        user_prompt = (
+            "You have no preloaded signals — you gather your own evidence from the "
+            "full-text corpus via your tools. Investigate the most worthwhile "
+            "current topic and produce EXACTLY ONE finding per your system "
+            "instructions, grounded in and citing (with [N] markers) the corpus "
+            "documents you gather. Output ONLY the STRICT JSON finding object."
+        )
     # P0-T1: capture the render-time {N -> signal_id} map so REFLECT can resolve
     # the prose's [N] citation markers back to substrate ids. Built from the SAME
     # ORIENTed slice _render_user_prompt rendered, so the 1-based N matches the
@@ -1869,7 +2241,12 @@ async def run_method(
         # trace for auditable retrieval. A hook that ignores the key leaves it
         # empty; the trace event is then byte-for-byte unchanged.
         rag_chunk_ids: list[str] = []
-        hook_options = {**options, GROUNDING_RAG_CHUNK_SINK_KEY: rag_chunk_ids}
+        rag_stats: dict[str, Any] = {}
+        hook_options = {
+            **options,
+            GROUNDING_RAG_CHUNK_SINK_KEY: rag_chunk_ids,
+            GROUNDING_RAG_STATS_SINK_KEY: rag_stats,
+        }
         try:
             preamble = await deps.grounding_hook(sliced, hook_options)
         except Exception as exc:  # pragma: no cover — enrichment must not fail the run
@@ -1894,6 +2271,11 @@ async def run_method(
             # substrate-only grounding, so the event is otherwise unchanged).
             if rag_chunk_ids:
                 ground_step["world_context_chunk_ids"] = list(rag_chunk_ids)
+            # M22 retrieval measurement (top cosine + retained count + active floor)
+            # — present whenever the RAG source ran, INCLUDING a run that retrieved
+            # nothing above the floor (retained=0), so #179 stays measurable.
+            for k, v in rag_stats.items():
+                ground_step[k] = v
             steps.append(ground_step)
         else:
             steps.append({"phase": "ground", "kind": "no_current_facts"})
@@ -1911,6 +2293,10 @@ async def run_method(
     # the one-shot synthesis to land a finding unchanged.
     gather_usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
     gather_refs: list[UUID] = []
+    gathered_context = ""
+    # Piece 1 — the {N -> citation entry} map for GATHER-gathered corpus docs,
+    # populated only when GATHER engages (keyed [len(sliced)+1 ..]).
+    gather_citation_extension: dict[int, dict[str, Any]] = {}
     active_binding = options.get("agency_binding") or deps.agency_binding
     # SEAM #22: per-tool bindings for the external (web_access) + write-back
     # (propose_facts) packs, each EFFECTIVE-gated + re-pointed per run by the
@@ -1926,18 +2312,57 @@ async def run_method(
         write_fragments=list(write_fragments) if write_fragments is not None else None,
     )
     if active_binding is not None:
-        gathered_context, gather_usage, gather_refs, _ = await _gather(
-            deps,
-            binding=active_binding,
-            user_prompt=user_prompt,
-            target_id=target_id,
-            analyst_id=analyst_id,
-            steps=steps,
-            tool_bindings=tool_bindings,
-            gather_system=gather_system,
+        gathered_context, gather_usage, gather_refs, _, gather_citation_extension = (
+            await _gather(
+                deps,
+                binding=active_binding,
+                user_prompt=user_prompt,
+                target_id=target_id,
+                analyst_id=analyst_id,
+                steps=steps,
+                tool_bindings=tool_bindings,
+                gather_system=gather_system,
+                # Piece 1: gathered [N] continue AFTER the slice signals [1..len].
+                base_offset=len(sliced),
+            )
         )
         if gathered_context:
             user_prompt = f"{gathered_context}\n{user_prompt}"
+        # Piece 1 — MERGE the gathered citation entries into the slice-built index
+        # BEFORE REFLECT's _extract_citations resolves the prose's [N] markers, so
+        # a [N] citing a GATHER-gathered corpus doc resolves (the faithfulness fix:
+        # otherwise the marker grounds against nothing and the finding floors).
+        # Slice keys [1..len(sliced)] stay authoritative — on any (base_offset-
+        # prevented) collision the slice entry wins.
+        for _n, _entry in gather_citation_extension.items():
+            if _n not in citation_index:
+                citation_index[_n] = _entry
+
+    # L2 — contentless gather_only guard. A gather_only run reached here on an
+    # EMPTY slice (the run_method + actor guards let it PROCEED only because a
+    # GATHER binding was engaged), but GATHER gathered NOTHING: no numbered corpus
+    # docs (empty citation_extension) AND no prose tool summaries (empty
+    # gathered_context). Synthesizing now would fabricate a zero-citation finding
+    # over a "Number of signals: 0" prompt, so NOOP gracefully with the same
+    # empty-slice diagnostic finding instead — while still recording GATHER's token
+    # usage (the rounds burned budget) so the actor's budget.record stays honest.
+    if not sliced and not gathered_context and not gather_citation_extension:
+        steps.append({"phase": "reflect", "kind": "noop_no_gathered_evidence"})
+        finding = FindingPayload(
+            title=f"No signals for {target_id or 'target'}",
+            body="The substrate slice was empty and GATHER gathered no evidence.",
+            confidence=0.0,
+            tags=["empty_slice"],
+        )
+        narrated = _narrate(finding, target_id=target_id, analyst_id=analyst_id)
+        steps.append({"phase": "narrate", "kind": "envelope"})
+        steps.append({"phase": "persist", "kind": "envelope"})
+        return AnalystMethodResult(
+            finding=narrated,
+            usage=gather_usage,
+            derived_from=list(gather_refs),
+            intermediate_steps=steps,
+        )
 
     # --- REASON+ACT ----------------------------------------------------
     # NOTE: when DSPy is wired into the runtime (L-176 GEPA replays this
@@ -1997,6 +2422,19 @@ async def run_method(
         citation_data = dict(finding.data) if isinstance(finding.data, dict) else {}
         citation_data["citations"] = citations
         finding = finding.model_copy(update={"data": citation_data})
+    # S-1d (salience stamp) — record this finding's CONSEQUENCE as the MAX-magnitude
+    # scored signal in its input window, so the composition tier can order by
+    # salience (S-2b) and the S-3 judge can check whether the read led with its
+    # highest-consequence input. The leaf signal's identity (top_signal_id /
+    # top_title) rides the max UP the tower via the composition propagation. Left
+    # UNSTAMPED when no input carried a salience score — the finding then sorts
+    # LAST at compose time (unscored, never mistaken for low-consequence).
+    from .signal_salience import build_signal_finding_salience
+    _finding_salience = build_signal_finding_salience(sliced)
+    if _finding_salience is not None:
+        sal_data = dict(finding.data) if isinstance(finding.data, dict) else {}
+        sal_data["salience"] = _finding_salience
+        finding = finding.model_copy(update={"data": sal_data})
     steps.append({
         "phase": "reflect",
         "kind": "coerce_finding",

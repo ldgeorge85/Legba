@@ -472,6 +472,140 @@ def test_marker_to_evidence_combines_title_and_snippet():
     assert ev[3] == "Title only"  # title-only preserved
 
 
+def test_marker_to_evidence_grounds_on_raw_source_not_distilled_summary():
+    """TRUST BOUNDARY: when a citation carries ``source_text`` (the RAW article),
+    the judge evidence LABELS it authoritative and rides the analyst's distilled
+    ``snippet`` along as SECONDARY context only — so a summarizer hallucination
+    (present in the summary but absent from the source) can be caught, not
+    rubber-stamped."""
+    from legba.data.provenance.verify import _marker_to_evidence
+
+    cits = [
+        {
+            "marker": "[1]",
+            "signal_id": "s-1",
+            "title": "Central bank holds rates",
+            # what the analyst READ (a distilled_body summary that overreaches)
+            "snippet": "The bank held rates and signalled three cuts next year.",
+            # the RAW authoritative article — NO mention of 'three cuts'
+            "source_text": "The central bank left its policy rate unchanged today.",
+        },
+    ]
+    ev = _marker_to_evidence(cits)
+    text = ev[1]
+    # SOURCE is labelled authoritative and carries the raw article verbatim.
+    assert "SOURCE (authoritative): The central bank left its policy rate unchanged today." in text
+    # The analyst's distilled summary is present but clearly LABELLED secondary.
+    assert "Analyst summary: The bank held rates and signalled three cuts next year." in text
+    # Title leads the evidence; the source precedes the summary (grounding order).
+    assert text.startswith("Central bank holds rates")
+    assert text.index("SOURCE (authoritative):") < text.index("Analyst summary:")
+
+
+def test_marker_to_evidence_omits_redundant_summary_line():
+    """When ``source_text`` == ``snippet`` (no distilled_body — they coincide), the
+    evidence carries the SOURCE once and drops the duplicate 'Analyst summary' line."""
+    from legba.data.provenance.verify import _marker_to_evidence
+
+    same = "Flooding displaced thousands across the delta this week."
+    cits = [{"marker": "[1]", "signal_id": "s-1", "title": "Delta floods",
+             "snippet": same, "source_text": same}]
+    ev = _marker_to_evidence(cits)
+    assert ev[1] == f"Delta floods\nSOURCE (authoritative): {same}"
+    assert "Analyst summary:" not in ev[1]
+
+
+def test_marker_to_evidence_omits_summary_when_snippet_is_prefix_of_source():
+    """F4: when the analyst read the raw source directly, ``snippet`` is a leading
+    PREFIX of the fuller ``source_text`` (no distinct distilled_body) — the evidence
+    carries the SOURCE once and drops the redundant 'Analyst summary' line."""
+    from legba.data.provenance.verify import _marker_to_evidence
+
+    src = "The central bank held rates today and signalled patience on future moves."
+    snip = "The central bank held rates today"  # a leading prefix of src
+    cits = [{"marker": "[1]", "signal_id": "s-1", "title": "Rates",
+             "source_text": src, "snippet": snip}]
+    ev = _marker_to_evidence(cits)
+    assert ev[1] == f"Rates\nSOURCE (authoritative): {src}"
+    assert "Analyst summary:" not in ev[1]
+
+
+def test_marker_to_evidence_labels_truncated_source_as_excerpt():
+    """F1: a citation flagged ``source_truncated`` is presented to the judge as an
+    EXCERPT (so the judge won't demote a cited claim merely for being absent from
+    the shown text), with the analyst summary kept as fuller-coverage context."""
+    from legba.data.provenance.verify import _marker_to_evidence
+
+    cits = [{
+        "marker": "[1]", "signal_id": "s-1", "title": "Long article",
+        "source_text": "Opening paragraphs of a long article about the summit.",
+        # the analyst summarized a point from DEEP in the article (past the cut)
+        "snippet": "The communique also pledged $2B in climate finance.",
+        "source_truncated": True,
+    }]
+    ev = _marker_to_evidence(cits)
+    assert "SOURCE (authoritative excerpt — the full article is longer than shown): " in ev[1]
+    assert "Analyst summary: The communique also pledged $2B in climate finance." in ev[1]
+    assert "SOURCE (authoritative):" not in ev[1]  # the COMPLETE label must NOT appear
+
+
+def test_marker_to_evidence_relabels_when_source_exceeds_evidence_cap():
+    """F1: even without the build-time flag, a ``source_text`` longer than the
+    judge's per-source cap is re-truncated AND relabelled an EXCERPT (honest label),
+    and the whole evidence stays within the total cap."""
+    from legba.data.provenance.verify import (
+        _marker_to_evidence,
+        _EVIDENCE_SOURCE_CHARS,
+        _EVIDENCE_TOTAL_CHARS,
+    )
+
+    long_src = "Z" + ("y" * (_EVIDENCE_SOURCE_CHARS + 500))
+    cits = [{"marker": "[1]", "signal_id": "s-1", "source_text": long_src}]
+    ev = _marker_to_evidence(cits)
+    assert ev[1].startswith("SOURCE (authoritative excerpt")
+    assert len(ev[1]) <= _EVIDENCE_TOTAL_CHARS
+
+
+def test_marker_to_evidence_legacy_branch_keeps_600_cap():
+    """F3: the no-source_text (old-data) branch keeps the ORIGINAL 600-char cap so
+    the verify-floor calibration on pre-existing findings is byte-unchanged."""
+    from legba.data.provenance.verify import _marker_to_evidence
+
+    long_snip = "s" * 5000
+    cits = [{"marker": "[1]", "signal_id": "s-1", "title": "T", "snippet": long_snip}]
+    ev = _marker_to_evidence(cits)
+    assert ev[1].startswith("T — ")
+    assert len(ev[1]) == 600  # legacy branch capped at 600, not the new larger caps
+
+
+async def test_unit_judge_prompt_carries_two_mode_source_framing(monkeypatch):
+    """F1: the unit judge prompt instructs BOTH modes — a COMPLETE source demotes an
+    absent claim; an EXCERPT demotes only a CONTRADICTED claim — plus the catch that
+    a summary-only fact the source contradicts is unsupported."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    captured: dict[str, str] = {}
+
+    class _RecordingJudge:
+        subprovider = "test"
+
+        async def chat_complete(self, messages, *, max_tokens=None, temperature=None, system=None, **kw):
+            captured["prompt"] = messages[0]["content"]
+            return _Response('{"verdicts": ["supported"]}')
+
+    sid = str(uuid4())
+    body = "## Key developments\n- The central bank held rates this month [1].\n"
+    citations = [{
+        "marker": "[1]", "signal_id": sid, "title": "Rates",
+        "source_text": "The central bank held its policy rate steady this month.",
+        "snippet": "The central bank held its policy rate steady this month.",
+    }]
+    await verify_finding_faithfulness(body=body, citations=citations, judge_llm=_RecordingJudge())
+    p = captured["prompt"]
+    assert "authoritative excerpt" in p                     # excerpt mode described
+    assert "CONTRADICTS it" in p                            # excerpt demotes only on contradiction
+    assert "does NOT itself validate a claim" in p          # summary never validates
+
+
 # ---------------------------------------------------------------------------
 # Critique payload — the gate input + the verification detail block
 # ---------------------------------------------------------------------------

@@ -242,6 +242,56 @@ def _point_id(collection: str, corpus: str, doc_id: str, chunk_seq: int, chunk_p
     return str(uuid5(_LANE4_NS, key))
 
 
+def contextual_embedding_input(
+    *,
+    title: str | None,
+    section: str | None,
+    countries: Any,
+    text: str,
+) -> str:
+    """The string that is EMBEDDED for a chunk — a lean context prefix + the body.
+
+    M22 recalibration (the RAG root-cause fix). Before M22 the loader embedded the
+    raw chunk BODY only, so a chunk vector carried no country/section anchor beyond
+    whatever the prose happened to repeat — a Government-section chunk that never
+    re-states "Iran" scored weakly against an "Iran government …" query. Prepending
+    a compact ``"<Country> — <section-leaf>"`` line to the embedded text puts the
+    country + topic INTO the vector, which (live probe against the 293-point corpus)
+    lifts the top on-target cosine ~+0.05 (Germany 0.553→0.606, Brazil 0.571→0.615)
+    while barely moving off-target (~+0.01), i.e. it WIDENS the on/off-target margin.
+
+    The prefix is intentionally LEAN — the country NAME (the ``countries`` payload's
+    Name form, i.e. the entry longer than an ISO-2 code) + the section's LAST heading
+    segment (dropping the "CIA World Factbook (stable background)" boilerplate that
+    otherwise dilutes the anchor). Degrades to the raw ``text`` when neither a
+    country name nor a section is available (never fabricates an anchor).
+
+    LOAD-BEARING: this is the SINGLE definition of the corpus embedding convention.
+    The Lane-4 loader (fresh loads) AND scripts/reembed_world_context.py (in-place
+    re-embed of the existing points) BOTH call it, from the SAME payload fields, so
+    the two paths produce byte-identical embedding inputs and never drift.
+    """
+    country = ""
+    if isinstance(countries, (list, tuple)):
+        # payload ``countries`` = [iso2-lower, ISO2-UPPER, Name]; prefer the Name
+        # (the entry longer than a 2-char ISO code). Fall back to the last entry.
+        for c in reversed(list(countries)):
+            if isinstance(c, str) and len(c.strip()) > 2:
+                country = c.strip()
+                break
+        if not country:
+            for c in reversed(list(countries)):
+                if isinstance(c, str) and c.strip():
+                    country = c.strip()
+                    break
+    leaf = ""
+    if isinstance(section, str) and section.strip():
+        leaf = section.split(">")[-1].strip()
+    lead = " — ".join(part for part in (country, leaf) if part)
+    body = text or ""
+    return f"{lead}\n\n{body}" if lead else body
+
+
 def _resolve_text(rec: ManualDocRecord, batch_dir: Path) -> str:
     """Return the record's chunk text — inline ``text`` or read ``text_ref``.
 
@@ -459,7 +509,19 @@ async def load_vector_batch(
             if dry_run:
                 result.counts["chunks"] += 1
                 continue
-            vec = await embedder.embed(chunk.text)
+            # M22: embed the LEAN-CONTEXTUALIZED input (country + section anchor +
+            # body), NOT the raw body — see contextual_embedding_input. Built from
+            # the SAME fields the payload carries so an in-place re-embed reproduces
+            # this vector exactly. chunk.section is the heading-aware section for
+            # this sub-chunk (== the payload's ``section``).
+            vec = await embedder.embed(
+                contextual_embedding_input(
+                    title=rec.title,
+                    section=chunk.section or rec.section,
+                    countries=rec.countries,
+                    text=chunk.text,
+                )
+            )
             pid = _point_id(collection, rec.corpus, rec.doc_id, rec.chunk_seq, chunk.seq)
             pending.setdefault(collection, []).append((pid, vec, payload))
             await _flush(collection)
@@ -477,6 +539,7 @@ __all__ = [
     "CORPUS_COLLECTIONS",
     "SeedBatchLedger",
     "VectorLoadResult",
+    "contextual_embedding_input",
     "load_vector_batch",
     "pg_seed_batch_ledger",
 ]

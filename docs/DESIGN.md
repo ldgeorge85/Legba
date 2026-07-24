@@ -621,7 +621,7 @@ plane), `prompt_fragments`, `rules`, `channels` (output bindings), a per-pack
 capability is the intersection `analyst.action_packs ∩
 target.allowed_action_packs ∩ pack.applicability`, gated by the governor. Seed
 packs: `media_processing`, `incident_response`, `substrate_read` (the consult
-kind's ~17 governed read tools, incl. the live semantic `search_context` corpus
+kind's 19 governed read tools, incl. the live semantic `search_context` corpus
 search), and `escalate_finding` (the example pack that fires on gated findings —
 it keys on post-verify `effective_confidence × severity`, with severity as a
 first-class read column, and delivers on the NATS `channels.escalations` subject,
@@ -894,7 +894,7 @@ the Dapr-Workflow client or the in-process fallback). Nothing dials Temporal.io.
 ## 7. Data shape
 
 Substrate schema is built by a single `src/legba/data/migrations/0001_baseline.sql`
-(Postgres) plus the forward chain (`0032`…`0060`, migration head **`0060`**). A cold start from empty volumes
+(Postgres) plus the forward chain (`0032`…`0085`, migration head **`0085`**). A cold start from empty volumes
 applies them in order. (The historical 0001→0031 migration chain was flattened to this
 baseline for the clean-slate release; it remains in git history.)
 
@@ -1105,11 +1105,13 @@ tick (`target_filter=None`, like `world_assessor`), **not** the `deep_consult`
 Dapr workflow (that path rides the broken long-activity round-trip, task #86).
 The deep GATHER investigation loop runs on the local gpt-oss / vLLM plane
 (`method.llm.primary` → `llm.primary.openai_compat`); the **voice** (the in-voice
-field-notes seam + the NARRATE synthesis) runs on the Anthropic plane, Opus 4.8
-(`method.llm.narrate` → `llm.anthropic.opus_4_7`). So Anthropic spend is just the
-bounded final voice synthesis (its `max_tokens` governs only the Opus narrate —
-16384 entry / 24576 consolidation — and is never sent to the local gather plane,
-which uses its own server budget); the agentic loop itself is local. This is the
+field-notes seam + the NARRATE synthesis) resolves a second handler
+(`method.llm.narrate`) that ALSO runs on the core plane
+(`llm.primary.openai_compat` — it previously ran on Anthropic Opus 4.8 but moved
+fully to core 2026-07-06, so the journal costs NO Anthropic spend; that plane is
+reserved for `consult`/`deep_consult`). So its `max_tokens` governs only the narrate
+voice output — 16384 entry / 24576 consolidation — and is never sent to the local
+gather plane, which uses its own server budget; the agentic loop itself is local. This is the
 optional-second-handler split described in §3.3.
 
 **Two packs, propose-and-gate (the hygiene invariant).** The journal is granted

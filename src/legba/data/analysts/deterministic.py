@@ -69,6 +69,7 @@ from .deterministic_handlers import (
     calibration_tracking,
     collection_gap,
     composition_lineage_sweep,
+    corpus_indexer,
     cross_source_coalesce,
     cross_source_dedup,
     entity_gc,
@@ -85,7 +86,11 @@ from .deterministic_handlers import (
     integrity_sweep,
     nexus_decay,
     proposed_edge_governance,
+    reenrich_ner,
+    reenrich_translation,
     scorecard_producer,
+    signal_embedder,
+    signal_summarizer,
     signals_retention,
     structural_balance,
     unit_correctness_scorer,
@@ -172,6 +177,35 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # side-written (the fact_contention* sidecar + the facts marker columns); the
     # per-run counts (groups open / abstained / junk-excluded) live in the trace.
     "fact_contention_arbiter": TRACE_ONLY,
+    # signal_summarizer — pure side-effect sweep: writes OUR analysis-tuned
+    # summary into signals.payload.distilled_body + stamps summarized_at. Emits
+    # no analytical finding (like entity_resolution); the per-run counts live in
+    # the trace.
+    "signal_summarizer": TRACE_ONLY,
+    # corpus_indexer — pure side-effect sweep: projects signals into the
+    # OpenSearch full-text corpus (the INDEX PLANE) + stamps indexed_at. Emits no
+    # analytical finding (like signal_summarizer / entity_resolution); the per-run
+    # counts (examined / indexed / failed) live in the trace.
+    "corpus_indexer": TRACE_ONLY,
+    # signal_embedder — pure side-effect sweep: projects signals into the Qdrant
+    # legba_signals collection (the VECTOR PLANE — semantic retrieval that lights
+    # up vector_search) + stamps embedding_ref. Emits no analytical finding (like
+    # corpus_indexer / signal_summarizer); the per-run counts (examined / embedded
+    # / failed) live in the trace.
+    "signal_embedder": TRACE_ONLY,
+    # reenrich_ner — ONE-TIME NER backfill sweep: re-runs the LIVE multilingual/
+    # telegram NER over the pre-fix historical backlog, writing payload.entities +
+    # promoting entity_classes + resetting entities_resolved_at (so entity_resolution
+    # re-folds them) + stamping reenriched_at. Its real product is the side-written
+    # signal enrichment (like signal_summarizer / entity_resolution); the per-run
+    # counts (examined / reenriched / failed) live in the trace.
+    "reenrich_ner": TRACE_ONLY,
+    # reenrich_translation — TRANSLATION backfill sweep (M13/T-1c): translates the
+    # non-Latin backlog's title (+ body when present) via the hosted /translate,
+    # side-writing payload.title_en / payload.text_en so readers narrate English,
+    # not a transliterated surface. Its real product is the side-written signal
+    # enrichment (like reenrich_ner); the per-run counts live in the trace.
+    "reenrich_translation": TRACE_ONLY,
     "nexus_decay": TRACE_ONLY,
     # P-09 cross-source dedup (PIVOT §4.3 / P-02) — links/marks duplicate
     # signals; the dedup counts live in the trace.
@@ -235,6 +269,34 @@ SUB_HANDLERS: dict[str, Any] = {
     # Holes-B contested-claims arbiter (#101, DETECT-ONLY) — builds the
     # fact_contention* sidecar + stamps the facts markers; never closes a fact.
     "fact_contention_arbiter": fact_contention_arbiter.handle,
+    # signal_summarizer — async sweep that distills long signal bodies into
+    # payload.distilled_body via the CORE self-hosted LLM plane ($0), so
+    # downstream synthesis reads OUR analysis-tuned brief instead of the
+    # publisher's teaser. Idempotent + forward-progressing (stamps
+    # signals.summarized_at on every examined row).
+    "signal_summarizer": signal_summarizer.handle,
+    # corpus_indexer — async sweep that projects signals into the OpenSearch
+    # full-text corpus (the INDEX PLANE — BM25 lexical mining substrate over the
+    # shared pool). Idempotent + forward-progressing (stamps signals.indexed_at;
+    # OpenSearch `_id` = the signal id, so a re-index overwrites in place).
+    "corpus_indexer": corpus_indexer.handle,
+    # signal_embedder — async sweep that embeds signal bodies into the Qdrant
+    # legba_signals collection (the VECTOR PLANE — semantic retrieval that lights
+    # up vector_search, which no-ops today with 0 points). Idempotent +
+    # forward-progressing (stamps signals.embedding_ref; the Qdrant point _id =
+    # the signal id, so a re-embed overwrites in place).
+    "signal_embedder": signal_embedder.handle,
+    # reenrich_ner — ONE-TIME async backfill sweep that re-runs the LIVE
+    # NERMultilingualHandler (translate-then-NER + telegram payload.text) over the
+    # ~9,143 signals ingested BEFORE the multilingual/telegram fix landed (they carry
+    # 0 entities). Reuses the production handler (never reimplements NER); idempotent
+    # + forward-progressing (stamps signals.reenriched_at on every examined row).
+    "reenrich_ner": reenrich_ner.handle,
+    # reenrich_translation — TRANSLATION-backfill sweep (M13/T-1c) that translates
+    # the ~1.9k non-Latin signals ingested BEFORE T-1a stamped title_en/text_en at
+    # ingest. Reuses the hosted /translate plane (never reimplements it); idempotent
+    # + forward-progressing (the field IS the marker — title_en NULL is the gate).
+    "reenrich_translation": reenrich_translation.handle,
     "nexus_decay": nexus_decay.handle,
     # P-09 cross-source dedup (PIVOT §4.3 / P-02)
     "cross_source_dedup": cross_source_dedup.handle,

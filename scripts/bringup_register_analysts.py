@@ -86,11 +86,14 @@ ANALYST_FILES = [
     # country_assessor + world_assessor FINDINGS as its inputs — so with the
     # monolith gone it went silent (31 legacy heads, no new output for >30h).
     # Removed from bringup so a fresh deploy cannot re-create it active over a
-    # dead input. cross_correlator (Task C) stays — it is a live producer. To
-    # restore meta_synthesizer: re-point its other_analysts at the compositions,
-    # un-retire, re-add this line, re-register.
+    # dead input. cross_correlator (Task C) is now ALSO retired (2026-07-09): it
+    # drifted into a coverage-gap detector reading RETIRED analyst outputs (0
+    # downstream consumers, emitted a live "score 0.00" faithfulness head); the
+    # live head is state=retired + its heads tombstoned. To restore either:
+    # un-retire, re-add its line, re-register (and for meta_synthesizer also
+    # re-point its other_analysts at the live compositions).
     # "analyst_meta_synthesizer.yaml",        # RETIRED — Piece 3 (Task B) legacy synthesizer
-    "analyst_cross_correlator.yaml",          # NEW — Piece 3 (Task C, sibling meta producer)
+    # "analyst_cross_correlator.yaml",        # RETIRED 2026-07-09 — Piece 3 (Task C) drifted; 0 consumers
     # PIECE C SUPERSEDED Piece 3 Task D: the situation-gated hypothesis_lifecycle
     # emitted 0 rows (gated on `active` situations that go dormant — see
     # DATA_ANALYSIS_DEEP_REVIEW_2026-06-16.md §1.2). The competing_hypotheses ACH
@@ -115,6 +118,8 @@ ANALYST_FILES = [
     "analyst_journal_assessor.yaml",         # NEW — Journal Assessor Wave 0 (the 11th OutputKind producer; entry tier)
     "analyst_journal_consolidator.yaml",     # NEW — Journal Wave 2 (consolidation tier: SAME kind, distinct id, daily beat)
     "analyst_entity_gc.yaml",                # NEW — health remediation D2 (deterministic GC of orphan entities/proposed_edges; drains the integrity_sweep-flagged backlog)
+    "analyst_entity_researcher.yaml",        # NEW — Phase E (E4: global META, LLM-adjudicated entity de-fragmentation; blocks candidates → adjudicates gray → tombstone+redirect merges; ships merge_mode: adjudicate_only [DRY-RUN], PUT-flip to apply)
+    "analyst_signal_salience.yaml",          # NEW — Phase S (S-1: global META, $0-plane per-signal consequence scorer; SELECTs un-scored recent text → LLM {event_class,actor_rank,magnitude} + deterministic authority → stamps signals.salience; ships score_mode: dry_run [no writes], PUT-flip to apply)
     "analyst_unit_correctness_scorer.yaml",  # NEW — P2-T5 (deterministic meta scorer: each bounded unit's correctness_vs_reference vs the operator gold labels; null when a unit has 0 labels)
     # P2-T2 — the 4 bounded-reasoning UNITS (T1 unit-factory pattern). Each is a
     # topic-scoped inline_target descriptor carrying its OWN method.system_prompt
@@ -178,7 +183,7 @@ ANALYST_FILES = [
 # distinct DESCRIPTOR id, NOT a new analyst kind, so it needs NO new vocabulary
 # row here — only its descriptor file in ANALYST_FILES. The single kind below
 # covers both tiers' `model_validate`.
-_NEW_ANALYST_KINDS: list[str] = ["journal_assessor"]
+_NEW_ANALYST_KINDS: list[str] = ["journal_assessor", "entity_researcher", "signal_salience"]
 
 
 def _load_body(name: str) -> dict:

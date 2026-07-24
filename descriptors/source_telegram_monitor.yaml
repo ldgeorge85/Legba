@@ -69,11 +69,27 @@ scope:
 acquisition: poll
 
 cadence:
+  # FOOTPRINT SOFTENING (anti-bot-flag): widened */15 → */30 and bumped
+  # jitter 60 → 120. Telegram bot-detection flags a user-account session that
+  # polls too aggressively; the flag lever is request FREQUENCY (and retry
+  # storms), so halving the poll rate + wider jitter de-correlates the request
+  # bursts and stays under the threshold. (The per-channel MESSAGE limit is NOT
+  # a footprint lever — Telethon's iter_messages batches ≤100 msgs per
+  # getHistory request, so 25 vs 50 msgs/channel is the same one API call; it
+  # was left at 50 to preserve war-beat coverage — see below.)
+  #
+  # Coverage on the wider cadence: the per-channel message_id cursor bounds the
+  # LOWER end (already-seen messages are never re-fetched), and lookback_hours
+  # bounds only the FIRST cursor-less pull. It does NOT bound the upper end — a
+  # channel posting more than per_channel_message_limit messages inside a single
+  # 30-min window drops the oldest-in-gap (newest-first truncation). At limit 50
+  # (~100/hr headroom) that is rare; eliminating it entirely (min_id+reverse
+  # bounded catch-up) is a queued follow-up, not this footprint pass.
   schedule:
     factory_kind: cron
-    raw: "*/15 * * * *"
+    raw: "*/30 * * * *"
   cooldown_seconds: 120
-  jitter_seconds: 60
+  jitter_seconds: 120
 
 config:
   api_id_secret:
@@ -127,12 +143,20 @@ config:
       - "rferl"                    # Radio Free Europe / Radio Liberty
   lookback_hours:
     factory_kind: number
+    # 12h stays FAR wider than the 30-min cadence gap, so no messages are
+    # missed on the cursor-less first pull; steady-state pulls are bounded by
+    # the per-channel message_id cursor, not this lookback.
     raw: 12
   # Bare boolean (no factory wrapper — the unwrap path passes scalars
   # through untouched): media described, never downloaded, stays off.
   include_media: false
   per_channel_message_limit:
     factory_kind: number
+    # Kept at 50 (NOT lowered): the message limit is a runaway-pull safety belt,
+    # not a footprint lever — Telethon fetches ≤100 msgs per getHistory request,
+    # so 25 vs 50 is the same single API call. Lowering it bought ~zero anti-flag
+    # benefit but would drop war-beat coverage on busy channels during active
+    # events. The footprint wins live in cadence/jitter/non-retryable-auth above.
     raw: 50
 
 pipeline:

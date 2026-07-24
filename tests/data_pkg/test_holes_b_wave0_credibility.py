@@ -47,6 +47,24 @@ from legba.data.provenance.writes import (
 NOW = datetime(2026, 6, 29, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _pin_fact_contention_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This file tests the Holes-B **Wave 0** A1/A2 contract (tier-nominal
+    credibility stamping, noisy-OR merge math, the ingestion rank guard) — a
+    layer that predates and is orthogonal to the Wave 4 contention-coexist
+    feature. The live deploy's ``.env`` sets ``LEGBA_FACT_CONTENTION=1``
+    (loaded eagerly at ``legba.data.config`` import time), which would route
+    every ``supersede_prior_facts()`` call here through
+    ``_supersede_prior_facts_coexist()`` — a FETCH-then-decide path that calls
+    ``conn.fetch(...)``, a method ``RecordingConn`` below does not implement
+    (none of these tests exercise multi-row coexistence; that is
+    ``test_writes_contention_coexist.py``'s job). Pin the flag OFF so this
+    file always exercises the OFF-path contract it is named for, regardless
+    of the host's ``.env``.
+    """
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION", "0")
+
+
 # ---------------------------------------------------------------------------
 # Fake conn — records every execute/fetchval and returns scripted results.
 # (Same shape as tests/data_pkg/test_writes_d15_d17_d18.py::RecordingConn.)

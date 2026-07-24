@@ -68,6 +68,7 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   // --- Awareness: the live surfaces + the detail rail ---
   'system.findings': 'awareness',
   'system.alert_center': 'awareness',
+  'system.escalations': 'awareness',
   'system.inspector': 'awareness',
   'v4.map': 'awareness',
   'v4.kpi': 'awareness',

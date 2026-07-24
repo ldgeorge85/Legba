@@ -74,6 +74,10 @@ grounding:
   scope: [target_geo, slice_entities]
   sources: [substrate, situations, graph_structure]
   max_facts: 30
+  # M22 — FOCUSED world_context RAG query theme (kept ready for a future re-flip;
+  # inert while vector:world_context is absent from sources above). Keyed on the
+  # corpus's military/security facets, not the abstract WMD-risk label.
+  rag_theme: "military, security forces, and weapons and nuclear programs"
 
 method:
   kind: llm_planner

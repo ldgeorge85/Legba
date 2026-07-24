@@ -56,6 +56,7 @@ from __future__ import annotations
 import itertools
 import json
 import logging
+import re
 import uuid
 from typing import Any, Mapping
 
@@ -69,6 +70,7 @@ from ..._entity_canon import (
     identity_fold,
     is_junk_entity,
     is_org_surface,
+    lookup_key,
 )
 from ._entity_geo import NameGeocoder, resolve_entity_geo
 
@@ -163,6 +165,30 @@ def _class_rank(cls: str | None) -> int:
     return _CLASS_RANK.get((cls or "entity"), len(_CLASS_PRIORITY))
 
 
+#: Class pairs that a NORMALIZED / alias-probe (article-aware) fallback may treat
+#: as the SAME referent. corporation is an organization sub-type. (country ↔
+#: location is handled separately as a keep-distinct ambiguity.) Used by the M4
+#: fallback so it never merges two DISTINCT referents that merely normalize to
+#: the same key ("the Atlantic" magazine vs "Atlantic" ocean).
+_FALLBACK_COMPATIBLE_PAIRS: frozenset[frozenset[str]] = frozenset({
+    frozenset({"organization", "corporation"}),
+})
+
+
+def _fallback_class_compatible(stored_cls: str, cls: str) -> bool:
+    """True when a fallback-elected keeper of ``stored_cls`` may adopt an incoming
+    mention of ``cls`` (DQ M4 adversarial #1).
+
+    Compatible = identical class, or an explicitly-justified equivalent pair
+    (organization/corporation). Any other cross-class pairing is treated as a
+    DISTINCT referent (the mention keeps its own class + surface, a separate row)
+    rather than being class-blindly merged into the keeper.
+    """
+    if stored_cls == cls:
+        return True
+    return frozenset({stored_cls, cls}) in _FALLBACK_COMPATIBLE_PAIRS
+
+
 #: SQL ``ORDER BY`` fragment mirroring :data:`_CLASS_RANK` — used by the
 #: any-class PRE-LOOKUP so the highest-priority existing row is elected
 #: deterministically (tie broken by oldest ``created_at``). Kept in sync with
@@ -179,6 +205,16 @@ _CLASS_PRIORITY_SQL = (
 )
 
 
+#: An article-prefixed surface is never a personal name ("the Golden State
+#: Warriors", "the Foreign Ministry"). E6-faucet-2 (`517e8fe`) closed the
+#: article→person DEFAULT on the NER side, but the NER model can still emit a
+#: positive person label for such a span and this write-path election accepted
+#: it — the 2026-07-21 review found the leak live (16 article-prefixed persons
+#: minted in 4 days). Demote to the generic bucket; the entity_researcher's
+#: reclassify pass assigns the true class.
+_ARTICLE_PREFIX_RE = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
+
+
 def resolve_entity_class(name: str, canonical_class: str) -> str:
     """Resolve ONE deterministic entity_class for a canonicalized name (D8).
 
@@ -188,8 +224,11 @@ def resolve_entity_class(name: str, canonical_class: str) -> str:
     (:func:`is_org_surface` — "Bank of England" / "Nippon Steel" / "Hyundai
     Motor Group") so a corporate/institutional name typed ``person`` by NER is
     promoted to ``organization``, then collapses any remaining competing signal
-    to the single highest-priority class. Pure + deterministic — same name ⇒
-    same class, every time, so "turkey" lands in ONE class going forward.
+    to the single highest-priority class. An article-prefixed surface that would
+    land ``person`` is demoted to the generic ``entity`` bucket instead (no
+    personal name starts with "the/a/an"; the reclassify pass settles it). Pure
+    + deterministic — same name ⇒ same class, every time, so "turkey" lands in
+    ONE class going forward.
     """
     cls = (str(canonical_class or "entity").strip() or "entity")
     candidates = [cls if cls in _CLASS_RANK else "entity"]
@@ -198,7 +237,10 @@ def resolve_entity_class(name: str, canonical_class: str) -> str:
     if is_org_surface(name):
         candidates.append("organization")
     # Lowest rank index (highest priority) wins.
-    return min(candidates, key=lambda c: _CLASS_RANK.get(c, len(_CLASS_PRIORITY)))
+    winner = min(candidates, key=lambda c: _CLASS_RANK.get(c, len(_CLASS_PRIORITY)))
+    if winner == "person" and _ARTICLE_PREFIX_RE.match(str(name or "")):
+        return "entity"
+    return winner
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +528,12 @@ async def _resolve_batch(
 
             signal_names: list[str] = []
             for fold, (text, cls) in seen.items():
-                key_aliases = aliases.get(fold, set())
+                key_aliases = set(aliases.get(fold, set()))
+                # DQ M4 — the surface we actually WRITE. Defaults to the incoming
+                # canonical text; the alias/article-aware pre-lookup below may
+                # rewrite it to an existing keeper's surface so an article/case/
+                # alias variant converges onto the keeper instead of forking.
+                write_name = text
                 # Per-batch cache: reuse an id already resolved this run, EXCEPT
                 # across the country/location genuine ambiguity — a location
                 # mention must not reuse a country row cached earlier in the
@@ -526,9 +573,11 @@ async def _resolve_batch(
                     # it here would re-attach live signals to a dead node that the
                     # next entity_gc tick strips again. Filter it out so the
                     # pre-lookup only ever elects the ACTIVE survivor for the name.
+                    #
+                    # FAST exact-name path first (uses idx_entity_profiles_name_class).
                     pre = await conn.fetchrow(
                         f"""
-                        SELECT id, entity_class
+                        SELECT id, entity_class, canonical_name
                           FROM entity_profiles
                          WHERE lower(canonical_name) = lower($1)
                            AND COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')
@@ -537,40 +586,109 @@ async def _resolve_batch(
                         """,
                         text,
                     )
+                    via_fallback = False
+                    if pre is None:
+                        # DQ M4 — ALIAS/ARTICLE-AWARE fallback. The exact-name probe
+                        # is blind to a leading article ("the Strait of Hormuz" vs
+                        # keeper "Strait of Hormuz") and to a keeper's folded
+                        # merged_aliases, so ingestion re-spawns a competing row for
+                        # an already-folded surface. Article/case/whitespace-
+                        # normalize BOTH sides (same rule as lookup_key) and also
+                        # probe each keeper's merged_aliases, so the variant
+                        # converges onto the ACTIVE keeper instead of forking.
+                        probe = lookup_key(text)
+                        if probe:
+                            pre = await conn.fetchrow(
+                                f"""
+                                SELECT id, entity_class, canonical_name
+                                  FROM entity_profiles
+                                 WHERE COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')
+                                   AND (
+                                     regexp_replace(regexp_replace(
+                                         lower(btrim(canonical_name)),
+                                         '^(the|a|an)\\s+', '', 'g'),
+                                         '\\s+', ' ', 'g') = $1
+                                     OR EXISTS (
+                                       SELECT 1
+                                         FROM jsonb_array_elements_text(
+                                             COALESCE(data->'merged_aliases', '[]'::jsonb)
+                                         ) AS al
+                                        WHERE regexp_replace(regexp_replace(
+                                            lower(btrim(al)),
+                                            '^(the|a|an)\\s+', '', 'g'),
+                                            '\\s+', ' ', 'g') = $1
+                                     )
+                                   )
+                                 ORDER BY {_CLASS_PRIORITY_SQL}, created_at ASC
+                                 LIMIT 1
+                                """,
+                                probe,
+                            )
+                            via_fallback = pre is not None
                     if pre is not None:
                         stored_cls = str(pre["entity_class"])
+                        stored_name = str(pre["canonical_name"])
                         if {stored_cls, cls} == {"country", "location"}:
                             # Genuine country/location ambiguity — keep the
-                            # mention's own class (distinct row), do not merge.
+                            # mention's own class AND surface (distinct row); do
+                            # NOT converge onto the keeper.
                             upsert_cls = cls
-                        elif _class_rank(cls) < _class_rank(stored_cls):
-                            # Incoming class out-ranks the stored top row: converge
-                            # under `cls`. Promote the stored row's class UP only
-                            # when nothing ELSE already holds (name, cls) — else the
-                            # upsert below lands on that existing higher-class row
-                            # and the promote would violate the unique index.
-                            upsert_cls = cls
-                            collide = await conn.fetchval(
-                                "SELECT 1 FROM entity_profiles "
-                                "WHERE lower(canonical_name) = lower($1) "
-                                "  AND entity_class = $2 AND id <> $3::uuid LIMIT 1",
-                                text, cls, str(pre["id"]),
-                            )
-                            if collide is None:
-                                await conn.execute(
-                                    "UPDATE entity_profiles "
-                                    "SET entity_class = $2, entity_type = $2, "
-                                    "    updated_at = now() WHERE id = $1::uuid",
-                                    str(pre["id"]), cls,
-                                )
+                        elif via_fallback:
+                            # DQ M4 (adversarial #1) — a NORMALIZED / alias-probe
+                            # match may be a DISTINCT referent that merely
+                            # normalizes the same ("the Atlantic" the magazine vs
+                            # "Atlantic" the ocean; "the Sun"/"the Post"/"the Hill").
+                            # So converge onto a fallback-elected keeper ONLY when
+                            # the class is COMPATIBLE, and NEVER promote/mutate that
+                            # keeper's class (class-blind promotion turned the ocean
+                            # into an organization + a permanent attractor). An
+                            # incompatible class is treated as a distinct entity —
+                            # write_name / upsert_cls stay the incoming values, so
+                            # the upsert inserts a new, separate row.
+                            if _fallback_class_compatible(stored_cls, cls):
+                                if stored_name.lower() != write_name.lower():
+                                    key_aliases.add(write_name)
+                                    write_name = stored_name
+                                # Converge onto the keeper's class; never a promote
+                                # (compatible => same tier, so no re-typing needed).
+                                upsert_cls = stored_cls
                         else:
-                            # Stored row is same-or-higher priority: keep its class
-                            # (never downgrade) and converge the mention onto it.
-                            upsert_cls = stored_cls
+                            # EXACT-name match (same surface) — the long-standing
+                            # converge/promote path (unchanged): the surface is
+                            # identical, so this is the SAME referent, and promoting
+                            # the class UP the priority ladder is safe.
+                            if stored_name.lower() != write_name.lower():
+                                key_aliases.add(write_name)
+                                write_name = stored_name
+                            if _class_rank(cls) < _class_rank(stored_cls):
+                                # Incoming class out-ranks the stored top row:
+                                # converge under `cls`. Promote the stored row's
+                                # class UP only when nothing ELSE already holds
+                                # (name, cls) — else the upsert below lands on that
+                                # existing higher-class row and the promote would
+                                # violate the unique index.
+                                upsert_cls = cls
+                                collide = await conn.fetchval(
+                                    "SELECT 1 FROM entity_profiles "
+                                    "WHERE lower(canonical_name) = lower($1) "
+                                    "  AND entity_class = $2 AND id <> $3::uuid LIMIT 1",
+                                    write_name, cls, str(pre["id"]),
+                                )
+                                if collide is None:
+                                    await conn.execute(
+                                        "UPDATE entity_profiles "
+                                        "SET entity_class = $2, entity_type = $2, "
+                                        "    updated_at = now() WHERE id = $1::uuid",
+                                        str(pre["id"]), cls,
+                                    )
+                            else:
+                                # Stored row is same-or-higher priority: keep its
+                                # class (never downgrade) and converge onto it.
+                                upsert_cls = stored_cls
                     # Geo by the entity's OWN NAME (not the signal's geocode).
                     # Signal-geo is at most a consistency-checked fallback.
                     egeo = await resolve_entity_geo(
-                        name=text,
+                        name=write_name,
                         entity_class=upsert_cls,
                         signal_geo=geo,
                         geocoder=geocoder,
@@ -580,7 +698,7 @@ async def _resolve_batch(
                     # flat 0.3 constant). aliases for THIS signal are the merge
                     # evidence; the geo + non-generic class lift it.
                     completeness = compute_completeness(
-                        name=text,
+                        name=write_name,
                         entity_class=upsert_cls,
                         geo_country=country,
                         geo_lat=lat,
@@ -650,7 +768,7 @@ async def _resolve_batch(
                                 geo_country = COALESCE(entity_profiles.geo_country, EXCLUDED.geo_country)
                         RETURNING id, version, (xmax = 0) AS inserted
                         """,
-                        text, upsert_cls, upsert_cls,
+                        write_name, upsert_cls, upsert_cls,
                         json.dumps({"source": "entity_resolution"}),
                         lat, lon, country, completeness,
                         analyst_id, analyst_version,
@@ -701,7 +819,7 @@ async def _resolve_batch(
                     r["id"], eid,
                 )
                 links_created += 1
-                signal_names.append(text)
+                signal_names.append(write_name)
 
             # Co-occurrence edges — pairwise among the signal's (capped) entities.
             #

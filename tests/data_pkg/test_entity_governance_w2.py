@@ -87,6 +87,19 @@ def test_person_surname_collision_stays_person():
     assert resolve_entity_class("Michelle Steel", "person") == "person"
 
 
+def test_article_prefixed_surface_never_resolves_person():
+    # 2026-07-21 review: NER can emit a positive person label for an
+    # article-prefixed span ("the Golden State Warriors" minted person live,
+    # 16 in 4 days) and the D8 election accepted it. No personal name starts
+    # with the/a/an — demote to the generic bucket; reclassify settles it.
+    assert resolve_entity_class("the Golden State Warriors", "person") == "entity"
+    assert resolve_entity_class("The Elders", "person") == "entity"
+    # a non-person class keeps its article-prefixed surface untouched
+    assert resolve_entity_class("the Strait of Hormuz", "location") == "location"
+    # and a plain personal name still resolves person
+    assert resolve_entity_class("Ali Khamenei", "person") == "person"
+
+
 def test_unknown_name_keeps_ner_class():
     # A plain person name with no org/country signal keeps its NER class.
     assert resolve_entity_class("Giorgia Meloni", "person") == "person"

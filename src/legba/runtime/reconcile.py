@@ -273,12 +273,23 @@ class ReconcileLoop:
         # bring_up_production_runtime to call reminder_gc.sweep_orphan_reminders;
         # left None in tests / embedded host (no daprd scheduler to GC).
         reminder_gc: Callable[[], Awaitable[Any]] | None = None,
+        # Task #236 RIDER: optional stale-pack-deps WARNING sweep, invoked on
+        # the SAME periodic cadence as reminder_gc (best-effort, never blocks
+        # reconcile). ``action_pack`` descriptors have no actor lifecycle of
+        # their own (they're outside ``_FAMILIES`` in dapr_host's
+        # desired_resolver), so a pack PUT never reaches an analyst's cached
+        # deps eviction — this diagnoses that drift instead of silently
+        # serving a stale tool grant. Signature ``() -> Awaitable[Any]``.
+        # Wired by bring_up_production_runtime to
+        # dapr_actors.warn_stale_pack_deps; left None in tests / embedded host.
+        pack_staleness_check: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         self._state = state_store
         self._resolve = desired_resolver
         self._list = desired_lister
         self._execute = action_executor
         self._reminder_gc = reminder_gc
+        self._pack_staleness_check = pack_staleness_check
         self._reconcilers = reconcilers or {
             "target": TargetReconciler(),
             "analyst": AnalystReconciler(),
@@ -464,6 +475,16 @@ class ReconcileLoop:
                         await self._reminder_gc()
                     except Exception as exc:  # pragma: no cover — best-effort
                         logger.warning("reconcile.reminder_gc.failed err=%s", exc)
+                # Task #236 RIDER: same best-effort, logged-and-continued shape
+                # as reminder_gc above — a stale-pack-deps sweep failure must
+                # never stall reconcile.
+                if self._pack_staleness_check is not None:
+                    try:
+                        await self._pack_staleness_check()
+                    except Exception as exc:  # pragma: no cover — best-effort
+                        logger.warning(
+                            "reconcile.pack_staleness_check.failed err=%s", exc,
+                        )
         except asyncio.CancelledError:
             return
 

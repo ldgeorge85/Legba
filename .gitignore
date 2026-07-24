@@ -59,3 +59,11 @@ planning/
 # in-repo (src/legba/data/seed/... + scripts/); the DATA does not. Per-chunk
 # license/provenance metadata is still recorded (hygiene + future options).
 corpora/
+
+# Curated seed DATA — OUR data, NOT part of the public project (per operator
+# 2026-07-09). The seed MACHINERY (src/legba/data/seed/**, scripts/seed*.py,
+# the adapters) ships; the DATA does not. Provide your own — see seeds/README.md.
+seeds/*.yaml
+!seeds/*.example.yaml
+scripts/backfill/seed_data.sql
+scripts/seed_data.py

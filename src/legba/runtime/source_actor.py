@@ -40,7 +40,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 import asyncpg
@@ -195,6 +195,18 @@ def bulk_highwater_advance(
     return max(0, int(prior_offset)) + walked
 
 
+#: B0-11 Fix-1 (MASTER_PLAN 2026-07-10) — max tolerated FUTURE skew on a
+#: feed-provided logical timestamp before the CURSOR advance clamps it to now.
+#: ~26h tolerates mislabeled-timezone feeds (a Beijing-local date served as
+#: GMT lands up to +8h ahead; a date-only entry stamped midnight can sit up to
+#: +24h ahead of a UTC clock) while catching the real poison class: a State
+#: Dept year-typo (published 2027-07-07) advanced a cursor ONE YEAR into the
+#: future and silently stalled the source until every entry was "older than
+#: the cursor". Only the cursor is clamped — the persisted signal keeps the
+#: feed's own published_at (provenance stays honest).
+_MAX_FUTURE_SKEW = timedelta(hours=26)
+
+
 def _entry_logical_ts(sig: Signal) -> datetime:
     """The logical timestamp of one processed entry, for cursor advance.
 
@@ -203,11 +215,28 @@ def _entry_logical_ts(sig: Signal) -> datetime:
     ``_last_seen_dt``) so the cursor advances along the source's OWN ordering.
     Falls back to the Signal's ``fetched_at`` (always present) for handlers
     that surface no logical timestamp. Always returns a tz-aware UTC datetime.
+
+    B0-11 Fix-1: a feed-provided timestamp beyond ``now + _MAX_FUTURE_SKEW``
+    is CLAMPED to now for cursor purposes — an upstream future-dated entry
+    (year-typo class) must never drag the cursor past the present, or every
+    subsequent real entry is silently filtered as already-seen.
     """
+    now = datetime.now(timezone.utc)
     for key in ("_published_at_dt", "_last_seen_dt", "_event_dt"):
         val = sig.payload.get(key)
         if isinstance(val, datetime):
-            return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+            ts = val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+            if ts > now + _MAX_FUTURE_SKEW:
+                logger.warning(
+                    "source_actor.cursor.future_ts_clamped source=%s ts=%s "
+                    "(feed-provided timestamp > now+%s; cursor uses now, "
+                    "payload keeps the feed's own date)",
+                    sig.payload.get("source_id") or getattr(sig, "source_id", "?"),
+                    ts.isoformat(),
+                    _MAX_FUTURE_SKEW,
+                )
+                return now
+            return ts
     fa = sig.fetched_at
     return fa if fa.tzinfo else fa.replace(tzinfo=timezone.utc)
 
@@ -718,6 +747,21 @@ class SourceCore:
             try:
                 since = datetime.fromisoformat(since_iso)
             except ValueError:
+                since = None
+        # B0-11 Fix-1 read-side SELF-HEAL: a stored cursor in the FUTURE is
+        # poison (an upstream future-dated entry advanced it past the present
+        # — the year-typo class stalled a source for what would have been a
+        # YEAR). Treat it as absent: the pull re-scans the lookback window and
+        # dedupe absorbs the overlap; the cursor re-seeds sanely on this pull.
+        if since is not None:
+            _since_utc = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+            if _since_utc > datetime.now(timezone.utc) + _MAX_FUTURE_SKEW:
+                ctx.logger.warning(
+                    "source_actor.cursor.poisoned_future source=%s stored=%s "
+                    "— discarding cursor (self-heal; dedupe absorbs the re-scan)",
+                    self.descriptor.identity.id,
+                    since_iso,
+                )
                 since = None
 
         # B — bulk high-water-mark resume. For a dataset-streaming source the

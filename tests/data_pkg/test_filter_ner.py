@@ -127,6 +127,7 @@ def _signal(
     *,
     body: str = "",
     title: str = "",
+    text: str = "",
     language: str | None = None,
     language_hint: str | None = None,
 ) -> Signal:
@@ -137,6 +138,10 @@ def _signal(
         payload["body"] = body
     if title:
         payload["title"] = title
+    if text:
+        # Telegram-shaped signal: message body lives in payload.text and
+        # title/summary/raw_body are empty (M12).
+        payload["text"] = text
     if language is not None:
         payload["language"] = language
     return Signal(
@@ -621,3 +626,416 @@ def test_entity_classes_match_the_nine():
         "country", "concept", "corporation", "software",
     }
     assert set(ENTITY_CLASSES) == expected
+
+
+# ===========================================================================
+# M12 — telegram payload.text is now NER'd
+# ===========================================================================
+#
+# Regression: telegram signals carry their message body in ``payload.text``
+# and leave title/summary/raw_body empty. The pre-fix default ``text_fields``
+# (["title","body","summary","raw_body"]) never saw it, so every telegram
+# signal short-circuited with entities=[] + ner_language=NULL (7,164 signals
+# live, 0 entities). The fix adds ``text`` to the default field set.
+
+
+def _make_ner_transport(
+    *,
+    triples_by_text: dict[str, list[dict[str, str]]] | None = None,
+    default_triples: list[dict[str, str]] | None = None,
+    translations: dict[str, str] | None = None,
+    captured: list[httpx.Request] | None = None,
+    extract_status: int = 200,
+    translate_status: int = 200,
+) -> tuple[Any, list[httpx.Request]]:
+    """MockTransport handler answering /health, /translate AND /extract.
+
+    ``translations`` maps an input text -> its (canned) English translation;
+    ``triples_by_text`` keys on the text /extract actually receives (i.e. the
+    *translated* text on the M11 path). ``captured`` records every request so
+    tests can assert the /translate-before-/extract ordering + wire bodies.
+    """
+    triples_by_text = triples_by_text or {}
+    default_triples = default_triples or []
+    translations = translations or {}
+    captured = captured if captured is not None else []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        path = request.url.path
+        if path == "/health":
+            return httpx.Response(200, json={"status": "ok", "models_loaded": True})
+        if path == "/translate":
+            if translate_status != 200:
+                return httpx.Response(translate_status, json={"error": "translate down"})
+            body = json.loads(request.content.decode("utf-8"))
+            txt = body.get("text", "")
+            return httpx.Response(200, json={
+                "translated": translations.get(txt, txt),
+                "source_lang": body.get("source_lang"),
+                "target_lang": body.get("target_lang", "en"),
+                "ms": 1.0,
+            })
+        if path == "/extract":
+            if extract_status != 200:
+                return httpx.Response(extract_status, json={"error": "extract down"})
+            body = json.loads(request.content.decode("utf-8"))
+            txt = body.get("text", "")
+            triples = triples_by_text.get(txt, default_triples)
+            return httpx.Response(200, json={"triples": triples, "ms": 1.0})
+        return httpx.Response(404, json={"error": "unexpected path"})
+
+    return handler, captured
+
+
+@pytest.mark.asyncio
+async def test_m12_telegram_payload_text_yields_entities():
+    """A telegram-shaped signal (content only in payload.text) now extracts
+    entities and stamps ner_language — the M12 fix."""
+    captured: list[httpx.Request] = []
+    handler_fn, _ = _make_ner_transport(
+        default_triples=[
+            {"subject": "Vladimir Putin", "predicate": "head of state",
+             "object": "Russia"},
+        ],
+        captured=captured,
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+
+    sig = _signal(text="Vladimir Putin met the visiting delegation.", language="en")
+    # Pre-fix: title/body/summary/raw_body all empty -> _extract_text == "".
+    out = await handler.transform(sig, _ctx())
+    assert out is not None
+    assert out.payload["entities"], "payload.text must now be NER'd"
+    assert out.payload["ner_language"] == "en"
+
+    # The /extract wire body proves payload.text fed the extractor.
+    extract_reqs = [r for r in captured if r.url.path == "/extract"]
+    assert extract_reqs, "expected an /extract call"
+    body = json.loads(extract_reqs[0].content.decode("utf-8"))
+    assert body["text"] == "Vladimir Putin met the visiting delegation."
+    await handler.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_m12_empty_telegram_signal_still_drops():
+    """An empty telegram message (no text anywhere) still short-circuits —
+    the M12 fix must not turn empties into spurious extract calls."""
+    captured: list[httpx.Request] = []
+    handler_fn, _ = _make_ner_transport(default_triples=[], captured=captured)
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(text="", language="en")
+    out = await handler.transform(sig, _ctx())
+    assert out.payload["entities"] == []
+    assert out.payload["ner_language"] is None
+    assert "/extract" not in [r.url.path for r in captured]
+    await handler.on_retire(_ctx())
+
+
+def test_m12_text_in_default_text_fields():
+    assert "text" in NERMultilingualConfig().text_fields
+
+
+# ===========================================================================
+# M11 — non-Latin NER via translate-then-NER
+# ===========================================================================
+#
+# The hosted /extract runs spaCy en_core_web_trf (English-only), so Arabic /
+# Cyrillic / CJK text extracts ~0 entities (live: `ar` 1,880 signals / 0 with
+# entities). The fix translates non-Latin bodies to English via the hosted
+# /translate (NLLB-200) endpoint BEFORE the /extract hop. Latin-script
+# languages stay on the direct path.
+
+
+def test_m11_config_translate_defaults():
+    cfg = NERMultilingualConfig()
+    assert cfg.translate_before_ner is True
+    assert cfg.translate_target_language == "en"
+    # Non-Latin scripts routed; Latin-script languages excluded by default.
+    assert {"ar", "ru", "uk", "zh", "he"} <= set(cfg.translate_languages)
+    assert "fr" not in cfg.translate_languages
+    assert "es" not in cfg.translate_languages
+    assert "en" not in cfg.translate_languages
+
+
+def test_m11_script_detection_helpers():
+    from legba.data.filters.ner import (
+        _dominant_script_lang,
+        _is_majority_non_latin,
+    )
+    assert _is_majority_non_latin("Россия провела переговоры")
+    assert _is_majority_non_latin("إسرائيل تشن غارات على غزة")
+    assert not _is_majority_non_latin("Israel launches strikes on Gaza")
+    assert not _is_majority_non_latin("Le président Macron à Paris")
+    assert not _is_majority_non_latin("12345 !!! ---")  # no letters at all
+    assert _dominant_script_lang("Россия переговоры") == "ru"
+    assert _dominant_script_lang("إسرائيل غزة") == "ar"
+    assert _dominant_script_lang("日本の首相は東京で") == "ja"  # kana present
+    assert _dominant_script_lang("윤석열 대통령은 서울") == "ko"
+    assert _dominant_script_lang("Hello world") is None
+
+
+@pytest.mark.asyncio
+async def test_m11_arabic_translates_then_extracts():
+    captured: list[httpx.Request] = []
+    arabic = "إسرائيل تشن غارات جوية على غزة"
+    english = "Israel launches airstrikes on Gaza"
+    handler_fn, _ = _make_ner_transport(
+        translations={arabic: english},
+        triples_by_text={english: [
+            {"subject": "Israel", "predicate": "country", "object": "Gaza"},
+        ]},
+        captured=captured,
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+
+    sig = _signal(text=arabic, language="ar")
+    out = await handler.transform(sig, _ctx())
+
+    paths = [r.url.path for r in captured]
+    assert "/translate" in paths and "/extract" in paths
+    # translate happens BEFORE extract.
+    assert paths.index("/translate") < paths.index("/extract")
+
+    # /translate got source_lang=ar, target=en, the original Arabic text.
+    treq = [r for r in captured if r.url.path == "/translate"][0]
+    tbody = json.loads(treq.content.decode("utf-8"))
+    assert tbody["source_lang"] == "ar"
+    assert tbody["target_lang"] == "en"
+    assert tbody["text"] == arabic
+
+    # /extract saw the ENGLISH translation, not the Arabic original.
+    ereq = [r for r in captured if r.url.path == "/extract"][0]
+    assert json.loads(ereq.content.decode("utf-8"))["text"] == english
+
+    # Entities extracted; provenance language stays the SOURCE lang (honest —
+    # the signal is Arabic even though NER ran on the translation).
+    entities = out.payload["entities"]
+    assert entities, "Arabic signal must now yield entities via translate-then-NER"
+    assert out.payload["ner_language"] == "ar"
+    assert all(e["lang"] == "ar" for e in entities)
+    await handler.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_m11_english_signal_not_translated():
+    captured: list[httpx.Request] = []
+    handler_fn, _ = _make_ner_transport(
+        default_triples=[
+            {"subject": "Alice", "predicate": "employer", "object": "Acme Corp"},
+        ],
+        captured=captured,
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(text="Alice works at Acme Corp.", language="en")
+    out = await handler.transform(sig, _ctx())
+    assert out.payload["entities"]
+    assert "/translate" not in [r.url.path for r in captured]
+    await handler.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_m11_latin_script_language_not_translated():
+    """French is Latin-script — English spaCy still recognises its proper
+    nouns, so it is NOT routed through translate (measured live: fr extracts)."""
+    captured: list[httpx.Request] = []
+    handler_fn, _ = _make_ner_transport(default_triples=[], captured=captured)
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(text="Le président a rencontré Emmanuel Macron à Paris.", language="fr")
+    await handler.transform(sig, _ctx())
+    assert "/translate" not in [r.url.path for r in captured]
+    await handler.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_m11_script_fallback_when_language_undetected():
+    """language_detect can return 'und'/'xx' on a short non-Latin body. The
+    script-detection fallback still routes it to translate (inferring the
+    source lang from the dominant script)."""
+    captured: list[httpx.Request] = []
+    russian = "Россия провела переговоры в Стамбуле"
+    english = "Russia held talks in Istanbul"
+    handler_fn, _ = _make_ner_transport(
+        translations={russian: english},
+        triples_by_text={english: [
+            {"subject": "Russia", "predicate": "event", "object": "talks"},
+        ]},
+        captured=captured,
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(text=russian, language="und")  # detection missed it
+    out = await handler.transform(sig, _ctx())
+    treqs = [r for r in captured if r.url.path == "/translate"]
+    assert treqs, "script fallback should have triggered a translate"
+    assert json.loads(treqs[0].content.decode("utf-8"))["source_lang"] == "ru"
+    assert out.payload["entities"]
+    await handler.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_m11_translate_failure_falls_back_to_direct_extract():
+    """A /translate outage must degrade gracefully: fall back to extracting
+    the original text (empty for non-Latin, but the signal still flows and the
+    gap is counted, not silent)."""
+    captured: list[httpx.Request] = []
+    arabic = "إسرائيل غزة تصعيد"
+    handler_fn, _ = _make_ner_transport(
+        translate_status=503,
+        default_triples=[],  # English NER on Arabic yields nothing (realistic)
+        captured=captured,
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(text=arabic, language="ar")
+    out = await handler.transform(sig, _ctx())
+
+    paths = [r.url.path for r in captured]
+    assert "/translate" in paths  # attempted
+    assert "/extract" in paths    # fell back
+    # /extract got the ORIGINAL Arabic (the fallback path).
+    ereq = [r for r in captured if r.url.path == "/extract"][0]
+    assert json.loads(ereq.content.decode("utf-8"))["text"] == arabic
+    assert out.payload["entities"] == []      # empty, but signal passed through
+    assert out.payload["ner_language"] == "ar"
+
+    # The failure is COUNTED (visible), not silent.
+    health = await handler.health_check(_ctx())
+    assert health.detail["translate_failures"] == 1
+    await handler.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_m11_translate_disabled_skips_translation():
+    captured: list[httpx.Request] = []
+    handler_fn, _ = _make_ner_transport(default_triples=[], captured=captured)
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(
+        NERMultilingualConfig(translate_before_ner=False), nlp_client=client,
+    )
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(text="إسرائيل غزة", language="ar")
+    await handler.transform(sig, _ctx())
+    assert "/translate" not in [r.url.path for r in captured]
+    await handler.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_m11_health_surfaces_translate_counters():
+    captured: list[httpx.Request] = []
+    arabic = "إسرائيل تشن غارات"
+    english = "Israel launches strikes"
+    handler_fn, _ = _make_ner_transport(
+        translations={arabic: english},
+        triples_by_text={english: [
+            {"subject": "Israel", "predicate": "country", "object": "Gaza"},
+        ]},
+        captured=captured,
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    await handler.transform(_signal(text=arabic, language="ar"), _ctx())
+    health = await handler.health_check(_ctx())
+    assert health.detail["translate_calls"] == 1
+    assert health.detail["translate_failures"] == 0
+    assert "ar" in health.detail["translate_languages"]
+    await handler.on_retire(_ctx())
+
+
+# ===========================================================================
+# B0-7 (2026-07-10) — markdown link/bold syntax is stripped BEFORE /extract
+# ===========================================================================
+#
+# Telegram payload.text carries raw markdown ("[**title**](url)") verbatim.
+# Fed to /extract unstripped, the NER emits spans still wearing the syntax
+# ("Ayatollah Ali Khamenei**](https://f24.my" — 115 junk entity_profiles
+# minted live) including MID-NAME residue ("S**ergey") that the canon's
+# name-level junk gate can't reject without losing the referent. The fix is
+# a conservative regex pass in _extract_text: "[text](url)" -> text and
+# paired "**text**" -> text; legitimate brackets in prose are untouched.
+
+
+def test_b07_extract_text_strips_markdown_link_and_bold():
+    handler = NERMultilingualHandler(NERMultilingualConfig())
+    sig = _signal(
+        text="[**Middle East live: Iran begins funeral**](https://f24.my/C2Ba.g)"
+    )
+    assert handler._extract_text(sig) == "Middle East live: Iran begins funeral"
+
+
+def test_b07_extract_text_strips_midname_bold_residue():
+    # The "S**ergey" class — bold markers splitting a name mid-token.
+    handler = NERMultilingualHandler(NERMultilingualConfig())
+    sig = _signal(text="Foreign Minister S**ergey Lavrov** spoke to reporters.")
+    assert handler._extract_text(sig) == (
+        "Foreign Minister Sergey Lavrov spoke to reporters."
+    )
+
+
+def test_b07_extract_text_leaves_legitimate_brackets_alone():
+    # Conservative pass: prose brackets without "](" adjacency, parentheticals,
+    # and unpaired asterisks are NOT rewritten.
+    handler = NERMultilingualHandler(NERMultilingualConfig())
+    for prose in (
+        "The report [sic] said (see appendix) nothing changed.",
+        "Indices a[1] (zero-based) are unaffected.",
+        "A single * asterisk survives.",
+    ):
+        assert handler._extract_text(_signal(text=prose)) == prose
+
+
+def test_b07_extract_text_plain_text_unchanged():
+    handler = NERMultilingualHandler(NERMultilingualConfig())
+    sig = _signal(title="Plain title", body="Plain body text.")
+    assert handler._extract_text(sig) == "Plain title\nPlain body text."
+
+
+@pytest.mark.asyncio
+async def test_b07_extract_wire_body_receives_markdown_free_text():
+    """End-to-end: a telegram markdown signal reaches /extract already clean."""
+    captured: list[httpx.Request] = []
+    handler_fn, _ = _make_ner_transport(
+        default_triples=[
+            {"subject": "Ayatollah Ali Khamenei", "predicate": "head of state",
+             "object": "Iran"},
+        ],
+        captured=captured,
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(
+        text="[**Iran begins funeral for Ayatollah Ali Khamenei**](https://f24.my/C2Ba.g)",
+        language="en",
+    )
+    out = await handler.transform(sig, _ctx())
+    assert out is not None
+    extract_reqs = [r for r in captured if r.url.path == "/extract"]
+    assert extract_reqs, "expected an /extract call"
+    body = json.loads(extract_reqs[0].content.decode("utf-8"))
+    assert body["text"] == "Iran begins funeral for Ayatollah Ali Khamenei"
+    assert "](" not in body["text"] and "**" not in body["text"]
+    await handler.on_retire(_ctx())

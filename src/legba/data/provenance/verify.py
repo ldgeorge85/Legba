@@ -288,6 +288,33 @@ async def validate_lineage(
 # Marker for a bare ``[3]`` citation (mirrors inline_target._CITATION_MARKER_RE).
 _CLAIM_MARKER_RE = re.compile(r"\[(\d+)\]")
 
+# M14 (2026-07-06) — a RANGE citation marker ``[1-92]`` / ``[1–92]`` cites the
+# WHOLE enumerated corpus (the shape a survey / NULL-RESULT finding uses: "51 of
+# the 92 signals concern floods/sports/trade [1-92]"). The bare-marker regex
+# ``\[(\d+)\]`` NEVER matches a range (its first digit is followed by '-', not
+# ']'), so a range-cited clause was read as ``no_citation`` and an honest survey
+# floored to ~0. This expands a range to its integer members (hyphen / en- / em-
+# dash) so the floor resolves the clause against the citation bridge like any
+# multi-marker clause. Capped so a pathological ``[1-999999]`` can't fan out.
+_CLAIM_RANGE_RE = re.compile(r"\[(\d+)\s*[-–—]\s*(\d+)\]")
+_MAX_RANGE_WIDTH = 500
+
+# M14 — an explicit ``[no citation]`` annotation is the assessor flagging a clause
+# as DELIBERATELY un-citable (a synthesis / framing / corpus-survey line), NOT a
+# fabricated fact. The floor treats it as floor-EXEMPT (see _is_fact_asserting);
+# the JUDGE still grades it (a fabricated absence must not hide behind the marker).
+_NO_CITATION_MARKER = "[no citation]"
+
+
+def _range_markers(claim: str) -> set[int]:
+    """Integer marker indices contributed by RANGE citations ``[lo-hi]`` (M14)."""
+    out: set[int] = set()
+    for m in _CLAIM_RANGE_RE.finditer(claim):
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if lo <= hi and (hi - lo) <= _MAX_RANGE_WIDTH:
+            out.update(range(lo, hi + 1))
+    return out
+
 # Marker for a composition ``[[ref:N]]`` citation — a 1-BASED ORDINAL (small int)
 # naming the Nth cited sub-claim in the rendered bundle. This is a LOCAL copy of
 # meta_findings_synthesizer._REF_MARKER_RE (NOT imported — verify.py stays
@@ -626,7 +653,11 @@ class UnsupportedSpan:
     one independent evidence unit) and ``hedge_laundering`` (a composed clause
     asserts more confidence than the sub-claim it rests on), plus the S3-T1
     ``indicator_uncited_triggered`` (a structured ``data.indicators[]`` entry with
-    status ``triggered`` that carries no citation).
+    status ``triggered`` that carries no citation), plus the write/verify-time
+    world-knowledge guards ``stale_leader`` (M13 — a stale-cutoff current-office-
+    holder reference, e.g. calling the sitting president "former") and
+    ``cross_target_leak`` (M15 — a per-country finding naming only OTHER countries
+    than its desk target).
     """
 
     text: str
@@ -674,6 +705,15 @@ class FaithfulnessReport:
     # composition can be at most as confident as its strongest INDEPENDENT
     # cited sub-claim.
     confidence_ceiling: float | None = None
+    # V3 (MP:DEC-E) — per-claim-KIND sub-scores from the LLM judge, recorded and
+    # never hidden (design §2.3). Maps each judged kind →
+    # ``{"checkable", "supported", "score"}``. Empty ``{}`` on the deterministic
+    # (judge-off / judge-unavailable) path, for the unit/composition floor, AND
+    # on the M14 whole-finding survey path (ONE rubric grades the whole claim
+    # list there — per-branch attribution would be fabricated). The headline
+    # ``faithfulness_score`` stays the POOLED ratio across ALL kinds, so no
+    # per-branch weighting can launder a bad kind behind a good one.
+    branch_scores: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -688,6 +728,7 @@ class FaithfulnessReport:
                 if self.confidence_ceiling is not None
                 else None
             ),
+            "branch_scores": self.branch_scores,
         }
 
 
@@ -727,18 +768,51 @@ def _marker_to_signal_id(citations: Any) -> dict[int, str]:
     return out
 
 
+# FAITHFULNESS TRUST BOUNDARY (2026-07): when a citation carries ``source_text``
+# (the RAW authoritative article — see inline_target._build_citation_index) the
+# judge grounds against IT, not against the analyst's ``snippet`` (which may be a
+# ``distilled_body`` LLM summary). The source portion is bounded generously (the
+# article is fuller than the summary, so a faithful summary point still traces to
+# it) and the whole evidence string is capped so the judge prompt can't bloat.
+# When the SOURCE is re-truncated here (or was already an excerpt at build time),
+# the judge is told so and softens "absent => unsupported" to "contradicted =>
+# unsupported" (F1) — otherwise a claim the analyst faithfully drew from deep in a
+# long article would be false-demoted for being past the excerpt cut.
+_EVIDENCE_SOURCE_CHARS = 3000
+_EVIDENCE_TOTAL_CHARS = 3600
+# BACKWARD-COMPAT (F3): entries with NO ``source_text`` (old data / non-signal
+# path) keep the ORIGINAL 600-char total cap so the C1 verify-floor calibration on
+# pre-existing findings is byte-unchanged. The larger caps above apply ONLY to the
+# new source_text-grounded branch.
+_EVIDENCE_LEGACY_CHARS = 600
+
+
 def _marker_to_evidence(citations: Any) -> dict[int, str]:
     """Map each citation's ``[N]`` marker index → its EVIDENCE TEXT — the cited
-    signal's title/headline — so the LLM judge can verify a claim against the
+    signal's authoritative source (+ title, + the analyst's working summary as
+    labelled secondary context) — so the LLM judge can verify a claim against the
     signal's actual CONTENT rather than an opaque UUID.
 
     The unit judge previously received :func:`_marker_to_signal_id` (``{N ->
     signal_id}``), i.e. UUIDs; a judge handed only a UUID cannot verify anything
     and marks even properly-cited claims ``unsupported`` (the dominant unit-score
     crusher). This mirrors the composition path's ``_ordinal_evidence_map`` (which
-    already supplies sub-claim text). Falls back to the source URL, then the
-    signal_id, only when no title is present — never fabricates evidence. Only
-    entries carrying a resolvable ``signal_id`` (a real cited signal) contribute.
+    already supplies sub-claim text).
+
+    FAITHFULNESS TRUST BOUNDARY: when the citation carries ``source_text`` (the RAW
+    article the summarizer distilled from — NEVER the analyst-read ``distilled_body``
+    summary), the judge is grounded on that SOURCE, LABELLED authoritative; the
+    analyst's ``snippet`` (its working text, distilled-first) rides along as
+    LABELLED secondary context ONLY when it is a genuinely DISTINCT summary (F4). A
+    claim present only in the summary but absent from a COMPLETE source is thus
+    UNSUPPORTED (a summarizer hallucination can't be rubber-stamped). When the
+    source is an EXCERPT (``source_truncated`` / re-truncated here), the judge is
+    told so and softens to "contradicted => unsupported" — a claim the analyst
+    faithfully drew from deep in a long article is NOT false-demoted for being past
+    the cut (F1). Entries with NO ``source_text`` (old data, non-signal path) keep
+    the prior title/snippet/source/id fallback chain byte-for-byte, at the ORIGINAL
+    600-char cap (F3). Never fabricates evidence; only entries carrying a resolvable
+    ``signal_id`` (a real cited signal) contribute.
     """
     out: dict[int, str] = {}
     if not isinstance(citations, (list, tuple)):
@@ -753,13 +827,14 @@ def _marker_to_evidence(citations: Any) -> dict[int, str]:
         m = _CLAIM_MARKER_RE.search(marker)
         if not m:
             continue
-        # (#116e) Feed the judge the cited signal's TITLE + SNIPPET (its captured
-        # summary/lede), mirroring the composition path's evidence_text — a title
-        # alone can be too terse for the judge to confirm a specific claim, so a
-        # properly-cited clause gets mis-graded DOWN. Fall back to title-only, then
-        # snippet-only, then the source URL, then the id — never fabricated.
+        # (#116e) Feed the judge the cited signal's TITLE + evidence text, mirroring
+        # the composition path's evidence_text — a title alone can be too terse for
+        # the judge to confirm a specific claim, so a properly-cited clause gets
+        # mis-graded DOWN. Fall back to title-only, then snippet-only, then the
+        # source URL, then the id — never fabricated.
         title = entry.get("title")
         source = entry.get("source")
+        source_text = entry.get("source_text")
         snippet = (
             entry.get("snippet")
             or entry.get("evidence_text")
@@ -767,17 +842,57 @@ def _marker_to_evidence(citations: Any) -> dict[int, str]:
         )
         title_txt = title.strip() if isinstance(title, str) and title.strip() else ""
         snip_txt = snippet.strip() if isinstance(snippet, str) and snippet.strip() else ""
-        if title_txt and snip_txt:
+        src_full = (
+            source_text.strip()
+            if isinstance(source_text, str) and source_text.strip()
+            else ""
+        )
+        src_txt = src_full[:_EVIDENCE_SOURCE_CHARS]
+        # F1: the SOURCE is an EXCERPT if it was flagged truncated at build time
+        # (cleaned raw exceeded the store cap) OR we re-truncate it here. Either way
+        # the judge must NOT demote a cited claim merely for being absent from the
+        # shown text — only for being CONTRADICTED by it.
+        source_truncated = bool(entry.get("source_truncated")) or (
+            len(src_full) > _EVIDENCE_SOURCE_CHARS
+        )
+        if src_txt:
+            # TRUST BOUNDARY: ground the judge on the RAW authoritative SOURCE; the
+            # analyst summary is LABELLED secondary context only (the judge prompt
+            # says a fact present only in a COMPLETE source is UNSUPPORTED; for an
+            # EXCERPT the summary shows what the fuller article covered). F4: skip the
+            # summary line when the analyst read raw directly — i.e. snippet is the
+            # same as, or a leading prefix of, the source (no distinct distilled_body).
+            parts = []
+            if title_txt:
+                parts.append(title_txt)
+            if source_truncated:
+                parts.append(
+                    "SOURCE (authoritative excerpt — the full article is longer "
+                    f"than shown): {src_txt}"
+                )
+            else:
+                parts.append(f"SOURCE (authoritative): {src_txt}")
+            if snip_txt and snip_txt != src_txt and not src_txt.startswith(snip_txt):
+                parts.append(f"Analyst summary: {snip_txt}")
+            text = "\n".join(parts)
+            cap = _EVIDENCE_TOTAL_CHARS
+        elif title_txt and snip_txt:
+            # Backward-compat (no source_text): the prior title + snippet evidence.
             text = f"{title_txt} — {snip_txt}"
+            cap = _EVIDENCE_LEGACY_CHARS
         elif title_txt:
             text = title_txt
+            cap = _EVIDENCE_LEGACY_CHARS
         elif snip_txt:
             text = snip_txt
+            cap = _EVIDENCE_LEGACY_CHARS
         elif isinstance(source, str) and source.strip():
             text = source.strip()
+            cap = _EVIDENCE_LEGACY_CHARS
         else:
             text = sid
-        out[int(m.group(1))] = str(text)[:600]
+            cap = _EVIDENCE_LEGACY_CHARS
+        out[int(m.group(1))] = str(text)[:cap]
     return out
 
 
@@ -1044,6 +1159,12 @@ def _is_fact_asserting(claim: str) -> bool:
     if not stripped:
         return False
     low = stripped.lower()
+    # M14: an explicit ``[no citation]`` annotation marks a DELIBERATELY un-citable
+    # synthesis / survey clause — floor-exempt (not an uncited-fact defect). The
+    # judge still grades it (via _is_judgeable_claim), so a fabricated absence
+    # dressed up with the marker is still caught semantically.
+    if _NO_CITATION_MARKER in low:
+        return False
     # A markdown heading line is structure, not an assertion.
     if s.lstrip().startswith("#"):
         return False
@@ -1080,14 +1201,11 @@ def _is_fact_asserting(claim: str) -> bool:
     # — flagging it no_citation crushed honest low-risk reads. A clause OPENING
     # with a bare "No " is a non-occurrence assertion ("No election … is reported",
     # "No military unrest … appears") — nothing exists to cite; guard only the rare
-    # positive "No fewer/less than" idioms.
-    if (low.startswith("no ") or low.startswith("none ")) and not low.startswith(
-        ("no fewer", "no less", "no longer", "no doubt", "no single", "no one")
-    ):
+    # positive "No fewer/less than" idioms. V3: this test is factored into
+    # ``_is_absence_claim`` so the floor exemption and the classifier's ``absence``
+    # route share ONE definition and cannot drift apart.
+    if _is_absence_claim(low):
         return False
-    for marker in _ABSENCE_MARKERS:
-        if marker in low:
-            return False
     # Require at least a few word characters so a stray "—" / "..." isn't a claim.
     if len(re.findall(r"[A-Za-z]{2,}", stripped)) < 2:
         return False
@@ -1144,6 +1262,261 @@ def _is_judgeable_claim(claim: str) -> bool:
     if len(re.findall(r"[A-Za-z]{2,}", stripped)) < 2:
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# V3 (2026-07-16, MP:DEC-E) — per-CLAIM-KIND classifier + versioned judge
+# profiles. The absence branch is the ONLY branch DEC-E approves building; the
+# scaffolding (classifier + profile registry + per-branch telemetry) is the
+# shared substrate every later branch (synthesis / forward_looking / stance /
+# V5 support-hardening) plugs into WITHOUT touching the core (design §2.4).
+#
+# The classifier is DETERMINISTIC + pure-lexical (verify.py imports nothing from
+# the analysts package): it is the thing that STOPS the measured 0.0/0.2/1.0
+# variance on identical absence prose, because the variance came from handing an
+# absence sentence to the free-latitude generic judge prompt — a deterministic
+# route to a constrained per-kind prompt removes that latitude. Every span is
+# assigned EXACTLY ONE kind (first-match-wins priority order → total + stable);
+# the ``narrative`` register is a MODIFIER carried from the analyst kind at the
+# call site, NOT a sixth kind, so it can never mis-partition the routing.
+#
+# COEXISTENCE with M14 (the whole-finding null-result survey below): M14 is a
+# WHOLE-FINDING route (≤1 positive claim ⇒ the survey rubric grades the entire
+# claim list as one corpus survey); the V3 absence branch is the PER-CLAIM route
+# for the embedded-absence-in-a-fact-rich-finding case M14 misses (design §3.2
+# #4 / §3.5). ``_run_judge`` checks M14 FIRST and only partitions when the
+# finding is NOT a whole-finding null — the two never compete.
+# ---------------------------------------------------------------------------
+
+# Claim-kind labels (design §2.1). ``citation_support`` is the residual — every
+# fact-asserting span that is none of the four structural/derived kinds.
+CLAIM_KIND_STRUCTURE = "structure"
+CLAIM_KIND_FORWARD_LOOKING = "forward_looking"
+CLAIM_KIND_ABSENCE = "absence"
+CLAIM_KIND_SYNTHESIS = "synthesis"
+CLAIM_KIND_CITATION_SUPPORT = "citation_support"
+
+
+def _is_absence_claim(low: str) -> bool:
+    """True when a lower-cased span is an ABSENCE / NEGATIVE assertion.
+
+    Byte-identical to the FLOOR's absence exemption test in
+    :func:`_is_fact_asserting` (the bare ``no ``/``none `` opener minus the
+    positive-idiom guard, OR any ``_ABSENCE_MARKERS`` phrase) — extracted so the
+    V3 classifier routes on the SAME calibrated lexical set the 10 in-window
+    recalibrations tuned, guaranteeing the route and the floor exemption agree.
+    """
+    if (low.startswith("no ") or low.startswith("none ")) and not low.startswith(
+        ("no fewer", "no less", "no longer", "no doubt", "no single", "no one")
+    ):
+        return True
+    return any(marker in low for marker in _ABSENCE_MARKERS)
+
+
+def _claim_kind(claim: str) -> str:
+    """Assign a segmented span EXACTLY ONE claim kind (design §2.1).
+
+    First-match-wins PRIORITY ORDER — structure > forward_looking > absence >
+    synthesis > citation_support — so the function is TOTAL (always returns a
+    kind) and STABLE (deterministic, pure-lexical). Reuses the already-live
+    lexical anchors (``_is_bold_heading``, ``_is_forward_looking``,
+    ``_LABELED_SCAFFOLD_RE``, ``_ABSENCE_MARKERS``, ``_SYNTHESIS_PREFIXES``,
+    ``_NO_CITATION_MARKER``) that the historical recalibrations calibrated, so a
+    span classified ``absence`` here is the SAME span the floor exempts as
+    absence — the route and the floor's exemptions cannot drift apart.
+
+    NOTE (V3 scope): only the ``absence`` route is consumed by a dedicated judge
+    profile in this train; the other kinds are classified for TELEMETRY
+    (``branch_scores``) and route to the existing prompt, per DEC-E.
+    """
+    s = claim.strip()
+    stripped = s.lstrip("#-*> ").strip()
+    low = stripped.lower()
+    # structure — a markdown/bold heading, a labeled ``**Severity:**`` scaffold,
+    # or a pure-marker span (matched on the ORIGINAL span so ``**``/``[N]`` are
+    # intact). This is the highest priority: a heading is never a claim of any
+    # other kind.
+    if (
+        s.lstrip().startswith("#")
+        or _is_bold_heading(s)
+        or _LABELED_SCAFFOLD_RE.match(s.strip())
+        or _CITATION_ONLY_RE.match(s)
+    ):
+        return CLAIM_KIND_STRUCTURE
+    for head in _NON_FACTUAL_HEADINGS:
+        if low.startswith(head):
+            return CLAIM_KIND_STRUCTURE
+    # forward_looking — a future-conditional idiom governs the whole clause. Runs
+    # BEFORE absence so a ``would confirm``/``to watch for`` signpost stays a
+    # prediction, never mis-routed to the absence prompt (design §3.6 test).
+    if _is_forward_looking(low):
+        return CLAIM_KIND_FORWARD_LOOKING
+    # absence — the negative-finding class this branch owns.
+    if _is_absence_claim(low):
+        return CLAIM_KIND_ABSENCE
+    # synthesis — a BLUF / Assessed / JUDGMENT derived-read opener, or a span the
+    # assessor explicitly flagged ``[no citation]`` (M14: a deliberately
+    # un-citable synthesis / framing line — design §2.1 table). Ordered AFTER
+    # absence so a marked absence still routes to the absence rubric.
+    if _NO_CITATION_MARKER in low:
+        return CLAIM_KIND_SYNTHESIS
+    for pref in _SYNTHESIS_PREFIXES:
+        if low.startswith(pref):
+            return CLAIM_KIND_SYNTHESIS
+    # citation_support — everything else (the residual fact-asserting span).
+    return CLAIM_KIND_CITATION_SUPPORT
+
+
+@dataclass(frozen=True)
+class JudgeProfile:
+    """A versioned per-claim-kind judge profile (design §2.2).
+
+    The profiles are CODE, versioned by a string stamp — NOT a descriptor, NOT a
+    migration. A critique records ``data.verification.branch_versions = {kind:
+    version, ...}`` for the profiles that RAN, so a recalibration becomes a
+    visible, greppable, per-kind version bump (the plan's "versioned judge
+    profiles" / "5-recalibrations-in-8-days class") instead of an invisible
+    edit buried among flat-file commits.
+
+    ``judge_system is None`` ⇒ the kind is classified for TELEMETRY only and is
+    NOT sent to a dedicated judge call — it rides the existing shared prompt (the
+    DEC-E scope boundary: only ``absence`` and ``citation_support`` carry a
+    prompt in this train).
+    """
+
+    kind: str
+    version: str
+    # The system prompt for this kind's dedicated judge call. ``None`` ⇒ no
+    # dedicated call (telemetry-only kind; rides the shared prompt).
+    judge_system: str | None = None
+
+
+# The absence-branch judge system prompt (design §3.4). A NEGATIVE-specific
+# rubric: the free-latitude "is this cited?" framing that produced the 0.0/0.2/
+# 1.0 spread is replaced with an explicit supported/contradicted/unsupported
+# rubric for absence claims, scoped to the searched evidence set. Output is the
+# SAME flat ``{"verdicts": [...]}`` shape the shared judge emits (deterministic
+# parse; no nested schema — nested crashed the pipeline twice).
+_ABSENCE_JUDGE_SYSTEM = (
+    "You are a faithfulness judge grading ABSENCE / NEGATIVE claims — statements "
+    "that something did NOT occur, was NOT observed, or is NOT evidenced. You are "
+    "given the evidence set the analyst searched (the [N] -> evidence map below) "
+    "and a list of absence claims. For each absence claim decide EXACTLY ONE "
+    "verdict:\n"
+    "- supported: the evidence set genuinely does NOT contain the thing the claim "
+    "says is absent, AND the claim's scope matches the evidence searched (a claim "
+    "scoped to 'the reviewed signals' / a named country / a stated corpus is "
+    "judged against THAT scope, not the whole world).\n"
+    "- contradicted: the evidence set plainly SHOWS the very thing the claim says "
+    "is absent (e.g. the claim says 'no strikes reported' but a cited item reports "
+    "a strike). A contradicted absence is the highest-severity error.\n"
+    "- unsupported: the claim asserts an absence that is UNBOUNDED or unscoped "
+    "('nothing is happening', 'there is no risk anywhere') that the searched "
+    "evidence cannot possibly establish, OR names a specific missing "
+    "event/number/place with a scope the evidence set does not cover.\n"
+    "Do NOT mark a scoped, evidence-consistent absence 'unsupported' merely "
+    "because a negative has no citation — a correctly-scoped negative over a "
+    "searched set is the normal, faithful shape of an honest low-risk read. "
+    'Output strict JSON only: {"verdicts": ["supported"|"contradicted"|'
+    '"unsupported", ...]} with one verdict per claim, in order. Output only the '
+    "JSON object."
+)
+
+# The versioned profile registry (design §2.2 / §5.2 step 2). ``absence`` and
+# ``citation_support`` carry a prompt this train; the other three kinds are
+# stubbed (judge_system=None → telemetry-only), stamped so a later train that
+# gives them a prompt is a visible per-kind version bump. Bump a ``version`` on
+# ANY prompt/floor-semantics change to that kind.
+_JUDGE_PROFILES: dict[str, JudgeProfile] = {
+    CLAIM_KIND_CITATION_SUPPORT: JudgeProfile(
+        kind=CLAIM_KIND_CITATION_SUPPORT,
+        version="citsupp.v3",
+        judge_system=None,  # rides the existing unit/composition prompt in _run_judge
+    ),
+    CLAIM_KIND_ABSENCE: JudgeProfile(
+        kind=CLAIM_KIND_ABSENCE,
+        version="absence.v1",
+        judge_system=_ABSENCE_JUDGE_SYSTEM,
+    ),
+    CLAIM_KIND_SYNTHESIS: JudgeProfile(
+        kind=CLAIM_KIND_SYNTHESIS, version="synthesis.v0", judge_system=None
+    ),
+    CLAIM_KIND_FORWARD_LOOKING: JudgeProfile(
+        kind=CLAIM_KIND_FORWARD_LOOKING, version="fwd.v0", judge_system=None
+    ),
+    CLAIM_KIND_STRUCTURE: JudgeProfile(
+        kind=CLAIM_KIND_STRUCTURE, version="structure.v0", judge_system=None
+    ),
+}
+
+
+# M14 (2026-07-06) — the corpus-SURVEY shape a NULL-RESULT finding uses to
+# characterize what the enumerated signals DO contain ("51 of the 92 signals
+# focus on floods/sports/trade", "none of the 78 signals reference …"). Paired
+# with the absence markers to detect the null-result finding shape below.
+_SURVEY_SHAPE_RE = re.compile(
+    r"\b\d+\s+signals?\b"
+    r"|\bsignals?\s+(?:focus|concern|relate|reference|are about|center|centre|"
+    r"revolve|pertain|discuss|cover)\b"
+    r"|\bnone\s+of\s+the\s+\d+\b"
+    r"|\bacross\s+(?:the\s+)?(?:examined|reviewed|available|analy[sz]ed)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_null_result_finding(body: str) -> bool:
+    """True for an honest NULL-RESULT / corpus-survey finding (M14).
+
+    The class the faithfulness judge most crushes: a unit that correctly reports
+    "nothing concerning found — the N signals are about floods/sports/trade".
+    Its content is a corpus-scoped NEGATIVE plus a survey of what the signals DO
+    show; almost nothing is individually citable. The judge grading each clause
+    "is this cited?" scores such honest nulls like fabrications (observed
+    0.0/0.2/1.0 across runs). When this fires, :func:`_run_judge` routes the
+    finding to a SURVEY rubric ("is this a faithful survey of the enumerated
+    evidence?") instead of per-clause citation.
+
+    Conservative: requires an ABSENCE or SURVEY signal AND that the finding asserts
+    at most one individually-citable positive fact (``_is_fact_asserting`` already
+    exempts absence / BLUF / synthesis, so a genuine null nets ~0 positive claims).
+    A finding rich in positive cited facts is NOT a null-result and keeps the
+    standard per-clause rubric.
+    """
+    if not body:
+        return False
+    low = body.lower()
+    has_absence = any(m in low for m in _ABSENCE_MARKERS) or bool(
+        re.search(r"(?:^|[\n.:;–—-])\s*(?:no|none)\b", low)
+    )
+    has_survey = bool(_SURVEY_SHAPE_RE.search(body))
+    if not (has_absence or has_survey):
+        return False
+    positive = [c for c in _segment_claims(body) if _is_fact_asserting(c)]
+    return len(positive) <= 1
+
+
+# M14 — the NULL-RESULT judge rubric. A survey-scoped grade for an honest
+# corpus-negative, so an un-citable NEGATIVE is not marked "unsupported" merely
+# for lacking a per-clause ``[N]``.
+_NULL_RESULT_JUDGE_SYSTEM = (
+    "You are a faithfulness judge grading a NULL-RESULT / corpus-survey finding. "
+    "Its core claim is a NEGATIVE ('no X observed / reported') together with a "
+    "survey of what the enumerated signals DO contain. Grade each claim as a "
+    "FAITHFUL SURVEY of the cited/enumerated evidence — NOT by whether each clause "
+    "carries its own citation. A stated ABSENCE is SUPPORTED unless the evidence "
+    "actually SHOWS the thing said to be absent; a survey characterization is "
+    "SUPPORTED unless it misdescribes the corpus; reasonable framing / severity / "
+    "risk judgement is SUPPORTED. Mark UNSUPPORTED only when the finding claims the "
+    "absence of something the evidence plainly contains, or asserts a SPECIFIC "
+    "event/number/name/place absent from all the evidence; mark CONTRADICTED only "
+    "when the evidence directly refutes it. Output only the JSON object."
+)
+_NULL_RESULT_PROMPT_PREFIX = (
+    "This is a NULL-RESULT / corpus-survey finding: judge whether it is a FAITHFUL "
+    "SURVEY of the evidence below (does the evidence set genuinely LACK what the "
+    "finding says is absent, and does it accurately characterize what the signals "
+    "contain?), rather than whether each clause is individually cited.\n\n"
+)
 
 
 def _segment_claims(body: str) -> list[str]:
@@ -1223,7 +1596,12 @@ def _deterministic_floor(
     supported = 0
     spans: list[UnsupportedSpan] = []
     for claim in claims:
-        markers = sorted({int(m.group(1)) for m in _CLAIM_MARKER_RE.finditer(claim)})
+        # M14: fold RANGE markers ``[lo-hi]`` in alongside bare ``[N]`` markers so a
+        # corpus-survey clause that cites the whole enumerated set resolves.
+        markers = sorted(
+            {int(m.group(1)) for m in _CLAIM_MARKER_RE.finditer(claim)}
+            | _range_markers(claim)
+        )
         if not markers:
             spans.append(UnsupportedSpan(text=claim, reason="no_citation"))
             continue
@@ -1431,6 +1809,202 @@ def _fold_indicators(
     )
 
 
+# ---------------------------------------------------------------------------
+# M13 / M15 (2026-07-06) — write/verify-time world-knowledge + target guards
+# ---------------------------------------------------------------------------
+#
+# The faithfulness judge grades CITATION-support, not world-knowledge, so two
+# defect classes both the citation floor AND the judge miss:
+#
+#   M13 STALE-CUTOFF LEADER — an assessor back-fills a current officeholder from a
+#     pre-cutoff training prior ("renewed cooperation via FORMER President Trump"
+#     while the cited signals establish Trump as the SITTING president).
+#   M15 CROSS-TARGET LEAK — a per-country UNIT finding whose named subject-country
+#     is the WRONG one (a Turkey desk head titled/bodied entirely "Romania").
+#
+# Both are cheap LEXICAL backstops that FLAG (add an unsupported span → demote
+# effective_confidence via the min(confidence, faithfulness) gate), NEVER delete.
+# Kept LOCAL + stdlib-only so verify.py stays slim-image-safe (no runtime import);
+# the curated maps deliberately MIRROR their runtime counterparts (the
+# legba.runtime.grounding current-officeholder anchor / finding_is_off_target
+# gazetteer) — minimal by design (US president only; a small country-token set).
+
+_STALE_LEADER_REASON = "stale_leader"
+_CROSS_TARGET_REASON = "cross_target_leak"
+
+# Curated CURRENT officeholders (US president ONLY — the one clear live stale-
+# cutoff error; extend only for a NEW confirmed live error). Two stale shapes:
+#   * a "former/ex/past ... <current holder>" reference — calling the SITTING
+#     holder "former" is always a temporal error;
+#   * a predecessor asserted as the CURRENT / sitting holder.
+# The qualifier→title separator is ``[-\s]+`` so the HYPHENATED "ex-President
+# Trump" matches (``ex`` + ``-`` + ``President``) as well as the spaced forms
+# ("former President Trump" / "past President Trump").
+_STALE_TRUMP_FORMER_RE = re.compile(
+    r"\b(?:former|ex|past|previous)[-\s]+(?:u\.?\s?s\.?\s+)?presidents?\s+"
+    r"(?:donald\s+(?:j\.?\s+)?)?trump\b"
+    r"|\btrump\b\s*,?\s+(?:the\s+)?(?:former|ex|past|previous)[-\s]+"
+    r"(?:u\.?\s?s\.?\s+)?president\b",
+    re.IGNORECASE,
+)
+# A predecessor asserted AS THE CURRENT holder — ONLY explicit current-frame
+# shapes. The bare "now/today within N chars" proximity is DELIBERATELY dropped:
+# it false-flagged "President Biden, NOW a private citizen" (which correctly says
+# Biden is out of office). Two accepted shapes: an explicit "current/sitting/
+# incumbent (US) president … Biden", or "President Biden {remains in office | is
+# the current/sitting president}".
+_STALE_WRONG_POTUS_RE = re.compile(
+    r"\b(?:current|sitting|incumbent)\s+(?:u\.?\s?s\.?\s+)?president[^.\n;]{0,32}"
+    r"\b(?:joe\s+)?biden\b"
+    r"|\bpresident\s+(?:joe\s+)?biden\b[^.\n;]{0,24}"
+    r"\b(?:remains?\s+in\s+office|is\s+(?:the\s+)?(?:current|sitting|incumbent)(?:\s+president)?)\b",
+    re.IGNORECASE,
+)
+_STALE_LEADER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_STALE_TRUMP_FORMER_RE,
+     "the current US president is Donald Trump, not a 'former' one"),
+    (_STALE_WRONG_POTUS_RE,
+     "the current US president is Donald Trump, not Biden"),
+)
+
+
+def stale_leader_spans(text: str) -> list[UnsupportedSpan]:
+    """FLAG stale-cutoff current-leader errors in ``text`` (M13).
+
+    Curated + US-only + conservative — at most one span per pattern. Never raises.
+    """
+    if not text:
+        return []
+    spans: list[UnsupportedSpan] = []
+    for regex, label in _STALE_LEADER_PATTERNS:
+        m = regex.search(text)
+        if m:
+            frag = text[max(0, m.start() - 12): m.end() + 12].strip()
+            spans.append(
+                UnsupportedSpan(
+                    text=f"stale current-leader reference — {label} (…{frag}…)"[:400],
+                    reason=_STALE_LEADER_REASON,
+                )
+            )
+    return spans
+
+
+# A compact country gazetteer + desk-slug expansion, MIRRORING
+# legba.runtime.grounding (_KNOWN_COUNTRY_TOKENS / _TARGET_SLUG_TO_NAMES) — a
+# deliberate slim-safe local copy so verify.py imports nothing from runtime.
+_TARGET_SLUG_TO_COUNTRY: dict[str, tuple[str, ...]] = {
+    "us": ("united states", "america", "u.s.", "usa"),
+    "cn": ("china",), "ru": ("russia",), "ir": ("iran",), "il": ("israel",),
+    "in": ("india",), "id": ("indonesia",), "br": ("brazil",),
+    "ar": ("argentina",), "mx": ("mexico",), "ca": ("canada",),
+    "fr": ("france",), "de": ("germany",), "it": ("italy",),
+    "gb": ("united kingdom", "britain", "uk"), "uk": ("united kingdom", "britain"),
+    "jp": ("japan",), "kr": ("south korea", "korea"), "sa": ("saudi arabia",),
+    "tr": ("turkey", "turkiye"), "au": ("australia",), "za": ("south africa",),
+    "eu": ("european union",), "kp": ("north korea", "dprk"), "tw": ("taiwan",),
+    "ua": ("ukraine",), "pk": ("pakistan",),
+}
+_COUNTRY_TOKENS: frozenset[str] = frozenset({
+    "united states", "america", "u.s.", "usa",
+    "china", "russia", "iran", "israel", "ukraine", "india", "indonesia",
+    "brazil", "argentina", "mexico", "canada", "france", "germany", "italy",
+    "spain", "united kingdom", "britain", "japan", "south korea", "north korea",
+    "korea", "saudi arabia", "turkey", "turkiye", "australia", "south africa",
+    "egypt", "pakistan", "afghanistan", "iraq", "syria", "lebanon", "yemen",
+    "venezuela", "taiwan", "vietnam", "thailand", "philippines", "nigeria",
+    "romania", "poland", "greece", "hungary", "bulgaria", "serbia", "croatia",
+})
+
+
+def _country_desk_slug(target_id: str | None) -> str | None:
+    """The trailing ISO-2 slug of a ``country_*`` target id, else ``None``."""
+    if not target_id or not isinstance(target_id, str):
+        return None
+    tid = target_id.strip().lower()
+    if "country" not in tid:
+        return None
+    token = tid.rsplit("_", 1)[-1]
+    return token if len(token) == 2 and token.isalpha() else None
+
+
+def _mentions_country(name: str, haystack_lc: str) -> bool:
+    """Whole-word (token-boundary) mention of ``name`` in a casefolded haystack."""
+    nlc = name.casefold()
+    return re.search(rf"(?<![a-z0-9]){re.escape(nlc)}(?![a-z0-9])", haystack_lc) is not None
+
+
+def cross_target_leak_span(
+    *, title: str, body: str, target_id: str | None,
+) -> UnsupportedSpan | None:
+    """FLAG a per-country finding whose named subject-country contradicts its desk
+    (M15): it names a DIFFERENT country and NEVER its own target geo.
+
+    Conservative fail-OPEN (mirrors :func:`grounding.finding_is_off_target`): a
+    finding that mentions its own country anywhere, or that names no country at
+    all, is NOT flagged. Non-country / unmapped desks are never flagged."""
+    slug = _country_desk_slug(target_id)
+    if slug is None:
+        return None
+    # Build the own-mention set from ONLY the country NAME tokens — NEVER the bare
+    # ISO-2 slug. A slug such as 'in' (India), 'it' (Italy), 'us' (US), 'id'
+    # (Indonesia) is a common English word that _mentions_country would match in
+    # normal prose, firing the on-target early-return on EVERY finding and silently
+    # disabling the guard for those desks. Fail-OPEN when the desk has no country-
+    # NAME mapping (an unmapped slug): we cannot tell its own country → never flag.
+    own = {n.casefold() for n in _TARGET_SLUG_TO_COUNTRY.get(slug, ())}
+    if not own:
+        return None
+    haystack_lc = f"{title}\n{body}".casefold()
+    if any(_mentions_country(n, haystack_lc) for n in own if n):
+        return None  # on-target — mentions its own geo somewhere
+    others = {c for c in _COUNTRY_TOKENS if c not in own}
+    named = sorted(c for c in others if _mentions_country(c, haystack_lc))
+    if not named:
+        return None  # names no country at all — generic/thin, not off-target
+    return UnsupportedSpan(
+        text=(
+            f"cross-target leak — desk target '{target_id}' but the finding names "
+            f"only other countries ({', '.join(named[:5])}) and never its own"
+        )[:400],
+        reason=_CROSS_TARGET_REASON,
+    )
+
+
+def _fold_world_knowledge_guards(
+    floor: FaithfulnessReport,
+    *,
+    title: str,
+    body: str,
+    target_id: str | None,
+) -> FaithfulnessReport:
+    """Fold the M13 stale-leader + M15 cross-target guards into a floor report.
+
+    Each guard hit is an extra CHECKABLE-but-UNSUPPORTED span (demotes
+    faithfulness). Applied to the floor BEFORE the optional judge so the judge's
+    reconciliation carries the demotion through (the spans are non-prose,
+    non-advisory → counted as residual unsupported). No hit → the floor is
+    returned UNCHANGED (byte-identical for callers passing no title/target_id).
+    """
+    guard_spans = stale_leader_spans(f"{title}\n{body}")
+    leak = cross_target_leak_span(title=title, body=body, target_id=target_id)
+    if leak is not None:
+        guard_spans = guard_spans + [leak]
+    if not guard_spans:
+        return floor
+    checkable = floor.checkable_claims + len(guard_spans)
+    supported = floor.supported_claims
+    score = 1.0 if checkable == 0 else supported / checkable
+    return FaithfulnessReport(
+        faithfulness_score=score,
+        checkable_claims=checkable,
+        supported_claims=supported,
+        unsupported_spans=floor.unsupported_spans + guard_spans,
+        judge_status=floor.judge_status,
+        judge_unavailable_reason=floor.judge_unavailable_reason,
+        confidence_ceiling=floor.confidence_ceiling,
+    )
+
+
 class _JudgeVerdictError(RuntimeError):
     """The judge returned a structurally-invalid verdict set — a verdict count
     that does not match the graded claims. Raised so :func:`_maybe_llm_judge`
@@ -1526,7 +2100,9 @@ async def _maybe_llm_judge(
         # floor.  (The live judge component points at the cross-family
         # self-hosted Llama-3.1-8B at deploy; that is a REGISTERED component,
         # not hardcoded here.)
-        verdicts = await _run_judge(judge_llm, body=body, citations=citations)
+        verdicts, branch_scores = await _run_judge(
+            judge_llm, body=body, citations=citations
+        )
     except Exception as exc:  # noqa: BLE001 — soft-fail, never break the run
         logger.warning("verify.faithfulness.judge_failed err=%s", exc)
         floor.judge_unavailable_reason = "judge_error"
@@ -1602,93 +2178,60 @@ async def _maybe_llm_judge(
         # Carry the floor's T7 evidence ceiling through — the judge only refines
         # the faithfulness number, never the double-count-corrected cap.
         confidence_ceiling=floor.confidence_ceiling,
+        # V3: the per-claim-KIND sub-scores from this judge run (design §2.3),
+        # recorded on the report so the payload can surface branch_scores /
+        # branch_versions. Empty on the deterministic path (never reached here)
+        # and on the M14 whole-finding survey path (one rubric, no partition).
+        branch_scores=branch_scores,
     )
 
 
-async def _run_judge(
+_GENERIC_JUDGE_SYSTEM = (
+    "You are a faithfulness judge distinguishing FABRICATION from analysis. "
+    "A claim is SUPPORTED when its factual content is consistent with and "
+    "grounded in the cited evidence — reasonable analytical interpretation, "
+    "framing, aggregation, severity/risk judgement, and negative reads (e.g. "
+    "'this is routine, not escalation') ARE permitted and count as supported. "
+    "Mark UNSUPPORTED only when the claim asserts a SPECIFIC fact the cited "
+    "evidence does not contain (an invented event, number, name, or place); "
+    "mark CONTRADICTED only when the evidence directly refutes it. Do NOT "
+    "penalize a claim merely for adding interpretation to a supported fact. "
+    "Output only the JSON object."
+)
+
+
+async def _judge_claim_partition(
     judge_llm: Any,
     *,
-    body: str,
-    citations: Any,
-) -> list[tuple[str, str]]:
-    """Call the judge LLM; return ``[(claim_text, verdict), ...]``.
+    claims: list[str],
+    evidence_prompt: str,
+    system: str,
+) -> list[str]:
+    """Send ONE partition of claims to the judge; return its verdict list.
 
-    ``verdict`` ∈ {supported, unsupported, contradicted}. Kept deliberately
-    thin — the prompt asks for a strict-JSON list; a malformed / empty response
-    yields ``[]`` (the caller then soft-fails to the floor). This is the ONLY
-    place that talks to the judge model; tests mock ``judge_llm.chat_complete``.
+    Factored out of :func:`_run_judge` so the V3 absence partition AND the M14
+    whole-finding survey call reuse the identical call + parse machinery with
+    their OWN system prompts (design §3.5). A malformed / empty response yields
+    ``[]``; a length mismatch raises :class:`_JudgeVerdictError` (the
+    ONE-verdict-per-claim honesty contract from #116d). ``evidence_prompt`` is
+    the per-branch user message already carrying the evidence map + numbered
+    claim list.
     """
-    import json
-
-    # H1: the judge grades EVERY prose span — including the BLUF / synthesis /
-    # absence claims the FLOOR exempts — so a fabricated uncited claim can't hide
-    # in a vacuous checkable=0. The floor still exempts (see _is_fact_asserting);
-    # the judge distinguishes faithful synthesis from invented fact via its prompt.
-    claims = [c for c in _segment_claims(body) if _is_judgeable_claim(c)]
-    if not claims:
-        return []
-    if _uses_subclaim_convention(citations):
-        # COMPOSITION branch — evidence is the CITED SUB-CLAIM's own text, keyed
-        # by the ordinal the clause cites via [[ref:N]].
-        evidence = _ordinal_evidence_map(citations)
-        prompt = (
-            "For each numbered CLAIM, decide whether it is FAITHFUL to the cited "
-            "SUB-CLAIMS (the N -> sub-claim text map below). A claim that cites a "
-            "[[ref:N]] marker must FOLLOW FROM the sub-claim it names. A claim with "
-            "NO [[ref:N]] marker is a synthesis / BLUF / framing / severity / "
-            "absence statement — mark it SUPPORTED unless it asserts a SPECIFIC "
-            "fact (an event, number, name, or place) that is absent from, or "
-            "contradicted by, ALL of the sub-claims. Answer strict JSON only: "
-            '{"verdicts": ["supported"|"unsupported"|"contradicted", ...]} with '
-            "one verdict per claim, in order.\n\n"
-            f"N -> sub-claim: {json.dumps({str(k): v for k, v in evidence.items()})}"
-            "\n\nCLAIMS:\n"
-            + "\n".join(f"{i}. {c}" for i, c in enumerate(claims, start=1))
-        )
-    else:
-        # UNIT branch. Feed the judge the cited signal's TEXT (title), not an
-        # opaque signal_id — a judge handed only a UUID cannot verify a claim and
-        # marks even properly-cited claims unsupported (the unit-score crusher).
-        # Mirrors the composition path's _ordinal_evidence_map (sub-claim text).
-        cited = _marker_to_evidence(citations)
-        prompt = (
-            "For each numbered CLAIM, decide whether it is FAITHFUL to the evidence "
-            "(the [N] -> evidence map below). A claim that cites [N] markers must "
-            "FOLLOW FROM the evidence those markers name. A claim with NO [N] marker "
-            "is a synthesis / framing / severity / absence statement — mark it "
-            "SUPPORTED unless it asserts a SPECIFIC fact (an event, number, name, or "
-            "place) that is absent from, or contradicted by, ALL of the evidence. "
-            'Answer strict JSON only: {"verdicts": ["supported"|"unsupported"|'
-            '"contradicted", ...]} with one verdict per claim, in order.\n\n'
-            f"[N] -> evidence: {json.dumps(cited)}\n\nCLAIMS:\n"
-            + "\n".join(f"{i}. {c}" for i, c in enumerate(claims, start=1))
-        )
     response = await judge_llm.chat_complete(
-        [{"role": "user", "content": prompt}],
-        # 2026-07-01: the faithfulness judge now runs on the SAME core reasoning
-        # model as generation (llm.primary.openai_compat), because the 8B
-        # cross-family judge proved too weak — harsh + mis-aimed (see the
-        # composition shake-down). Matched to the main model's budget: a
-        # reasoning-class model may emit thinking before the strict-JSON verdicts,
-        # so a 512 cap would truncate the JSON → empty parse → soft-fail to floor.
-        # NOTE: this removes cross-family independence — a DOCUMENTED LIMITATION,
-        # pending a dedicated reasoning judge model (a self-verifying model shares
-        # blind spots with the generator; the deterministic citation floor + the
+        [{"role": "user", "content": evidence_prompt}],
+        # 2026-07-01: the faithfulness judge runs on the SAME core reasoning model
+        # as generation (llm.primary.openai_compat), because the 8B cross-family
+        # judge proved too weak — harsh + mis-aimed (see the composition
+        # shake-down). Matched to the main model's budget: a reasoning-class model
+        # may emit thinking before the strict-JSON verdicts, so a 512 cap would
+        # truncate the JSON → empty parse → soft-fail to floor. NOTE: same-family
+        # removes cross-family independence — a DOCUMENTED LIMITATION, pending a
+        # dedicated reasoning judge model (a self-verifying model shares blind
+        # spots with the generator; the deterministic citation floor + the
         # provenance chain still backstop it).
         max_tokens=16384,
         temperature=0.0,
-        system=(
-            "You are a faithfulness judge distinguishing FABRICATION from analysis. "
-            "A claim is SUPPORTED when its factual content is consistent with and "
-            "grounded in the cited evidence — reasonable analytical interpretation, "
-            "framing, aggregation, severity/risk judgement, and negative reads (e.g. "
-            "'this is routine, not escalation') ARE permitted and count as supported. "
-            "Mark UNSUPPORTED only when the claim asserts a SPECIFIC fact the cited "
-            "evidence does not contain (an invented event, number, name, or place); "
-            "mark CONTRADICTED only when the evidence directly refutes it. Do NOT "
-            "penalize a claim merely for adding interpretation to a supported fact. "
-            "Output only the JSON object."
-        ),
+        system=system,
     )
     content = getattr(response, "content", "") or ""
     # (#116d) Fence/prose-tolerant parse: a reasoning-class judge may wrap the
@@ -1710,13 +2253,212 @@ async def _run_judge(
         raise _JudgeVerdictError(
             f"judge returned {len(raw)} verdicts for {len(claims)} claims"
         )
-    out: list[tuple[str, str]] = []
-    for claim, verdict in zip(claims, raw):
+    out: list[str] = []
+    for verdict in raw:
         v = str(verdict).strip().lower()
         if v not in ("supported", "unsupported", "contradicted"):
             v = "unsupported"
-        out.append((claim, v))
+        out.append(v)
     return out
+
+
+async def _run_judge(
+    judge_llm: Any,
+    *,
+    body: str,
+    citations: Any,
+) -> tuple[list[tuple[str, str]], dict[str, dict[str, int | float]]]:
+    """Call the judge LLM; return ``([(claim_text, verdict), ...], branch_scores)``.
+
+    ``verdict`` ∈ {supported, unsupported, contradicted}, in ORIGINAL claim order.
+    ``branch_scores`` maps each claim-kind that was JUDGED to
+    ``{"checkable", "supported", "score"}`` (design §2.3 telemetry).
+
+    ROUTING (M14 first, then the V3 partition — the two never compete):
+
+    * **M14 whole-finding survey** — a corpus-negative / survey finding
+      (``_is_null_result_finding``: ≤1 positive claim) keeps the tip behaviour
+      byte-for-byte: ONE call grading the WHOLE claim list under the survey
+      rubric. ``branch_scores`` is ``{}`` there — one rubric graded everything,
+      so per-branch attribution would be fabricated.
+    * **V3 per-claim partition (MP:DEC-E)** — otherwise the graded claims are
+      PARTITIONED by claim kind: the ``absence`` partition goes to a dedicated
+      judge call with the negative-claim rubric (design §3.4) — a deterministic
+      route to a constrained prompt removes the free-latitude that produced the
+      0.0/0.2/1.0 variance on identical absence prose — and every OTHER kind
+      rides the existing unit/composition prompt VERBATIM. Verdicts are re-zipped
+      in the original span order. This is the embedded-absence-in-a-fact-rich-
+      finding case M14 misses (design §3.2 #4 / §3.5). When a finding carries NO
+      absence claim, EXACTLY ONE judge call is made with the byte-identical
+      existing prompt — the headline arithmetic and the judge-call count are
+      unchanged (the pooled-ratio invariant, design §2.3 point 3).
+
+    Kept deliberately thin — a malformed / empty response yields ``[]`` (the
+    caller then soft-fails to the floor). This is the ONLY place that talks to
+    the judge model; tests mock ``judge_llm.chat_complete``.
+    """
+    import json
+
+    # H1: the judge grades EVERY prose span — including the BLUF / synthesis /
+    # absence claims the FLOOR exempts — so a fabricated uncited claim can't hide
+    # in a vacuous checkable=0. The floor still exempts (see _is_fact_asserting);
+    # the judge distinguishes faithful synthesis from invented fact via its prompt.
+    claims = [c for c in _segment_claims(body) if _is_judgeable_claim(c)]
+    if not claims:
+        return [], {}
+    # M14: a corpus-negative / survey finding is graded with the NULL-RESULT
+    # rubric (survey faithfulness) rather than the per-clause citation rubric, so
+    # an honest un-citable NEGATIVE isn't scored like a fabrication.
+    null_result = _is_null_result_finding(body)
+    if _uses_subclaim_convention(citations):
+        # COMPOSITION branch — evidence is the CITED SUB-CLAIM's own text, keyed
+        # by the ordinal the clause cites via [[ref:N]]. The lead is shared by
+        # the M14 whole-finding call and the V3 citation_support partition; each
+        # appends its own numbered claim list.
+        evidence = _ordinal_evidence_map(citations)
+        shared_lead = (
+            "For each numbered CLAIM, decide whether it is FAITHFUL to the cited "
+            "SUB-CLAIMS (the N -> sub-claim text map below). A claim that cites a "
+            "[[ref:N]] marker must FOLLOW FROM the sub-claim it names. A claim with "
+            "NO [[ref:N]] marker is a synthesis / BLUF / framing / severity / "
+            "absence statement — mark it SUPPORTED unless it asserts a SPECIFIC "
+            "fact (an event, number, name, or place) that is absent from, or "
+            "contradicted by, ALL of the sub-claims. Answer strict JSON only: "
+            '{"verdicts": ["supported"|"unsupported"|"contradicted", ...]} with '
+            "one verdict per claim, in order.\n\n"
+            f"N -> sub-claim: {json.dumps({str(k): v for k, v in evidence.items()})}"
+        )
+        # The absence rubric is scoped to the SAME evidence map so the negative
+        # judge sees exactly what the analyst searched (design §3.4 per-claim lead).
+        absence_evidence_line = (
+            "N -> sub-claim (the evidence the analyst searched): "
+            f"{json.dumps({str(k): v for k, v in evidence.items()})}"
+        )
+    else:
+        # UNIT branch. Feed the judge the cited signal's TEXT (title / F-train
+        # SOURCE+summary lines), not an opaque signal_id — a judge handed only a
+        # UUID cannot verify a claim and marks even properly-cited claims
+        # unsupported (the unit-score crusher). Mirrors the composition path's
+        # _ordinal_evidence_map (sub-claim text).
+        cited = _marker_to_evidence(citations)
+        shared_lead = (
+            "For each numbered CLAIM, decide whether it is FAITHFUL to the evidence "
+            "(the [N] -> evidence map below). A claim that cites [N] markers must "
+            "FOLLOW FROM the evidence those markers name. An evidence entry may carry "
+            "a 'SOURCE' line (the actual source article) and an 'Analyst summary' line "
+            "(what the analyst worked from — it does NOT itself validate a claim). Two "
+            "modes, driven by the SOURCE label: (a) 'SOURCE (authoritative)' is the "
+            "COMPLETE article — a cited claim absent from it is UNSUPPORTED; (b) "
+            "'SOURCE (authoritative excerpt ...)' is only the START of a longer article "
+            "— do NOT mark a claim unsupported merely because it is absent from the "
+            "excerpt (the Analyst summary shows what the fuller article covered); mark "
+            "it unsupported ONLY if the SOURCE excerpt CONTRADICTS it. In BOTH modes, a "
+            "fact in the Analyst summary that the SOURCE CONTRADICTS is UNSUPPORTED. A "
+            "claim with NO [N] marker is a synthesis / framing / severity / absence "
+            "statement — mark it SUPPORTED unless it asserts a SPECIFIC fact (an event, "
+            "number, name, or place) that is absent from, or contradicted by, ALL of "
+            "the evidence. "
+            'Answer strict JSON only: {"verdicts": ["supported"|"unsupported"|'
+            '"contradicted", ...]} with one verdict per claim, in order.\n\n'
+            f"[N] -> evidence: {json.dumps(cited)}"
+        )
+        absence_evidence_line = (
+            f"[N] -> evidence (the evidence the analyst searched): {json.dumps(cited)}"
+        )
+
+    def _numbered(claim_list: list[str]) -> str:
+        return "\n".join(f"{i}. {c}" for i, c in enumerate(claim_list, start=1))
+
+    # M14 whole-finding survey — retained as-is (the ≤1-positive special case):
+    # ONE call, the WHOLE claim list, the survey rubric on both the system role
+    # and the prompt lead. No V3 partition, no branch telemetry (one rubric).
+    if null_result:
+        survey_prompt = (
+            _NULL_RESULT_PROMPT_PREFIX
+            + shared_lead
+            + "\n\nCLAIMS:\n"
+            + _numbered(claims)
+        )
+        survey_verdicts = await _judge_claim_partition(
+            judge_llm,
+            claims=claims,
+            evidence_prompt=survey_prompt,
+            system=_NULL_RESULT_JUDGE_SYSTEM,
+        )
+        if not survey_verdicts:
+            return [], {}
+        return list(zip(claims, survey_verdicts)), {}
+
+    # V3 partition — split graded claims by kind, preserving each claim's
+    # ORIGINAL index so verdicts can be re-zipped in span order. The absence
+    # partition is the only one routed to a dedicated prompt this train (DEC-E);
+    # everything else rides the shared prompt as the ``citation_support``
+    # (residual) partition.
+    absence_idx: list[int] = []
+    shared_idx: list[int] = []
+    kinds: list[str] = []
+    for i, claim in enumerate(claims):
+        kind = _claim_kind(claim)
+        kinds.append(kind)
+        if kind == CLAIM_KIND_ABSENCE:
+            absence_idx.append(i)
+        else:
+            shared_idx.append(i)
+
+    verdicts_by_idx: dict[int, str] = {}
+
+    if shared_idx:
+        shared_claims = [claims[i] for i in shared_idx]
+        shared_prompt = shared_lead + "\n\nCLAIMS:\n" + _numbered(shared_claims)
+        shared_verdicts = await _judge_claim_partition(
+            judge_llm,
+            claims=shared_claims,
+            evidence_prompt=shared_prompt,
+            system=_GENERIC_JUDGE_SYSTEM,
+        )
+        if not shared_verdicts:
+            return [], {}  # judge_empty on the load-bearing partition → soft-fail
+        for i, v in zip(shared_idx, shared_verdicts):
+            verdicts_by_idx[i] = v
+
+    if absence_idx:
+        absence_claims = [claims[i] for i in absence_idx]
+        absence_prompt = (
+            "You are given the evidence the analyst searched and a list of ABSENCE "
+            "claims to grade against it.\n\n"
+            + absence_evidence_line
+            + "\n\nABSENCE CLAIMS:\n"
+            + _numbered(absence_claims)
+        )
+        absence_profile = _JUDGE_PROFILES[CLAIM_KIND_ABSENCE]
+        absence_verdicts = await _judge_claim_partition(
+            judge_llm,
+            claims=absence_claims,
+            evidence_prompt=absence_prompt,
+            system=absence_profile.judge_system or _GENERIC_JUDGE_SYSTEM,
+        )
+        if not absence_verdicts:
+            return [], {}  # judge_empty on the absence partition → soft-fail
+        for i, v in zip(absence_idx, absence_verdicts):
+            verdicts_by_idx[i] = v
+
+    # Re-zip in ORIGINAL span order + record per-branch sub-scores (design §2.3).
+    out: list[tuple[str, str]] = []
+    branch_scores: dict[str, dict[str, int | float]] = {}
+    for i, claim in enumerate(claims):
+        verdict = verdicts_by_idx[i]
+        out.append((claim, verdict))
+        kind = kinds[i]
+        bucket = branch_scores.setdefault(
+            kind, {"checkable": 0, "supported": 0, "score": 0.0}
+        )
+        bucket["checkable"] += 1
+        if verdict == "supported":
+            bucket["supported"] += 1
+    for bucket in branch_scores.values():
+        c = bucket["checkable"]
+        bucket["score"] = 1.0 if c == 0 else round(bucket["supported"] / c, 4)
+    return out, branch_scores
 
 
 async def verify_finding_faithfulness(
@@ -1726,6 +2468,8 @@ async def verify_finding_faithfulness(
     judge_llm: Any | None = None,
     finding_confidence: float | None = None,
     indicators: Any = None,
+    title: str = "",
+    target_id: str | None = None,
 ) -> FaithfulnessReport:
     """MANDATORY faithfulness verify over ONE finding's cited prose.
 
@@ -1762,9 +2506,23 @@ async def verify_finding_faithfulness(
         looking 'Indicators to watch' PROSE section is UNAFFECTED — it stays
         dropped wholesale by ``_segment_claims``; this scores only the STRUCTURED
         mirror.
+    title:
+        OPTIONAL — the finding's title. Default ``""`` → the M13/M15 guards see
+        only the body (byte-identical for callers that pass no title). The unit
+        caller passes it so the guards catch a title-only leak (the M15 live case
+        was a Turkey desk head TITLED "Romania").
+    target_id:
+        OPTIONAL — the finding's run target id (``country_g20_tr`` …). Default
+        ``None`` → the M15 cross-target guard is a no-op (byte-identical). When a
+        ``country_*`` desk id is passed, a finding that names ONLY other countries
+        is FLAGGED (demotes effective_confidence), never deleted.
     """
     floor = _deterministic_floor(body, citations, finding_confidence)
     floor = _fold_indicators(floor, indicators)
+    # M13/M15: cheap lexical world-knowledge + target guards (flag, never delete).
+    floor = _fold_world_knowledge_guards(
+        floor, title=title, body=body, target_id=target_id
+    )
     return await _maybe_llm_judge(
         floor, body=body, citations=citations, judge_llm=judge_llm
     )
@@ -1831,6 +2589,19 @@ def build_faithfulness_critique_payload(
         )
     for span in report.unsupported_spans[:20]:
         body_lines.append(f"  - [{span.reason}] {span.text[:200]}")
+    # V3 (MP:DEC-E) — per-branch telemetry (design §2.3 / §2.2). ``branch_scores``
+    # is the pooled sub-score per JUDGED claim-kind (empty on the deterministic
+    # path AND on the M14 whole-finding survey path, so those runs + a pre-V3
+    # reader are byte-identical). ``branch_versions`` stamps the profile VERSION
+    # of each kind that ran, so a recalibration is a visible, greppable, per-kind
+    # version bump. Both are ADDITIVE JSONB keys ignored by existing readers (the
+    # gate reads only ``overall_score``, which is unchanged).
+    branch_scores = report.branch_scores or {}
+    branch_versions = {
+        kind: _JUDGE_PROFILES[kind].version
+        for kind in branch_scores
+        if kind in _JUDGE_PROFILES
+    }
     return {
         "title": f"Faithfulness verify (score {overall:.2f})",
         "body": "\n".join(body_lines)[:65536],
@@ -1863,6 +2634,10 @@ def build_faithfulness_critique_payload(
                 "unsupported_spans": [s.as_dict() for s in report.unsupported_spans],
                 "judge_status": report.judge_status,
                 "judge_unavailable_reason": report.judge_unavailable_reason,
+                # V3 per-branch telemetry (additive; {} when the judge did not run
+                # or the M14 whole-finding survey rubric graded the entire list).
+                "branch_scores": branch_scores,
+                "branch_versions": branch_versions,
             }
         },
     }

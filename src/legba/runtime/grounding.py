@@ -93,6 +93,7 @@ __all__ = [
     "is_non_event_situation_name",
     "situation_grounding_min_intensity",
     "situation_scope_for_target",
+    "target_country_name",
     "target_scope_names",
     "trusted_source_types",
     "world_context_country_filter_values",
@@ -188,16 +189,32 @@ _WORLD_CONTEXT_BLOCK_CHAR_CAP = 3000
 # Relevance floor for the opportunistic ``world_context`` RAG (S5-T3). A retrieved
 # chunk must clear this cosine-similarity score to be injected as a prior; a chunk
 # below it is DROPPED and, when ALL retrieved chunks fall below, NO block is built
-# (degrade-not-drop — ``build_world_context_block([])`` returns ``None``). Observed
-# on-target Factbook retrieval scores are ~0.53-0.66; weak / off-topic matches fall
-# below. DQ Phase-2 RAG tune (2026-07-03): raised 0.5 -> 0.65 so only the STRONGEST
-# on-target priors ground — the marginal 0.5-0.65 hits were the ones fuelling
-# uncited interpretation (the C1/RAG mechanism finding), at real token cost.
-# Applied server-side via Qdrant's ``score_threshold`` AND re-checked client-side
-# in :meth:`SubstrateGroundingResolver._map_world_context_hits` (a client / stub
-# that ignores the threshold still can't leak a below-floor chunk). Env-overridable
-# via ``LEGBA_WORLD_CONTEXT_MIN_SCORE``; a bad / blank value falls back to default.
-_WORLD_CONTEXT_MIN_SCORE = 0.65
+# (degrade-not-drop — ``build_world_context_block([])`` returns ``None``).
+#
+# CALIBRATION (M22, 2026-07-06 — live embedding probe against the 293-point
+# world_context corpus, the `embedding-inno1` / bge-m3 endpoint). The 0.65 floor
+# filtered ~100% of hits (0/81 runs injected) because it sat ABOVE the achievable
+# on-target cosine for this embedder+corpus. Two paired retrieval fixes recalibrate
+# the distribution (query construction + doc-side context prefix; see
+# analyst_deps_builder._world_context_query and lane4_loader.contextual_embedding_input):
+#   * on-target (target-country background chunks): best chunk ~0.60-0.66
+#   * off-target (another country's chunks):        ~0.40-0.43
+# So a floor in [0.50, 0.56] discriminates cleanly (wide margin either side); we
+# pick the HIGH end for PRECISION (the RAG rollback showed marginal hits fuel
+# uncited-interpretation leak) — 0.55 admits only genuinely-strong on-target priors
+# and rejects every off-target chunk by ~0.13. NOTE: this margin was measured
+# CROSS-COUNTRY (on-target country's chunks vs another country's) — the case the
+# per-desk Qdrant MatchAny country filter already scopes; the harder INTRA-country
+# SECTION discrimination (does the RIGHT section outrank a weaker same-country one?)
+# is not validated by the probe and will be measured live by the #179 instrumentation
+# (world_context_top_score / retained, now on every ground trace). Raise toward 0.58-0.60 AFTER the
+# corpus re-embed (scripts/reembed_world_context.py) lifts every desk's top chunk
+# over 0.60. Applied server-side via Qdrant's ``score_threshold`` AND re-checked
+# client-side in :meth:`SubstrateGroundingResolver._map_world_context_hits` (a
+# client / stub that ignores the threshold still can't leak a below-floor chunk).
+# Env-overridable via ``LEGBA_WORLD_CONTEXT_MIN_SCORE``; a bad / blank value falls
+# back to default.
+_WORLD_CONTEXT_MIN_SCORE = 0.55
 
 
 def world_context_min_score() -> float:
@@ -925,6 +942,16 @@ _TARGET_SLUG_TO_NAMES: dict[str, tuple[str, ...]] = {
     # tell Pakistan from India, so an India-only finding would slip through as a
     # PK product. The mapping buys the precision to catch that off-target shape.
     "pk": ("pakistan",),
+    # A3 / DEC-C (2026-07-16): the escalation-risk watch desks. Aliases cover
+    # the shapes wire copy actually uses ("Burma", "DRC", "Burkina"); the guard
+    # still fails OPEN for anything missing here.
+    "sd": ("sudan",),
+    "ml": ("mali",),
+    "bf": ("burkina faso", "burkina"),
+    "ne": ("niger",),
+    "cd": ("dr congo", "drc", "democratic republic of the congo", "congo"),
+    "mm": ("myanmar", "burma"),
+    "ht": ("haiti",),
 }
 
 
@@ -945,6 +972,28 @@ def target_scope_names(target_id: str | None) -> set[str]:
         names.add(tlc)
         names.update(_TARGET_SLUG_TO_NAMES.get(tlc, ()))
     return names
+
+
+def target_country_name(target_id: str | None) -> str | None:
+    """The canonical DISPLAY country name for a per-country target id, or ``None``.
+
+    ``country_watch_ir`` → ``"Iran"``; ``country_g20_us`` → ``"United States"``.
+    Used to build the FOCUSED ``vector:world_context`` RAG query (a natural
+    "<country> <theme>" phrase), which retrieves the target's Factbook-background
+    chunks far better than the bare ISO slug ("ir") or the noisy slice-entity pile
+    the query used before M22 (live probe: focused geo+theme ~0.60-0.66 on-target
+    vs the diluted pile ~0.47-0.59). Returns ``None`` for a meta / no-target /
+    non-single-country target (the query then falls back to theme-only, and the
+    per-desk country filter still scopes retrieval). Resolves via the same
+    :data:`_TARGET_SLUG_TO_NAMES` gazetteer the off-target guard uses; an unmapped
+    slug yields ``None`` (never a bare ISO token as a query term)."""
+    if not is_per_country_target(target_id):
+        return None
+    for tok in _target_id_geo_names(target_id):
+        names = _TARGET_SLUG_TO_NAMES.get(tok.casefold())
+        if names:
+            return names[0].title()
+    return None
 
 
 # A country-name token from a finding's text. We match WHOLE words against a
@@ -1535,7 +1584,8 @@ class SubstrateGroundingResolver:
         TWO cheap retrieval guards (the prerequisite for safe RAG expansion):
 
           * RELEVANCE FLOOR — a retrieved chunk must clear
-            :func:`world_context_min_score` (default 0.5) to ground. Applied
+            :func:`world_context_min_score` (default 0.55, M22-calibrated) to
+            ground. Applied
             server-side via Qdrant's ``score_threshold`` AND re-checked
             client-side (a stub / client that ignores the threshold still can't
             leak a below-floor chunk). If ALL hits fall below → no chunks → no
@@ -1724,6 +1774,24 @@ _PREAMBLE_HEADER = (
 )
 
 
+# M13 (2026-07-06) — a curated CURRENT-officeholder anchor, ALWAYS rendered at the
+# top of the ground-truth preamble (independent of slice / candidate luck) so a
+# grounded assessor never back-fills a stale-cutoff officeholder from its training
+# prior (the "former President Trump" error class — a live RU narrative_coordination
+# finding called the SITTING US president "former"). Minimal by design: the single
+# clear live stale-cutoff error (the US presidency). The seed already carries the
+# same fact (Donald Trump | leader of | United States, valid_until NULL); this
+# anchor guarantees it reaches the preamble even when "United States" is not a
+# resolved grounding candidate for the run. MIRRORS the lexical write/verify-time
+# guard's curated map in legba.data.provenance.verify (_CURRENT_OFFICEHOLDERS) —
+# keep the two in lockstep (extend only for a NEW confirmed live stale-leader error).
+_CURRENT_OFFICEHOLDER_ANCHOR: tuple[str, ...] = (
+    "United States — current President (head of state and government): Donald Trump "
+    "(in office since 2025-01-20; the SITTING president — do NOT refer to him as a "
+    "former president).",
+)
+
+
 def build_grounding_preamble(
     facts: Sequence[GroundingFact],
     nexuses: Sequence[GroundingNexus],
@@ -1735,12 +1803,17 @@ def build_grounding_preamble(
     Returns ``None`` when there is nothing to inject (no facts AND no
     nexuses) so the caller can skip prepending an empty header. The block is
     plain text (the runner concatenates it ahead of the rendered slice); it is
-    intentionally compact — one line per fact/relationship.
+    intentionally compact — one line per fact/relationship. When a preamble IS
+    built, the curated current-officeholder anchor (M13) heads the fact list.
     """
     if not facts and not nexuses:
         return None
     today = (now or datetime.now(tz=timezone.utc)).date().isoformat()
     lines: list[str] = [_PREAMBLE_HEADER.format(today=today)]
+    # M13: curated current-officeholder anchor first (always present when a
+    # preamble is built) so the current US president is never mis-stated as former.
+    for anchor in _CURRENT_OFFICEHOLDER_ANCHOR:
+        lines.append(f"- {anchor}")
     for f in facts:
         lines.append(f"- {f.render()}")
     if nexuses:

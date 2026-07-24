@@ -1,17 +1,28 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Read surface for the Journal Assessor (planning/JOURNAL_ASSESSOR_PLAN.md §9 /
-§12 Wave 3).
+§12 Wave 3; Voices panel step 1, planning/VOICES_PANEL_SPEC.md §3).
 
-Exposes ONE read-only GET endpoint — ``/journal`` — that backs the UI Journal
-panel:
+Exposes the Journal panel's read surface:
 
-  * the single OPEN ``entry_kind='consolidation'`` row ("Legba's current inner
-    landscape"), prominent, or ``null`` before the first consolidation exists;
-  * a cursor-paged stream of recent ``entry_kind='entry'`` rows; and
-  * the substrate-derived ``calibration`` verdict (forecast_unproven /
-    calibration_thin / BSS / sample sizes) so the §9 honesty banner is keyed off
-    the live calibration metric, NOT off a self-reported payload field (§10).
+  * ``GET /journal`` — the single OPEN ``entry_kind='consolidation'`` row
+    ("Legba's current inner landscape"), prominent, or ``null`` before the
+    first consolidation exists; a cursor-paged stream of recent entries
+    (``entry`` / ``chronicle`` by default, or the repeatable ``kind`` filter's
+    selection, §3.1); and the substrate-derived ``calibration`` verdict
+    (forecast_unproven / calibration_thin / BSS / sample sizes) so the §9
+    honesty banner is keyed off the live calibration metric, NOT off a
+    self-reported payload field (§10).
+  * ``GET /journal/{id}`` — a single row, always at ``fields=full`` weight, for
+    the Voices reader pane's on-select fetch (§3.3).
+
+FIELDS MODE (§3.3). ``fields=summary`` (list-view weight — id/entry_kind/title/
+honesty_flags/period_*/produced_at/analyst_* + the verify score, §3.4) vs.
+``fields=full`` (today's behavior — adds body/claims/cited_substrate_refs/
+verify_body). Summary requests skip ``_resolve_refs`` entirely (it only hydrates
+fields summary rows don't carry) and skip the critique body join (verify_body is
+full-only) so the grouped list (§2b of the spec) stays a cheap read regardless of
+how many chronicle-weight rows are in the window.
 
 CHIP HYDRATION (§3.6 / §9). A journal claim binds a cited span to a list of bare
 substrate UUIDs (``claims[].refs``); the UI renders each as a provenance chip
@@ -22,6 +33,22 @@ is no resolve-by-uuid endpoint, so this route resolves every cited ref to its
 tables (UUIDs are globally unique, so each id resolves in at most one table). The
 UI then calls ``selectRow(kind, id, label)`` directly without a second round-trip
 or a try-each-kind fallback.
+
+VERIFY SCORE (§3.4). Journal rows are verified the same way an ``inline_target``
+finding is (V1, the journal verify profile / chronicle gate — see
+``dapr_actors.py``'s journal-output verify fire condition): the verify pass
+lands a ``kind='critique'`` row on ``analyst_outputs`` whose
+``data->>'analyzed_output_id'`` names the journal entry's id and whose
+``title LIKE 'Faithfulness verify%'`` — the SAME join shape
+``substrate_reads_api.py``'s ``/findings`` lateral uses for findings, mirrored
+here for journal rows (which have no analogous join today). ``verify_score`` is
+that critique's ``overall_score`` (nullable — ``null`` when no such critique
+exists, never fabricated); ``verify_body`` (``fields=full`` only) is the
+critique's ``body`` text, which lists each unsupported/contested span as
+``  - [judge_contradicted] ...`` / ``  - [judge_unsupported] ...`` /
+``  - [no_citation] ...`` lines (``verify.build_faithfulness_critique_payload``)
+— the per-claim verdict detail the Voices reader pane renders as a compact
+flagged-claim block.
 
 OFF-CHAIN INVARIANT (§3.1 / §3.5). This route reads ``journal_entries`` directly
 and never the lineage catalog; the chip walk is UP-only (entry → what it cites)
@@ -37,7 +64,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -53,6 +80,22 @@ from .api import RegistryAPIDeps, require_bearer
 
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 200
+
+# The full entry_kind vocabulary the `kind` filter accepts (VOICES_PANEL_SPEC
+# §3.1). `entry_kind` itself is a free TEXT column (no DB CHECK constraint), so
+# this allowlist is the validation boundary — a typo 400s rather than silently
+# returning zero rows. `lens`/`lens_diff` are accepted now (harmless — no such
+# rows exist yet, §3.1) even though the `lens` secondary filter (§3.2) waits for
+# LV-1's `journal_entries.data` column.
+_VALID_KINDS = frozenset({"entry", "consolidation", "chronicle", "lens", "lens_diff"})
+
+# Default stream selection when `kind` is omitted: every append tier —
+# diary entries, chronicle, and the lens faculties + their diff (LV-2 tail,
+# 2026-07-23; the panel's filter rail narrows client-side). Consolidation
+# stays slot-only, never a stream row.
+_DEFAULT_STREAM_KINDS = ("entry", "chronicle", "lens", "lens_diff")
+
+_VALID_FIELDS = frozenset({"summary", "full"})
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +131,31 @@ def _validate_limit(limit: int) -> int:
             detail=f"limit must be in [1, {MAX_LIMIT}]",
         )
     return limit
+
+
+def _validate_kinds(kind: list[str] | None) -> list[str] | None:
+    """Validate the repeatable ``kind`` filter (§3.1). ``None`` (param omitted)
+    is passed through so the caller can distinguish "no filter" from an
+    explicit (impossible) empty selection. A value outside ``_VALID_KINDS``
+    400s — silently returning zero rows on a typo is a worse failure mode."""
+    if kind is None:
+        return None
+    bad = [k for k in kind if k not in _VALID_KINDS]
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid kind(s) {bad}; must be one of {sorted(_VALID_KINDS)}",
+        )
+    return kind
+
+
+def _validate_fields(fields: str) -> str:
+    if fields not in _VALID_FIELDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"fields must be one of {sorted(_VALID_FIELDS)}",
+        )
+    return fields
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +256,61 @@ async def _resolve_refs(conn: Any, ids: list[str]) -> dict[str, ResolvedRef]:
     return out
 
 
+class VerifyResult(NamedTuple):
+    """The latest 'Faithfulness verify' critique's gate score + body text for
+    one journal entry (§3.4)."""
+
+    score: float
+    body: str
+
+
+async def _read_verify_results(
+    conn: Any, entry_ids: list[str],
+) -> dict[str, VerifyResult]:
+    """Batch-resolve ``{entry_id: VerifyResult}`` for the given journal entry
+    ids (§3.4) — one query over the WHOLE id set, mirroring ``_resolve_refs``'s
+    single-batched-pass shape rather than a per-row lateral.
+
+    Mirrors ``substrate_reads_api.py``'s ``/findings`` critique join: the
+    critique is an ``analyst_outputs`` row with ``kind='critique'`` whose
+    ``data->>'analyzed_output_id'`` names the analyzed row (here, the journal
+    entry's id — the journal verify profile / V1 chronicle gate stamps this the
+    same way the finding verify path does), PINNED to
+    ``title LIKE 'Faithfulness verify%'`` so a later generic critique can never
+    win the ``produced_at`` race and mask the faithfulness verdict (S8-T2's
+    reasoning, reproduced here since journal rows have no existing critique
+    join to extend). ``DISTINCT ON`` picks the latest critique per entry.
+
+    An entry with no faithfulness critique is simply absent from the returned
+    dict — the caller reads that as ``verify_score=None`` (never fabricated,
+    never defaulted to a number, §3.4's "flagged gap, not buildable" position).
+    """
+    out: dict[str, VerifyResult] = {}
+    if not entry_ids:
+        return out
+    uniq = sorted({str(i) for i in entry_ids})
+    sql = """
+        SELECT DISTINCT ON (data->>'analyzed_output_id')
+               data->>'analyzed_output_id' AS entry_id,
+               (data->>'overall_score')::real AS score,
+               body
+          FROM analyst_outputs
+         WHERE kind = 'critique'
+           AND data->>'analyzed_output_id' = ANY($1::text[])
+           AND data->>'overall_score' IS NOT NULL
+           AND title LIKE 'Faithfulness verify%'
+         ORDER BY data->>'analyzed_output_id', produced_at DESC, id DESC
+    """
+    rows = await conn.fetch(sql, uniq)
+    for row in rows:
+        eid = row["entry_id"]
+        score = row["score"]
+        if eid is None or score is None:
+            continue
+        out[eid] = VerifyResult(score=float(score), body=str(row["body"] or ""))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Response models.
 # ---------------------------------------------------------------------------
@@ -209,7 +332,8 @@ class JournalClaimOut(BaseModel):
 
 
 class JournalEntryOut(BaseModel):
-    """One ``journal_entries`` row hydrated for the panel."""
+    """One ``journal_entries`` row hydrated for the panel, at ``fields=full``
+    weight (§3.3)."""
 
     id: str
     entry_kind: str
@@ -223,12 +347,40 @@ class JournalEntryOut(BaseModel):
     produced_at: datetime
     analyst_id: str | None
     analyst_version: str | None
+    # §3.4 — the 'Faithfulness verify' critique's gate score, nullable (no
+    # fabricated number when no such critique exists yet).
+    verify_score: float | None = None
+    # §3.4, full-only — the critique body text, which names each
+    # unsupported/contested span as a ``  - [judge_contradicted] ...`` /
+    # ``  - [judge_unsupported] ...`` / ``  - [no_citation] ...`` line; the
+    # reader pane's per-claim verdict block parses these.
+    verify_body: str | None = None
+
+
+class JournalEntrySummaryOut(BaseModel):
+    """One ``journal_entries`` row at ``fields=summary`` weight (§3.3) — the
+    grouped-list read. A DISTINCT model (not nullable fields bolted onto
+    ``JournalEntryOut``) so the TS type stays honest about what a summary row
+    actually carries: no ``body``/``claims``/``cited_substrate_refs``, and no
+    ``_resolve_refs`` pass paid for fields this shape doesn't render.
+    """
+
+    id: str
+    entry_kind: str
+    title: str
+    honesty_flags: list[str] = Field(default_factory=list)
+    period_start: datetime
+    period_end: datetime
+    produced_at: datetime
+    analyst_id: str | None
+    analyst_version: str | None
+    verify_score: float | None = None
 
 
 class CalibrationVerdict(BaseModel):
     """The substrate-derived calibration posture for the §10 honesty banner.
 
-    Read directly from the freshest ``kind='calibration'`` finding — the SAME
+    Read directly from the freshest ``calibration_tracking`` finding — the SAME
     source the journal's deterministic honesty post-step keys off — so the banner
     can CROSS-CHECK the stored ``honesty_flags`` against live metrics rather than
     trusting a self-reported field. ``available`` is false before any calibration
@@ -247,11 +399,26 @@ class CalibrationVerdict(BaseModel):
 
 
 class JournalOut(BaseModel):
-    """``GET /journal`` body: the open consolidation (or null) + the entry stream
-    + the calibration verdict."""
+    """``GET /journal?fields=full`` body (default): the open consolidation (or
+    null) + the entry stream + the calibration verdict, each row at full
+    (body+claims) weight."""
 
     consolidation: JournalEntryOut | None
     entries: list[JournalEntryOut]
+    next_cursor: str | None
+    calibration: CalibrationVerdict
+
+
+class JournalSummaryOut(BaseModel):
+    """``GET /journal?fields=summary`` body — the SAME envelope shape as
+    ``JournalOut`` (§3.3), but each row is the list-cheap
+    ``JournalEntrySummaryOut`` (no body/claims/cited_substrate_refs, no
+    ``_resolve_refs`` pass paid for). A distinct response model (rather than a
+    union on ``JournalOut``) so the two shapes never accidentally cross-validate
+    against each other."""
+
+    consolidation: JournalEntrySummaryOut | None
+    entries: list[JournalEntrySummaryOut]
     next_cursor: str | None
     calibration: CalibrationVerdict
 
@@ -272,9 +439,15 @@ def _load_jsonb(value: Any) -> Any:
     return value
 
 
-def _hydrate_entry(row: Any, resolved: dict[str, ResolvedRef]) -> JournalEntryOut:
-    """Map a ``journal_entries`` row to its panel shape, binding each claim's +
-    the flat union's refs to their resolved ``(kind, title)``."""
+def _hydrate_entry(
+    row: Any,
+    resolved: dict[str, ResolvedRef],
+    verify: dict[str, VerifyResult] | None = None,
+) -> JournalEntryOut:
+    """Map a ``journal_entries`` row to its ``fields=full`` panel shape, binding
+    each claim's + the flat union's refs to their resolved ``(kind, title)``,
+    and (§3.4) folding in the row's verify score + critique body when a
+    'Faithfulness verify' critique exists for it."""
     raw_claims = _load_jsonb(row["claims"]) or []
     claims: list[JournalClaimOut] = []
     if isinstance(raw_claims, list):
@@ -295,6 +468,7 @@ def _hydrate_entry(row: Any, resolved: dict[str, ResolvedRef]) -> JournalEntryOu
 
     cited_ids = [str(r) for r in (row["cited_substrate_refs"] or [])]
     cited = [resolved[r] for r in cited_ids if r in resolved]
+    vr = (verify or {}).get(str(row["id"]))
 
     return JournalEntryOut(
         id=str(row["id"]),
@@ -309,6 +483,29 @@ def _hydrate_entry(row: Any, resolved: dict[str, ResolvedRef]) -> JournalEntryOu
         produced_at=row["produced_at"],
         analyst_id=row["analyst_id"],
         analyst_version=row["analyst_version"],
+        verify_score=vr.score if vr is not None else None,
+        verify_body=vr.body if vr is not None else None,
+    )
+
+
+def _hydrate_summary(
+    row: Any, verify: dict[str, VerifyResult] | None = None,
+) -> JournalEntrySummaryOut:
+    """Map a ``journal_entries`` row to its ``fields=summary`` panel shape
+    (§3.3) — no body/claims/cited_substrate_refs, so no ``resolved`` map is
+    needed here at all."""
+    vr = (verify or {}).get(str(row["id"]))
+    return JournalEntrySummaryOut(
+        id=str(row["id"]),
+        entry_kind=row["entry_kind"],
+        title=row["title"],
+        honesty_flags=list(row["honesty_flags"] or []),
+        period_start=row["period_start"],
+        period_end=row["period_end"],
+        produced_at=row["produced_at"],
+        analyst_id=row["analyst_id"],
+        analyst_version=row["analyst_version"],
+        verify_score=vr.score if vr is not None else None,
     )
 
 
@@ -327,18 +524,26 @@ def _all_ref_ids(rows: list[Any]) -> list[str]:
 
 
 async def _read_calibration(conn: Any) -> CalibrationVerdict:
-    """Read the freshest ``kind='calibration'`` finding and reduce it to the
+    """Read the freshest ``calibration_tracking`` finding and reduce it to the
     banner verdict — the same deterministic logic as the runtime
     ``SubstrateQueryPort.get_calibration`` (the journal honesty post-step's
-    source), replicated read-only here so the banner is substrate-keyed."""
+    source), replicated read-only here so the banner is substrate-keyed.
+
+    B0-3 (read-truth): the writer produces ``kind='finding'`` +
+    ``analyst_id='calibration_tracking'`` (nothing writes ``kind='calibration'``)
+    and the metrics live one JSONB level down at ``data.data`` (the row's
+    ``data`` column is the WHOLE FindingPayload dump)."""
     row = await conn.fetchrow(
         "SELECT id, produced_at, data FROM analyst_outputs "
-        "WHERE kind = 'calibration' "
+        "WHERE kind = 'finding' AND analyst_id = 'calibration_tracking' "
+        "AND superseded_by IS NULL "
         "ORDER BY produced_at DESC, id DESC LIMIT 1"
     )
     if row is None:
         return CalibrationVerdict(available=False)
-    data = _load_jsonb(row["data"]) or {}
+    payload = _load_jsonb(row["data"]) or {}
+    data = payload.get("data") if isinstance(payload, dict) else None
+    data = data if isinstance(data, dict) else {}
     bss = data.get("brier_skill_score")
     ready = bool(data.get("forecast_acute_ready"))
     degenerate = bool(data.get("forecast_acute_degenerate"))
@@ -374,34 +579,78 @@ async def _read_calibration(conn: Any) -> CalibrationVerdict:
 # ---------------------------------------------------------------------------
 
 
-# The hydrated columns the panel reads from journal_entries (no internal /
-# off-chain columns — derived_from is always empty for journal rows, §3.5).
+# The hydrated columns the panel reads from journal_entries at `fields=full`
+# (no internal / off-chain columns — derived_from is always empty for journal
+# rows, §3.5).
 _ENTRY_COLS = (
     "id, entry_kind, title, body, claims, cited_substrate_refs, honesty_flags, "
     "period_start, period_end, produced_at, analyst_id, analyst_version"
 )
 
+# The list-cheap column set at `fields=summary` (§3.3) — drops body/claims/
+# cited_substrate_refs, the fields that make a chronicle row markedly heavier
+# than a diary row and that a future lens_diff.data matrix would only add to.
+_SUMMARY_COLS = (
+    "id, entry_kind, title, honesty_flags, "
+    "period_start, period_end, produced_at, analyst_id, analyst_version"
+)
+
+
+def _stream_where(kind: list[str] | None) -> tuple[list[str], bool]:
+    """Build the stream's ``entry_kind`` predicate from the validated `kind`
+    filter (§3.1), and report whether the consolidation slot should still be
+    fetched.
+
+    * ``kind`` omitted → default: stream = all append tiers
+      (entry+chronicle+lens+lens_diff), consolidation slot fetched.
+    * ``kind`` provided → the stream filters to exactly the requested kinds
+      MINUS ``'consolidation'`` (consolidation is never a stream row, it has
+      its own slot); the slot is fetched only when ``'consolidation'`` was
+      itself requested — filtering to "just chronicles" also hides the pinned
+      slot, per §3.1.
+    """
+    if kind is None:
+        return list(_DEFAULT_STREAM_KINDS), True
+    stream_kinds = [k for k in kind if k != "consolidation"]
+    want_consolidation = "consolidation" in kind
+    return stream_kinds, want_consolidation
+
 
 def build_journal_router(deps: RegistryAPIDeps) -> APIRouter:
     """Construct the read-only Journal router bound to the registry deps.
 
-    Mount under ``/api/v1`` so the path resolves at ``/api/v1/journal``. One GET,
-    bearer-gated, reading the primary Postgres pool via
-    ``deps.descriptor_registry.pg.acquire()`` — the same path the substrate-reads
-    + lineage routers use.
+    Mount under ``/api/v1`` so the paths resolve at ``/api/v1/journal`` (the
+    stream + consolidation slot + calibration verdict) and
+    ``/api/v1/journal/{id}`` (a single row, always full weight — the Voices
+    reader pane's on-select fetch, §3.3). Bearer-gated, reading the primary
+    Postgres pool via ``deps.descriptor_registry.pg.acquire()`` — the same path
+    the substrate-reads + lineage routers use.
     """
     router = APIRouter(tags=["journal"])
 
-    @router.get("/journal", response_model=JournalOut)
+    @router.get("/journal", response_model=None)
     async def get_journal(
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
+        kind: list[str] | None = Query(default=None),
+        fields: str = Query(default="full"),
         principal: str = Depends(require_bearer),
-    ) -> JournalOut:
+    ) -> JournalOut | JournalSummaryOut:
         limit = _validate_limit(limit)
+        kind = _validate_kinds(kind)
+        fields = _validate_fields(fields)
+        summary = fields == "summary"
+
+        stream_kinds, want_consolidation = _stream_where(kind)
 
         args: list[Any] = []
-        where = ["entry_kind = 'entry'"]
+        # The stream carries the append tiers selected by `kind` (default:
+        # ALL of them — diary, chronicle, lens, lens_diff; the card exposes
+        # entry_kind so the panel can badge them apart). §3.1: parameterized
+        # `= ANY(...)` replaces the old hardcoded `IN ('entry','chronicle')`.
+        # The open consolidation stays its own slot below (never a stream row).
+        args.append(stream_kinds)
+        where = ["entry_kind = ANY($1::text[])"]
         if cursor is not None:
             cur_at, cur_id = _decode_cursor(cursor)
             args.append(cur_at)
@@ -409,8 +658,9 @@ def build_journal_router(deps: RegistryAPIDeps) -> APIRouter:
             where.append(f"(produced_at, id) < (${len(args) - 1}, ${len(args)})")
         args.append(limit + 1)
 
+        cols = _SUMMARY_COLS if summary else _ENTRY_COLS
         entries_sql = f"""
-            SELECT {_ENTRY_COLS}
+            SELECT {cols}
               FROM journal_entries
              WHERE {' AND '.join(where)}
              ORDER BY produced_at DESC, id DESC
@@ -418,9 +668,10 @@ def build_journal_router(deps: RegistryAPIDeps) -> APIRouter:
         """
 
         # The single OPEN consolidation — the partial-unique index in 0048
-        # guarantees at most one (valid_until IS NULL AND superseded_by IS NULL).
+        # guarantees at most one (valid_until IS NULL AND superseded_by IS
+        # NULL). Fetched only when the `kind` filter still wants it (§3.1).
         consolidation_sql = f"""
-            SELECT {_ENTRY_COLS}
+            SELECT {cols}
               FROM journal_entries
              WHERE entry_kind = 'consolidation'
                AND valid_until IS NULL
@@ -431,24 +682,54 @@ def build_journal_router(deps: RegistryAPIDeps) -> APIRouter:
 
         async with deps.descriptor_registry.pg.acquire() as conn:
             entry_rows = await conn.fetch(entries_sql, *args)
-            consolidation_row = await conn.fetchrow(consolidation_sql)
+            consolidation_row = (
+                await conn.fetchrow(consolidation_sql) if want_consolidation else None
+            )
             calibration = await _read_calibration(conn)
 
             page_rows = list(entry_rows[:limit])
             hydrate_rows = list(page_rows)
             if consolidation_row is not None:
                 hydrate_rows = [consolidation_row, *hydrate_rows]
-            # ONE batched ref-resolution pass over the consolidation + the page.
-            resolved = await _resolve_refs(conn, _all_ref_ids(hydrate_rows))
+
+            # §3.4 — the verify-score join, batched over every hydrated row's
+            # id, both modes (the summary chip pill needs the score too; only
+            # the full body text is summary-skipped).
+            verify = await _read_verify_results(
+                conn, [str(r["id"]) for r in hydrate_rows],
+            )
+
+            resolved: dict[str, ResolvedRef] = {}
+            if not summary:
+                # §3.3 — skip `_resolve_refs` entirely for summary requests; it
+                # exists only to hydrate fields summary rows don't carry.
+                resolved = await _resolve_refs(conn, _all_ref_ids(hydrate_rows))
+
+        next_cursor: str | None = None
+
+        if summary:
+            consolidation_summary = (
+                _hydrate_summary(consolidation_row, verify)
+                if consolidation_row is not None
+                else None
+            )
+            entries_summary = [_hydrate_summary(r, verify) for r in page_rows]
+            if len(entry_rows) > limit and entries_summary:
+                last = entries_summary[-1]
+                next_cursor = _encode_cursor(last.produced_at, last.id)
+            return JournalSummaryOut(
+                consolidation=consolidation_summary,
+                entries=entries_summary,
+                next_cursor=next_cursor,
+                calibration=calibration,
+            )
 
         consolidation = (
-            _hydrate_entry(consolidation_row, resolved)
+            _hydrate_entry(consolidation_row, resolved, verify)
             if consolidation_row is not None
             else None
         )
-        entries = [_hydrate_entry(r, resolved) for r in page_rows]
-
-        next_cursor: str | None = None
+        entries = [_hydrate_entry(r, resolved, verify) for r in page_rows]
         if len(entry_rows) > limit and entries:
             last = entries[-1]
             next_cursor = _encode_cursor(last.produced_at, last.id)
@@ -459,5 +740,26 @@ def build_journal_router(deps: RegistryAPIDeps) -> APIRouter:
             next_cursor=next_cursor,
             calibration=calibration,
         )
+
+    @router.get("/journal/{entry_id}", response_model=JournalEntryOut)
+    async def get_journal_entry(
+        entry_id: UUID,
+        principal: str = Depends(require_bearer),
+    ) -> JournalEntryOut:
+        """A single ``journal_entries`` row at full weight (§3.3) — the Voices
+        reader pane's on-select fetch (``GET /journal/{id}``), symmetric with
+        the existing resolve machinery rather than a single-row-via-list-filter
+        workaround."""
+        sql = f"SELECT {_ENTRY_COLS} FROM journal_entries WHERE id = $1"
+        async with deps.descriptor_registry.pg.acquire() as conn:
+            row = await conn.fetchrow(sql, entry_id)
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"journal entry {entry_id} not found",
+                )
+            resolved = await _resolve_refs(conn, _all_ref_ids([row]))
+            verify = await _read_verify_results(conn, [str(row["id"])])
+        return _hydrate_entry(row, resolved, verify)
 
     return router

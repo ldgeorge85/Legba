@@ -30,17 +30,47 @@ identity:
 
 subscription:
   # No `targets` block => META analyst (single global run; target_filter=None).
-  # WIDER than the synth: the correlator's value is cross-cutting, so it reads
-  # the predictor too and across output kinds (not just findings).
+  # M19 (2026-07-06) — REPOINTED to the LIVE composition + unit layer. The prior
+  # set (country_assessor / country_predictor / world_assessor) pointed at the
+  # RETIRED per-country layer (country_assessor last fired 2026-07-01;
+  # country_predictor is gone), so the correlator saw a near-monoculture and
+  # degraded to "insufficient cross-analyst data" blind_spots while hundreds of
+  # live unit + composition findings went uncorrelated. It now reads the eight
+  # bounded UNITS + the country/region compositions + the world composition — the
+  # real analytical surface it is meant to correlate across.
   other_analysts:
-    - id: country_assessor
+    - id: country_composition
+      data_types: [finding]
+      time_window: 24h
+    - id: region_composition
       data_types: [finding]
       time_window: 24h
     - id: world_assessor
       data_types: [finding]
       time_window: 24h
-    - id: country_predictor
-      data_types: [prediction]
+    - id: energy_security
+      data_types: [finding]
+      time_window: 24h
+    - id: escalation
+      data_types: [finding]
+      time_window: 24h
+    - id: leadership_transition
+      data_types: [finding]
+      time_window: 24h
+    - id: economic_coercion
+      data_types: [finding]
+      time_window: 24h
+    - id: internal_stability
+      data_types: [finding]
+      time_window: 24h
+    - id: military_posture
+      data_types: [finding]
+      time_window: 24h
+    - id: narrative_coordination
+      data_types: [finding]
+      time_window: 24h
+    - id: proliferation_watch
+      data_types: [finding]
       time_window: 24h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
@@ -57,6 +87,20 @@ method:
   prompt_module: "legba.prompts.cross_analyst_correlator.v1"
   llm:
     primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # M16 (2026-07-06) — the MANDATORY faithfulness verify. Its PRESENCE is the
+    # opt-in the actor's verify dispatch keys on (same discriminator the world /
+    # per-country compositions use). Without it the correlator was the ONE active
+    # LLM analyst that ESCAPED verify, so its confidence (<=0.95) was never clamped
+    # to faithfulness. The correlator cites the other analyst_outputs it reasons
+    # over via [[ref:N]] markers resolved into data['citations'] (ref_kind=finding),
+    # so the generalized composition (sub-claim) verify grades each clause against
+    # the cited output's text and folds effective_confidence = min(confidence,
+    # faithfulness). Same switchable core-plane stack_ref as the compositions;
+    # gated by LEGBA_VERIFY_LLM_JUDGE (soft-fails to the deterministic floor).
+    verify:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider

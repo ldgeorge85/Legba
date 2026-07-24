@@ -45,6 +45,15 @@ tools:
   # metadata. Read-only; BACKGROUND/method knowledge, not live substrate.
   - name: search_context
     config: {}
+  # Stage 1 — the OpenSearch full-text corpus readers (index legba_signals_corpus,
+  # ~106k signal docs): search_corpus = BM25 lexical keyword search over the WHOLE
+  # raw body of every ingested signal (optional keyword facet filters — geo, tags,
+  # source_id, language, …); read_document = fetch one signal's full indexed doc
+  # (incl full raw_body) by its doc_id. Makes the corpus AGENTIC. Read-only.
+  - name: search_corpus
+    config: {}
+  - name: read_document
+    config: {}
   # S4 (Phase 1) richer readers — the agentic assessors investigate rather than
   # one-shot: open signed/typed nexuses, ACH hypothesis rows, a facts∪signals
   # timeline, and a per-target substrate rollup.

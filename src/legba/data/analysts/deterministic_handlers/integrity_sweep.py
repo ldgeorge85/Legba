@@ -38,6 +38,21 @@ re-homes the two whose substrate moved:
      0051, extended by 0056_prune_dangling_derived_from_v2); this handler only
      COUNTS + SAMPLES, per its read-only audit contract.
 
+Standing delivery-failure CANARY (W1-T3): alongside the referential checks the
+sweep runs one cheap read over ``alert_sink_deliveries`` for NON-DELIVERED alerts
+in the last 24h — ``status='failed'`` (a hard failure, e.g. pushover 552/552) or
+``status='logged_only'`` (the emit went NOWHERE, no publisher wired — the silent
+case), grouped by ``(sink_kind, status)``. If ANY non-delivery is in the window it
+goes LOUD — a ``logger.warning`` plus a ``topic:delivery_health`` +
+``severity:<low|elevated|high>`` contribution folded into this run's finding
+(title, body breakdown, ``data``). Severity scales with the hard-``failed`` volume;
+a logged-only-only window floors at ``low`` (a log-only channel can be a config
+choice). If nothing failed or went nowhere it adds NOTHING (no false positive).
+This exists because pushover delivery failed 552/552 SILENTLY for ~11 days (the
+live-audit lesson): a dead delivery sink is exactly the drift this deterministic
+sweep must surface. Like the other checks it refuses loud — a missing/broken
+``alert_sink_deliveries`` read RAISES rather than reporting a false clean.
+
 Crucially — and unlike its predecessor — it **refuses loud**: a failing check
 (e.g. a relation that does not exist) is NOT swallowed into a zeroed finding.
 The exception propagates, the deterministic run errors visibly, and no
@@ -80,8 +95,12 @@ _DANGLING_SAMPLE_CAP = 25
 # the carrier. Mirrors the check's four-table lineage catalog EXACTLY (so the
 # sample can never list a ref the count did not count). LIMIT-capped + read-only;
 # the repair stays in the prune migration, never here.
+# NOTE: min(ao.id) would be min(uuid) — Postgres has no uuid aggregate, so the
+# whole sweep hard-failed ("function min(uuid) does not exist") whenever a dangling
+# ref existed to sample. Aggregate over the text cast, then cast back (picks the
+# lexicographically-smallest owning row id — an arbitrary but stable sample).
 _DANGLING_SAMPLE_SQL = """
-SELECT df.ref AS ref, min(ao.id) AS sample_output_id
+SELECT df.ref AS ref, min(ao.id::text)::uuid AS sample_output_id
 FROM analyst_outputs ao
 CROSS JOIN LATERAL unnest(ao.derived_from) AS df(ref)
 WHERE array_length(ao.derived_from, 1) IS NOT NULL
@@ -378,17 +397,136 @@ async def probe_reachable_click_path(
     }
 
 
+# ---------------------------------------------------------------------------
+# W1-T3 — delivery-failure CANARY (read-only, fail-loud)
+# ---------------------------------------------------------------------------
+#
+# The live audit found pushover delivery FAILED 552/552 for ~11 days with NO
+# surfaced signal. This standing check reads the delivery audit table for FAILED
+# deliveries in a rolling window and — only when there ARE any — folds a loud,
+# severity-scaled delivery-health contribution into this run's finding. Zero
+# failures adds nothing (no false positive).
+_DELIVERY_FAILURE_WINDOW_HOURS = 24
+
+# Per-(sink,status) breakdown of NON-DELIVERED alerts in the window: count + one
+# sample error, most-failing first. Two TERMINAL non-delivery statuses count:
+#   * 'failed'      — a delivery attempt that permanently failed / exhausted
+#                     retries (the pushover 552/552 case). Drives the severity band.
+#   * 'logged_only' — the emit went NOWHERE: an alert/nats_stream (or webhook /
+#                     a2a_skill / mcp_tool / stix_bundle) channel with no publisher
+#                     wired only logged its intent (agency/tools.py P7-F5). This is
+#                     the *silent* non-delivery the canary most needs to surface, so
+#                     it is counted — but it floors at 'low' severity (a log-only
+#                     channel can be a config choice, not an active break).
+# 'retrying' is IN-FLIGHT (not terminal) and is deliberately excluded. The run's
+# delivery total is sum(n) over these rows. Fail-loud: a missing/broken relation
+# RAISES (asyncpg UndefinedTableError) and is NOT caught — the canary must never
+# report a false clean. Columns per migration 0061 (sink_kind / status /
+# attempted_at / error_message).
+_DELIVERY_FAILURE_SQL = """
+/* canary:delivery_failures */
+SELECT sink_kind, status, count(*) AS n, max(error_message) AS sample_err
+FROM alert_sink_deliveries
+WHERE status IN ('failed', 'logged_only')
+  AND attempted_at > now() - interval '24 hours'
+GROUP BY sink_kind, status
+ORDER BY n DESC
+"""
+
+
+def _delivery_severity(total: int) -> str:
+    """Volume band for a 24h FAILED-delivery count (called only when total>0).
+
+    Scales with volume so a handful of transient failures reads low while a sink
+    failing wholesale (e.g. pushover 552/552) reads high — the loud end of the
+    canary the live audit needed.
+    """
+    if total >= 100:
+        return "high"
+    if total >= 10:
+        return "elevated"
+    return "low"
+
+
+def _delivery_severity_split(failed_total: int, logged_only_total: int) -> str | None:
+    """Severity for the combined non-delivery picture, or None when all clean.
+
+    'failed' rows drive the volume band (the unambiguous breaks). When there are
+    NO hard failures but there ARE 'logged_only' (went-nowhere) rows the severity
+    FLOORS at 'low' — surfaced, but a log-only channel can be a config choice, so
+    it never alone escalates to elevated/high (avoids a false alarm on by-design
+    log-only sinks).
+    """
+    if failed_total > 0:
+        return _delivery_severity(failed_total)
+    if logged_only_total > 0:
+        return "low"
+    return None
+
+
+async def _delivery_failures(pool: Any) -> list[dict[str, Any]]:
+    """Per-(sink,status) breakdown of NON-DELIVERED alerts in the last 24h.
+
+    Counts the two terminal non-delivery statuses ('failed' and 'logged_only');
+    'retrying' is in-flight and excluded. Returns ``[{"sink_kind", "status", "n",
+    "sample_err"}, ...]`` sorted by ``n`` desc; the run's delivery total is
+    ``sum(n)``. **Fail-loud**: a missing relation or bad
+    query RAISES (not caught) — the canary must never silently report clean (the
+    552/552-silent-for-11-days bug). The ONLY degradation is a connection with no
+    multi-row ``fetch`` (an older fake/probe): it returns [] rather than
+    fabricating one, mirroring the sample/probe contract in this module.
+    """
+    async with pool.acquire() as conn:
+        fetch = getattr(conn, "fetch", None)
+        if fetch is None:
+            return []
+        rows = await fetch(_DELIVERY_FAILURE_SQL)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "sink_kind": row["sink_kind"],
+                "status": row["status"],
+                "n": int(row["n"]),
+                "sample_err": row["sample_err"],
+            }
+        )
+    return out
+
+
 def _build_finding(
     *,
     issues: dict[str, int],
     target_id: str | None,
     dangling_sample: list[dict[str, str]] | None = None,
     probe: dict[str, dict[str, Any]] | None = None,
+    delivery_failures: list[dict[str, Any]] | None = None,
 ) -> FindingPayload:
     total = sum(issues.values())
     title = f"Integrity sweep: {total} issue(s) across {len(issues)} checks"
     if target_id:
         title = f"{title} for {target_id}"
+    # W1-T3 delivery-failure canary: only contributes when a delivery actually
+    # failed or went nowhere in the window — a clean window adds NOTHING (no false
+    # positive). 'failed' = a hard delivery failure (drives severity);
+    # 'logged_only' = the emit went NOWHERE (no publisher wired) — the silent case
+    # the canary exists for (floors at 'low').
+    delivery = delivery_failures or []
+    delivery_total = sum(int(r["n"]) for r in delivery)
+    failed_total = sum(int(r["n"]) for r in delivery if r.get("status") == "failed")
+    logged_only_total = sum(
+        int(r["n"]) for r in delivery if r.get("status") == "logged_only"
+    )
+    delivery_severity = _delivery_severity_split(failed_total, logged_only_total)
+    if delivery_total > 0:
+        # Go LOUD and identifiable in the title (this is the 552/552-silent bug's
+        # cure): name the non-delivery condition + resolved severity up front.
+        _went_nowhere = f" + {logged_only_total} went-nowhere" if logged_only_total else ""
+        title = (
+            f"ALERT DELIVERY FAILURE: {failed_total} failed{_went_nowhere} in "
+            f"{_DELIVERY_FAILURE_WINDOW_HOURS}h [severity:{delivery_severity}] "
+            f"— {title}"
+        )
     body_lines = [f"total_issues={total}"]
     for k in sorted(issues):
         body_lines.append(f"{k}={issues[k]}")
@@ -404,6 +542,22 @@ def _build_finding(
     tags = ["deterministic", "integrity_sweep"]
     tags.append("integrity_issues_present" if total > 0 else "integrity_clean")
 
+    # W1-T3 delivery-failure canary section — only when something failed / went nowhere.
+    if delivery_total > 0:
+        body_lines.append(
+            f"alert_delivery_non_delivery (failed={failed_total} "
+            f"logged_only={logged_only_total} total={delivery_total} in "
+            f"{_DELIVERY_FAILURE_WINDOW_HOURS}h, severity={delivery_severity}, "
+            f"rows={len(delivery)}):"
+        )
+        for r in delivery:
+            body_lines.append(
+                f"  sink_kind={r['sink_kind']} status={r.get('status')} "
+                f"n={r['n']} sample_err={r.get('sample_err')}"
+            )
+        tags.append("topic:delivery_health")
+        tags.append(f"severity:{delivery_severity}")
+
     # P1-T8 reachable-click-path probe: surface the three dead-end counts (0 on a
     # clean path) + a capped NAMED sample of any dead-end node so the operator/UI
     # can confirm — or pinpoint — the navigable read.
@@ -418,22 +572,33 @@ def _build_finding(
             body_lines.append(f"    - {detail}")
     tags.append("click_path_dead_ends" if probe_total > 0 else "click_path_clean")
 
+    data: dict[str, Any] = {
+        "sub_handler": SUB_HANDLER_NAME,
+        "issues": issues,
+        "total_issues": total,
+        "dangling_derived_from_sample": sample,
+        "dangling_derived_from_sample_cap": _DANGLING_SAMPLE_CAP,
+        "reachable_click_path": probe,
+        "reachable_click_path_dead_ends": probe_total,
+        "reachable_click_path_sample_cap": _PROBE_SAMPLE_CAP,
+    }
+    # W1-T3: carry the delivery-failure breakdown ONLY when there is one — a clean
+    # window leaves the delivery keys absent (emit nothing / no false positive).
+    if delivery_total > 0:
+        data["alert_delivery_failures"] = delivery
+        data["alert_delivery_failures_total"] = delivery_total
+        data["alert_delivery_failures_failed"] = failed_total
+        data["alert_delivery_failures_logged_only"] = logged_only_total
+        data["alert_delivery_failures_window_hours"] = _DELIVERY_FAILURE_WINDOW_HOURS
+        data["alert_delivery_failures_severity"] = delivery_severity
+
     return FindingPayload(
         title=title[:2048],
         body="\n".join(body_lines)[:65536],
         confidence=1.0,
         evidence=[],
         tags=tags,
-        data={
-            "sub_handler": SUB_HANDLER_NAME,
-            "issues": issues,
-            "total_issues": total,
-            "dangling_derived_from_sample": sample,
-            "dangling_derived_from_sample_cap": _DANGLING_SAMPLE_CAP,
-            "reachable_click_path": probe,
-            "reachable_click_path_dead_ends": probe_total,
-            "reachable_click_path_sample_cap": _PROBE_SAMPLE_CAP,
-        },
+        data=data,
     )
 
 
@@ -469,6 +634,27 @@ async def handle(
     # degrades to zeros when the connection cannot multi-row fetch.
     probe = await probe_reachable_click_path(pool, cap=_PROBE_SAMPLE_CAP)
     probe_dead_ends = sum(int(probe[k]["count"]) for k in _PROBE_KEYS)
+    # W1-T3 delivery-failure canary — fail-loud read of the delivery audit table.
+    # NOT wrapped: a missing/broken relation propagates (never a false clean).
+    delivery_failures = await _delivery_failures(pool)
+    delivery_total = sum(int(r["n"]) for r in delivery_failures)
+    if delivery_total > 0:
+        _failed_total = sum(
+            int(r["n"]) for r in delivery_failures if r.get("status") == "failed"
+        )
+        _logged_only_total = sum(
+            int(r["n"]) for r in delivery_failures if r.get("status") == "logged_only"
+        )
+        logger.warning(
+            "integrity_sweep.delivery_failures total=%d failed=%d logged_only=%d "
+            "window_h=%d severity=%s breakdown=%s",
+            delivery_total,
+            _failed_total,
+            _logged_only_total,
+            _DELIVERY_FAILURE_WINDOW_HOURS,
+            _delivery_severity_split(_failed_total, _logged_only_total),
+            [(r["sink_kind"], r["status"], r["n"]) for r in delivery_failures],
+        )
     if total > 0 or probe_dead_ends > 0:
         logger.warning(
             "integrity_sweep.issues total=%d click_path_dead_ends=%d detail=%s",
@@ -483,6 +669,7 @@ async def handle(
         target_id=options.get("target_id"),
         dangling_sample=dangling_sample,
         probe=probe,
+        delivery_failures=delivery_failures,
     )
     return AnalystMethodResult(
         finding=finding,

@@ -357,8 +357,14 @@ async def test_predictor_descriptor_registers_with_real_yaml(
         'target_id() == "india_energy_infra"'
     )
     assert "signal" in typed.subscription.targets.data_types
-    # Cadence is the 30-min beat with a 15-min cooldown floor.
-    assert typed.cadence.fallback_schedule == "*/30 * * * *"
+    # Cadence: fallback_schedule is DELIBERATELY NULLED (P0-T6 SEQUENCED
+    # FREEZE, docs/SEAMS.md #32) — "a forecast is a CLAIM that must be SCORED
+    # before it ships." A null schedule means dapr_actors' on-activate gate
+    # registers NO reminder, so the freeze is mechanically self-enforcing.
+    # RETURNS at P4 behind the Brier scoreboard alongside country_predictor
+    # and the GEPA optimizer (same freeze pattern). This assertion now guards
+    # the freeze holding, not the pre-freeze "*/30 * * * *" beat.
+    assert typed.cadence.fallback_schedule is None
     assert typed.cadence.cooldown_seconds == 900
 
 

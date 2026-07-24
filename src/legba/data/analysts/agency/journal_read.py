@@ -97,6 +97,11 @@ JOURNAL_READ_TOOLS = (
     "get_source_health",
     "get_budget_status",
     "get_journal_delta",
+    # VOICES LV-1 (planning/VOICES_BUILD_DESIGN §3.2): the chorus DIFF pass reads
+    # this cycle's four faculty lens reads through this tool. It is granted to the
+    # whole journal_read pack (one pack, one grant) but is inert for the tiers
+    # that never call it (entry/consolidation/chronicle/faculty).
+    "get_lens_reads",
 )
 
 
@@ -167,6 +172,18 @@ async def _call_instrument(call: ToolCall, ctx: ToolContext, name: str) -> ToolR
                 since=args.get("since"),
                 limit=int(args.get("limit", 30)),
             )
+        elif name == "get_lens_reads":
+            # VOICES LV-1 (§3.2): the faculty id set is passed at CALL TIME (never
+            # imported into the runtime port) — the kind-module constant lives in
+            # the analyst layer, this pack is the analyst layer, so importing it
+            # here does NOT cross the port boundary the design guards.
+            from legba.data.analysts.journal_assessor import LENS_ANALYST_IDS
+
+            out = await port.get_lens_reads(
+                lens_analyst_ids=list(LENS_ANALYST_IDS),
+                since=args.get("since"),
+                limit=int(args.get("limit", 20)),
+            )
         else:  # pragma: no cover — registry only maps the known names
             return ToolResult(status="failed", error=f"unknown journal tool {name!r}")
     except Exception as exc:  # noqa: BLE001 — port failures fold into the loop
@@ -229,6 +246,12 @@ async def get_journal_delta_tool(
     return await _call_instrument(call, ctx, "get_journal_delta")
 
 
+async def get_lens_reads_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_instrument(call, ctx, "get_lens_reads")
+
+
 def register_journal_read_tools(registry: ToolRegistry) -> None:
     """Register the journal_read pack's tool handlers.
 
@@ -256,6 +279,7 @@ def register_journal_read_tools(registry: ToolRegistry) -> None:
     registry.register("get_source_health", get_source_health_tool)
     registry.register("get_budget_status", get_budget_status_tool)
     registry.register("get_journal_delta", get_journal_delta_tool)
+    registry.register("get_lens_reads", get_lens_reads_tool)
 
 
 __all__ = [
@@ -271,4 +295,5 @@ __all__ = [
     "get_source_health_tool",
     "get_budget_status_tool",
     "get_journal_delta_tool",
+    "get_lens_reads_tool",
 ]

@@ -37,7 +37,8 @@ cannot be wired against today's substrate raises a clear
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Mapping
+import re
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 import asyncpg
@@ -110,6 +111,7 @@ async def build_analyst_run_method(
     substrate_query_port: Any | None = None,
     embedding_service: Any | None = None,
     qdrant_client: Any | None = None,
+    nlp_client: Any | None = None,
     tools_registry: Mapping[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] | None = None,
     consult_agency_binding: Any | None = None,
     inline_target_agency_binding: Any | None = None,
@@ -175,6 +177,16 @@ async def build_analyst_run_method(
         ``vector:world_context`` RAG can cosine-search the curated corpus at
         GROUND time. ``None`` (no vector store) keeps grounding on the structured
         substrate path (no BACKGROUND PRIORS block).
+    nlp_client:
+        Optional hosted-NLP client SOURCE the host built once at bring-up (the
+        process-lifetime :class:`LazyNlpClient` holder for the
+        ``nlp.local.legba_models`` stack component). Threaded — mirroring
+        ``embedding_service`` for signal_embedder — onto the ``reenrich_ner``
+        deterministic sub-handler's deps so its one-time NER-backfill sweep can
+        re-run the LIVE translate-then-NER path over the pre-fix historical backlog.
+        Resolved LAZILY inside ``_wire_reenrich_ner`` (only for that bound
+        sub-handler), so no other analyst pays a registry round-trip for a client it
+        never uses. ``None`` (NLP plane not provisioned) → the sweep no-ops per tick.
 
     Returns
     -------
@@ -272,6 +284,8 @@ async def build_analyst_run_method(
     elif kind == "deterministic":
         trio = await _build_deterministic(
             descriptor, handler, deps, _resolve_primary_llm,
+            embedding_service=embedding_service,
+            nlp_client=nlp_client,
         )
     elif kind == "predictor":
         trio = await _build_predictor(descriptor, handler, _resolve_primary_llm)
@@ -290,6 +304,10 @@ async def build_analyst_run_method(
             _resolve_primary_llm,
             substrate_query_port=substrate_query_port,
             agency_binding=consult_agency_binding,
+            # F1 model picker: thread the by-id resolver so the kind's run_method
+            # can build a per-request handler for the operator's chosen plane.
+            # It is bound to the consult allowlist inside _build_consult_on_demand.
+            resolve_llm_component=_resolve_llm_component,
         )
     elif kind == "deep_consult":
         trio = _build_deep_consult(
@@ -308,6 +326,23 @@ async def build_analyst_run_method(
             resolve_llm_component=_resolve_llm_component,
             embedding_service=embedding_service,
             qdrant_client=qdrant_client,
+        )
+    elif kind == "entity_researcher":
+        # E4 — the entity de-fragmentation analyst. Like relationship_reifier: a
+        # global META kind that BOTH calls the LLM (merge adjudication on the
+        # $0 core plane) AND reads/writes entity_profiles directly. deps carry
+        # the resolved primary LLM + pg_pool + budget; merge_mode gates apply.
+        trio = await _build_entity_researcher(
+            descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool, deps=deps,
+        )
+    elif kind == "signal_salience":
+        # S-1 — the per-signal salience scorer. Like entity_researcher: a global
+        # META sweep that BOTH calls the LLM (consequence scoring on the $0 core
+        # plane) AND reads/writes signals directly (un-scored pool in,
+        # signals.salience out). deps carry the resolved primary LLM + pg_pool +
+        # budget; score_mode gates apply (dry-run default).
+        trio = await _build_signal_salience(
+            descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool, deps=deps,
         )
     else:
         # Defensive — discover_analyst_kinds returned a kind we didn't
@@ -626,7 +661,10 @@ def _build_grounding_hook(
         )
         return None
 
-    from ..data.analysts.inline_target import GROUNDING_RAG_CHUNK_SINK_KEY
+    from ..data.analysts.inline_target import (
+        GROUNDING_RAG_CHUNK_SINK_KEY,
+        GROUNDING_RAG_STATS_SINK_KEY,
+    )
     from ..data.config import QdrantConfig
     from .grounding import (
         SubstrateGroundingResolver,
@@ -636,7 +674,10 @@ def _build_grounding_hook(
         build_world_context_block,
         collect_grounding_candidates,
         situation_scope_for_target,
+        target_country_name,
+        world_context_min_score,
     )
+    from .rag_rollback import is_world_context_enabled
 
     # L-114 / S5-T3: thread the hosted embedding client + the raw Qdrant client
     # (when the host built them) into the resolver so the opportunistic
@@ -668,6 +709,27 @@ def _build_grounding_hook(
     # time so a descriptor that opts in without a provisioned vector plane is
     # observable (the run then degrades to no block).
     want_world_context = "vector:world_context" in sources
+    # AUTO-ROLLBACK KILL-SWITCH (M22 — FIX A: per-run authoritative). A unit rolled
+    # back off (via the persisted rag_rollback state or the
+    # LEGBA_WORLD_CONTEXT_DISABLED_UNITS env pin) gets NO world_context block even
+    # though its descriptor still lists the source — the flip is reverted IN CODE,
+    # with no live descriptor PUT / redeploy. CRITICAL: this must NOT be baked into
+    # the cached grounding-hook closure here at BUILD time — per-target deps live in
+    # _ANALYST_DEPS and are evicted only on a descriptor-version change / process
+    # restart, and record_rollback triggers no eviction, so a build-time bake would
+    # keep injecting until an unrelated restart (the guard would be as inert as the
+    # comments-only one). The authoritative check is re-read EACH RUN inside the hook
+    # below; the read here is a fast-path LOG only (it does NOT set
+    # want_world_context, so a later re-enable resumes injection on the same closure).
+    ws_analyst_id = descriptor.identity.id
+    if want_world_context and not is_world_context_enabled(ws_analyst_id):
+        logger.info(
+            "analyst_deps_builder.grounding.world_context_rolled_back_at_build "
+            "analyst=%r — currently in the rag_rollback disabled set; the BACKGROUND "
+            "PRIORS block is suppressed (re-checked per run, so this can change "
+            "without a restart)",
+            ws_analyst_id,
+        )
     if want_world_context and (embedder is None or qdrant is None):
         logger.info(
             "analyst_deps_builder.grounding.world_context_unavailable analyst=%r "
@@ -688,16 +750,15 @@ def _build_grounding_hook(
             descriptor.identity.id, sources,
         )
 
-    # The RAG query's leading clause — the unit's bounded question, proxied by the
-    # descriptor's human name (falls back to its id). Prepended to the target +
-    # slice-entity candidates so the semantic search keys on the TOPIC, not just
-    # the entities (RAG plan §B: "query = unit's bounded question + target country
-    # + top slice entities").
-    question_hint = (
-        getattr(descriptor.identity, "name", None)
-        or getattr(descriptor.identity, "id", None)
-        or ""
-    )
+    # M22 — the FOCUSED RAG query THEME. The pre-M22 query led with the unit's
+    # display NAME ("Leadership-Transition Risk Unit") and appended the noisy
+    # slice-entity pile (person/org names the officeholder-stripped corpus never
+    # contains), which diluted the geo/topic anchor and kept on-target cosines
+    # below the floor. The theme is instead a corpus-facet phrase (government /
+    # military / economy / society) from the descriptor's grounding.rag_theme, or a
+    # cleaned form of its name — combined at run time with the target country into a
+    # tight "<country> <theme>" query. Computed once at build time.
+    rag_theme = _rag_theme_for_descriptor(descriptor)
 
     async def _hook(
         inputs: list[Mapping[str, Any]],
@@ -755,8 +816,24 @@ def _build_grounding_hook(
         # available here at GROUND time. Non-citable prior; an empty collection →
         # no block (no fabricated header). The retrieved chunk ids are recorded
         # into the caller's trace sink (when supplied) for auditable retrieval.
-        if want_world_context:
-            query = _world_context_query(question_hint, candidates())
+        # PER-RUN KILL-SWITCH (M22 FIX A) — AUTHORITATIVE. Re-read the disabled set
+        # EACH run (a cheap env read + a small state-file stat/read) so a rollback
+        # fired by rag_watch --enforce / an auto-trigger (writing the rag_rollback
+        # state) OR the env pin suppresses injection on the VERY NEXT run, with NO
+        # restart or deps eviction. Fail-safe by construction: is_world_context_enabled
+        # returns True unless the unit is EXPLICITLY in the disabled set — a missing /
+        # malformed state yields no disable signal → enabled; a unit present in the set
+        # → suppressed (fail-closed for an explicitly-disabled unit).
+        if want_world_context and is_world_context_enabled(ws_analyst_id):
+            # FOCUSED query (M22): "<target country> <theme>" for a per-country
+            # desk (its Factbook-background chunks are the retrieval target, further
+            # scoped by the per-desk country filter); theme + top geo terms for a
+            # meta / no-country run. NO unit-name noise, NO person-entity pile.
+            country_name = target_country_name(target_id)
+            geo_terms = () if country_name else candidates()[:2]
+            query = _world_context_query(
+                theme=rag_theme, country_name=country_name, geo_terms=geo_terms,
+            )
             # Thread the run's target_id so the resolver can apply the per-desk
             # country filter (a single-country desk retrieves only its own
             # country's chunks; a meta / no-target / non-single-country run applies
@@ -764,6 +841,18 @@ def _build_grounding_hook(
             chunks = await resolver.resolve_world_context(
                 query, limit=max_facts, target_id=target_id,
             )
+            # M22 instrumentation — the retrieval measurement #179 needs. Record the
+            # retained-chunk count + top retained cosine + the active floor into the
+            # per-run stats sink (folded into the ground trace event), so the RAG
+            # retrieval distribution is auditable run-over-run even when 0 chunks
+            # clear the floor (retained=0 = retrieved-but-all-below-floor / empty).
+            stats = options.get(GROUNDING_RAG_STATS_SINK_KEY)
+            if isinstance(stats, dict):
+                stats["world_context_retained"] = len(chunks)
+                scores = [c.score for c in chunks if c.score is not None]
+                if scores:
+                    stats["world_context_top_score"] = round(max(scores), 4)
+                stats["world_context_min_score"] = round(world_context_min_score(), 4)
             block = build_world_context_block(chunks)
             if block:
                 parts.append(block)
@@ -775,29 +864,76 @@ def _build_grounding_hook(
     return _hook
 
 
-def _world_context_query(question_hint: str, candidates: "list[str]") -> str:
-    """Assemble the ASSEMBLE-time ``vector:world_context`` RAG query string.
+def _world_context_query(
+    *, theme: str, country_name: str | None, geo_terms: Sequence[str] = (),
+) -> str:
+    """Assemble the FOCUSED ``vector:world_context`` RAG query string (M22).
 
-    ``question_hint`` (the unit's bounded question, proxied by the descriptor
-    name) leads, followed by the target-geo + top slice-entity candidates — the
-    same deterministic candidate set the structured resolver grounds on. Capped
-    to the leading candidates so the semantic query stays tight, and stripped of
-    empties. Returns ``""`` when there is nothing to query on (→ no RAG block).
+    A tight natural-language phrase keyed on the curated country-background
+    corpus's actual facets, NOT the pre-M22 "<unit name> — <slice-entity pile>"
+    query. For a PER-COUNTRY desk the target country leads (``"<country> <theme>"``
+    — e.g. ``"Iran government structure, political system, and leadership"``); its
+    Factbook chunks are the retrieval target and the per-desk country filter scopes
+    retrieval further. For a META / no-country run the theme leads, followed by up
+    to 2 top geo terms. Returns ``""`` when there is nothing to query on (→ no RAG
+    block).
+
+    Live probe (M22, 293-point corpus): the focused phrase clears the recalibrated
+    floor on-target (~0.60-0.66) and holds off-target well below (~0.40-0.43),
+    where the old diluted query sat at ~0.47-0.59 (below the 0.65 floor → 0/81
+    injections). The person-entity pile is DROPPED entirely — the officeholder-
+    stripped corpus contains no people, so those terms only pulled the centroid off
+    the geo/topic anchor.
     """
-    terms: list[str] = []
-    q = (question_hint or "").strip()
-    if q:
-        terms.append(q)
-    for c in candidates[:_WORLD_CONTEXT_QUERY_CANDIDATES]:
-        if isinstance(c, str) and c.strip():
-            terms.append(c.strip())
-    return " — ".join(terms) if terms else ""
+    theme = (theme or "").strip()
+    if country_name and country_name.strip():
+        return f"{country_name.strip()} {theme}".strip()
+    # meta / no-country: theme + up to 2 top geo terms (a country desk is the
+    # common case; a meta run keeps the query keyed on the theme + whatever geo the
+    # slice surfaced).
+    terms: list[str] = [theme] if theme else []
+    for g in geo_terms:
+        if isinstance(g, str) and g.strip():
+            terms.append(g.strip())
+        if len(terms) >= 3:
+            break
+    return " ".join(terms).strip()
 
 
-# How many leading candidate names (target geo + top slice entities) fold into
-# the ``vector:world_context`` RAG query alongside the bounded question. Bounded
-# so a tag-heavy slice can't bloat the semantic query into noise.
-_WORLD_CONTEXT_QUERY_CANDIDATES = 8
+# Tokens stripped from a descriptor NAME when deriving a fallback RAG theme (the
+# unit's abstract risk label — "Risk Unit", "Watch" — is noise against the corpus,
+# which is factual country background). Used only when grounding.rag_theme is unset.
+_THEME_STOPWORDS: frozenset[str] = frozenset(
+    {"unit", "risk", "watch", "the", "a", "an", "and"}
+)
+
+
+def _clean_theme_from_name(name: str) -> str:
+    """Derive a corpus-friendly theme phrase from a descriptor NAME (fallback).
+
+    "Leadership-Transition Risk Unit" → "leadership transition"; "Internal-Stability
+    / Coup-Risk Unit" → "internal stability coup". Splits on ``-`` / ``/`` /
+    whitespace and drops the abstract-label stopwords. Best-effort — a descriptor
+    that cares should set an explicit ``grounding.rag_theme``.
+    """
+    lowered = re.sub(r"[-/]", " ", (name or "").lower())
+    tokens = [t for t in re.split(r"\s+", lowered) if t and t not in _THEME_STOPWORDS]
+    return " ".join(tokens).strip()
+
+
+def _rag_theme_for_descriptor(descriptor: Any) -> str:
+    """The ``vector:world_context`` query theme for a descriptor: the explicit
+    ``grounding.rag_theme`` when set, else a cleaned form of the descriptor name."""
+    grounding = getattr(descriptor, "grounding", None)
+    theme = getattr(grounding, "rag_theme", None)
+    if isinstance(theme, str) and theme.strip():
+        return theme.strip()
+    name = (
+        getattr(descriptor.identity, "name", None)
+        or getattr(descriptor.identity, "id", None)
+        or ""
+    )
+    return _clean_theme_from_name(name)
 
 
 async def _build_cross_target_raw(
@@ -899,6 +1035,119 @@ async def _build_relationship_reifier(
     )
 
 
+async def _build_entity_researcher(
+    descriptor: AnalystDescriptor,
+    handler: KindHandler,
+    resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
+    *,
+    pg_pool: "asyncpg.Pool | None" = None,
+    deps: StandardDeps,
+) -> tuple[Callable[..., Any], Any | None, OutputKind]:
+    """entity_researcher (E4) — the entity de-fragmentation analyst.
+
+    A global META kind that BOTH calls the LLM (merge adjudication on the $0
+    core plane) AND reads/writes entity_profiles directly (blocked candidate
+    pairs in, tombstone+redirect merges out). Its ``kind_deps`` carry the
+    resolved primary LLM, the pg_pool, and the budget reporter. The descriptor's
+    ``method.llm.merge_mode`` gates the ONLY mutating behavior (``'apply'`` vs
+    the dry-run default ``'adjudicate_only'``)."""
+    from ..data.analysts.entity_researcher import EntityResearcherDeps
+
+    llm = await resolve_llm()
+    merge_mode = str(_read_method_llm_option(
+        descriptor, "merge_mode", default="adjudicate_only"))
+    max_pairs = _read_method_llm_option(
+        descriptor, "max_pairs", default=EntityResearcherDeps.max_pairs)
+    trgm_limit = _read_method_llm_option(
+        descriptor, "trgm_limit", default=EntityResearcherDeps.trgm_limit)
+    same_min = _read_method_llm_option(
+        descriptor, "same_min_confidence",
+        default=EntityResearcherDeps.same_min_confidence)
+    max_tokens = _read_method_llm_option(
+        descriptor, "max_tokens", default=EntityResearcherDeps.max_tokens)
+    temperature = _read_method_llm_option(
+        descriptor, "temperature", default=EntityResearcherDeps.temperature)
+    batch_size = _read_method_llm_option(
+        descriptor, "batch_size", default=EntityResearcherDeps.batch_size)
+    reclassify_max = _read_method_llm_option(
+        descriptor, "reclassify_max", default=EntityResearcherDeps.reclassify_max)
+    reclass_min = _read_method_llm_option(
+        descriptor, "reclass_min_confidence",
+        default=EntityResearcherDeps.reclass_min_confidence)
+    # #219 — fraction of reclassify_max split off to the generic-entity pool;
+    # default 0.0 (from EntityResearcherDeps) preserves pre-#219 behavior
+    # until a descriptor PUT opts in, same precedent as reclassify_max itself
+    # shipping at 0 in E6c (`5994594`) before its own live flip (`9b53f00`).
+    reclass_entity_share = _read_method_llm_option(
+        descriptor, "reclass_entity_share",
+        default=EntityResearcherDeps.reclass_entity_share)
+    return (
+        handler.run_method,
+        EntityResearcherDeps(
+            llm=llm,
+            pg_pool=pg_pool,
+            budget=getattr(deps, "budget", None),
+            apply=(merge_mode == "apply"),
+            max_pairs=int(max_pairs),
+            same_min_confidence=float(same_min),
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+            batch_size=int(batch_size),
+            reclassify_max=int(reclassify_max),
+            reclass_min_confidence=float(reclass_min),
+            reclass_entity_share=float(reclass_entity_share),
+        ),
+        handler.output_kind,
+    )
+
+
+async def _build_signal_salience(
+    descriptor: AnalystDescriptor,
+    handler: KindHandler,
+    resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
+    *,
+    pg_pool: "asyncpg.Pool | None" = None,
+    deps: StandardDeps,
+) -> tuple[Callable[..., Any], Any | None, OutputKind]:
+    """signal_salience (S-1) — the per-signal consequence scorer.
+
+    A global META sweep that BOTH calls the LLM (salience scoring on the $0 core
+    plane) AND reads/writes ``signals`` directly (un-scored recent-text pool in,
+    ``signals.salience`` out). Its ``kind_deps`` carry the resolved primary LLM,
+    the pg_pool, and the budget reporter. The descriptor's ``method.llm.score_mode``
+    gates the ONLY mutating behavior (``'apply'`` vs the dry-run default)."""
+    from ..data.analysts.signal_salience import SignalSalienceDeps
+
+    llm = await resolve_llm()
+    score_mode = str(_read_method_llm_option(
+        descriptor, "score_mode", default="dry_run"))
+    max_rows = _read_method_llm_option(
+        descriptor, "max_rows", default=SignalSalienceDeps.max_rows)
+    batch_size = _read_method_llm_option(
+        descriptor, "batch_size", default=SignalSalienceDeps.batch_size)
+    window_hours = _read_method_llm_option(
+        descriptor, "window_hours", default=SignalSalienceDeps.window_hours)
+    max_tokens = _read_method_llm_option(
+        descriptor, "max_tokens", default=SignalSalienceDeps.max_tokens)
+    temperature = _read_method_llm_option(
+        descriptor, "temperature", default=SignalSalienceDeps.temperature)
+    return (
+        handler.run_method,
+        SignalSalienceDeps(
+            llm=llm,
+            pg_pool=pg_pool,
+            budget=getattr(deps, "budget", None),
+            apply=(score_mode == "apply"),
+            max_rows=int(max_rows),
+            batch_size=int(batch_size),
+            window_hours=int(window_hours),
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+        ),
+        handler.output_kind,
+    )
+
+
 async def _build_competing_hypotheses(
     descriptor: AnalystDescriptor,
     handler: KindHandler,
@@ -952,6 +1201,9 @@ async def _build_deterministic(
     handler: KindHandler,
     deps: StandardDeps,
     resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
+    *,
+    embedding_service: Any | None = None,
+    nlp_client: Any | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """deterministic — code-only sub-dispatched kind.
 
@@ -961,63 +1213,409 @@ async def _build_deterministic(
     ``options["sub_handler"]`` — the descriptor must populate that field
     (validated by the kind itself, not here).
 
-    Wave 2b (#101): the ``fact_contention_arbiter`` sub-handler may break a
-    NEAR-TIE abstain with a BOUNDED call on the SELF-HOSTED vLLM plane. We
-    resolve that handler and inject it into ``deps.extras`` under
-    ``fact_contention.LLM_DEPS_EXTRA_KEY`` ONLY when BOTH hold:
+    Two deterministic sub-handlers reach for the SELF-HOSTED vLLM plane
+    (``llm.primary.openai_compat`` — NEVER Anthropic / Opus, that plane is
+    consult/deep only). Both resolve the descriptor's ``method.llm.primary`` via
+    the same ``resolve_llm()`` path and merge the handler into ``deps.extras``
+    under their own key; the shared :func:`_wire_deterministic_llm` applies the
+    ``_is_anthropic_component`` hard-refuse + degrade-not-break for both:
 
-      * ``LEGBA_FACT_CONTENTION_LLM_TIEBREAK`` is set (default OFF); AND
-      * the descriptor declares ``method.llm.primary`` (the
-        ``llm.primary.openai_compat`` self-hosted component — NEVER Anthropic /
-        Opus, that plane is consult/deep only).
+      * ``signal_summarizer`` — ALWAYS-ON (no env flag). Its sweep distills long
+        signal bodies on the CORE plane ($0). Wired whenever the bound
+        sub-handler is ``signal_summarizer`` AND the descriptor declares
+        ``method.llm.primary``. Key: ``signal_summarizer.LLM_DEPS_EXTRA_KEY``.
+      * ``fact_contention_arbiter`` (Wave 2b, #101) — FLAG-GATED
+        (``LEGBA_FACT_CONTENTION_LLM_TIEBREAK``, default OFF). Breaks a NEAR-TIE
+        abstain with a bounded vLLM call. Key:
+        ``fact_contention_arbiter.LLM_DEPS_EXTRA_KEY``.
 
-    Off (or no LLM ref) → ``deps`` is threaded UNMODIFIED, so every other
-    deterministic sub-handler (and the arbiter's deterministic path) is
-    byte-for-byte unchanged. A resolution failure degrades to the no-LLM path
-    (the arbiter's own abstain stands) rather than blocking deps-build.
+    No LLM ref (or the sub-handler doesn't want one, or the flag is off) →
+    ``deps`` is threaded UNMODIFIED, so every other deterministic sub-handler
+    stays byte-for-byte unchanged. A resolution failure degrades to the no-LLM
+    path (the sub-handler's own fallback) rather than blocking deps-build.
     """
-    tiebreak_component_id = _primary_llm_component_id(descriptor)
+    component_id = _primary_llm_component_id(descriptor)
+    sub_handler = getattr(descriptor.method, "sub_handler", None)
+    is_deterministic = descriptor.identity.kind == "deterministic"
+
+    # signal_summarizer — always-on CORE-plane distillation (no env flag). Wired
+    # only for the bound sub-handler so no other deterministic analyst pays for a
+    # resolution it never uses.
     if (
-        descriptor.identity.kind == "deterministic"
-        and _fact_contention_tiebreak_enabled()
-        and tiebreak_component_id is not None
+        is_deterministic
+        and sub_handler == "signal_summarizer"
+        and component_id is not None
     ):
-        if _is_anthropic_component(tiebreak_component_id):
-            # Hard guard: the Wave-2b tie-break is vLLM-only. Refuse an
-            # Anthropic/Opus primary (the billed consult/deep plane) so a
-            # mis-wired arbiter descriptor can never route tie-break calls onto
-            # Opus; stay on the deterministic (no-LLM) abstain path.
-            logger.warning(
-                "analyst_deps_builder.deterministic.tiebreak_refused_anthropic "
-                "analyst=%r llm=%r — Wave-2b tie-break is vLLM-only; refusing an "
-                "Anthropic/Opus primary; staying deterministic",
-                descriptor.identity.id, tiebreak_component_id,
-            )
-        else:
-            try:
-                from ..data.analysts.deterministic_handlers.fact_contention_arbiter import (
-                    LLM_DEPS_EXTRA_KEY,
-                )
+        from ..data.analysts.deterministic_handlers.signal_summarizer import (
+            LLM_DEPS_EXTRA_KEY as _SUMMARIZER_LLM_KEY,
+        )
 
-                llm = await resolve_llm()
-                from dataclasses import replace as _dc_replace
+        deps = await _wire_deterministic_llm(
+            descriptor,
+            deps,
+            resolve_llm,
+            component_id=component_id,
+            extra_key=_SUMMARIZER_LLM_KEY,
+            purpose="signal_summarizer",
+        )
 
-                merged_extras = {**dict(deps.extras), LLM_DEPS_EXTRA_KEY: llm}
-                deps = _dc_replace(deps, extras=merged_extras)
-                logger.info(
-                    "analyst_deps_builder.deterministic.fact_contention_tiebreak "
-                    "analyst=%r llm=%r — Wave-2b LLM tie-break WIRED on the "
-                    "self-hosted vLLM plane",
-                    descriptor.identity.id, tiebreak_component_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "analyst_deps_builder.deterministic.tiebreak_resolve_failed "
-                    "analyst=%r err=%s — degrading to the deterministic (no-LLM) "
-                    "arbiter path",
-                    descriptor.identity.id, exc,
-                )
+    # fact_contention_arbiter Wave-2b tie-break — flag-gated (default OFF). Not
+    # keyed on sub_handler (a pre-existing descriptor may carry the llm block
+    # without the field); the flag + llm.primary presence is the gate.
+    if (
+        is_deterministic
+        and _fact_contention_tiebreak_enabled()
+        and component_id is not None
+    ):
+        from ..data.analysts.deterministic_handlers.fact_contention_arbiter import (
+            LLM_DEPS_EXTRA_KEY as _TIEBREAK_LLM_KEY,
+        )
+
+        deps = await _wire_deterministic_llm(
+            descriptor,
+            deps,
+            resolve_llm,
+            component_id=component_id,
+            extra_key=_TIEBREAK_LLM_KEY,
+            purpose="fact_contention_tiebreak",
+        )
+
+    # corpus_indexer — always-on OpenSearch INDEX PLANE sweep (no LLM). Build +
+    # connect an OpenSearchStore and merge it into deps.extras so the sweep can
+    # index the next batch of un-indexed signals. Wired only for the bound
+    # sub-handler so no other deterministic analyst pays for a store it never uses.
+    if is_deterministic and sub_handler == "corpus_indexer":
+        from ..data.analysts.deterministic_handlers.corpus_indexer import (
+            OS_DEPS_EXTRA_KEY as _CORPUS_OS_KEY,
+        )
+
+        deps = await _wire_corpus_indexer_os(
+            descriptor, deps, extra_key=_CORPUS_OS_KEY,
+        )
+
+    # signal_embedder — always-on Qdrant VECTOR PLANE sweep (no LLM; the hosted
+    # embedder is the process-lifetime embedding_service the host built at bring-up
+    # from embed.primary.openai_compat). Build + connect a QdrantStore AND thread
+    # that embedder, both into deps.extras, so the sweep can embed the next batch
+    # of un-embedded signals into legba_signals. Wired only for the bound
+    # sub-handler so no other deterministic analyst pays for a store it never uses.
+    if is_deterministic and sub_handler == "signal_embedder":
+        deps = await _wire_signal_embedder(
+            descriptor, deps, embedding_service=embedding_service,
+        )
+
+    # reenrich_ner — ONE-TIME NER-backfill sweep (no LLM; it re-runs the LIVE
+    # multilingual/telegram NER over the pre-fix historical backlog). Resolve the
+    # hosted NlpServiceClient from the process-lifetime nlp_client source and merge
+    # it into deps.extras so the sweep can call the production translate-then-NER
+    # path. Wired only for the bound sub-handler so no other deterministic analyst
+    # pays for a client it never uses.
+    if is_deterministic and sub_handler == "reenrich_ner":
+        deps = await _wire_reenrich_ner(descriptor, deps, nlp_client=nlp_client)
+
+    # reenrich_translation — TRANSLATION-backfill sweep (M13/T-1c; no LLM). Reuses
+    # the SAME hosted NlpServiceClient source as reenrich_ner (translate is the same
+    # /translate plane), threaded under its OWN deps.extras key. Wired only for the
+    # bound sub-handler so no other deterministic analyst pays for it.
+    if is_deterministic and sub_handler == "reenrich_translation":
+        deps = await _wire_reenrich_translation(
+            descriptor, deps, nlp_client=nlp_client
+        )
     return handler.run_method, deps, handler.output_kind
+
+
+async def _wire_signal_embedder(
+    descriptor: AnalystDescriptor,
+    deps: StandardDeps,
+    *,
+    embedding_service: Any | None,
+) -> StandardDeps:
+    """Build + connect a :class:`QdrantStore` AND thread the hosted embedding
+    client into ``deps.extras`` for the signal_embedder sweep, returning the
+    (replaced) deps.
+
+    EMBEDDER-WIRING CHOICE: rather than resolve a SECOND embedding client here
+    (which would need the registry + secrets plumbing), we reuse the
+    process-lifetime ``embedding_service`` the host already built ONCE at bring-up
+    from ``embed.primary.openai_compat`` (the same handle threaded into the
+    inline_target / journal grounding RAG). It arrives via
+    ``build_analyst_run_method(..., embedding_service=...)`` and is passed straight
+    through — no per-analyst rebuild, no extra registry fetch, one shared client.
+
+    Degrade-not-break (mirrors ``_wire_corpus_indexer_os``): any failure to
+    build/connect the Qdrant store logs a warning and returns ``deps`` with only
+    the embedder wired; if the embedder is absent too, ``deps`` is returned with
+    neither — the sweep then no-ops that tick (its own no-plane guard). The
+    AsyncQdrantClient is lazy (connect opens no socket), so an unreachable Qdrant
+    does not fail here — the actual upsert degrades inside the sweep instead."""
+    from dataclasses import replace as _dc_replace
+
+    from ..data.analysts.deterministic_handlers.signal_embedder import (
+        EMBEDDER_DEPS_EXTRA_KEY as _EMBED_KEY,
+        QDRANT_DEPS_EXTRA_KEY as _QDRANT_KEY,
+    )
+
+    merged_extras = dict(deps.extras)
+
+    # Thread the pre-built hosted embedder (the vector plane's compute leg).
+    if embedding_service is not None:
+        merged_extras[_EMBED_KEY] = embedding_service
+        logger.info(
+            "analyst_deps_builder.signal_embedder.embedder_wired analyst=%r — "
+            "reusing the process-lifetime embed.primary.openai_compat client",
+            descriptor.identity.id,
+        )
+    else:
+        logger.warning(
+            "analyst_deps_builder.signal_embedder.no_embedder analyst=%r — no "
+            "embedding_service was provisioned at bring-up; the sweep no-ops until "
+            "one is wired",
+            descriptor.identity.id,
+        )
+
+    # Build + connect the QdrantStore (the vector plane's storage leg).
+    try:
+        from ..data.qdrant import QdrantStore
+
+        store = QdrantStore.from_env()
+        await store.connect()
+        merged_extras[_QDRANT_KEY] = store
+        logger.info(
+            "analyst_deps_builder.signal_embedder.qdrant_wired analyst=%r "
+            "host=%s:%d collection=%s — the Qdrant vector plane is wired",
+            descriptor.identity.id, store.cfg.host, store.cfg.port,
+            store.cfg.signals_collection,
+        )
+    except Exception as exc:
+        logger.warning(
+            "analyst_deps_builder.signal_embedder.qdrant_wire_failed analyst=%r "
+            "err=%s — degrading to the no-store path (the sweep no-ops this tick)",
+            descriptor.identity.id, exc,
+        )
+
+    return _dc_replace(deps, extras=merged_extras)
+
+
+async def _wire_reenrich_ner(
+    descriptor: AnalystDescriptor,
+    deps: StandardDeps,
+    *,
+    nlp_client: Any | None,
+) -> StandardDeps:
+    """Resolve the hosted :class:`NlpServiceClient` and merge it into
+    ``deps.extras`` for the reenrich_ner NER-backfill sweep, returning the
+    (replaced) deps.
+
+    NLP-WIRING CHOICE (mirrors ``_wire_signal_embedder``'s embedder reuse): rather
+    than re-plumb the registry + secrets here, we reuse the process-lifetime
+    hosted-NLP source the host already built at bring-up — the
+    :class:`~legba.runtime.nlp_client_factory.LazyNlpClient` holder for the
+    ``nlp.local.legba_models`` stack component (the SAME source the source-enrichment
+    pipeline's ner_multilingual filter binds to). It arrives via
+    ``build_analyst_run_method(..., nlp_client=...)``. The holder resolves LAZILY —
+    we call it HERE (only for this bound sub-handler) so no other deterministic
+    analyst triggers a registry round-trip for a client it never uses.
+
+    Degrade-not-break (mirrors ``_wire_signal_embedder`` / ``_wire_corpus_indexer_os``):
+    a ``None`` source, or any resolution failure (models-host unreachable / stack row
+    not seeded at deps-build), logs a warning and returns ``deps`` UNMODIFIED — the
+    sweep then no-ops that tick (its own no-nlp guard sets ``skipped_no_nlp``). The
+    holder does NOT cache a failure, so a later deps (re)build retries once the plane
+    heals."""
+    from dataclasses import replace as _dc_replace
+
+    from ..data.analysts.deterministic_handlers.reenrich_ner import (
+        NLP_DEPS_EXTRA_KEY as _NLP_KEY,
+    )
+
+    if nlp_client is None:
+        logger.warning(
+            "analyst_deps_builder.reenrich_ner.no_nlp_source analyst=%r — no hosted "
+            "NLP client source was provisioned at bring-up; the NER-backfill sweep "
+            "no-ops until one is wired",
+            descriptor.identity.id,
+        )
+        return deps
+
+    # The source is the LazyNlpClient holder (async .get()) in production; accept an
+    # already-resolved client too (tests / a future eager wiring) via duck-typing on
+    # the async getter.
+    resolved: Any | None = nlp_client
+    getter = getattr(nlp_client, "get", None)
+    if callable(getter):
+        try:
+            resolved = await getter()
+        except Exception as exc:
+            logger.warning(
+                "analyst_deps_builder.reenrich_ner.nlp_resolve_failed analyst=%r "
+                "err=%s — degrading to the no-nlp path (the sweep no-ops this tick; "
+                "a later deps rebuild retries once the models-host heals)",
+                descriptor.identity.id, exc,
+            )
+            return deps
+
+    if resolved is None:
+        logger.warning(
+            "analyst_deps_builder.reenrich_ner.nlp_unresolved analyst=%r — the NLP "
+            "source resolved to None; the NER-backfill sweep no-ops this tick",
+            descriptor.identity.id,
+        )
+        return deps
+
+    merged_extras = {**dict(deps.extras), _NLP_KEY: resolved}
+    logger.info(
+        "analyst_deps_builder.reenrich_ner.nlp_wired analyst=%r — resolved the hosted "
+        "NlpServiceClient; the NER-backfill translate-then-NER plane is wired",
+        descriptor.identity.id,
+    )
+    return _dc_replace(deps, extras=merged_extras)
+
+
+async def _wire_reenrich_translation(
+    descriptor: AnalystDescriptor,
+    deps: StandardDeps,
+    *,
+    nlp_client: Any | None,
+) -> StandardDeps:
+    """Resolve the hosted :class:`NlpServiceClient` and merge it into
+    ``deps.extras`` under the reenrich_translation key (M13/T-1c).
+
+    Identical wiring to :func:`_wire_reenrich_ner` (same process-lifetime hosted-NLP
+    source — translate is the same ``nlp.local.legba_models`` /translate plane), only
+    the extras KEY differs so the two backfill sweeps stay independently addressable.
+    Degrade-not-break: a ``None`` source / resolution failure returns ``deps``
+    UNMODIFIED and the sweep no-ops that tick (its own no-nlp guard)."""
+    from dataclasses import replace as _dc_replace
+
+    from ..data.analysts.deterministic_handlers.reenrich_translation import (
+        NLP_DEPS_EXTRA_KEY as _NLP_KEY,
+    )
+
+    if nlp_client is None:
+        logger.warning(
+            "analyst_deps_builder.reenrich_translation.no_nlp_source analyst=%r — no "
+            "hosted NLP client source was provisioned at bring-up; the translation-"
+            "backfill sweep no-ops until one is wired",
+            descriptor.identity.id,
+        )
+        return deps
+
+    # The source is the LazyNlpClient holder (async .get()) in production; accept an
+    # already-resolved client too (tests) via duck-typing on the async getter.
+    resolved: Any | None = nlp_client
+    getter = getattr(nlp_client, "get", None)
+    if callable(getter):
+        try:
+            resolved = await getter()
+        except Exception as exc:
+            logger.warning(
+                "analyst_deps_builder.reenrich_translation.nlp_resolve_failed "
+                "analyst=%r err=%s — degrading to the no-nlp path (the sweep no-ops "
+                "this tick; a later deps rebuild retries once the models-host heals)",
+                descriptor.identity.id, exc,
+            )
+            return deps
+
+    if resolved is None:
+        logger.warning(
+            "analyst_deps_builder.reenrich_translation.nlp_unresolved analyst=%r — the "
+            "NLP source resolved to None; the translation-backfill sweep no-ops",
+            descriptor.identity.id,
+        )
+        return deps
+
+    merged_extras = {**dict(deps.extras), _NLP_KEY: resolved}
+    logger.info(
+        "analyst_deps_builder.reenrich_translation.nlp_wired analyst=%r — resolved the "
+        "hosted NlpServiceClient; the translation-backfill /translate plane is wired",
+        descriptor.identity.id,
+    )
+    return _dc_replace(deps, extras=merged_extras)
+
+
+async def _wire_corpus_indexer_os(
+    descriptor: AnalystDescriptor,
+    deps: StandardDeps,
+    *,
+    extra_key: str,
+) -> StandardDeps:
+    """Build + connect an :class:`OpenSearchStore` and merge it into
+    ``deps.extras[extra_key]`` for the corpus_indexer sweep, returning the
+    (replaced) deps.
+
+    Degrade-not-break: any failure to build/connect the store (opensearch-py
+    absent, config error) logs a warning and returns ``deps`` UNMODIFIED — the
+    sweep then no-ops that tick (its own no-store guard). The AsyncOpenSearch
+    client is lazy (connect opens no socket), so an unreachable OpenSearch does
+    not fail here — the actual bulk request degrades inside the sweep instead."""
+    try:
+        from dataclasses import replace as _dc_replace
+
+        from ..data.opensearch import OpenSearchStore
+
+        store = OpenSearchStore.from_env()
+        await store.connect()
+        merged_extras = {**dict(deps.extras), extra_key: store}
+        deps = _dc_replace(deps, extras=merged_extras)
+        logger.info(
+            "analyst_deps_builder.corpus_indexer.os_wired analyst=%r "
+            "host=%s:%d index=%s — the OpenSearch index plane is wired",
+            descriptor.identity.id, store.cfg.host, store.cfg.port, store.cfg.index,
+        )
+    except Exception as exc:
+        logger.warning(
+            "analyst_deps_builder.corpus_indexer.os_wire_failed analyst=%r err=%s "
+            "— degrading to the no-store path (the sweep no-ops this tick)",
+            descriptor.identity.id, exc,
+        )
+    return deps
+
+
+async def _wire_deterministic_llm(
+    descriptor: AnalystDescriptor,
+    deps: StandardDeps,
+    resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
+    *,
+    component_id: str,
+    extra_key: str,
+    purpose: str,
+) -> StandardDeps:
+    """Resolve the descriptor's SELF-HOSTED primary LLM and merge it into
+    ``deps.extras[extra_key]``, returning the (replaced) deps.
+
+    Hard-refuses an Anthropic component (``_is_anthropic_component``): the
+    deterministic plane is self-hosted / $0 only, so a mis-wired descriptor can
+    never route a deterministic-analyst call onto the billed Opus plane
+    (consult / deep_consult are the only sanctioned Anthropic users) — on a
+    refuse, ``deps`` is returned UNMODIFIED (the sub-handler stays on its no-LLM
+    path). Any resolution failure likewise degrades to the unchanged ``deps``
+    rather than blocking deps-build."""
+    if _is_anthropic_component(component_id):
+        logger.warning(
+            "analyst_deps_builder.deterministic.llm_refused_anthropic "
+            "analyst=%r purpose=%s llm=%r — the deterministic plane is vLLM-only; "
+            "refusing an Anthropic/Opus primary; staying no-LLM",
+            descriptor.identity.id, purpose, component_id,
+        )
+        return deps
+    try:
+        from dataclasses import replace as _dc_replace
+
+        llm = await resolve_llm()
+        merged_extras = {**dict(deps.extras), extra_key: llm}
+        deps = _dc_replace(deps, extras=merged_extras)
+        logger.info(
+            "analyst_deps_builder.deterministic.llm_wired "
+            "analyst=%r purpose=%s llm=%r — resolved on the self-hosted vLLM plane",
+            descriptor.identity.id, purpose, component_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "analyst_deps_builder.deterministic.llm_resolve_failed "
+            "analyst=%r purpose=%s err=%s — degrading to the no-LLM path",
+            descriptor.identity.id, purpose, exc,
+        )
+    return deps
 
 
 def _fact_contention_tiebreak_enabled() -> bool:
@@ -1195,6 +1793,9 @@ async def _build_consult_on_demand(
     *,
     substrate_query_port: Any | None,
     agency_binding: Any | None = None,
+    resolve_llm_component: (
+        Callable[[str], Awaitable[LLMProviderHandler]] | None
+    ) = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """consult_on_demand — ReAct loop over the substrate-tool whitelist.
 
@@ -1209,8 +1810,19 @@ async def _build_consult_on_demand(
     callers don't supply one we raise :class:`AnalystDepsBuildError`
     per the no-stubs rule rather than handing the kind a half-wired
     port and letting it crash at first tool call.
+
+    F1 model picker: when ``resolve_llm_component`` (the by-id resolver) is
+    threaded, we wrap it in an ALLOWLIST-BOUND resolver and hand it to the kind
+    so a per-request ``llm_component_override`` builds a fresh handler for the
+    operator's chosen plane. The bound resolver refuses any id outside
+    :data:`legba.data.analysts.consult_on_demand.LLM_OVERRIDE_ALLOWLIST`, so the
+    kind can never be steered onto an arbitrary component. None keeps the kind
+    on the cached primary (Opus default) — the pre-F1 behavior, unchanged.
     """
-    from ..data.analysts.consult_on_demand import ConsultOnDemandDeps
+    from ..data.analysts.consult_on_demand import (
+        LLM_OVERRIDE_ALLOWLIST,
+        ConsultOnDemandDeps,
+    )
 
     llm = await resolve_llm()
     if substrate_query_port is None:
@@ -1219,6 +1831,11 @@ async def _build_consult_on_demand(
             "supplied — no production implementation exists in-tree yet "
             "(see analyst_deps_builder report). Pass substrate_query_port "
             "explicitly when binding this analyst."
+        )
+    override_resolver = None
+    if resolve_llm_component is not None:
+        override_resolver = _bind_override_resolver(
+            resolve_llm_component, LLM_OVERRIDE_ALLOWLIST,
         )
     return (
         handler.run_method,
@@ -1231,9 +1848,35 @@ async def _build_consult_on_demand(
             # direct port dispatch, no governance, never wired by the
             # runtime.
             agency_binding=agency_binding,
+            resolve_llm_component=override_resolver,
         ),
         handler.output_kind,
     )
+
+
+def _bind_override_resolver(
+    resolve_llm_component: Callable[[str], Awaitable[LLMProviderHandler]],
+    allowlist: "frozenset[str] | set[str]",
+) -> Callable[[str], Awaitable[LLMProviderHandler]]:
+    """Wrap a by-id LLM resolver so it resolves ONLY allowlisted component ids.
+
+    The consult / deep model picker (F1) exposes a per-request plane override.
+    The registry front door is the primary gate (it maps a friendly value to one
+    of the sanctioned ids and never accepts a raw id), but the run-time resolver
+    is bound here too so a component id outside the allowlist is refused with a
+    clear error rather than resolved — defense in depth for the LLM plane.
+    """
+
+    async def _resolve(component_id: str) -> LLMProviderHandler:
+        if component_id not in allowlist:
+            raise AnalystDepsBuildError(
+                f"consult LLM override {component_id!r} is not in the allowlist "
+                f"{sorted(allowlist)!r} — refusing to resolve an unsanctioned "
+                f"plane"
+            )
+        return await resolve_llm_component(component_id)
+
+    return _resolve
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@
 # scan exits NON-ZERO on anything that must not reach the public remote:
 #
 #   1. Prior-host CODENAME in tracked file content (terms in .prepush_terms).
+#   1b. Private infra-host fragments (api.ai1 / ai1.infra / .ai1.) in content.
 #   2. Operator DOMAIN in tracked file content (civislux).
 #   3. A tracked .env / secrets file (must stay gitignored).
 #   4. Private-key material (BEGIN ... PRIVATE KEY) in tracked content.
@@ -15,6 +16,7 @@
 #   6. High-entropy strings (long base64/hex literals) — heuristic.
 #   7. Non-neutral git author/committer identity on commits about to push.
 #   8. A tracked planning/ file (internal tracking must stay ignored).
+#   9. A tracked corpora/ file (operational corpus DATA must stay ignored).
 #
 # It scans TRACKED CONTENT (`git grep`) + the about-to-push commit range —
 # never the untracked vault/.env (those are correctly ignored). Allowlisted
@@ -59,6 +61,18 @@ elif git grep -nI -iE "${CODENAME_RE}" -- . \
      ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' \
      ':(exclude).prepush_terms' >/tmp/_ps_codename 2>/dev/null; then
   while IFS= read -r line; do report codename "${line}"; done < /tmp/_ps_codename
+fi
+
+# 1b. Private infra-host FRAGMENTS. Bare `ai1` is deliberately NOT in
+#     .prepush_terms (too short — real false-positive risk), but the distinctive
+#     multi-part forms of the operator's GPU/gateway host family
+#     (api.ai1 / ai1.infra / .ai1.) have ~zero false-positive risk and are
+#     exactly what leaked (5x `api.ai1`) uncaught before. Scanned directly here.
+section "1b. private infra-host fragments (api.ai1 / ai1.infra / .ai1.)"
+if git grep -nI -E -- '\bapi\.ai1\b|ai1\.infra|\.ai1\.' . \
+     ':(exclude)scripts/prepush_scan.sh' ':(exclude)docs/RUNBOOK.md' \
+     ':(exclude).prepush_terms' >/tmp/_ps_ai1 2>/dev/null; then
+  while IFS= read -r line; do report infra-host "${line}"; done < /tmp/_ps_ai1
 fi
 
 # 2. Operator domain in tracked content.
@@ -126,9 +140,33 @@ if [[ -n "${BAD_IDENT}" ]]; then
   done <<< "${BAD_IDENT}"
 fi
 
+# 7b. Codename / infra-host fragments in the ABOUT-TO-PUSH commit MESSAGES.
+#     `git grep` (sections 1/1b) only sees the tree; commit bodies ship in
+#     history too. This is a NON-FATAL WARN, not a hard fail: the release path
+#     is a clean-slate squash-before-push (see RUNBOOK §20) which discards every
+#     range message and writes ONE fresh commit — so these resolve at push time.
+#     It is surfaced so a NON-squash push is never made blind to a message leak.
+section "7b. codename / infra-host in commit messages (${RANGE}) — WARN"
+if [[ -n "${CODENAME_RE}" ]]; then
+  MSG_HITS="$(git log "${RANGE}" --format='%H %s%n%b' 2>/dev/null \
+    | grep -inE "${CODENAME_RE}|\\bapi\\.ai1\\b|ai1\\.infra|\\.ai1\\." || true)"
+  if [[ -n "${MSG_HITS}" ]]; then
+    echo "  WARN  commit messages name internal terms — squash-before-push resolves; reword first if NOT squashing:"
+    printf '%s\n' "${MSG_HITS}" | sed 's/^/    /'
+  else
+    echo "  clean"
+  fi
+fi
+
 # 8. Tracked planning/ files (internal tracking must stay ignored).
 section "8. tracked planning/ files"
 while IFS= read -r f; do report tracked-planning "${f}"; done < <(git ls-files planning/ 2>/dev/null)
+
+# 9. Tracked corpora/ files. The operational corpus DATA (world_context /
+#    Factbook / license-bearing chunks) is the #1 "never ship" directory
+#    (.gitignore), but had no gate backstop — a `git add -f` could sneak it in.
+section "9. tracked corpora/ files"
+while IFS= read -r f; do report tracked-corpora "${f}"; done < <(git ls-files corpora/ 2>/dev/null)
 
 # Optional gitleaks pass.
 section "gitleaks (optional)"

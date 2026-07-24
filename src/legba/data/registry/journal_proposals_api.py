@@ -136,8 +136,14 @@ async def _journal_calibration_evidence(conn: Any) -> CalibrationEvidence:
     """Read the §7.5(a) objective evidence for a self_revision review: the live
     calibration verdict + the journal's own recent critic mean. Best-effort —
     absent data reads as 'unproven' (absence of proof is not proof of skill)."""
+    # B0-3 (read-truth): the calibration writer produces ``kind='finding'`` +
+    # ``analyst_id='calibration_tracking'`` (nothing writes ``kind='calibration'``)
+    # and the metrics live one JSONB level down at ``data.data`` (the row's
+    # ``data`` column is the WHOLE FindingPayload dump).
     cal = await conn.fetchrow(
-        "SELECT data FROM analyst_outputs WHERE kind = 'calibration' "
+        "SELECT data FROM analyst_outputs "
+        "WHERE kind = 'finding' AND analyst_id = 'calibration_tracking' "
+        "AND superseded_by IS NULL "
         "ORDER BY produced_at DESC, id DESC LIMIT 1"
     )
     forecast_unproven = True
@@ -146,7 +152,9 @@ async def _journal_calibration_evidence(conn: Any) -> CalibrationEvidence:
     available = False
     if cal is not None:
         available = True
-        data = _load_jsonb(cal["data"]) or {}
+        payload = _load_jsonb(cal["data"]) or {}
+        data = payload.get("data") if isinstance(payload, dict) else None
+        data = data if isinstance(data, dict) else {}
         raw_bss = data.get("brier_skill_score")
         bss = float(raw_bss) if isinstance(raw_bss, (int, float)) else None
         ready = bool(data.get("forecast_acute_ready"))

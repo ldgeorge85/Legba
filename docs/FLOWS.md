@@ -192,7 +192,9 @@ not a gap.
 
 Legba measures **groundedness**, not truth: the verify pass asks *does each
 claim follow from its cited evidence?* — not *is the claim true in the
-world?*. Every cited finding is scored in `[0,1]` by two layers
+world?*. Every cited finding — and, since the journal verify profile, every
+journal entry's cited fact claims (perspective spans exempt; the prose is never
+mutated) — is scored in `[0,1]` by two layers
 (`data/provenance/verify.py`): a **deterministic citation-presence floor**
 (always on — a fact-asserting clause with no `[N]` marker, or whose marker
 resolves to no real signal id, is an unsupported span), and an **optional LLM
@@ -1431,9 +1433,12 @@ beat) — its only live effect today is its own next entry.
 3. **Per-phase LLM split.** The heavy GATHER investigation loop runs on the local
    gpt-oss / vLLM plane (`method.llm.primary → llm.primary.openai_compat`; a
    "Reasoning: high" content directive is injected into the gather system prompt
-   only). The VOICE — the field-notes seam + the NARRATE synthesis — runs on the
-   Anthropic plane, Opus 4.8 (`method.llm.narrate → llm.anthropic.opus_4_7`). So
-   `max_tokens` governs ONLY the bounded Opus narrate output (it is never sent to
+   only). The VOICE — the field-notes seam + the NARRATE synthesis — resolves a
+   SECOND handler (`method.llm.narrate`) that ALSO points at
+   `llm.primary.openai_compat` — the same core plane (it previously ran on
+   Anthropic Opus 4.8; moved fully to core 2026-07-06, so the journal costs NO
+   Anthropic spend — that plane is reserved for `consult`/`deep_consult` only). So
+   `max_tokens` governs ONLY the bounded narrate voice output (it is never sent to
    the vLLM gather, which serves its own server budget) and the deep agentic loop
    is local. The deps builder reads the optional `method.llm.narrate.raw` and
    resolves a SECOND handler (`analyst_deps_builder.py:435-527`); analysts without

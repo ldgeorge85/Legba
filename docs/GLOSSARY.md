@@ -145,7 +145,13 @@ one layer that cuts *across* this map rather than sitting at a fixed altitude.
 **baseline enrichment** — The deterministic, no-LLM step run on every signal
 at ingest, inside the `SourceActor` before fan-out: `language_detect → geocode
 → entity NER → classify → source_credibility → dedupe → fact_extract`. This is
-the *"enrich once"* in *"ingest once, enrich once, match many."*
+the *"enrich once"* in *"ingest once, enrich once, match many."* The `entity
+NER` step is **translate-then-NER** for non-Latin scripts — Arabic/Russian/
+Ukrainian signals (and Telegram message bodies, read from `payload.text`) are
+translated to English via the hosted NLLB `/translate` endpoint before
+extraction, where they previously yielded zero entities. The historical
+backlog is drained: a `reenrich_ner` batch re-enriched the ~10k older
+non-Latin/Telegram signals in place.
 
 **cadence / cadence heartbeat** — A scheduled interval (a cron-derived Dapr
 reminder, e.g. every 6h/12h/1d) on which an analyst is re-evaluated — the
@@ -303,10 +309,14 @@ dated "authoritative current context" preamble of currently-valid facts,
 nexuses, and situations from the substrate, correcting the LLM's stale
 training cutoff. Restricted to still-valid facts of **seed/curated**
 provenance only; all seven **bounded reasoning units** opt in. The Tier-2 vector
-`world_context` RAG source is now **LIVE** (retrieved from a curated Qdrant corpus
-through the stack embedder port, bge-m3 1024-dim; opportunistic, relevance-floored,
-country-filtered, degrade-not-drop) and **staggered on** for `leadership_transition`
-+ `internal_stability`.
+`world_context` RAG source is a **guarded, measured pilot** on the
+`internal_stability` unit only — retrieved from a curated, re-embedded Qdrant
+corpus through the stack embedder port (bge-m3 1024-dim) with a focused
+`<country> <theme>` query, contextualized chunks, a lowered relevance floor,
+country-filtering, and degrade-not-drop. Its injected priors stay **non-citable**
+(fenced background, no `[N]` ids); `leadership_transition` RAG is **off** (rolled
+back); and a per-run **RAG rollback guard** (see **rag_watch**) reverts injection
+if faithfulness drops or token cost rises.
 
 **modality** — The medium of a signal — text, image, audio, video, structured,
 or binary — treated as a first-class axis from ingest onward. A modality
@@ -421,8 +431,16 @@ scorer when the token budget is exhausted.
 over the substrate. `consult` runs a **ReAct** (reason-then-act) loop over
 governed read-only substrate tools, returning cited references and stated
 uncertainty; `deep_consult` schedules a longer plan → acquire → analyze →
-synthesize Dapr workflow and persists the result. Production consult is
-governed through the `substrate_read` pack — a tool not in that pack blocks as
+synthesize Dapr workflow and persists the result. Each request may pick which
+registered LLM plane answers — **Opus** (Anthropic, billed, the default; no
+selection preserves prior behavior) or **Core** (the free **self-hosted core**
+plane) — via a server-side allowlist that maps the friendly value to a
+component id (the client never names a component); the choice **fails closed**
+(a chosen plane that can't be honored raises rather than silently billing the
+default) and a provider outage surfaces as a graceful HTTP 503 naming the
+*other* plane. Anthropic is now reserved for consult/deep_consult only (the
+**journal** moved fully to the core plane). Production consult is governed
+through the `substrate_read` pack — a tool not in that pack blocks as
 `unknown_tool`.
 
 **country_assessor** — RETIRED (2026-07): the former monolithic per-country
@@ -494,12 +512,22 @@ Legba's pipeline sits — it does not imply sensor-fusion rigor.
 **Journal assessor** — A global META analyst (`journal_assessor`,
 `target_filter=None`) that narrates a first-person point of view *across* the
 entire flow — the one analyst pointed at the whole organism rather than one
-slice. Two tiers share one extension kind: a 12h entry tier and a daily
+slice. The voice roster shares one extension kind: the 12h entry tier, a daily
 `journal_consolidator` that distills prior entries into one forward-carried
-narrative. It is granted only the non-write-fact `journal_read` +
+narrative, the weekly third-person **chronicle**, and the weekly **lens**
+tier. It is granted only the non-write-fact `journal_read` +
 `journal_propose` packs, so everything outward goes through
 **propose-and-gate**; its only un-gated effect is its own continuity. Live,
 deployed and live-validated.
+
+**lens / lens_diff (faculty lenses)** — Four weekly interpretive analysts on
+the journal kind (`lens_trend`, `lens_baserate`, `lens_capability`,
+`lens_intent`), each carrying **one declared falsifiable prior**; every lens
+reads the verified tower top and writes an `entry_kind='lens'` read that
+asserts no new fact and has no publish edge. `lens_diff` runs after the four
+and narrates where they agree, split, or outlie — a chorus diff, never a
+merged consensus. All verify through the same post-persist faithfulness gate
+as journal entries.
 
 **Journal (OutputKind)** — The 11th typed output: a journal
 entry/consolidation landing in the dedicated `journal_entries` table, not
@@ -627,6 +655,17 @@ a freshly-registered descriptor to declared-active on first register.
 auto-reject) — goes to the human-gated `journal_proposals` queue, never a live
 table. A human accepts or rejects; the accept path runs an idempotent per-kind
 apply worker. The journal's only un-gated effect is its own continuity.
+
+**RAG rollback guard / `rag_watch`** — A real per-run safety guard on the
+`world_context` RAG pilot (`src/legba/runtime/rag_rollback.py`, replacing an
+earlier comments-only stub) that re-checks a disabled-units env var and a
+persisted state file on **every** run, so a rollback suppresses prior injection
+on the *next* run without a restart. Triggers are a faithfulness drop, a
+low-faith ratio, or a token-cost rise (≥35%); it is actuated by
+`scripts/rag_watch.py --enforce`, with per-run trace instrumentation
+(`world_context_top_score` / `retained` / `min_score`) so the measurement is
+honest. Known limit: the pilot state file currently lives at an ephemeral path
+(move to a volume for persistence).
 
 **security perimeter (Caddy basic-auth)** — The single outer boundary: Caddy
 serves the operator UI over HTTPS behind HTTP basic auth and proxies `/api` to

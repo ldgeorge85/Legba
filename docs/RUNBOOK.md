@@ -75,7 +75,7 @@ specs under `docs/` for context. New here? Start with the
 - **⚠️ The journal needs its OWN dead-analyst canaries — two of them.** The journal assessor (Legba's first-person reflective voice) runs as **two META single-global-run analysts** (`target_filter=None`, like `world_assessor`) that SHARE one extension analyst kind, `journal_assessor` (registered via `register_analyst_kind` + the vocabulary-entries family — NOT a built-in `AnalystKind`; the built-in-kind count is unchanged): the **entry tier** (`journal_assessor`, descriptor `descriptors/analyst_journal_assessor.yaml`, cadence `0 0,12 * * *` = every 12h) and the **consolidation tier** (`journal_consolidator`, `descriptors/analyst_journal_consolidator.yaml`, cadence `0 2 * * *` = daily 02:00 UTC). Each global-run analyst can go silently dead WITHOUT a target to flag it, so **each needs its OWN activation canary** — the entry-tier canary exercises a DIFFERENT actor id than the consolidator, so a green entry tier does NOT prove the consolidator is alive. **The daily consolidator hides death the LONGEST** (a 24h beat); watch its `produced_at` directly. Producer output lands in the dedicated `journal_entries` table (migration **0048**, which also adds `journal_proposals`) — NOT `analyst_outputs` — and is **OFF the fact/finding/nexus chain**: a journal row is a *perspective OVER* the provenance chain, carrying an always-empty `derived_from` and deliberately excluded from the lineage catalog, so a `GET /api/v1/lineage/...` walk can never surface it. The two analysts are granted ONLY the `journal_read` (14 read tools incl. 9 self-instruments) + `journal_propose` packs (both non-write-fact — the grant-layer backstop for the never-write-a-fact invariant). Register them with `scripts/bringup_register_action_packs.py` (packs) + `scripts/bringup_register_analysts.py` (descriptors + the `journal_assessor` kind). The journal writes ONLY its own entries/consolidations directly; every outward effect (a correction, a change, or a self-revision) goes to the **human-gated `journal_proposals` queue**, never a live table — operator review happens via the accept/reject routes (`GET /api/v1/journal_proposals?status=pending`, `POST /api/v1/journal_proposals/{id}/accept`, `POST /api/v1/journal_proposals/{id}/reject` — reject REQUIRES a `decision_reason`; a `self_revision` touching a protected section auto-rejects on accept). Entries themselves render via `GET /api/v1/journal` + the `system.journal` UI panel.
 
 - **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~57 registered source descriptors, ~50 live/active including seed/baseline plus the standalone state-media feeds IRNA / PressTV / Ukrinform and the UCDP GED adapter — the latter currently **paused pending an access token**). To stand a fresh instance up to current scope:
-  1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations — currently `0054`…`0060` (live head **0060**).
+  1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations — currently `0054`…`0085` (live head **0085**).
   2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the seven bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`); `bringup_register_watch_country_targets.py` adds the 6-desk watch tier; `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
   3. **Then the FULL source catalog** — run `scripts/bringup_register_source_catalog.py` to register the 46-source catalog (this is what takes the instance from the 3-feed cold-start to current scope), plus the deterministic cadence analysts + the budget envelope (§7).
   4. Seed the knowledge roots (§7.2) and verify ingestion (§9). A current-scope instance reaches order-of-magnitude tens-of-thousands of signals and tens-of-thousands of findings — the 3-feed set will not.
@@ -207,10 +207,20 @@ Idempotent. Re-runs skip already-applied migrations
 > A **fresh deploy** does not replay the 23-file migration history: it applies the
 > single round-trip-proven baseline `deploy/baseline/0001_baseline.sql` (which builds
 > the schema + AGE graph and pre-seeds the ledger to head **0053**), then `migrate`
-> applies any **future** (`0054`+) migrations — currently `0054`…`0060` (the
-> contested-claims schema, the `unit_reference_labels` gold table, and the
-> composition-tower supersession fold; live head **0060**). The
-> `migrate`-only path above is for an instance whose schema already exists.
+> applies any **future** (`0054`+) migrations — currently `0054`…`0085`; live head
+> **0085**. Highlights: the contested-claims schema, the `unit_reference_labels`
+> gold table, and the composition-tower supersession fold (`0054`…`0060`); the
+> DQ-program migrations (`0061`…`0075`); and the 2026-07 audit-remediation sweep
+> (`0076`…`0080`). The audit-remediation migrations are **demote/close-only** (they
+> tombstone or re-fold junk, never hard-delete):
+>
+> - **0076** — entity re-fold + junk gate (`entity_profiles` 12,257 → 12,144).
+> - **0077** — close semantic / demonym / relative-temporal junk facts (reversible `valid_until`).
+> - **0078** — nexus junk + self-edge close and demonym/plural dyad canonicalize (reversible).
+> - **0079** — `cross_correlator` stale-head sweep (reversible).
+> - **0080** — state-media `source_credibility` seed + a cross-target mislabel close.
+>
+> The `migrate`-only path above is for an instance whose schema already exists.
 > `deploy/deploy.sh` does both steps for you.
 
 Verify:
@@ -733,14 +743,23 @@ python3 scripts/seed.py --source world_baseline --dry-run
 python3 scripts/seed.py --source world_baseline     # commit
 ```
 
+> **The curated seed DATA is operator-provided, not bundled.** Legba ships the
+> seed *machinery* (the adapters, the driver, the import CLI) but no curated
+> data. `seeds/world_baseline.yaml` / `seeds/sipri_arms_transfers.yaml` are not
+> in the repo — provide your own in the documented format (see **`seeds/README.md`**
+> + `seeds/world_baseline.example.yaml`). If a curated file is absent, its adapter
+> logs a warning and no-ops (0 rows), so `--seed` degrades cleanly rather than
+> failing. The network adapters (`wikidata_leaders`, `acled_conflict`) need no
+> local file.
+
 Live adapters (registered in `legba.data.seed.ADAPTERS`):
 
 | Adapter | Source |
 |---|---|
-| `world_baseline` | curated YAML (`seeds/world_baseline.yaml`) |
+| `world_baseline` | curated YAML — operator-provided (`seeds/world_baseline.yaml`; see `seeds/README.md`) |
 | `wikidata_leaders` | live Wikidata SPARQL |
 | `acled_conflict` | ACLED conflict-events feed |
-| `sipri_arms_transfers` | curated SIPRI YAML (`seeds/sipri_arms_transfers.yaml`) |
+| `sipri_arms_transfers` | curated SIPRI YAML — operator-provided (`seeds/sipri_arms_transfers.yaml`) |
 
 #### Seed CURRENT world leaders (knowledge-grounding root)
 
@@ -802,9 +821,11 @@ grounding:
   enabled: true
   scope: [target_geo, slice_entities]   # both is the default
   sources: [substrate, situations, graph_structure, vector:world_context]
-  # vector:world_context is LIVE opportunistic RAG (relevance-floored, country-filtered,
-  # degrade-not-drop) — currently flipped on for leadership_transition + internal_stability;
-  # omit it to ground on the structured substrate only.
+  # vector:world_context is a relevance-floored, country-filtered, degrade-not-drop
+  # RAG source, currently a GUARDED, MEASURED PILOT on internal_stability ONLY
+  # (leadership_transition RAG is OFF as of the 2026-07-03 rollback). See the
+  # "world_context RAG guarded pilot" task in §11 for the kill-switch + auto-rollback
+  # controls; omit it to ground on the structured substrate only.
   max_facts: 30                         # token cap, 1..200
 ```
 
@@ -1234,6 +1255,126 @@ the legba-mcp image launched per-conversation:
   }
 }
 ```
+
+### Consult / deep_consult model picker (opus vs core)
+
+Each on-demand `consult` / `deep_consult` request may choose **which registered
+LLM plane answers it**:
+
+- **`opus`** — the Anthropic Opus plane (**billed**). This is **THE DEFAULT** — a
+  request that names no model preserves prior behavior exactly.
+- **`core`** — the free self-hosted core (`openai_compat`) plane.
+
+A **server-side allowlist** maps the friendly value → a registered component id;
+the client never names a component directly. Selection is **FAIL-CLOSED**: if a
+chosen non-default plane can't be honored, the run **raises** rather than silently
+falling back to (and billing) the default. A provider outage surfaces as a
+graceful **HTTP 503** that names the OTHER plane (e.g. *"The Core plane is
+unavailable … select the Opus model"*), not a bare 502.
+
+**UI:** the Consult and DeepConsult panels each carry a model dropdown — labels
+*"Opus (Anthropic · billed)"* (default) and *"Core (free)"* — and remember the
+last choice. (Backlog: the F1 UI image needs a redeploy to render the neutral
+*"Core (free)"* label live.)
+
+**Budget:** accounting keys off the *chosen* plane, but the shared per-day consult
+token cap still binds on **both** planes.
+
+**Anthropic is now reserved for `consult` / `deep_consult` ONLY.** Every other
+analyst runs on the self-hosted core plane — including the **journal**, whose
+GATHER *and* VOICE phases both now run on the core plane (the VOICE phase
+previously ran on Anthropic Opus; the §0 journal note is otherwise unchanged).
+
+### world_context RAG guarded pilot (kill-switch + auto-rollback)
+
+Opportunistic RAG (`vector:world_context` BACKGROUND PRIORS, §7.3) is **re-activated
+as a GUARDED, MEASURED PILOT on the `internal_stability` unit ONLY**
+(`leadership_transition` RAG is OFF as of the 2026-07-03 rollback). The embedder
+(bge-m3) was never the problem; the recalibration fixed *retrieval usage* — a
+focused `"<country> <theme>"` query (was a diluted unit-name + entity blob), chunks
+embedded with a `"<Country> — <section>"` context lead, the 293-point corpus
+re-embedded in place, and the relevance floor lowered **0.65 → 0.55** (on-target
+now ~0.6, off-target ~0.42). The injected priors stay **NON-CITABLE** (fenced
+background, no `[N]` ids).
+
+A **REAL per-run auto-rollback guard** (`src/legba/runtime/rag_rollback.py`)
+replaces the old comments-only one: it re-checks the kill-switch **on EVERY
+grounding build**, so a rollback suppresses injection on the unit's **NEXT run
+WITHOUT a restart** (no descriptor PUT). Its inputs are a union:
+
+- **`LEGBA_WORLD_CONTEXT_DISABLED_UNITS`** — env pin: a comma-separated list of
+  `analyst_id`s to hold OFF. Set-and-forget.
+- **`LEGBA_RAG_ROLLBACK_STATE`** — path to the persisted rollback state file that
+  `rag_watch --enforce` writes. ⚠️ **This currently lives at an ephemeral `/tmp`
+  path — point it at a mounted volume for the rollback to survive a container
+  recreate.** With neither the env pin nor a state path set, an enforced rollback
+  can't persist (`rag_rollback.record.no_state_path`).
+
+Operate it:
+
+```
+# Report BEFORE/AFTER faithfulness + low-faith rate + token/latency for a unit,
+# and evaluate the pre-registered rollback rule (read-only, no writes):
+python3 scripts/rag_watch.py --unit internal_stability
+python3 scripts/rag_watch.py --all-units
+
+# ACTUATE: if the rule TRIGGERED, persist the unit into the kill-switch so the
+# runtime auto-reverts on its NEXT run (writes LEGBA_RAG_ROLLBACK_STATE):
+python3 scripts/rag_watch.py --unit internal_stability --enforce
+
+# Re-embed the corpus in place after an embedding-convention change (dry-run first):
+python3 scripts/reembed_world_context.py --dry-run
+python3 scripts/reembed_world_context.py
+```
+
+**Rollback triggers:** a faithfulness drop, a rising low-faith ratio, or a
+token-cost rise (≥35%). Per-run trace instrumentation records
+`world_context_top_score` / `retained` / `min_score` so the measurement stays
+honest. Floor override: **`LEGBA_WORLD_CONTEXT_MIN_SCORE`** (default **0.55**) —
+after a re-embed you can tighten it toward 0.58–0.60 once the on-target probe
+clears it.
+
+⚠️ **KNOWN LIMIT (declared, not solved):** firing RAG has historically thickened
+the low-faithfulness TAIL even with the non-citable header; the guard reverts if
+that recurs, but this is a **guarded pilot, not a finished feature**, and its
+state file sits at an ephemeral path until moved to a volume.
+
+### Re-auth + un-pause the Telegram source
+
+The `telegram_channel` source (descriptor `descriptors/source_telegram_monitor.yaml`,
+id `source.telegram.org_channels`) is **PAUSED**. A dead/expired MTProto session had
+dropped Telethon into a reconnect **hot-loop that flooded ~95% of the runtime log**;
+that is fixed (bounded transport reconnect + per-pull client teardown + tamed
+`telethon.*` loggers), but the source **cannot be un-paused until an operator
+re-mints a valid session** — and that login is **INTERACTIVE** (Telegram requires
+the account phone number + the code it texts, plus a 2FA password if set), so it is
+done out-of-band, never by the runtime.
+
+Re-auth (interactive — needs a TTY):
+
+```
+export TELEGRAM_API_ID=...        # from https://my.telegram.org
+export TELEGRAM_API_HASH=...
+python3 scripts/telethon_auth.py  # type the phone + the code Telegram texts you
+# → prints a `TELEGRAM_SESSION_B64=...` line: a base64 Telethon SQLite session.
+#   Treat it like a password — it grants FULL access to that account. Never commit.
+```
+
+Then load the three vault secrets (`source.telegram.api_id` / `api_hash` /
+`session`) and un-pause the descriptor:
+
+```
+# 1. Put TELEGRAM_SESSION_B64=... (+ the api id/hash) into gitignored .env, then:
+python3 scripts/bringup_vault_load.py
+# 2. Un-pause the source descriptor by PUTting its body with identity.state=active
+#    — same mechanism as "Activate a country target" above.
+```
+
+Verify each channel handle resolves to the organization's OFFICIAL channel before
+flipping active (handles are claimable), then confirm it pulls fresh signals with
+no `telethon` transport hot-loop in the runtime log. The runtime image must carry
+the `telethon` dep (see §15) or the handler's lazy import fails loud at configure
+time.
 
 ## 12. Known issues (as of 2026-05-23)
 
@@ -1824,3 +1965,56 @@ done
 (`/api/v1/registry/healthz` → 200), the `signals` + `analyst_outputs` row counts
 match the source rig within tolerance, and a fan-out produces a fresh finding.
 Record the drill date + result in the ops log.
+
+## 24. Host stall watchdog (actor-plane auto-recovery)
+
+The Dapr sidecar's actor plane can degrade silently — reminders/invokes stop,
+ingestion and every analyst cadence die, yet every container reports healthy
+(observed 2026-07-14 and 2026-07-15; the second stall cost ~39h). The
+in-container `liveness_watchdog` detects the stall and writes a durable
+`alert_sink_deliveries` row, but has no docker access, so recovery needs a
+host-side actuator.
+
+**The actuator:** `scripts/host_stall_watchdog.sh`, run by a root cron every 5
+minutes (`/etc/cron.d/legba-watchdog`). It checks the freshest `signals` row's
+age straight from Postgres; when the pipeline is provably dead (age > 30 min,
+default `MAX_AGE_SECS=1800` — the healthy p100 inter-signal gap measured ≤18
+min over 7 days) it executes the recovery in the **B0-13 P2 order (2026-07-23,
+scheduler-log-proven): restart the RUNTIME first, wait for its healthcheck
+(bounded 30×5s), then the sidecar, then the dapr-workflow worker.** Order is
+load-bearing: the old sidecar-first order made the sidecar re-report its host
+to placement before the ~19s Python boot bound :6090, so the placement table
+published with only the workflow-engine actor types — business actors had no
+host, and the first restart always failed while an identical second restart
+(image hot in page cache, <1s boot) always won. It was never the worker and
+never a delay. The script then **verifies the recovery took** (+12 min
+re-check of the signal age) and, if flow has not resumed, repeats the trio
+ONCE, cooldown-exempt. It stamps a 45-min cooldown and inserts an
+`alert_sink_deliveries` row (`sink_kind='host_watchdog'`,
+`status='auto_recovered'`) so the recovery is visible in the escalations
+panel. Expected stall cost under this order: ~2-3 minutes detect-to-recovered.
+
+**Safety ladder (all must pass before a restart):** maintenance flag → all
+three containers running (else a deploy is in progress — hands off) → runtime
+15-min warmup grace → the age query must SUCCEED (a query failure never
+restarts; the fault is unproven) → age over threshold → cooldown not active
+(a persisting stall after one auto-restart logs `ESCALATE` and stops — a
+restart loop is the churn that causes stalls).
+
+**Operations:**
+
+```bash
+# disable during maintenance / manual deploys
+touch /etc/legba-watchdog.disabled       # re-enable: rm the flag
+# observe
+tail /var/log/legba_host_watchdog.log    # events only (skips/fires/escalates)
+stat /var/lib/legba-watchdog/heartbeat   # mtime proves the cron itself is alive
+# dry-run the decision path
+DRY_RUN=1 MAX_AGE_SECS=1 GRACE_SECS=1 scripts/host_stall_watchdog.sh
+```
+
+The cron entry is host-side (not in the repo); reinstall on a new host:
+
+```
+*/5 * * * * root /usr/local/deployments/active/legba/scripts/host_stall_watchdog.sh >> /var/log/legba_host_watchdog.log 2>&1
+```

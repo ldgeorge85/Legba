@@ -91,6 +91,7 @@ returns, and pass it through to
         pg_pool=pg_store.pool,
         qdrant_client=qdrant_client,
         embedder=embedding_service,  # L-114 — free-text vector_search
+        opensearch_store=opensearch_store,  # Stage 1 — full-text corpus readers
     )
     ...
     await build_analyst_run_method(
@@ -126,11 +127,39 @@ __all__ = ["PostgresQdrantSubstrateQueryPort"]
 # wedge a postgres connection.
 _MAX_ROW_LIMIT = 200
 
+# H-2 (audit W6 / B0-5) — bounds on the journal's scorecard↔composition
+# disagreements reconciliation surfaced on ``get_assessments``. A bounded,
+# fail-safe REFLECTION surface (never a gate): how many distinct countries to
+# reconcile per call and how many divergence rows to hand the journal.
+_DISAGREEMENT_MAX_TARGETS = 12
+_DISAGREEMENT_MAX_ROWS = 20
+
 # ``search_context`` (S5-T4) — RAG chunks are short; a handful of the most
 # similar priors answers "what does the corpus say about X". Default small,
 # hard-capped so a runaway planner can't pull the whole corpus.
 _SEARCH_CONTEXT_DEFAULT_K = 6
 _SEARCH_CONTEXT_MAX_K = 50
+
+# ``search_corpus`` / ``read_document`` (Stage 1 — the OpenSearch full-text
+# corpus, index ``legba_signals_corpus``, ~106k signal docs): BM25 lexical
+# search over the WHOLE raw signal body + a by-id fetch of one signal's full
+# indexed doc. Default small, hard-capped so a runaway planner can't pull the
+# whole corpus in one round. ``_CORPUS_FILTER_KEYS`` is the keyword-facet subset
+# of the corpus mapping (see :data:`legba.data.opensearch.CORPUS_INDEX_MAPPING`)
+# a planner may term-filter on; any other key is dropped before the query is
+# built (an arbitrary facet would silently match nothing).
+_SEARCH_CORPUS_DEFAULT_SIZE = 10
+_SEARCH_CORPUS_MAX_SIZE = 50
+_CORPUS_FILTER_KEYS = (
+    "geo",
+    "tags",
+    "source_id",
+    "language",
+    "modality",
+    "entity_classes",
+    "retention_class",
+    "license_class",
+)
 
 # The LIVE assessment producers the journal + consult reflect OVER when
 # ``get_assessments`` is called with no explicit ``analyst_id``. Replaces the
@@ -222,6 +251,8 @@ class PostgresQdrantSubstrateQueryPort:
         signals_collection: str = "legba_signals",
         world_context_collection: str = "world_context",
         tradecraft_collection: str = "tradecraft",
+        opensearch_store: Any | None = None,
+        corpus_index: str = "legba_signals_corpus",
     ) -> None:
         self._pool = pg_pool
         self._qdrant = qdrant_client
@@ -244,6 +275,16 @@ class PostgresQdrantSubstrateQueryPort:
             "world_context": world_context_collection,
             "tradecraft": tradecraft_collection,
         }
+        # Stage 1 ``search_corpus`` / ``read_document`` — the OpenSearch
+        # full-text corpus (index ``corpus_index``, ~106k signal docs). Built
+        # GUARDED + threaded in at bring-up (opensearch-py may be absent on a
+        # host); when None the readers report the honest ``no_corpus_wired``
+        # shape instead of connecting — the same degrade-not-fabricate contract
+        # the embedder honors with ``no_embedder_wired``. The store's
+        # ``connect()`` is idempotent + opens no socket until a real request, so
+        # the readers connect lazily on first use and construction stays sync.
+        self._opensearch = opensearch_store
+        self._corpus_index = corpus_index
 
     # ------------------------------------------------------------------
     # search_signals
@@ -280,6 +321,7 @@ class PostgresQdrantSubstrateQueryPort:
 
         sql_parts = [
             "SELECT id, payload->>'title' AS title, "
+            "payload->>'title_en' AS title_en, "
             "payload->>'category' AS category, canonical_url, fetched_at,",
             "       ts_rank(",
             "         to_tsvector('simple', coalesce(payload->>'title','') || ' ' || ",
@@ -311,6 +353,9 @@ class PostgresQdrantSubstrateQueryPort:
             rows.append({
                 "id": str(rid),
                 "title": r["title"],
+                # T-1b (M13): the stored English title, when the signal went
+                # through the translate route; absent otherwise. Readers prefer it.
+                "title_en": r["title_en"],
                 "category": r["category"],
                 "source_url": r["canonical_url"],
                 "produced_at": r["fetched_at"].isoformat()
@@ -476,6 +521,10 @@ class PostgresQdrantSubstrateQueryPort:
                        produced_at, analyst_id, target_id
                 FROM entity_profiles
                 WHERE LOWER(canonical_name) = LOWER($1)
+                  -- E5: a merged loser is a tombstone, not a live entity (its
+                  -- surface is now an alias of the keeper). Exclude it so a
+                  -- merged fragment can't surface as a separate entity.
+                  AND merged_into IS NULL
                 """,
                 n,
             )
@@ -505,6 +554,7 @@ class PostgresQdrantSubstrateQueryPort:
                 """
                 SELECT sel.signal_id, sel.role, sel.confidence, sel.created_at,
                        s.payload->>'title' AS title,
+                       s.payload->>'title_en' AS title_en,
                        s.payload->>'category' AS category,
                        s.fetched_at AS signal_produced_at
                 FROM signal_entity_links sel
@@ -523,7 +573,7 @@ class PostgresQdrantSubstrateQueryPort:
             # — so inspect_entity never surfaces a replaced/expired fact.
             fact_rows = await conn.fetch(
                 """
-                SELECT id, subject, predicate, value, confidence,
+                SELECT id, subject, predicate, value, confidence, source_type,
                        valid_from, produced_at
                 FROM facts
                 WHERE LOWER(subject) = LOWER($1)
@@ -560,6 +610,12 @@ class PostgresQdrantSubstrateQueryPort:
                 "value": f["value"],
                 "confidence": float(f["confidence"])
                     if f["confidence"] is not None else None,
+                # source_type rides every fact row (mirrors query_facts F1) so a
+                # reader — consult LLM / agency read tools / UI — can discount an
+                # ingestion extraction (confidence is not a usable trust signal
+                # for ingestion; the uncited grounding preamble excludes it
+                # wholesale, this cited surface LABELS it).
+                "source_type": f["source_type"],
                 "valid_from": f["valid_from"].isoformat()
                     if isinstance(f["valid_from"], datetime) else None,
                 "produced_at": f["produced_at"].isoformat()
@@ -578,6 +634,8 @@ class PostgresQdrantSubstrateQueryPort:
                 "linked_at": m["created_at"].isoformat()
                     if isinstance(m["created_at"], datetime) else None,
                 "title": m["title"],
+                # T-1b (M13): stored English title (translate route); absent else.
+                "title_en": m["title_en"],
                 "category": m["category"],
                 "signal_produced_at": m["signal_produced_at"].isoformat()
                     if isinstance(m["signal_produced_at"], datetime) else None,
@@ -946,6 +1004,122 @@ class PostgresQdrantSubstrateQueryPort:
         }
 
     # ------------------------------------------------------------------
+    # search_corpus / read_document (Stage 1) — the OpenSearch full-text corpus
+    # ------------------------------------------------------------------
+
+    async def search_corpus(
+        self,
+        *,
+        query: str,
+        filters: dict[str, Any] | None = None,
+        size: int = _SEARCH_CORPUS_DEFAULT_SIZE,
+    ) -> dict[str, Any]:
+        """BM25 lexical search over the OpenSearch signal corpus (Stage 1).
+
+        Runs a multi_match keyword search over the WHOLE raw signal body (index
+        ``self._corpus_index``, ~106k docs) via :meth:`OpenSearchStore.search`,
+        with optional keyword term filters. Complements ``vector_search`` (dense
+        cosine over the analytic slice) and ``search_signals`` (Postgres FTS over
+        title + summary): this is cheap LEXICAL recall over the full text of
+        EVERY ingested signal.
+
+        ``filters`` maps a keyword facet → a scalar (term) or a list (terms);
+        only the whitelisted keys in :data:`_CORPUS_FILTER_KEYS` with a non-None
+        value are honored (any other key is dropped before the query is built).
+        ``size`` is clamped to ``[1, _SEARCH_CORPUS_MAX_SIZE]``. A falsy ``query``
+        is allowed — the store degrades to match_all so a filter-only browse
+        works.
+
+        HONESTY / degrade-not-break (mirrors ``vector_search``'s seam contract):
+        no corpus wired → the honest ``no_corpus_wired`` shape (never connects);
+        a transport/search failure is logged and folded into an ``error`` field
+        rather than raising into the consult loop.
+        """
+        clamped = max(1, min(int(size), _SEARCH_CORPUS_MAX_SIZE))
+
+        # No OpenSearch store threaded through the port — honest unavailable
+        # shape, never a connect attempt (the same contract the embedder readers
+        # honor with ``no_embedder_wired``).
+        if self._opensearch is None:
+            return {
+                "rows": [],
+                "count": 0,
+                "query": query,
+                "filters": {},
+                "size": clamped,
+                "status": "no_corpus_wired",
+            }
+
+        # Keep ONLY the whitelisted, non-None filter keys — a planner cannot
+        # term-filter on an arbitrary field (that would silently match nothing).
+        # A non-dict ``filters`` (a mis-emitted string/list) coerces to {} so a
+        # bad shape degrades to an unfiltered search, never an AttributeError
+        # (mirrors compare_targets' isinstance type-guard on container args).
+        raw_filters = filters if isinstance(filters, dict) else {}
+        clean: dict[str, Any] = {
+            k: v
+            for k, v in raw_filters.items()
+            if k in _CORPUS_FILTER_KEYS and v is not None
+        }
+
+        try:
+            await self._opensearch.connect()  # idempotent — no-op if connected
+            rows = await self._opensearch.search(
+                self._corpus_index,
+                (query or "").strip() or None,
+                filters=clean or None,
+                size=clamped,
+            )
+        except Exception as exc:  # noqa: BLE001 — corpus backend surface
+            logger.warning(
+                "substrate_query_port.search_corpus.failed err=%s", exc,
+            )
+            return {
+                "rows": [],
+                "count": 0,
+                "query": query,
+                "filters": clean,
+                "size": clamped,
+                "error": f"corpus_search_failed: {exc!s}",
+            }
+        return {
+            "rows": rows,
+            "count": len(rows),
+            "query": query,
+            "filters": clean,
+            "size": clamped,
+        }
+
+    async def read_document(self, *, doc_id: str) -> dict[str, Any]:
+        """Fetch one signal's full indexed corpus doc by id (Stage 1).
+
+        Returns the whole stored ``_source`` (including the full ``raw_body``,
+        not a snippet) for one signal via :meth:`OpenSearchStore.get`, so a
+        planner that found a doc through ``search_corpus`` / ``search_signals``
+        can pull its entire article text + facets. Degrade-not-break: no corpus
+        wired → ``no_corpus_wired``; a miss → ``not_found``; a backend failure is
+        logged and folded into an ``error`` field rather than raising.
+        """
+        if self._opensearch is None:
+            return {"status": "no_corpus_wired", "doc_id": doc_id}
+
+        try:
+            await self._opensearch.connect()  # idempotent — no-op if connected
+            src = await self._opensearch.get(self._corpus_index, str(doc_id))
+        except Exception as exc:  # noqa: BLE001 — corpus backend surface
+            logger.warning(
+                "substrate_query_port.read_document.failed err=%s", exc,
+            )
+            return {
+                "status": "error",
+                "doc_id": doc_id,
+                "error": f"read_document_failed: {exc!s}",
+            }
+        if src is None:
+            return {"status": "not_found", "doc_id": doc_id}
+        return {"status": "found", "doc_id": doc_id, "document": src}
+
+    # ------------------------------------------------------------------
     # query_nexuses (S4-T6)
     # ------------------------------------------------------------------
 
@@ -1161,6 +1335,7 @@ class PostgresQdrantSubstrateQueryPort:
         analyst_id: str | None = None,
         severity: str | None = None,
         since_hours: int | None = None,
+        include_superseded: bool = False,
         limit: int = 20,
     ) -> dict[str, Any]:
         """The platform's own recent FINDINGS, with the critic-folded
@@ -1170,9 +1345,17 @@ class PostgresQdrantSubstrateQueryPort:
         LEFT JOIN LATERAL that surfaces the critic's ``overall_score``), dropping
         the FastAPI cursor/auth layer. Findings are analysis-derived (the
         platform's own synthesis), NOT raw signals — weigh accordingly.
+
+        R1 / W2-T1 (read-truth): superseded findings are EXCLUDED by default
+        (``superseded_by IS NULL``) so an agent reads the LIVE head of each
+        finding chain, not a stale double-count. Pass ``include_superseded=True``
+        to relax the gate (history/audit reads). This ONE handler serves
+        consult + journal_read + deep_consult.
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         clauses: list[str] = ["f.kind = 'finding'"]
+        if not include_superseded:
+            clauses.append("f.superseded_by IS NULL")
         params: list[Any] = []
         if target_id is not None:
             params.append(target_id)
@@ -1530,6 +1713,7 @@ class PostgresQdrantSubstrateQueryPort:
             signal_rows = await conn.fetch(
                 """
                 SELECT id, payload->>'title' AS title,
+                       payload->>'title_en' AS title_en,
                        payload->>'category' AS category,
                        canonical_url, fetched_at, created_at
                 FROM signals
@@ -1594,6 +1778,8 @@ class PostgresQdrantSubstrateQueryPort:
                 "id": str(sid),
                 "at": anchor.isoformat(),
                 "title": r["title"],
+                # T-1b (M13): stored English title (translate route); absent else.
+                "title_en": r["title_en"],
                 "category": r["category"],
                 "source_url": r["canonical_url"],
             }))
@@ -2240,7 +2426,137 @@ class PostgresQdrantSubstrateQueryPort:
                 "produced_at": r["produced_at"].isoformat()
                     if isinstance(r["produced_at"], datetime) else None,
             })
-        return {"rows": rows, "refs": refs, "count": len(rows)}
+        # H-2 (audit W6 / B0-5) — reconcile the returned countries' scorecards
+        # against their CURRENT country_composition heads and surface any
+        # REMAINING divergence as a bounded `disagreements` block, using the SAME
+        # pure reducers the registry's /eval/country_scorecard endpoint uses
+        # (data/registry/scorecard_reconcile). This is a READ-TIME reflection
+        # surface so the journal can narrate the divergence honestly (the two P4
+        # products judge over different windows) — it is NEVER a gate and NEVER
+        # computed at compose-write. Fully fail-safe: any error (incl. the import)
+        # degrades to `disagreements: []` and never breaks the assessments read.
+        disagreements = await self._reconcile_scorecard_disagreements(rows, refs)
+        return {
+            "rows": rows,
+            "refs": refs,
+            "count": len(rows),
+            "disagreements": disagreements,
+        }
+
+    async def _reconcile_scorecard_disagreements(
+        self,
+        rows: list[dict[str, Any]],
+        refs: list[str],
+    ) -> list[dict[str, Any]]:
+        """Reconcile the assessment countries' scorecards vs their live
+        ``country_composition`` heads (H-2 / B0-5). Returns a bounded list of
+        divergence rows (each a ``ScorecardDisagreement`` dump + ``target_id``);
+        appends the contested finding ids to ``refs`` (deduped) so the journal
+        may cite them. Fully fail-safe — any error yields ``[]``, never raising.
+        """
+        try:
+            from ..data.registry.scorecard_reconcile import (
+                composition_usages,
+                scorecard_disagreements,
+            )
+
+            country_targets = sorted({
+                str(r["target_id"]) for r in rows
+                if r.get("target_id") and str(r["target_id"]) != "world"
+            })[:_DISAGREEMENT_MAX_TARGETS]
+            if not country_targets:
+                return []
+            async with self._pool.acquire() as conn:
+                # Latest scorecard head per target — bands.dimensions carries each
+                # dimension's band + reason (insufficient-evidence = excluded).
+                sc_rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT ON (target_id) target_id, data
+                      FROM analyst_outputs
+                     WHERE kind = 'scorecard'
+                       AND superseded_by IS NULL
+                       AND target_id = ANY($1::text[])
+                     ORDER BY target_id, produced_at DESC, id DESC
+                    """,
+                    country_targets,
+                )
+                # Latest country_composition head per target — citations
+                # (data.data.citations) + the derived_from uuid[] COLUMN.
+                comp_rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT ON (target_id)
+                           target_id, derived_from::text[] AS derived_from, data
+                      FROM analyst_outputs
+                     WHERE kind = 'finding'
+                       AND analyst_id = 'country_composition'
+                       AND superseded_by IS NULL
+                       AND target_id = ANY($1::text[])
+                     ORDER BY target_id, produced_at DESC, id DESC
+                    """,
+                    country_targets,
+                )
+                dims_by_target: dict[str, dict[str, Any]] = {}
+                for scr in sc_rows:
+                    raw = scr["data"]
+                    payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                    # A malformed (non-dict) scorecard `data` must degrade to {}
+                    # and SKIP just that row — not raise and (via the outer except)
+                    # sink the whole disagreements block. Mirrors the composition
+                    # parse guard below (review: fail-safe consistency).
+                    payload = payload if isinstance(payload, dict) else {}
+                    bands = ((payload.get("data") or {}).get("bands")) or {}
+                    dims = bands.get("dimensions")
+                    if isinstance(dims, dict):
+                        dims_by_target[str(scr["target_id"])] = dims
+                comp_by_target: dict[str, tuple[Any, list[str]]] = {}
+                unresolved: set[str] = set()
+                for cr in comp_rows:
+                    raw = cr["data"]
+                    payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                    payload = payload if isinstance(payload, dict) else {}
+                    citations = (payload.get("data") or {}).get("citations")
+                    derived = [str(x) for x in (cr["derived_from"] or [])]
+                    comp_by_target[str(cr["target_id"])] = (citations, derived)
+                    cited = composition_usages(citations, [], {})
+                    unresolved.update(f for f in derived if f not in cited)
+                derived_analysts: dict[str, str] = {}
+                if unresolved:
+                    lu = await conn.fetch(
+                        "SELECT id::text AS id, analyst_id FROM analyst_outputs "
+                        "WHERE id = ANY($1::uuid[])",
+                        sorted(unresolved),
+                    )
+                    derived_analysts = {
+                        lr["id"]: lr["analyst_id"] for lr in lu if lr["analyst_id"]
+                    }
+            # Run the shared pure reducers per target that has BOTH a scorecard
+            # and a composition head; flatten, bound, and stamp each row's target.
+            disagreements: list[dict[str, Any]] = []
+            for tgt in country_targets:
+                dims = dims_by_target.get(tgt)
+                comp = comp_by_target.get(tgt)
+                if not dims or comp is None:
+                    continue
+                citations, derived = comp
+                for d in scorecard_disagreements(
+                    dims, composition_usages(citations, derived, derived_analysts)
+                ):
+                    item = d.model_dump()
+                    item["target_id"] = tgt
+                    disagreements.append(item)
+            disagreements = disagreements[:_DISAGREEMENT_MAX_ROWS]
+            # The contested finding ids ARE returned by this tool now, so the
+            # journal may cite them; add them to refs (deduped, order-preserving).
+            seen = set(refs)
+            for item in disagreements:
+                fid = item.get("finding_id")
+                if fid and fid not in seen:
+                    seen.add(fid)
+                    refs.append(fid)
+            return disagreements
+        except Exception as exc:  # noqa: BLE001 — degrade to honest empty, never break the read
+            logger.debug("get_assessments.disagreements_unavailable err=%s", exc)
+            return []
 
     async def get_graph_structure(
         self,
@@ -2431,22 +2747,30 @@ class PostgresQdrantSubstrateQueryPort:
         }
 
     async def get_calibration(self) -> dict[str, Any]:
-        """The platform's CALIBRATION posture — the latest ``kind='calibration'``
+        """The platform's CALIBRATION posture — the latest ``calibration_tracking``
         finding, with the SEGREGATED acute-forecast pilot reported HONESTLY
         (plan §5 / §10).
 
-        Reads the freshest calibration finding from ``analyst_outputs``. The
-        headline ``brier`` is EXOGENOUS-only (the only number that measures
-        calibration against reality); the acute-forecast pilot lives in its OWN
-        keys (``brier_forecast_acute`` / ``brier_skill_score`` / sample size /
+        Reads the freshest calibration finding from ``analyst_outputs``. B0-3
+        (read-truth): the writer produces ``kind='finding'`` with
+        ``analyst_id='calibration_tracking'`` (deterministic.py OUTPUT_KINDS —
+        NO writer emits ``kind='calibration'``), and the metrics live one JSONB
+        level down (the row's ``data`` column holds the WHOLE FindingPayload
+        dump; the free-form metrics dict is ``data.data`` — the
+        eval_country_scorecard precedent). The headline ``brier`` is
+        EXOGENOUS-only (the only number that measures calibration against
+        reality); the acute-forecast pilot lives in its OWN keys
+        (``brier_forecast_acute`` / ``brier_skill_score`` / sample size /
         ready / degenerate / status) and is NEVER pooled into the headline. This
         is the read the journal's deterministic honesty post-step (§10) keys off:
         the forecast leg is UNPROVEN until ``forecast_acute_ready`` AND NOT
-        ``forecast_acute_degenerate`` AND ``brier_skill_score > 0``.
+        ``forecast_acute_degenerate`` AND ``brier_skill_score > 0``. ``refs``
+        carries the finding's row id so the journal can cite it.
         """
         sql = (
             "SELECT id, produced_at, data FROM analyst_outputs "
-            "WHERE kind = 'calibration' "
+            "WHERE kind = 'finding' AND analyst_id = 'calibration_tracking' "
+            "AND superseded_by IS NULL "
             "ORDER BY produced_at DESC, id DESC LIMIT 1"
         )
         async with self._pool.acquire() as conn:
@@ -2460,7 +2784,11 @@ class PostgresQdrantSubstrateQueryPort:
                 "refs": [],
             }
         raw = row["data"]
-        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        # One level down: analyst_outputs.data = the FindingPayload dump; the
+        # calibration metrics are its free-form `data` dict.
+        data = payload.get("data") if isinstance(payload, dict) else None
+        data = data if isinstance(data, dict) else {}
         bss = data.get("brier_skill_score")
         ready = bool(data.get("forecast_acute_ready"))
         degenerate = bool(data.get("forecast_acute_degenerate"))
@@ -2610,9 +2938,45 @@ class PostgresQdrantSubstrateQueryPort:
             "ORDER BY sig.last_signal_at ASC NULLS FIRST "
             f"LIMIT {clamped_limit}"
         )
+        now = datetime.now(timezone.utc)
+        silent_cutoff = now - timedelta(hours=silent_hours)
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql)
-        now = datetime.now(timezone.utc)
+            # H-1 (MASTER_PLAN 2026-07-13, DENOMINATOR HONESTY): accurate aggregate
+            # counts across ALL wired head sources — NOT derived from `rows` (which
+            # lists only ACTIVE sources, capped at `limit`, so its silent/error
+            # tallies undercount and it can never see paused/retired). The journal's
+            # "all active feeds fresh" hid the denominator (a critique found the
+            # honest shape is ~37 fresh / 48 active / 58 wired). These give the
+            # journal the true "N fresh / M active / K wired" + the paused/retired
+            # roster to name (apparatus quiet, not world silence).
+            state_records = await conn.fetch(
+                "SELECT state, count(*) AS n FROM source_descriptors "
+                "WHERE is_head = TRUE GROUP BY state"
+            )
+            active_agg = await conn.fetchrow(
+                "SELECT count(*) AS active_total, "
+                "  count(*) FILTER (WHERE sig.last_signal_at IS NOT NULL "
+                "    AND sig.last_signal_at >= $1) AS fresh, "
+                "  count(*) FILTER (WHERE sig.last_signal_at IS NULL "
+                "    OR sig.last_signal_at < $1) AS stalled, "
+                "  count(*) FILTER (WHERE po.outcome = 'error') AS erroring "
+                "FROM source_descriptors s "
+                "LEFT JOIN LATERAL (SELECT max(fetched_at) AS last_signal_at FROM signals "
+                "  WHERE source_id = s.descriptor_id) sig ON TRUE "
+                "LEFT JOIN LATERAL (SELECT outcome FROM source_poll_outcomes "
+                "  WHERE source_id = s.descriptor_id ORDER BY occurred_at DESC LIMIT 1) po ON TRUE "
+                "WHERE s.is_head = TRUE AND s.state = 'active'",
+                silent_cutoff,
+            )
+            non_active_records = await conn.fetch(
+                "SELECT s.descriptor_id AS source_id, "
+                "  s.body->'identity'->>'name' AS name, s.state "
+                "FROM source_descriptors s "
+                "WHERE s.is_head = TRUE AND s.state <> 'active' "
+                "ORDER BY s.state, name "
+                f"LIMIT {clamped_limit}"
+            )
         rows: list[dict[str, Any]] = []
         silent_count = 0
         error_count = 0
@@ -2637,13 +3001,31 @@ class PostgresQdrantSubstrateQueryPort:
                 "last_poll_outcome": r["last_poll_outcome"],
                 "last_health_state": r["last_health_state"],
             })
+        by_state = {str(r["state"]): int(r["n"]) for r in state_records}
+        summary = {
+            "total_wired": sum(by_state.values()),
+            "by_state": by_state,
+            "active_total": int(active_agg["active_total"]) if active_agg else 0,
+            "active_fresh": int(active_agg["fresh"]) if active_agg else 0,
+            "active_stalled": int(active_agg["stalled"]) if active_agg else 0,
+            "active_erroring": int(active_agg["erroring"]) if active_agg else 0,
+            "silent_threshold_hours": silent_hours,
+        }
+        non_active = [
+            {"source_id": r["source_id"], "name": r["name"], "state": r["state"]}
+            for r in non_active_records
+        ]
         return {
             "rows": rows,
             "refs": [],
             "count": len(rows),
+            # Capped/active-only view (back-compat). Prefer `summary` for the truth.
             "silent_count": silent_count,
             "error_count": error_count,
             "silent_threshold_hours": silent_hours,
+            # H-1 denominator-honest aggregates (whole-fleet, not row-capped).
+            "summary": summary,
+            "non_active": non_active,
         }
 
     async def get_budget_status(
@@ -2856,6 +3238,109 @@ class PostgresQdrantSubstrateQueryPort:
                 "new_situations": int(new_situations or 0),
                 "new_nexuses": int(new_nexuses or 0),
             },
+            "refs": refs,
+        }
+
+    async def get_lens_reads(
+        self,
+        *,
+        lens_analyst_ids: list[str],
+        since: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """This cycle's VOICES faculty lens reads — the chorus DIFF's material
+        (VOICES_BUILD_DESIGN §3.2, LV-1).
+
+        Returns the MOST RECENT ``entry_kind='lens'`` row per ``analyst_id`` in
+        ``lens_analyst_ids`` produced since ``since`` (an ISO8601 timestamp;
+        defaults self-computed to a 7d window, mirroring get_journal_delta's
+        default-to-prior-period pattern — no caller timestamp required). Keeping
+        only the newest row per faculty makes the read idempotent under a
+        retry/double-fire. ``analyst_ids_seen`` / ``analyst_ids_missing`` let the
+        diff NARRATE be honest about an absent faculty rather than silently
+        thinning the matrix (§3.4 partial-roster contract). ``refs`` carries the
+        lens-row ids — a diff MAY cite a faculty's own read (a real off-chain
+        journal id, same as get_journal_delta exposes prior-entry ids).
+
+        ``lens_analyst_ids`` is passed by the CALLER (the journal_read tool), not
+        imported here — the kind-module id set must not cross this layer boundary
+        into the runtime port."""
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        # Resolve the window (default: a 7d lookback — the lens tier's weekly beat).
+        since_dt: datetime | None = None
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(str(since))
+                if since_dt.tzinfo is None:
+                    since_dt = since_dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                since_dt = None
+        if since_dt is None:
+            since_dt = datetime.now(timezone.utc) - timedelta(days=7)
+        # Defensive: an empty id list means no faculties to gather — return the
+        # honest empty roster rather than an unfiltered scan.
+        ids = [a for a in (lens_analyst_ids or []) if isinstance(a, str)]
+        rows: list[Any] = []
+        if ids:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, analyst_id, title, body, claims, "
+                    "       cited_substrate_refs, period_start, period_end, "
+                    "       produced_at, data "
+                    "FROM journal_entries "
+                    "WHERE entry_kind = 'lens' AND analyst_id = ANY($1::text[]) "
+                    "  AND produced_at >= $2 "
+                    "ORDER BY produced_at DESC "
+                    "LIMIT $3",
+                    ids,
+                    since_dt,
+                    clamped_limit,
+                )
+        # Keep only the MOST RECENT row per analyst_id (rows arrive produced_at
+        # DESC, so the FIRST occurrence per id is the newest — idempotent dedup).
+        latest_by_id: dict[str, Any] = {}
+        for r in rows:
+            aid = r["analyst_id"]
+            if aid not in latest_by_id:
+                latest_by_id[aid] = r
+
+        def _load_json(raw: Any, default: Any) -> Any:
+            # asyncpg hands a jsonb column back as a str (no codec set) — parse it;
+            # a dict/list already-parsed passes through. Mirrors the inline pattern
+            # used across this port for `data` columns.
+            if isinstance(raw, str):
+                try:
+                    return json.loads(raw)
+                except ValueError:
+                    return default
+            return raw if raw is not None else default
+
+        def _read_dict(r: Any) -> dict[str, Any]:
+            return {
+                "id": str(r["id"]),
+                "analyst_id": r["analyst_id"],
+                "title": r["title"],
+                "body": (r["body"] or "")[:8000],
+                "claims": _load_json(r["claims"], []),
+                "cited_substrate_refs": [str(x) for x in (r["cited_substrate_refs"] or [])],
+                "period_start": r["period_start"].isoformat()
+                    if isinstance(r["period_start"], datetime) else None,
+                "period_end": r["period_end"].isoformat()
+                    if isinstance(r["period_end"], datetime) else None,
+                "produced_at": r["produced_at"].isoformat()
+                    if isinstance(r["produced_at"], datetime) else None,
+                "data": _load_json(r["data"], {}),
+            }
+
+        reads = [_read_dict(latest_by_id[aid]) for aid in ids if aid in latest_by_id]
+        seen = [aid for aid in ids if aid in latest_by_id]
+        missing = [aid for aid in ids if aid not in latest_by_id]
+        refs = [str(latest_by_id[aid]["id"]) for aid in seen]
+        return {
+            "reads": reads,
+            "analyst_ids_seen": seen,
+            "analyst_ids_missing": missing,
+            "since": since_dt.isoformat() if isinstance(since_dt, datetime) else None,
             "refs": refs,
         }
 

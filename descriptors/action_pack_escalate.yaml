@@ -17,9 +17,12 @@
 # alert on a high-severity tag alone (the raw-confidence gate is closed). A
 # S3-T2 indicator_tracker flip into `triggered` is a second trigger class.
 #
-# Applicability: tag-scoped to g20 targets — the live working set — so the
-# applicability leg of the resolution is demonstrably real (a non-g20
-# target denies with a visible governor BLOCK).
+# Applicability: tag-scoped to the live working set — g20 desks AND the
+# `watch` tier (IL/IR/KP/PK/TW/UA), the highest-stakes desks (audit C2 fix,
+# 2026-07-06: watch desks were silently dropping high-severity escalations
+# with a `not_applicable` block because this list was g20-only). The
+# applicability leg stays demonstrably real — a target in neither tier denies
+# with a visible governor BLOCK.
 #
 # Registered via scripts/bringup_register_action_packs.py.
 
@@ -59,6 +62,7 @@ rules:
 
 applies_to_tags:
   - g20
+  - watch
 
 governor:
   budget_account: escalate_finding

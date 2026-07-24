@@ -64,6 +64,12 @@ grounding:
   # (rag_watch, n=15): faithfulness 0.611 / 9,417 tokens.
   sources: [substrate, situations, graph_structure, vector:world_context]
   max_facts: 30
+  # M22 — the FOCUSED world_context RAG query theme. The query is built as
+  # "<target country> <rag_theme>" (NOT the old unit-name + slice-entity pile),
+  # keyed on the corpus's actual facets (government / internal security / stability),
+  # which lifts on-target retrieval over the recalibrated floor. This unit is the
+  # live RAG-ON pilot, so the theme is load-bearing here.
+  rag_theme: "government, internal security forces, and political stability"
 
 method:
   kind: llm_planner

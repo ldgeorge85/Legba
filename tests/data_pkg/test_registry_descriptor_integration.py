@@ -169,6 +169,21 @@ async def nats_store() -> NatsStore:
 
 @pytest_asyncio.fixture
 async def registry(pg_store: PostgresStore, nats_store: NatsStore) -> DescriptorRegistry:
+    # TEST_DEBT_RECON.md Bucket I: DescriptorRegistry.start() calls
+    # _sync_analyst_kind_registry(), which REPLACES (not unions)
+    # ANALYST_KIND_REGISTRY's process-wide extension set from this fresh
+    # session DB's (empty) vocabulary_entries.analyst_kind rows — wiping the
+    # in-code registrations legba.data.analysts does at import time
+    # (journal_assessor / entity_researcher / signal_salience) for the
+    # REMAINDER of the pytest process, poisoning any later test/file that
+    # assumes those kinds validate. Snapshot + restore around this fixture
+    # (the shared setup/teardown point every test in this file goes through)
+    # so the singleton never leaks past a single test, mirroring the
+    # snapshot/restore discipline test_analyst_kind_registry_seeded_from_vocab_on_start
+    # already uses locally for its OWN extra mutation.
+    from legba.data.schemas import ANALYST_KIND_REGISTRY
+
+    snapshot = ANALYST_KIND_REGISTRY.extension_values()
     identity = _fixed_identity()
     reg = DescriptorRegistry(
         pg_store,
@@ -176,19 +191,33 @@ async def registry(pg_store: PostgresStore, nats_store: NatsStore) -> Descriptor
         signing_identity=identity,
     )
     await reg.start()
-    yield reg
-    await reg.stop()
+    try:
+        yield reg
+    finally:
+        await reg.stop()
+        ANALYST_KIND_REGISTRY.replace_extensions(snapshot)
 
 
 @pytest_asyncio.fixture
 async def registry_no_nats(pg_store: PostgresStore) -> DescriptorRegistry:
     """Variant without NATS — for tests that don't care about events and
-    want to avoid the subscription teardown noise."""
+    want to avoid the subscription teardown noise.
+
+    Same ANALYST_KIND_REGISTRY snapshot/restore as `registry` above (Bucket I)
+    — .start() replaces the process-wide extension set from this session DB's
+    empty vocabulary_entries.analyst_kind rows.
+    """
+    from legba.data.schemas import ANALYST_KIND_REGISTRY
+
+    snapshot = ANALYST_KIND_REGISTRY.extension_values()
     identity = _fixed_identity()
     reg = DescriptorRegistry(pg_store, signing_identity=identity)
     await reg.start()
-    yield reg
-    await reg.stop()
+    try:
+        yield reg
+    finally:
+        await reg.stop()
+        ANALYST_KIND_REGISTRY.replace_extensions(snapshot)
 
 
 # ---------------------------------------------------------------------------

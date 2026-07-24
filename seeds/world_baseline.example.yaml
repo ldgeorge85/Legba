@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# world_baseline.example.yaml — a MINIMAL, illustrative FORMAT example for the
+# world_baseline seed adapter (src/legba/data/seed/adapters/world_baseline.py).
+#
+# This is NOT the real curated dataset — Legba ships no bundled seed data (the
+# curated seeds/world_baseline.yaml is operator-provided, see seeds/README.md).
+# Copy this to seeds/world_baseline.yaml and replace the rows with your own
+# curated, temporally-honest facts, then `python scripts/seed.py --source
+# world_baseline`. Every entry below is generic public-knowledge illustration.
+#
+# Three top-level keys are read; each is optional (a missing/empty key = 0 rows).
+
+# --- leaders -> facts ------------------------------------------------------
+# Each row becomes: a LeaderOf fact (subject=leader, value=country) PLUS a
+# country-SUBJECT office fact (subject=country, predicate=`office`, value=leader).
+leaders:
+  - leader: "Emmanuel Macron"      # person (the office-holder)
+    country: "France"              # the country they lead
+    valid_from: "2017-05-14"       # REQUIRED — term start (YYYY-MM-DD)
+    # office: "head of state"      # optional; default "head of state".
+    #                              #   Use e.g. "head of government" so a PM and
+    #                              #   a president for the SAME country don't
+    #                              #   supersede each other on (country, office).
+    # valid_until: "2027-05-13"    # optional; omit for an open/current term.
+    # confidence: 0.95             # optional; default 0.95.
+
+# --- alliances -> signed +1 nexuses ----------------------------------------
+# Each bloc emits one nexus per member (subject=country, rel_type, object=bloc).
+alliances:
+  - bloc: "NATO"                   # the organization / bloc (object)
+    rel_type: "MemberOf"           # optional; default "MemberOf"
+    polarity: 1                    # optional; default +1 (supportive)
+    members:
+      - { country: "France", valid_from: "1949-04-04" }   # valid_from REQUIRED
+      # - { country: "Canada", valid_from: "1949-04-04", valid_until: null, confidence: 0.95 }
+
+# --- conflicts -> signed nexuses (current active-conflict layer) ------------
+# Preferred shape: `sides` groups co-belligerents into coalitions. HOSTILE (-1)
+# `InActiveConflictWith` edges are emitted ONLY across sides; ALLIED (+1)
+# `AlliedWith` edges within a multi-member side. (A legacy flat `belligerents:`
+# list — all-vs-all hostile, no alliances — is also accepted.)
+conflicts:
+  - name: "Example border conflict"   # optional label
+    sides:
+      - ["Country A"]                  # side 1 (one or more countries)
+      - ["Country B", "Country C"]     # side 2 — B & C are ALLIED, both vs A
+    valid_from: "2026-01-01"           # REQUIRED — conflict onset (YYYY-MM-DD)
+    # valid_until: "2026-06-30"        # optional; set when the conflict ends.
+    # confidence: 0.95                 # optional; default 0.95.

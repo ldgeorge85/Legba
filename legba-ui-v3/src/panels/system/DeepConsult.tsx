@@ -28,7 +28,11 @@ import {
   getDeepConsultStatus,
   listConsultSessions,
   loadConsultSession,
+  loadConsultModel,
+  saveConsultModel,
+  CONSULT_MODEL_OPTIONS,
   ApiError,
+  type ConsultModel,
   type DeepConsultStatus,
   type ConsultSessionSummary,
 } from '@/lib/api'
@@ -54,6 +58,8 @@ export default function DeepConsultPanel({ registration }: PanelProps) {
   const [scope, setScope] = useState('')
   const [emitFacts, setEmitFacts] = useState(true)
   const [emitHypotheses, setEmitHypotheses] = useState(true)
+  // F1 model picker — the LLM plane the deep workflow runs on; persisted.
+  const [model, setModel] = useState<ConsultModel>(() => loadConsultModel())
 
   const [statusResp, setStatusResp] = useState<DeepConsultStatus | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -101,6 +107,7 @@ export default function DeepConsultPanel({ registration }: PanelProps) {
         scope_predicate: scope.trim() || null,
         emit_facts: emitFacts,
         emit_hypotheses: emitHypotheses,
+        model,
       })
       setStatusResp({
         task_id: resp.task_id,
@@ -197,7 +204,7 @@ export default function DeepConsultPanel({ registration }: PanelProps) {
           onChange={(e) => setScope(e.target.value)}
           disabled={submitting}
         />
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex flex-wrap items-center gap-4 text-sm">
           <label className="flex items-center gap-1">
             <input
               type="checkbox"
@@ -213,6 +220,27 @@ export default function DeepConsultPanel({ registration }: PanelProps) {
               onChange={(e) => setEmitHypotheses(e.target.checked)}
             />
             Emit hypotheses
+          </label>
+          {/* F1 model picker — which LLM plane runs the deep workflow. */}
+          <label className="flex items-center gap-1 text-xs text-neutral-400">
+            Model
+            <select
+              value={model}
+              onChange={(e) => {
+                const m = e.target.value as ConsultModel
+                setModel(m)
+                saveConsultModel(m)
+              }}
+              disabled={submitting}
+              className="rounded border border-neutral-700 bg-neutral-900 px-1.5 py-0.5 text-xs"
+              data-testid="deep-consult-model"
+            >
+              {CONSULT_MODEL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </label>
           <button
             type="button"

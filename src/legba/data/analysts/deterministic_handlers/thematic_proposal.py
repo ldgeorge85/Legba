@@ -74,6 +74,50 @@ def min_intensity() -> float:
         return _DEFAULT_MIN_INTENSITY
 
 
+#: M21 (2026-07-06 mining audit) — ABSENCE / negation FRAMING. situation_clustering
+#: names a frame from its latest member finding, and an "all-clear" assessment
+#: ("United States – No discernible instability vector", "no observable WMD
+#: activity", "No coordinated narrative detected") frames the ABSENCE of a
+#: situation. Because ``intensity_score`` tracks prose VERBOSITY, these verbose
+#: null-findings rank at the TOP of the proposal list — a misleading decision aid
+#: (proposing a dedicated thematic target for a NON-situation). An absence-FRAMING
+#: token marks the frame absence-framed and EXCLUDES it from candidacy.
+#:
+#: F3 (2026-07-06 review): match the absence-FRAMING construction, NOT a bare
+#: negation token. "no" / "not" fire ONLY when followed by whitespace ("no
+#: discernible …", "no evidence of …", "not detected") — a HYPHENATED compound
+#: ("no-first-use policy", "no-fly zone") is a SUBSTANTIVE posture name, not
+#: absence. The remaining absence words ("absence", "negligible", "without",
+#: "neither", …) are matched as whole words. Conservative: a substantive frame
+#: ("Turkey – State Repression", "China nuclear-capable delivery build-up",
+#: "Norway sovereign-fund leverage") carries no absence framing and is unaffected.
+_ABSENCE_RE = re.compile(
+    r"""
+      \b(?:no|not)(?=\s)                          # "no discernible", "not detected"
+                                                  #   — NOT "no-fly"/"no-first-use"
+    | \b(?:none|never|neither|nothing|nil|without
+          |absence|absent|negligible|nonexistent|non-existent
+          |lack|lacks|lacking)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def is_absence_framed(name: str) -> bool:
+    """True when a situation name frames the ABSENCE of a situation (M21 / F3).
+
+    Matches an absence-FRAMING construction: a "no"/"not" DETERMINER followed by
+    whitespace ("No observable …", "no discernible …", "not detected"), or a
+    whole-word absence token ("absence of …", "negligible …", "neither target nor
+    wielder", "without …"). A HYPHENATED "no-…"/"not-…" compound
+    ("no-first-use policy", "no-fly zone") is a substantive posture NAME and is
+    NOT flagged. Whole-word matching also means a real referent that merely
+    CONTAINS the letters ("Norway", "Kosovo", "Monaco") is never spuriously
+    flagged.
+    """
+    return bool(_ABSENCE_RE.search(str(name or "")))
+
+
 def candidate_terms(name: str) -> list[str]:
     """Salient lowercased terms from a situation name (stopword/length filtered),
     most-distinctive (longest) first, de-duplicated, capped at ``_MAX_TERMS``."""
@@ -122,17 +166,37 @@ def _is_covered(terms: list[str], covered_text: str) -> bool:
     )
 
 
-def _proposal(sig: str, name: str, intensity: float, terms: list[str]) -> dict[str, Any]:
-    # Suffix a short signature hash so two unrelated situations that happen to
-    # share a longest term (both "diplomatic") don't collide on one target id.
+def stable_slug(sig: str, name: str) -> str:
+    """A STABLE ``suggested_target_id`` for a situation (M21).
+
+    The OLD slug keyed off ``terms[0]`` — the situation name's longest keyword —
+    which is VOLATILE: situation_clustering re-frames a situation from its latest
+    member finding every tick, so one France situation surfaced as
+    ``situation_instability_2ba74f`` / ``situation_observable_2ba74f`` /
+    ``situation_leadership_2ba74f`` across runs — a non-deterministic identity the
+    convergence loop can never settle. The slug now derives ONLY from the stable
+    ``situation_signature`` (e.g. ``sig:country_g20_fr`` → ``situation_country_g20_fr``),
+    so one situation maps to exactly ONE slug regardless of its current framing.
+    Falls back to a stable hash of the name when the signature is empty.
+    """
+    key = str(sig or "").strip()
+    if key:
+        # Drop a leading "sig:"/"sig_" marker, then sanitize to a slug token.
+        base = re.sub(r"^sig[:_]?", "", key.casefold())
+        base = re.sub(r"[^a-z0-9]+", "_", base).strip("_")
+        if base:
+            return f"situation_{base}"[:128]
     import hashlib
-    h = hashlib.sha1((sig or "").encode("utf-8")).hexdigest()[:6]
-    base = re.sub(r"[^a-z0-9]+", "_", (terms[0] if terms else "situation")).strip("_")
+    h = hashlib.sha1((str(name or "")).encode("utf-8")).hexdigest()[:12]
+    return f"situation_{h}"
+
+
+def _proposal(sig: str, name: str, intensity: float, terms: list[str]) -> dict[str, Any]:
     return {
         "situation_signature": sig,
         "name": name[:512],
         "intensity_score": round(float(intensity), 4),
-        "suggested_target_id": f"situation_{base}_{h}"[:128],
+        "suggested_target_id": stable_slug(sig, name),
         "suggested_predicate": suggested_predicate(terms),
         "terms": terms,
     }
@@ -142,8 +206,15 @@ def _build_proposals(
     situations: list[dict[str, Any]], covered_text: str, *, floor: float,
 ) -> list[dict[str, Any]]:
     """Pure core: high-intensity OPEN situations not yet covered → proposals,
-    most-intense first."""
+    most-intense first.
+
+    M21 filters, applied in order: skip below the intensity floor; skip an
+    ABSENCE/negation-framed frame (an "all-clear" null-finding is not a situation
+    to give a target); skip an already-covered frame; then DEDUP on the stable
+    slug so one situation (one signature) yields exactly one proposal even if the
+    input carries multiple rows / re-framings for it."""
     out: list[dict[str, Any]] = []
+    seen_slugs: set[str] = set()
     for s in sorted(
         situations, key=lambda r: float(r.get("intensity_score") or 0.0), reverse=True
     ):
@@ -151,10 +222,20 @@ def _build_proposals(
         if intensity < floor:
             continue
         name = str(s.get("name") or "")
+        # M21 (a): exclude absence/negation-framed compositions from candidacy.
+        if is_absence_framed(name):
+            continue
         terms = candidate_terms(name)
         if not terms or _is_covered(terms, covered_text):
             continue
-        out.append(_proposal(str(s.get("situation_signature") or ""), name, intensity, terms))
+        sig = str(s.get("situation_signature") or "")
+        # M21 (b)+(c): dedup at the OUTPUT level on the STABLE (signature-derived)
+        # slug — one situation = one proposal.
+        slug = stable_slug(sig, name)
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        out.append(_proposal(sig, name, intensity, terms))
         if len(out) >= _MAX_PROPOSALS:
             break
     return out

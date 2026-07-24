@@ -44,6 +44,17 @@ from .errors import (
     VersionConflict,
 )
 
+# B0-5 (audit W6) — the scorecard↔composition reconciliation reducers + model
+# now live in a PURE, substrate-free module so the journal's ``get_assessments``
+# instrument (runtime image) reconciles with the SAME code this endpoint uses.
+# Aliased to the historical private names so the call sites below stay identical
+# (this extraction is a no-behavior-change refactor).
+from .scorecard_reconcile import (
+    ScorecardDisagreement,
+    composition_usages as _composition_usages,
+    scorecard_disagreements as _scorecard_disagreements,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +94,7 @@ class ScorecardRow(BaseModel):
 
 
 class CalibrationScoreboard(BaseModel):
-    """The platform's HONEST skill scoreboard — the freshest ``kind='calibration'``
+    """The platform's HONEST skill scoreboard — the freshest ``calibration_tracking``
     finding, reduced EXACTLY as :meth:`SubstrateQueryPort.get_calibration` (~2091).
 
     Read INLINE registry-side (the ``journal_api._read_calibration`` slim precedent,
@@ -135,6 +146,13 @@ class CountryScorecard(BaseModel):
     empty-but-explicit basis (the UI renders the honest not-enough-verified-claims
     state, never a fabricated band). An empty list (no scorecard computed yet) is
     a first-class honest state, NOT a 404.
+
+    ``disagreements`` (B0-5, audit W6) reconciles this card against the CURRENT
+    ``country_composition`` head: every finding the scorecard excluded from a
+    dimension's basis that the composition nonetheless cites / derives from.
+    Empty is the normal post-B0-1 state (both products share the faithfulness
+    floor now); a row makes any REMAINING divergence — e.g. from the different
+    windows (scorecard 336h vs composition 24h) — visible instead of silent.
     """
     target_id: str
     id: str
@@ -143,6 +161,7 @@ class CountryScorecard(BaseModel):
     floors: dict[str, float] = Field(default_factory=dict)
     dimensions: dict[str, Any] = Field(default_factory=dict)
     composition: dict[str, Any] = Field(default_factory=dict)
+    disagreements: list[ScorecardDisagreement] = Field(default_factory=list)
 
 
 class ConsumerLagRow(BaseModel):
@@ -207,6 +226,194 @@ class SourceFiringRow(BaseModel):
     last_poll_outcome: str | None = None
     recent_error_count: int = 0
     status: Literal["firing", "silent", "error", "paused"] = "silent"
+
+
+class EscalationDeliveryRow(BaseModel):
+    """One ``alert_sink_deliveries`` audit row — a single escalation delivery.
+
+    Mirrors the repurposed per-delivery audit table (migration 0061) that the
+    ``ChannelEmitter`` escalate/incident edge writes one row into per emit. This
+    is the human-visible answer to "who got alerted, and did it land?" — the
+    delivery record that today lands durably in Postgres but is rendered NOWHERE
+    (audit finding C3).
+
+    ``status`` is the HONEST publish outcome, NOT a claimed success:
+
+      * ``delivered``    — the NATS/webhook publish confirmed (``delivered_at``
+        is stamped).
+      * ``failed``       — a delivery attempt raised / permanently failed
+        (``error_message`` carries the cause, e.g. pushover 552; no
+        ``delivered_at``).
+      * ``logged_only``  — the emit went NOWHERE: no publisher was wired, so the
+        alert was logged and dropped (the silent-loss case the C3 edge exists to
+        surface).
+      * ``retrying``     — an in-flight attempt from the dormant alert-output-kind
+        retry path (not counted as a non-delivery — it may still land).
+
+    ``target_id`` / ``severity`` / ``effective_confidence`` are the channel-emit
+    honesty columns (the country, the resolved severity, the verify-FOLDED
+    confidence the escalate gate crossed); they read NULL for legacy
+    alert-output-kind rows.
+    """
+    id: str
+    alert_row_id: str | None = None
+    channel_name: str | None = None
+    sink_kind: str
+    sink_target: str | None = None
+    target_id: str | None = None
+    severity: str | None = None
+    effective_confidence: float | None = None
+    status: str
+    error_message: str | None = None
+    attempt_number: int = 1
+    attempted_at: datetime
+    delivered_at: datetime | None = None
+    payload_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class EscalationNonDelivery(BaseModel):
+    """One ``(sink_kind, status)`` non-delivery tally in the window.
+
+    This is EXACTLY the per-``(sink_kind, status)`` breakdown the W1-T3
+    integrity-sweep canary watches (``integrity_sweep._delivery_non_deliveries``):
+    the two TERMINAL non-delivery statuses (``failed`` / ``logged_only``) counted
+    over the last 24h, with one sample error. Surfacing the same signal in the UI
+    means a human sees the failure the canary alarms on.
+    """
+    sink_kind: str
+    status: Literal["failed", "logged_only"]
+    n: int
+    sample_error: str | None = None
+
+
+class EscalationDeliverySummary(BaseModel):
+    """Rollup of escalation deliveries over the last ``window_hours`` (default 24h).
+
+    The window rollup is DELIBERATELY unfiltered — it is the honest global health
+    signal (what failed or went nowhere recently) regardless of any status/target
+    filter the operator applied to the row list. ``non_delivery`` (=
+    ``failed + logged_only``) is the number the canary alarms on; a clean window
+    is all-zero (no fabricated activity).
+    """
+    window_hours: int
+    total: int = 0
+    delivered: int = 0
+    failed: int = 0
+    logged_only: int = 0
+    retrying: int = 0
+    other: int = 0
+    # failed + logged_only — the W1-T3 canary's non-delivery count.
+    non_delivery: int = 0
+    by_sink_status: list[EscalationNonDelivery] = Field(default_factory=list)
+
+
+class EscalationDeliveriesResponse(BaseModel):
+    """The ``GET /system/escalations`` payload: a 24h health summary + the
+    recent (newest-first) delivery rows.
+
+    Read-only and honest: an empty table returns a zeroed summary + no rows (a
+    first-class "nothing has been escalated" state, never fabricated activity).
+    """
+    summary: EscalationDeliverySummary
+    rows: list[EscalationDeliveryRow] = Field(default_factory=list)
+
+
+def _escalation_delivery_row(r: dict[str, Any]) -> EscalationDeliveryRow:
+    """Shape one raw ``alert_sink_deliveries`` row into the response model.
+
+    ``payload_summary`` is JSONB — asyncpg may hand it back as a str (raw) or a
+    dict; parse defensively either way. UUID columns (``id`` / ``alert_row_id``)
+    are stringified for the wire.
+    """
+    raw_summary = r.get("payload_summary")
+    summary: dict[str, Any]
+    if isinstance(raw_summary, str):
+        try:
+            parsed = json.loads(raw_summary)
+        except (ValueError, TypeError):
+            parsed = {}
+        summary = parsed if isinstance(parsed, dict) else {}
+    elif isinstance(raw_summary, dict):
+        summary = dict(raw_summary)
+    else:
+        summary = {}
+
+    alert_row_id = r.get("alert_row_id")
+    conf = r.get("effective_confidence")
+    return EscalationDeliveryRow(
+        id=str(r["id"]),
+        alert_row_id=str(alert_row_id) if alert_row_id is not None else None,
+        channel_name=r.get("channel_name"),
+        sink_kind=str(r.get("sink_kind") or ""),
+        sink_target=r.get("sink_target"),
+        target_id=r.get("target_id"),
+        severity=r.get("severity"),
+        effective_confidence=float(conf) if conf is not None else None,
+        status=str(r.get("status") or ""),
+        error_message=r.get("error_message"),
+        attempt_number=int(r.get("attempt_number") or 1),
+        attempted_at=r["attempted_at"],
+        delivered_at=r.get("delivered_at"),
+        payload_summary=summary,
+    )
+
+
+def _build_escalations_response(
+    delivery_rows: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+    *,
+    window_hours: int,
+) -> EscalationDeliveriesResponse:
+    """Pure reducer: (recent rows, 24h grouped tallies) → the response model.
+
+    Split out from the route handler so the shaping + the canary-aligned summary
+    are unit-testable without a live substrate. ``summary_rows`` are the
+    ``GROUP BY status, sink_kind`` tallies over the window (each carries
+    ``status`` / ``sink_kind`` / ``n`` / ``sample_err``); ``delivery_rows`` are
+    the recent rows already ordered newest-first by SQL (order is preserved here).
+    """
+    counts = {"delivered": 0, "failed": 0, "logged_only": 0, "retrying": 0}
+    other = 0
+    total = 0
+    non_delivery_rows: list[EscalationNonDelivery] = []
+    for r in summary_rows:
+        st = str(r.get("status") or "")
+        n = int(r.get("n") or 0)
+        total += n
+        if st in counts:
+            counts[st] += n
+        else:
+            other += n
+        if st in ("failed", "logged_only") and n > 0:
+            non_delivery_rows.append(
+                EscalationNonDelivery(
+                    sink_kind=str(r.get("sink_kind") or ""),
+                    status=st,  # type: ignore[arg-type]
+                    n=n,
+                    sample_error=r.get("sample_err") or r.get("sample_error"),
+                )
+            )
+    # Worst-first: hard 'failed' before 'logged_only', then by volume desc, then
+    # sink_kind for a stable order.
+    non_delivery_rows.sort(
+        key=lambda x: (0 if x.status == "failed" else 1, -x.n, x.sink_kind)
+    )
+
+    summary = EscalationDeliverySummary(
+        window_hours=window_hours,
+        total=total,
+        delivered=counts["delivered"],
+        failed=counts["failed"],
+        logged_only=counts["logged_only"],
+        retrying=counts["retrying"],
+        other=other,
+        non_delivery=counts["failed"] + counts["logged_only"],
+        by_sink_status=non_delivery_rows,
+    )
+    return EscalationDeliveriesResponse(
+        summary=summary,
+        rows=[_escalation_delivery_row(r) for r in delivery_rows],
+    )
 
 
 class OptimizerCandidate(BaseModel):
@@ -806,6 +1013,86 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         return out
 
     @router.get(
+        "/system/escalations",
+        response_model=EscalationDeliveriesResponse,
+    )
+    async def system_escalations(
+        status: str | None = Query(default=None),
+        sink_kind: str | None = Query(default=None),
+        target_id: str | None = Query(default=None),
+        severity: str | None = Query(default=None),
+        window_hours: int = Query(default=24, ge=1, le=720),
+        limit: int = Query(default=200, ge=1, le=1000),
+        principal: str = Depends(require_bearer),
+    ) -> EscalationDeliveriesResponse:
+        """Human-visible escalation-delivery edge (audit finding C3 / decision D1).
+
+        Serves the ``alert_sink_deliveries`` per-delivery audit (migration 0061)
+        — the durable record of every escalate/incident emit the ChannelEmitter
+        writes — so a human can finally SEE whether an escalation LANDED or went
+        NOWHERE. Today those rows land in Postgres + NATS ``channels.escalations``
+        but nothing renders them; this route closes that gap.
+
+        Returns:
+
+          * ``summary`` — a rollup over the last ``window_hours`` (default 24h,
+            DELIBERATELY unfiltered): delivered / failed / logged_only / retrying
+            counts + the ``non_delivery`` total (failed + logged_only) and its
+            per-``(sink_kind, status)`` breakdown. That non-delivery signal is
+            EXACTLY what the W1-T3 integrity-sweep canary alarms on — surfacing it
+            here means the operator sees the same failure the canary does.
+          * ``rows`` — the recent deliveries, newest-first, optionally filtered by
+            ``status`` / ``sink_kind`` / ``target_id`` / ``severity``, capped at
+            ``limit``.
+
+        Read-only + honest: an empty table returns a zeroed summary + no rows (a
+        first-class "nothing escalated" state, never fabricated). Fully defensive
+        — any query failure degrades to that same honest-empty response at HTTP
+        200 so the panel renders "no deliveries" rather than polling a 500.
+        """
+        try:
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                summary_rows = await conn.fetch(
+                    """
+                    SELECT status, sink_kind,
+                           count(*) AS n,
+                           max(error_message) AS sample_err
+                      FROM public.alert_sink_deliveries
+                     WHERE attempted_at > now()
+                           - make_interval(hours => $1)
+                     GROUP BY status, sink_kind
+                    """,
+                    int(window_hours),
+                )
+                delivery_rows = await conn.fetch(
+                    """
+                    SELECT id, alert_row_id, channel_name, sink_kind, sink_target,
+                           target_id, severity, effective_confidence, status,
+                           error_message, attempt_number, attempted_at,
+                           delivered_at, payload_summary
+                      FROM public.alert_sink_deliveries
+                     WHERE ($1::text IS NULL OR status = $1)
+                       AND ($2::text IS NULL OR sink_kind = $2)
+                       AND ($3::text IS NULL OR target_id = $3)
+                       AND ($4::text IS NULL OR severity = $4)
+                     ORDER BY attempted_at DESC, id DESC
+                     LIMIT $5
+                    """,
+                    status, sink_kind, target_id, severity, int(limit),
+                )
+        except Exception as exc:  # noqa: BLE001 — degrade to honest empty, HTTP 200
+            logger.info("v3.system.escalations.unavailable err=%s", exc)
+            return EscalationDeliveriesResponse(
+                summary=EscalationDeliverySummary(window_hours=int(window_hours)),
+            )
+
+        return _build_escalations_response(
+            [dict(r) for r in delivery_rows],
+            [dict(r) for r in summary_rows],
+            window_hours=int(window_hours),
+        )
+
+    @router.get(
         "/optimizer/candidates", response_model=list[OptimizerCandidate],
     )
     async def list_optimizer_candidates(
@@ -1136,10 +1423,14 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         """The honest skill scoreboard — the exogenous Brier + the SEGREGATED
         acute-forecast BSS, tagged ready / accumulating / degenerate.
 
-        Reduces the freshest ``kind='calibration'`` finding EXACTLY as
+        Reduces the freshest ``calibration_tracking`` finding EXACTLY as
         :meth:`SubstrateQueryPort.get_calibration` (~2091), but reads it INLINE
         here so the registry image stays slim (no runtime / deterministic-handler
-        import — the ``journal_api._read_calibration`` precedent, ~329). The panel
+        import — the ``journal_api._read_calibration`` precedent, ~329). B0-3
+        (read-truth): the writer produces ``kind='finding'`` +
+        ``analyst_id='calibration_tracking'`` (nothing writes
+        ``kind='calibration'``), and the metrics live one JSONB level down at
+        ``data.data`` (the eval_country_scorecard precedent below). The panel
         keys every displayed string off the flags this returns, so a thin exogenous
         sample OR a degenerate acute pilot reads as an honest withheld state, never
         a bare positive number.
@@ -1147,7 +1438,8 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         async with deps.descriptor_registry.pg.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT id, produced_at, data FROM public.analyst_outputs "
-                "WHERE kind = 'calibration' "
+                "WHERE kind = 'finding' AND analyst_id = 'calibration_tracking' "
+                "AND superseded_by IS NULL "
                 "ORDER BY produced_at DESC, id DESC LIMIT 1"
             )
         if row is None:
@@ -1155,7 +1447,9 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             # ("no pilot yet"), not a failed pilot. Both legs read unproven.
             return CalibrationScoreboard(available=False)
         raw = row["data"]
-        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        data = payload.get("data") if isinstance(payload, dict) else None
+        data = data if isinstance(data, dict) else {}
         bss = data.get("brier_skill_score")
         ready = bool(data.get("forecast_acute_ready"))
         degenerate = bool(data.get("forecast_acute_degenerate"))
@@ -1216,6 +1510,16 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         first-class honest state, NOT a 404. Each row's per-dimension bands carry
         the basis ids (empty-but-explicit for an insufficient dimension) the UI
         drills into the P1 evidence + signed lineage.
+
+        B0-5 (audit W6) — each card also carries ``disagreements``: the
+        scorecard reconciled against the CURRENT ``country_composition`` head
+        (its ``data.data.citations[*].ref_id``/``source`` + its
+        ``derived_from`` lineage column). A row = a finding this scorecard
+        EXCLUDED from a dimension's basis that the composition nonetheless
+        uses; empty is the normal reconciled state. Fully defensive (the
+        ``system_escalations`` precedent): any failure in the reconciliation
+        queries degrades to ``disagreements: []`` at HTTP 200 — it never
+        breaks the scorecard read itself.
         """
         async with deps.descriptor_registry.pg.acquire() as conn:
             rows = await conn.fetch(
@@ -1262,6 +1566,76 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                     ),
                 )
             )
+
+        # B0-5 (audit W6) — reconcile each card against the CURRENT
+        # country_composition head. Fully defensive: any failure below degrades
+        # to disagreements=[] at HTTP 200 (the system_escalations precedent) —
+        # the scorecard read above is already complete and must not break.
+        try:
+            targets = [card.target_id for card in out]
+            if targets:
+                async with deps.descriptor_registry.pg.acquire() as conn:
+                    comp_rows = await conn.fetch(
+                        """
+                        SELECT DISTINCT ON (target_id)
+                               target_id,
+                               derived_from::text[] AS derived_from,
+                               data
+                          FROM public.analyst_outputs
+                         WHERE kind = 'finding'
+                           AND analyst_id = 'country_composition'
+                           AND superseded_by IS NULL
+                           AND target_id = ANY($1::text[])
+                         ORDER BY target_id, produced_at DESC, id DESC
+                        """,
+                        targets,
+                    )
+                    # Parse each head's LIVE-VERIFIED shapes: citations at
+                    # data['data']['citations'] (ref_id + source = the producing
+                    # analyst) and the derived_from uuid[] COLUMN. Lineage-only
+                    # ids (no covering citation) need an id→analyst_id lookup.
+                    parsed: dict[str, tuple[Any, list[str]]] = {}
+                    unresolved: set[str] = set()
+                    for cr in comp_rows:
+                        raw_comp = cr["data"]
+                        payload = (
+                            json.loads(raw_comp)
+                            if isinstance(raw_comp, str)
+                            else (raw_comp or {})
+                        )
+                        payload = payload if isinstance(payload, dict) else {}
+                        citations = (payload.get("data") or {}).get("citations")
+                        derived = [str(x) for x in (cr["derived_from"] or [])]
+                        parsed[cr["target_id"]] = (citations, derived)
+                        cited = _composition_usages(citations, [], {})
+                        unresolved.update(f for f in derived if f not in cited)
+                    derived_analysts: dict[str, str] = {}
+                    if unresolved:
+                        lookup_rows = await conn.fetch(
+                            "SELECT id::text AS id, analyst_id "
+                            "FROM public.analyst_outputs "
+                            "WHERE id = ANY($1::uuid[])",
+                            sorted(unresolved),
+                        )
+                        derived_analysts = {
+                            lr["id"]: lr["analyst_id"]
+                            for lr in lookup_rows
+                            if lr["analyst_id"]
+                        }
+                for card in out:
+                    comp = parsed.get(card.target_id)
+                    if comp is None:
+                        continue
+                    citations, derived = comp
+                    card.disagreements = _scorecard_disagreements(
+                        card.dimensions,
+                        _composition_usages(citations, derived, derived_analysts),
+                    )
+        except Exception as exc:  # noqa: BLE001 — degrade to honest empty, HTTP 200
+            logger.info(
+                "v3.eval.country_scorecard.disagreements_unavailable err=%s", exc
+            )
+
         return out
 
     @router.get("/eval/analyst_runtime")

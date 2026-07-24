@@ -474,8 +474,19 @@ class JournalPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # The discriminator. Entries are pure append; only consolidations supersede.
-    entry_kind: Literal["entry", "consolidation"] = "entry"
+    # The discriminator. Entries, chronicles, and lens reads are pure append;
+    # only consolidations supersede. 'chronicle' = the public-record tier
+    # (planning/CHRONICLE_BUILD_2026-07-21.md — detached third-person cited
+    # prose over the tower top; same payload contract). 'lens' / 'lens_diff' =
+    # the VOICES faculty-lens tier (planning/VOICES_PLAN_2026-07-21.md, DL-1): a
+    # faculty reads the verified tower top through a declared falsifiable prior
+    # ('lens'), and a fifth diff pass narrates their agree/split/outlier
+    # ('lens_diff'). Both ride this exact JournalPayload contract + verify floor.
+    # (The chronicle build hit exactly this Literal: an unwidened list rejected
+    # the new kind at validation — widen it BEFORE the write path can produce it.)
+    entry_kind: Literal[
+        "entry", "consolidation", "chronicle", "lens", "lens_diff"
+    ] = "entry"
     title: str = Field(min_length=1, max_length=2048)
     # The narrative (markdown, with inline [[ref:<uuid>]] citation markers).
     body: str = Field(default="", max_length=65536)
@@ -493,6 +504,14 @@ class JournalPayload(BaseModel):
     # Forced DETERMINISTICALLY by a non-LLM post-step (§10) — never trusted as
     # agent-self-reported. Empty in Wave 0 (the deterministic post-step is Wave 1).
     honesty_flags: list[str] = Field(default_factory=list)
+    # Free-form per-row metadata (VOICES LV-1, migration 0090). Empty {} for
+    # every entry/consolidation/chronicle row (no behavior change). A 'lens' row
+    # carries {"lens_id": <analyst_id>}; a 'lens_diff' row carries the structured
+    # {"matrix": {...}} agreement matrix (VOICES_BUILD_DESIGN §2.9 / §3.3).
+    # Mirrors FactPayload.data / NexusPayload.data. `prior_version` is
+    # deliberately NOT duplicated here — the row's own analyst_version column IS
+    # the prior version (DL-2).
+    data: dict[str, Any] = Field(default_factory=dict)
     kind_marker: Literal["journal"] = "journal"
 
 

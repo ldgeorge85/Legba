@@ -325,12 +325,14 @@ class _SubstrateStub:
         analyst_id: str | None = None,
         severity: str | None = None,
         since_hours: int | None = None,
+        include_superseded: bool = False,
         limit: int = 20,
     ) -> dict[str, Any]:
         self.calls.append((
             "list_findings",
             {"target_id": target_id, "analyst_id": analyst_id,
-             "severity": severity, "since_hours": since_hours, "limit": limit},
+             "severity": severity, "since_hours": since_hours,
+             "include_superseded": include_superseded, "limit": limit},
         ))
         if self.raise_on == "list_findings":
             raise RuntimeError("substrate down")
@@ -1194,6 +1196,122 @@ def test_rounds_constants():
 
 
 # ---------------------------------------------------------------------------
+# F1 model picker — per-request LLM plane override in the run path
+# ---------------------------------------------------------------------------
+
+
+def _final_answer(text: str = "ok") -> str:
+    return json.dumps({
+        "final": True,
+        "answer": text,
+        "uncertainty": 0.2,
+        "cited_refs": [],
+        "unanswered_aspects": [],
+    })
+
+
+@pytest.mark.asyncio
+async def test_llm_override_uses_resolved_handler():
+    """When the question row carries ``llm_component_override`` AND a resolver is
+    wired, the run uses the FRESHLY RESOLVED handler for its LLM calls — not the
+    cached primary — and the resolved plane's subprovider surfaces on the payload.
+    """
+    primary = _ScriptedLLMHandler([_final_answer("from primary")])
+    primary.subprovider = "opus-primary"
+    override = _ScriptedLLMHandler([_final_answer("from core")])
+    override.subprovider = "core-override"
+
+    resolved: list[str] = []
+
+    async def _resolver(component_id: str):
+        resolved.append(component_id)
+        return override
+
+    deps = ConsultOnDemandDeps(
+        llm=primary, substrate=_SubstrateStub(), resolve_llm_component=_resolver,
+    )
+    result = await run_method(
+        [{"question": "q", "llm_component_override": "llm.primary.openai_compat"}],
+        {"analyst_id": "consult.x"},
+        deps,
+    )
+
+    # The override handler answered; the cached primary was never called.
+    assert resolved == ["llm.primary.openai_compat"]
+    assert len(override.calls) == 1
+    assert len(primary.calls) == 0
+    assert result.consult_response.answer == "from core"
+    assert result.consult_response.data.get("subprovider") == "core-override"
+
+
+@pytest.mark.asyncio
+async def test_no_override_keeps_cached_primary():
+    """Absent an override, the resolver is NEVER called and the cached primary
+    handler answers — the default-preserving contract."""
+    primary = _ScriptedLLMHandler([_final_answer("from primary")])
+    primary.subprovider = "opus-primary"
+
+    called = False
+
+    async def _resolver(component_id: str):
+        nonlocal called
+        called = True
+        raise AssertionError("resolver must not run without an override")
+
+    deps = ConsultOnDemandDeps(
+        llm=primary, substrate=_SubstrateStub(), resolve_llm_component=_resolver,
+    )
+    result = await run_method(
+        [{"question": "q"}], {"analyst_id": "consult.x"}, deps,
+    )
+    assert called is False
+    assert len(primary.calls) == 1
+    assert result.consult_response.data.get("subprovider") == "opus-primary"
+
+
+@pytest.mark.asyncio
+async def test_override_with_no_resolver_fails_closed():
+    """An override on the question row with NO resolver wired FAILS CLOSED — it
+    must never silently fall back to (and bill) the cached primary (F-A). The
+    primary is never called; a clear ``llm plane`` error is raised (the actor
+    surfaces it as a hard failure)."""
+    primary = _ScriptedLLMHandler([_final_answer("from primary")])
+    primary.subprovider = "opus-primary"
+    deps = ConsultOnDemandDeps(llm=primary, substrate=_SubstrateStub())
+    with pytest.raises(ValueError, match="llm plane"):
+        await run_method(
+            [{"question": "q", "llm_component_override": "llm.primary.openai_compat"}],
+            {"analyst_id": "consult.x"},
+            deps,
+        )
+    assert len(primary.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_override_resolve_failure_fails_closed():
+    """If the resolver RAISES (e.g. the core plane is down), the run FAILS CLOSED
+    — it must NOT degrade to the cached primary (F-A: that would silently bill
+    Opus while echoing 'core' + recording $0). The error names the unavailable
+    plane; the primary is never called."""
+    primary = _ScriptedLLMHandler([_final_answer("from primary")])
+    primary.subprovider = "opus-primary"
+
+    async def _resolver(component_id: str):
+        raise RuntimeError("core plane unreachable")
+
+    deps = ConsultOnDemandDeps(
+        llm=primary, substrate=_SubstrateStub(), resolve_llm_component=_resolver,
+    )
+    with pytest.raises(ValueError, match="unavailable"):
+        await run_method(
+            [{"question": "q", "llm_component_override": "llm.primary.openai_compat"}],
+            {"analyst_id": "consult.x"},
+            deps,
+        )
+    assert len(primary.calls) == 0
+
+
+# ---------------------------------------------------------------------------
 # T2 — broad-first system prompt (D2) without clobbering the loop protocol
 # ---------------------------------------------------------------------------
 
@@ -1658,7 +1776,7 @@ async def test_finished_intelligence_tools_are_known_and_dispatchable():
     assert substrate.calls[-1] == (
         "list_findings",
         {"target_id": "country_g20_ir", "analyst_id": None, "severity": None,
-         "since_hours": 48, "limit": 5},
+         "since_hours": 48, "include_superseded": False, "limit": 5},
     )
 
     out = await _dispatch_tool(
@@ -2233,3 +2351,75 @@ def test_system_prompt_mandates_situation_survey_for_broad():
 def test_system_prompt_requires_markdown_answer():
     assert "MARKDOWN prose" in _SYSTEM_PROMPT
     assert 'nested {"final": ...} envelope' in _SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# R2 / W2-T3 — truncation honesty: _bounded_tool_json replaces the blind
+# json.dumps(result)[:N] chop on every tool-result message (consult GATHER loop,
+# inline_target GATHER, journal NARRATE). Contract: ALWAYS valid JSON, ALWAYS
+# <= limit, and an explicit "truncated": true marker whenever anything dropped.
+# ---------------------------------------------------------------------------
+
+
+def test_bounded_tool_json_small_result_passes_through_unmarked():
+    from legba.data.analysts.consult_on_demand import _bounded_tool_json
+
+    result = {"rows": [{"id": "a", "title": "t"}], "refs": ["a"], "count": 1}
+    out = _bounded_tool_json(result, 8000)
+    assert json.loads(out) == result  # byte-for-byte semantics, no marker
+
+
+def test_bounded_tool_json_drops_whole_rows_and_marks_truncated():
+    from legba.data.analysts.consult_on_demand import _bounded_tool_json
+
+    rows = [{"id": f"row-{i}", "body": "x" * 200} for i in range(60)]
+    result = {"rows": rows, "refs": [r["id"] for r in rows], "count": 60}
+    out = _bounded_tool_json(result, 4000)
+    assert len(out) <= 4000
+    parsed = json.loads(out)  # VALID JSON — the whole point
+    assert parsed["truncated"] is True
+    assert parsed["rows_total"] == 60
+    assert 0 < len(parsed["rows"]) < 60
+    # Surviving rows are INTACT (whole trailing rows dropped, none chopped).
+    for row in parsed["rows"]:
+        assert set(row) == {"id", "body"}
+        assert len(row["body"]) == 200
+    # Non-row keys survive alongside the marker.
+    assert parsed["count"] == 60
+
+
+def test_bounded_tool_json_giant_single_row_falls_back_to_envelope():
+    from legba.data.analysts.consult_on_demand import _bounded_tool_json
+
+    result = {"rows": [{"id": "big", "body": "y" * 10_000}]}
+    out = _bounded_tool_json(result, 2000)
+    assert len(out) <= 2000
+    parsed = json.loads(out)
+    assert parsed["truncated"] is True
+    assert parsed["raw_prefix"].startswith('{"rows"')
+
+
+def test_bounded_tool_json_items_key_and_non_dict_fallback():
+    from legba.data.analysts.consult_on_demand import _bounded_tool_json
+
+    # get_timeline-shaped result truncates on "items".
+    items = [{"n": i, "pad": "z" * 300} for i in range(30)]
+    out = _bounded_tool_json({"items": items}, 3000)
+    parsed = json.loads(out)
+    assert parsed["truncated"] is True
+    assert parsed["items_total"] == 30
+    assert len(out) <= 3000
+    # A non-mapping result still yields valid bounded JSON.
+    out2 = _bounded_tool_json(["e" * 500] * 20, 1000)
+    assert len(out2) <= 1000
+    assert json.loads(out2)["truncated"] is True
+
+
+def test_bounded_tool_json_unserializable_degrades_honestly():
+    from legba.data.analysts.consult_on_demand import _bounded_tool_json
+
+    out = _bounded_tool_json({"bad": object()}, 500)
+    assert len(out) <= 500
+    parsed = json.loads(out)
+    assert parsed["truncated"] is True
+    assert parsed["error"] == "unserializable tool result"

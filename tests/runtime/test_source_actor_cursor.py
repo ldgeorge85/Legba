@@ -442,3 +442,74 @@ async def test_non_bulk_source_has_no_bulk_offset(monkeypatch):
     cur = await store.get("cursor")
     assert "bulk_offset" not in cur
     assert await store.get(BULK_RESUME_OFFSET_KEY) is None
+
+
+# ---------------------------------------------------------------------------
+# B0-11 Fix-1 — future-dated feed timestamps must never poison the cursor
+# (the stategov year-typo class: published_at 2027 advanced the cursor a full
+# year into the future → every real entry filtered as already-seen → a silent
+# one-year stall).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_future_published_ts_clamps_cursor_advance():
+    """A feed entry dated far in the FUTURE (upstream year-typo) advances the
+    cursor to ~now, never to the bogus future date. The persisted payload keeps
+    the feed's own date (provenance honest) — only the cursor is clamped."""
+    source_id = f"source.test.futurets_{uuid4().hex[:8]}"
+    sd = _poll_descriptor(source_id)
+    deps = StandardDeps(pg_pool=_FakePool(), nats_publish=None)
+    core = SourceCore(f"source::{source_id}::fut", SourceDeps(descriptor=sd, deps=deps))
+
+    now = datetime.now(tz=timezone.utc)
+    poison = now + timedelta(days=365)          # the year-typo class
+    nearby = now + timedelta(hours=6)           # mislabeled-TZ class: tolerated
+    entries = [_entry(source_id, nearby), _entry(source_id, poison)]
+    store = InMemoryStateStore()
+    _wire_core(core, store, _StubHandler(entries))
+
+    await core.pull_once()
+
+    cursor = await store.get("cursor")
+    advanced = datetime.fromisoformat(cursor["last_pulled_at"])
+    # The poison ts was clamped: the cursor sits at/near NOW (within the skew
+    # tolerance), NOT a year ahead.
+    from legba.runtime.source_actor import _MAX_FUTURE_SKEW
+    assert advanced <= datetime.now(tz=timezone.utc) + _MAX_FUTURE_SKEW
+    assert advanced < now + timedelta(days=300)  # provably not the typo date
+
+
+@pytest.mark.asyncio
+async def test_poisoned_future_cursor_self_heals_on_read():
+    """A STORED cursor already in the future (pre-fix poison) is discarded at
+    the next pull: the handler sees ``since=None`` (full lookback re-scan;
+    dedupe absorbs overlap) and the cursor re-seeds sanely."""
+    source_id = f"source.test.selfheal_{uuid4().hex[:8]}"
+    sd = _poll_descriptor(source_id)
+    deps = StandardDeps(pg_pool=_FakePool(), nats_publish=None)
+    core = SourceCore(f"source::{source_id}::heal", SourceDeps(descriptor=sd, deps=deps))
+
+    now = datetime.now(tz=timezone.utc)
+    store = InMemoryStateStore()
+    # Pre-seed the poison: a cursor one year in the future (the live stategov
+    # state this fix self-heals).
+    await store.set("cursor", {
+        "source_id": source_id,
+        "last_pulled_at": (now + timedelta(days=365)).isoformat(),
+        "rows_pulled": 24,
+        "last_error": None,
+    })
+    entries = [_entry(source_id, now - timedelta(hours=1))]
+    handler = _StubHandler(entries)
+    _wire_core(core, store, handler)
+
+    result = await core.pull_once()
+
+    # The poisoned cursor was treated as ABSENT — not handed to the handler.
+    assert handler.seen_since is None
+    assert result["signals_written"] == 1
+    # And the re-seeded cursor is sane (the fresh entry's logical ts).
+    cursor = await store.get("cursor")
+    advanced = datetime.fromisoformat(cursor["last_pulled_at"])
+    assert advanced <= datetime.now(tz=timezone.utc)

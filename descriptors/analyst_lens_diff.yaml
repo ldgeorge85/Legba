@@ -1,0 +1,79 @@
+# lens_diff — the chorus DIFF pass (VOICES LV-1, DL-7; build spec
+# planning/VOICES_BUILD_DESIGN.md §3, plan planning/VOICES_PLAN_2026-07-21.md).
+#
+# The FIFTH id on the journal_assessor kind, fired AFTER the four faculties. The
+# kind module maps this id → entry_kind='lens_diff' in journal_entries — append-
+# only, OFF the fact/finding/nexus chain, V1 faithfulness verify fires (keyed on
+# identity.kind, not id). It reads this cycle's four faculty reads (via
+# get_lens_reads in the journal_read pack), computes the deterministic roster
+# matrix into data.matrix, and narrates agree/split/outlier per contested topic —
+# priors visible, convergence-over-a-contested-claim rendered as a WARNING band,
+# the aperture line verbatim. It NEVER merges the voices. NO publish edge.
+#
+# It has NO declared prior of its own — its persona (legba.prompts.lens_diff) is
+# the referee's stance: report the shape of the argument, never adjudicate who is
+# right.
+#
+# Cadence: WEEKLY, 30min AFTER the last faculty (lens_intent 08:00) so all four
+# reads have landed (§4.1). Model plane: $0 core.
+
+identity:
+  id: lens_diff
+  name: "Voices — Chorus Diff"
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: journal_assessor             # SAME kind module; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: voices_lv1
+
+subscription:
+  other_analysts: []
+  substrate:
+    direct_queries: false
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  prompt_module: "legba.prompts.lens_diff:LENS_DIFF_SYSTEM"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 12288
+  budget_tokens_per_day: 600000
+  gather:
+    max_rounds: 6
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "30 8 * * 1"     # weekly — Mondays 08:30 UTC (after all 4, §4.1)
+  cooldown_seconds: 518400            # 6d — below the 7d interval
+
+grounding:
+  enabled: false
+
+# journal_read grants get_lens_reads (the this-cycle faculty-reads reader) plus
+# the tower-top reads (get_source_health for the collection-health line). No
+# substrate_read, no journal_propose, no publish sink.
+action_packs:
+  - pack_id: journal_read
+
+outputs: []

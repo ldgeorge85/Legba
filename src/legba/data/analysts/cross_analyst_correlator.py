@@ -84,8 +84,10 @@ agreements are the lowest-priority confirmation signal.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import UUID
@@ -182,6 +184,110 @@ _MAX_INPUT_OUTPUTS = 40             # context budget; broad subscription
 #                                     can return more, we trim newest-first
 _MAX_TITLE_CHARS = 200
 _MAX_BODY_CHARS = 800
+
+# M16 — the composition-style ``[[ref:N]]`` ordinal citation marker. A 1-BASED
+# ordinal (small int) naming the position of the cited analyst-output block in the
+# rendered slice (the SAME ``enumerate(projected, start=1)`` index the render
+# stamps as ``[N]``). Wrapped ``[[ref:...]]`` so the generalized faithfulness
+# verify's syntax discriminator routes it to the composition sub-claim floor
+# (``_uses_subclaim_convention`` keys on ``ref_kind='finding'`` / ``[[ref:``),
+# exactly as the meta_findings_synthesizer compositions do.
+_REF_MARKER_RE = re.compile(r"\[\[ref:(\d+)\]\]")
+
+# Bound the per-citation evidence text stashed into ``data['citations']`` so the
+# DB-free composition verify has the cited output's body without bloating the row.
+_MAX_EVIDENCE_TEXT_CHARS = 600
+
+# M17 — the cross_correlator supersession-signature prefix. Distinct from the
+# composition ``composition:`` prefix (so the FU6 composition fold never touches a
+# correlation head, and vice-versa) and from the content ``sig:`` / explicit
+# ``sit:`` prefixes. Encodes correlation_type + the sorted referenced-TARGET set
+# so a fresh run about the same targets supersedes the prior head instead of the
+# feed accumulating one meta-observation head per cycle (the ~32-stale-head symptom).
+_XCORR_SIG_PREFIX = "xcorr"
+
+# M17 — blind_spot decay TTL (hours). A blind_spot that is STILL a real coverage
+# gap is re-asserted every cadence (~12h) and its fresh head supersedes the prior
+# same-signature head (so its produced_at keeps refreshing and it never ages out);
+# only a blind_spot the correlator has STOPPED asserting (the gap was filled / the
+# topic lapsed) ages past this TTL and decays. 72h = 6 cadence cycles of margin.
+# Kept in sync with migration 0079's stale-sweep cutoff.
+_BLIND_SPOT_DECAY_TTL_HOURS = 72
+
+
+def _situation_signature(
+    correlation_type: str,
+    referenced_target_ids: Sequence[str],
+) -> str:
+    """Stable per-correlation supersession signature.
+
+    Keyed on ``correlation_type`` + the SORTED, de-duplicated set of non-empty
+    ``target_id`` values among the referenced outputs. Two runs that report the
+    same relationship (e.g. a blind_spot over the same countries, a contradiction
+    between the same targets) hash to the SAME signature, so the newer head
+    supersedes the older via the write-path fold. When the referenced set is
+    entirely target-less (all-global reads) the token is ``_global`` — those
+    collapse to one rolling global head per correlation_type (bounded, and the
+    blind_spot decay expires an abandoned one).
+
+    A very long joined target list is replaced by a short stable hash so the
+    signature stays a compact, index-friendly key.
+    """
+    targets = sorted({str(t) for t in referenced_target_ids if t})
+    token = ",".join(targets) if targets else "_global"
+    if len(token) > 180:
+        token = hashlib.sha1(token.encode("utf-8")).hexdigest()[:16]
+    ct = correlation_type if correlation_type in _VALID_CORRELATION_TYPES else "blind_spot"
+    return f"{_XCORR_SIG_PREFIX}:{ct}:{token}"
+
+
+def _dedupe_live_heads(
+    inputs: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """M18(a) — collapse the slice to ONE head per
+    ``(analyst_id, target_id, situation_signature)`` BEFORE correlation.
+
+    The correlator reads a 24h window; a signature-bearing producer (the
+    world/region/country compositions, or the correlator itself) can have a prior
+    head STILL inside the window during the brief write-to-supersede lag. Diffing a
+    head against its own just-superseded predecessor manufactures a false
+    'contradiction'. This keeps only the NEWEST row per signature key so two
+    sequential snapshots of the SAME producer/signature are never compared as if
+    simultaneous. Rows with NO signature (first-order unit findings) are passed
+    through untouched — they carry no head identity to collapse, and the
+    ``superseded_by IS NULL`` READ_SLICE filter already excludes their retired
+    versions.
+    """
+    def _sig(row: Mapping[str, Any]) -> str | None:
+        sig = row.get("situation_signature")
+        if sig:
+            return str(sig)
+        data = row.get("data")
+        if isinstance(data, Mapping):
+            inner = data.get("data")
+            if isinstance(inner, Mapping) and inner.get("situation_signature"):
+                return str(inner["situation_signature"])
+        return None
+
+    def _ts(row: Mapping[str, Any]) -> Any:
+        return row.get("produced_at") or row.get("created_at") or ""
+
+    best: dict[tuple[str, str, str], Mapping[str, Any]] = {}
+    passthrough: list[Mapping[str, Any]] = []
+    for row in inputs:
+        sig = _sig(row)
+        if not sig:
+            passthrough.append(row)
+            continue
+        key = (
+            str(row.get("analyst_id") or ""),
+            str(row.get("target_id") or ""),
+            sig,
+        )
+        cur = best.get(key)
+        if cur is None or str(_ts(row)) > str(_ts(cur)):
+            best[key] = row
+    return passthrough + list(best.values())
 
 
 def _coerce_uuid(value: Any) -> UUID | None:
@@ -322,6 +428,7 @@ Detector priority (apply in order; pick the highest-priority hit):
   2. BLIND_SPOT — a topic clearly present across multiple inputs (via target_id, tags, or shared entities) has no analyst output addressing it. Cite the inputs that establish the topic and say no analyst covers it.
   3. AGREEMENT — three or more outputs converge on the same claim. Lowest priority; useful as confidence reinforcement.
 Cite the specific analyst output UUIDs you used. For contradictions and agreements you MUST cite at least two distinct analyst_id values. For blind_spots, cite the outputs that establish the unaddressed topic.
+GROUNDING — in the body, CITE every factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as [N] at the START of the analyst-output block it rests on (the same N is the block's position in the list below). NEVER invent an N and NEVER cite an N not shown; a clause with no cited output behind it must NOT assert a fact. A [[ref:N]] is a PROMISE that block N actually says, in substance, what the clause claims — this is what the faithfulness verify grades, so an ungrounded claim is demoted.
 Respond with strict JSON, nothing else:
 {"correlation_type": "contradiction" | "agreement" | "blind_spot", "title": "...", "body": "... (explain the relationship; reference analysts by id)", "referenced_outputs": ["<uuid>", ...], "referenced_analyst_ids": ["<analyst_id_a>", "<analyst_id_b>", ...], "confidence": 0.0-1.0, "tags": ["..."]}"""
 )
@@ -385,6 +492,7 @@ def _coerce_correlation(
     valid_output_ids: set[str],
     valid_analyst_ids: set[str],
     contributing_analysts: Sequence[str] = (),
+    projected: Sequence[Mapping[str, Any]] | None = None,
 ) -> FindingPayload:
     """Parse the LLM's JSON into a :class:`FindingPayload` with correlation metadata.
 
@@ -508,19 +616,85 @@ def _coerce_correlation(
     title = str(parsed.get("title") or fallback_title)[:2048]
     body = str(parsed.get("body") or "")[:65536]
 
+    # M16 — resolve the model's inline ``[[ref:N]]`` ORDINAL markers against the
+    # rendered slice so the MANDATORY faithfulness verify can grade each clause
+    # against the cited analyst-output's actual text. ``N`` maps to
+    # ``projected[N-1]`` (the SAME ``enumerate(projected, start=1)`` order the
+    # render stamped). Only in-range ordinals become citations; an out-of-range
+    # (fabricated) handle is dropped. Each citation carries ``ref_id`` (the cited
+    # output uuid), ``ref_kind='finding'`` (routes verify to the sub-claim floor)
+    # and ``evidence_text`` (the cited body) so the verify runs DB-free — mirroring
+    # meta_findings_synthesizer's composition citation shape.
+    citations: list[dict[str, Any]] = []
+    index_by_ordinal: dict[int, Mapping[str, Any]] = {}
+    target_by_output_id: dict[str, str] = {}
+    if projected:
+        index_by_ordinal = {n: row for n, row in enumerate(projected, start=1)}
+        for row in projected:
+            oid = str(row.get("output_id") or "")
+            tgt = str(row.get("target_id") or "")
+            if oid and tgt:
+                target_by_output_id[oid] = tgt
+        seen_ords: set[int] = set()
+        for match in _REF_MARKER_RE.finditer(body):
+            n = int(match.group(1))
+            if n in seen_ords or not (1 <= n <= len(index_by_ordinal)):
+                continue
+            seen_ords.add(n)
+            src_row = index_by_ordinal[n]
+            uid = _coerce_uuid(src_row.get("output_id"))
+            if uid is None:
+                continue
+            citation: dict[str, Any] = {
+                "marker": f"[[ref:{n}]]",
+                "ordinal": n,
+                "ref_id": str(uid),
+                "ref_kind": "finding",
+                "evidence_text": str(src_row.get("body") or "")[
+                    :_MAX_EVIDENCE_TEXT_CHARS
+                ],
+            }
+            if src_row.get("analyst_id"):
+                citation["source"] = str(src_row["analyst_id"])
+            if src_row.get("target_id"):
+                citation["target_id"] = str(src_row["target_id"])
+            if src_row.get("title"):
+                citation["title"] = str(src_row["title"])
+            citations.append(citation)
+
+    # M17 — derive the stable supersession signature from correlation_type + the
+    # sorted set of referenced TARGET ids (of the cited outputs). A fresh run over
+    # the same targets supersedes the prior head via the write-path fold.
+    ref_targets = {
+        target_by_output_id[o] for o in referenced_outputs if o in target_by_output_id
+    }
+    ref_targets |= {
+        str(c["target_id"]) for c in citations if c.get("target_id")
+    }
+    situation_signature = _situation_signature(correlation_type, sorted(ref_targets))
+
+    data: dict[str, Any] = {
+        **meta_marks,
+        "correlation_type": correlation_type,
+        "referenced_outputs": referenced_outputs,
+        "referenced_analyst_ids": referenced_analyst_ids,
+        "situation_signature": situation_signature,
+        # M17 (adversarial FIX #1) — the EXACT referenced-target set (sorted), so the
+        # blind_spot decay can test scope-containment precisely (a signature's target
+        # tokens can be sha1-collapsed for long sets; this keeps the raw set).
+        "xcorr_targets": sorted(ref_targets),
+        "raw_llm_response": raw[:8000],
+    }
+    if citations:
+        data["citations"] = citations
+
     return FindingPayload(
         title=title,
         body=body,
         confidence=confidence,
         evidence=referenced_outputs[:50],
         tags=tags,
-        data={
-            **meta_marks,
-            "correlation_type": correlation_type,
-            "referenced_outputs": referenced_outputs,
-            "referenced_analyst_ids": referenced_analyst_ids,
-            "raw_llm_response": raw[:8000],
-        },
+        data=data,
     )
 
 
@@ -612,11 +786,21 @@ async def run_method(
                 "correlation_type": "blind_spot",
                 "referenced_outputs": [],
                 "referenced_analyst_ids": [],
+                # M17 — a stable signature so successive empty-slice diagnostics
+                # supersede (fold to one head) rather than accumulate per cycle.
+                "situation_signature": _situation_signature("blind_spot", []),
+                "xcorr_targets": [],
             },
         )
         return AnalystMethodResult(finding=finding, usage={})
 
-    projected, _derived_from, analyst_ids = _orient(inputs)
+    # M18(a) — collapse the slice to ONE head per signature key BEFORE correlation
+    # so two SEQUENTIAL snapshots of the same producer (e.g. the 12h-apart world
+    # composition heads) are never diffed as if simultaneous (the false-contradiction
+    # class). READ_SLICE already filters superseded heads; this catches the residual
+    # write-to-supersede lag window.
+    deduped = _dedupe_live_heads(inputs)
+    projected, _derived_from, analyst_ids = _orient(deduped)
     valid_output_ids = {p["output_id"] for p in projected if p["output_id"]}
     valid_analyst_ids = set(analyst_ids)
 
@@ -649,6 +833,7 @@ async def run_method(
         valid_output_ids=valid_output_ids,
         valid_analyst_ids=valid_analyst_ids,
         contributing_analysts=sorted(analyst_ids),
+        projected=projected,
     )
     # Stamp analyst lineage tag so substrate filters work without joining
     # the data dict.
@@ -746,15 +931,22 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     if time_window_hours is None:
         time_window_hours = _resolve_window_hours(descriptor)
 
+    # M18(a) — read only LIVE heads (``superseded_by IS NULL``). A prior
+    # composition/correlator head STILL inside the 24h window but already
+    # superseded MUST NOT be handed to the correlator, or it diffs a head against
+    # its own retired predecessor and manufactures a false 'contradiction'. The
+    # in-kind ``_dedupe_live_heads`` closes the residual write-to-supersede lag.
     if ids:
         rows = await conn.fetch(
             f"""
             SELECT id, kind, title, body, confidence, severity, data,
                    target_id, target_version, analyst_id, analyst_version,
-                   produced_at, derived_from, schema_uri, run_id
+                   produced_at, derived_from, schema_uri, run_id,
+                   situation_signature
             FROM analyst_outputs
             WHERE analyst_id = ANY($1::TEXT[])
               AND produced_at > NOW() - make_interval(hours => $2)
+              AND superseded_by IS NULL
             ORDER BY produced_at DESC
             LIMIT {int(limit)}
             """,
@@ -766,9 +958,11 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             f"""
             SELECT id, kind, title, body, confidence, severity, data,
                    target_id, target_version, analyst_id, analyst_version,
-                   produced_at, derived_from, schema_uri, run_id
+                   produced_at, derived_from, schema_uri, run_id,
+                   situation_signature
             FROM analyst_outputs
             WHERE produced_at > NOW() - make_interval(hours => $1)
+              AND superseded_by IS NULL
             ORDER BY produced_at DESC
             LIMIT {int(limit)}
             """,

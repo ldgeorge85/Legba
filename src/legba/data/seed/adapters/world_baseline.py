@@ -34,6 +34,7 @@ fetch → map → resolve → write → batch path end-to-end. The YAML is the
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -41,6 +42,8 @@ from typing import Any, Iterable
 import yaml
 
 from .._base import SeedContext, SeedEntity, SeedFact, SeedNexus, SeedPayload
+
+logger = logging.getLogger(__name__)
 
 # Repo-root-relative default (…/legba/seeds/world_baseline.yaml). This file is
 # …/src/legba/data/seed/adapters/world_baseline.py → 6 parents up = repo root.
@@ -99,6 +102,14 @@ class WorldBaselineSeedSource:
         """Load + parse the curated YAML (no network)."""
         override = ctx.options.get("yaml_path") if ctx and ctx.options else None
         path = Path(override) if override else self._yaml_path
+        if not path.exists():
+            logger.warning(
+                "seed.%s: no seed file at %s — skipping; Legba ships no bundled "
+                "seed data, provide your own (see seeds/README.md)",
+                self.name,
+                path,
+            )
+            return {}
         raw_text = path.read_text(encoding="utf-8")
         data = yaml.safe_load(raw_text) or {}
         # Stash a content hash for the manifest (reproducibility / drift check).

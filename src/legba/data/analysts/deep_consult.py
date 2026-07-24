@@ -145,6 +145,22 @@ async def run_method(
     analyst_id = str(options.get("analyst_id") or KIND_NAME)
     analyst_version = str(options.get("analyst_version") or "")
 
+    # F1 model picker: honor an OPTIONAL per-request LLM plane override. The
+    # registry maps the operator's friendly choice ("opus"/"core") to a
+    # sanctioned component id and threads it as ``llm_component_override``;
+    # validated here against the SAME allowlist as the chat path (defense in
+    # depth — the registry is the primary gate). Absent / not-allowlisted ⇒ the
+    # descriptor primary (Opus default), unchanged. The workflow's stage deps
+    # resolve their handler AND their BudgetEnforcer from THIS id, so the whole
+    # deep run (plan → analyze) plus its spend accounting key off the chosen
+    # plane automatically (deep_consult_workflow.resolve_deep_consult_stage_deps).
+    from .consult_on_demand import LLM_OVERRIDE_ALLOWLIST
+
+    llm_component_id = deps.llm_component_id
+    override_component = first.get("llm_component_override")
+    if override_component and str(override_component) in LLM_OVERRIDE_ALLOWLIST:
+        llm_component_id = str(override_component)
+
     wf_input = DeepConsultWorkflowInput(
         question=question,
         scope_predicate=scope_predicate,
@@ -152,7 +168,7 @@ async def run_method(
         analyst_id=analyst_id,
         analyst_version=analyst_version,
         run_id=run_id,
-        llm_component_id=deps.llm_component_id,
+        llm_component_id=llm_component_id,
         budget_tokens_per_day=deps.budget_tokens_per_day,
         max_acquire_rounds=int(
             first.get("max_acquire_rounds") or deps.max_acquire_rounds

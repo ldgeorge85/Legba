@@ -310,7 +310,12 @@ async def test_live_pivot_acceptance(pivot_pool):
     try:
         result = await run_method(
             [], {"sub_handler": SUB, "analyst_id": produced_by, "run_id": uuid4(),
-                 "scope_analyst_id": analyst_id, "owner_tenant": tenant}, deps,
+                 "scope_analyst_id": analyst_id, "owner_tenant": tenant,
+                 # Fixture rows are seeded at a hardcoded t0 (2026-06-02) that
+                 # ages out of the 30-day default lookback as wall-clock time
+                 # advances; a generous override keeps this deterministic
+                 # (TEST_DEBT_RECON.md Bucket F).
+                 "lookback_days": 3650}, deps,
         )
         data = result.finding.data
         assert data["clustered_count"] == 1, data
@@ -360,7 +365,8 @@ async def test_live_pivot_acceptance(pivot_pool):
         # already superseded so it drops out of the eligible set.
         rerun = await run_method(
             [], {"sub_handler": SUB, "analyst_id": produced_by, "run_id": uuid4(),
-                 "scope_analyst_id": analyst_id, "owner_tenant": tenant}, deps,
+                 "scope_analyst_id": analyst_id, "owner_tenant": tenant,
+                 "lookback_days": 3650}, deps,
         )
         assert rerun.finding.data["superseded_count"] == 0
         async with pivot_pool.acquire() as conn:
@@ -403,9 +409,12 @@ async def test_live_third_cycle_supersedes_chain(pivot_pool):
                                   produced_at=t0 + timedelta(hours=2),
                                   analyst_id=analyst_id)
         # first run: f1 superseded by f2.
+        # lookback_days overridden generously (Bucket F): the hardcoded t0
+        # fixture ages out of the 30-day default as wall-clock time advances.
         await run_method(
             [], {"sub_handler": SUB, "analyst_id": produced_by, "run_id": uuid4(),
-                 "scope_analyst_id": analyst_id, "owner_tenant": tenant}, deps)
+                 "scope_analyst_id": analyst_id, "owner_tenant": tenant,
+                 "lookback_days": 3650}, deps)
         # cycle 3 arrives.
         async with pivot_pool.acquire() as conn:
             await _insert_finding(conn, fid=f3, title="Sudan v3",
@@ -415,7 +424,8 @@ async def test_live_third_cycle_supersedes_chain(pivot_pool):
         # second run: f3 is the new latest, f2 gets superseded by it.
         r2 = await run_method(
             [], {"sub_handler": SUB, "analyst_id": produced_by, "run_id": uuid4(),
-                 "scope_analyst_id": analyst_id, "owner_tenant": tenant}, deps)
+                 "scope_analyst_id": analyst_id, "owner_tenant": tenant,
+                 "lookback_days": 3650}, deps)
         assert r2.finding.data["superseded_count"] == 1
 
         async with pivot_pool.acquire() as conn:
@@ -481,7 +491,11 @@ async def test_live_fetch_window_newest_first_not_starved_by_old_noise(pivot_poo
         deps = StandardDeps(pg_pool=pivot_pool)
         result = await run_method(
             [], {"sub_handler": SUB, "analyst_id": produced_by, "run_id": uuid4(),
-                 "scope_analyst_id": analyst_id, "owner_tenant": tenant}, deps,
+                 "scope_analyst_id": analyst_id, "owner_tenant": tenant,
+                 # Generous lookback override only (Bucket F) — deliberately NOT
+                 # touching the _MAX_FINDINGS=3 cap monkeypatch above, which is
+                 # the actual point of this test (newest-first beats a small cap).
+                 "lookback_days": 3650}, deps,
         )
         # Newest-first: the substantive pair is in the 3-row window → clustered.
         assert result.finding.data["superseded_count"] == 1, result.finding.data

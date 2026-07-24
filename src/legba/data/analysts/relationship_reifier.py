@@ -71,7 +71,11 @@ from .deterministic_handlers.structural_balance import POLARITY, polarity_from
 # supplies weapons to Iranian" can never be reified, and DROP true junk
 # endpoints. Prefer the new shared module path (the old deterministic_handlers
 # path is now a re-export shim).
-from .._entity_canon import canonicalize_entity, is_junk_entity
+from .._entity_canon import canonicalize_entity, is_junk_entity, same_referent
+# E1 — keeper election at write. Shared ``data``-layer helper (takes a conn; the
+# canon must not) so a fragment/alias endpoint rewrites to its elected
+# entity_profiles keeper BEFORE write_nexus. Degrade-not-break: never raises.
+from .._entity_resolve import resolve_keeper
 
 logger = logging.getLogger(__name__)
 
@@ -532,8 +536,10 @@ def _coerce_typing(
     # canonicalize_entity returns "" for a fully-stripped-away / junk-collapsed
     # name — drop. A demonym collapse can also make subject == object (the
     # "Israel leader of Israeli" / "Iran supplies weapons to Iranian" class):
-    # that is a self-loop, not a relationship — DROP it.
-    if not subject or not object_ or subject.lower() == object_.lower():
+    # that is a self-loop, not a relationship — DROP it. DQ M8: same_referent
+    # also catches a plain singular/plural self-loop ("Houthi"/"Houthis") the
+    # canon does not map to a single lemma.
+    if not subject or not object_ or same_referent(subject, object_):
         return None
     intermediary = obj.get("intermediary")
     intermediary = (
@@ -861,6 +867,10 @@ async def run_method(
     degraded = 0
     skipped_endpoints = 0  # D3: candidate pairs dropped as junk / demonym self-loop
     budget_paused = False
+    # E1 — one keeper-election memo for the whole run (endpoints repeat across
+    # pairs; the fallback probe is an un-indexed scan). Fresh each run so it never
+    # goes stale against a concurrent entity_profiles change.
+    keeper_cache: dict[str, str] = {}
 
     for cand in candidates:
         # Honor the budget envelope before each LLM call (degrade-not-drop:
@@ -889,7 +899,9 @@ async def run_method(
             continue
         c_source, _ = canonicalize_entity(raw_source, "entity")
         c_target, _ = canonicalize_entity(raw_target, "entity")
-        if not c_source or not c_target or c_source.lower() == c_target.lower():
+        # DQ M8 — same_referent (not a bare lower() equality) also drops a plain
+        # singular/plural self-loop ("Houthi"/"Houthis") the canon does not map.
+        if not c_source or not c_target or same_referent(c_source, c_target):
             skipped_endpoints += 1
             continue
         source = c_source
@@ -997,6 +1009,51 @@ async def run_method(
         )
         try:
             async with pool.acquire() as conn:
+                # E1 — CANONICALIZE-AT-WRITE: resolve each endpoint (already
+                # surface-canonicalized + LLM-renamed by _coerce_typing) to its
+                # elected entity_profiles KEEPER's canonical_name, so a fragment
+                # ('SNSC', 'Resistance') or an alias converges onto the one graph
+                # actor instead of minting a distinct node. resolve_keeper NEVER
+                # raises + returns the input unchanged on any miss/error, so one
+                # bad probe can't sink the row — and this whole block is already
+                # wrapped in the per-pair try/except below (degrade-not-drop).
+                new_subject = (
+                    await resolve_keeper(
+                        conn, payload.subject, entity_class="entity",
+                        cache=keeper_cache,
+                    )
+                ).strip()
+                new_object = (
+                    await resolve_keeper(
+                        conn, payload.object, entity_class="entity",
+                        cache=keeper_cache,
+                    )
+                ).strip()
+                # N4 — re-run the self-loop gate AFTER the keeper rewrite (the
+                # ordering is canonicalize → resolve_keeper → self-loop → write).
+                # Two surfaces that fold onto the SAME keeper ('Axis of
+                # Resistance' + 'Resistance' → one keeper) are now identical
+                # strings, so same_referent catches the self-loop that differing
+                # raw surfaces hid. A degenerate rewrite (empty) is ignored —
+                # keep the pre-rewrite endpoint rather than drop the edge.
+                if new_subject and new_object:
+                    if same_referent(new_subject, new_object):
+                        logger.info(
+                            "relationship_reifier.keeper_self_loop dropped "
+                            "pair=%s/%s -> %s/%s",
+                            payload.subject, payload.object,
+                            new_subject, new_object,
+                        )
+                        continue
+                    if (new_subject, new_object) != (payload.subject, payload.object):
+                        payload.subject = new_subject
+                        payload.object = new_object
+                        # Keep the human label consistent with the rewritten
+                        # endpoints (label was built from the pre-keeper surfaces
+                        # in _coerce_typing).
+                        payload.label = (
+                            f"{new_subject} {payload.rel_type} {new_object}"[:4096]
+                        )
                 before = await conn.fetchval(
                     "SELECT count(*) FROM nexuses "
                     "WHERE lower(subject)=lower($1) AND lower(object)=lower($2) "

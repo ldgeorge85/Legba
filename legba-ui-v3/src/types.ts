@@ -75,6 +75,11 @@ export type PanelKind =
   // Product surfaces (UI-6 / Tier G — pivot)
   | 'system.search'
   | 'system.alert_center'
+  // Escalation-delivery audit edge (audit finding C3 / decision D1): renders
+  // alert_sink_deliveries so a human SEES whether an escalation landed or
+  // went nowhere. Distinct from system.alert_center (the localStorage
+  // subscription watchlist over the findings feed).
+  | 'system.escalations'
   | 'system.report_export'
   //   (system.tenant_view DELETED — multitenancy is ingestion-only, not baked)
   // The Inspector — the unified detail surface (redesign Move 1, the keystone)

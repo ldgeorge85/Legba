@@ -29,8 +29,12 @@ const BODY_PRIMARY = ['title', 'summary', 'severity', 'confidence', 'status', 'p
 
 /** Payload keys that hold the actual written report, in preference order. The
  *  rendered keys are dropped from the metadata DescriptorView below so the
- *  report isn't shown twice (once rendered, once as a raw collapsed string). */
-const REPORT_KEYS = ['summary', 'body', 'assessment', 'narrative', 'text'] as const
+ *  report isn't shown twice (once rendered, once as a raw collapsed string).
+ *  `distilled_body` is FIRST: for a signal it's OUR analysis-tuned summary
+ *  (markdown BLUF + quoted claims) written by signal_summarizer — feature it as
+ *  the report instead of the publisher's `summary` teaser. Non-signal kinds have
+ *  no distilled_body, so they fall through to `summary`/`body` exactly as before. */
+const REPORT_KEYS = ['distilled_body', 'summary', 'body', 'assessment', 'narrative', 'text'] as const
 
 /** Extract the report markdown + which key it came from, from the merged body. */
 function pickReport(body: Record<string, unknown>): { key: string; text: string } | null {

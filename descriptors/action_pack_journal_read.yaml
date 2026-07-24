@@ -69,6 +69,11 @@ tools:
     config: {}
   - name: get_journal_delta
     config: {}
+  # VOICES LV-1: the chorus DIFF pass reads this cycle's four faculty lens reads
+  # (entry_kind='lens') through this tool. Granted to the whole pack (one grant);
+  # inert for the tiers that never call it.
+  - name: get_lens_reads
+    config: {}
 
 prompt_fragments:
   - >-
@@ -93,8 +98,9 @@ prompt_fragments:
   - >-
     Cite the UUIDs the tools return — never fabricate a ref. The instrument reads
     that carry no row id (graph metrics, calibration aggregates, budget rollups,
-    run health) are observations about yourself: narrate them honestly, but do not
-    invent a [[ref:...]] for them.
+    run health) are observations about yourself: mark those spans [[instrument]]
+    — never invent a [[ref:...]] for them, and never attach a news signal's uuid
+    to a claim about your own metrics.
 
 rules:
   - "Never fabricate substrate refs — cite only UUIDs the tools returned."

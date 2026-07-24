@@ -50,7 +50,16 @@ from ....runtime.analyst_method import AnalystMethodResult
 # deterministic_handlers/_entity_canon is now a re-export shim). canonicalize_entity
 # normalizes a promoted endpoint; is_junk_entity drops true junk; is_demonym is
 # retained for the existing centrality-inflation gate.
-from ..._entity_canon import canonicalize_entity, is_demonym, is_junk_entity
+from ..._entity_canon import (
+    canonicalize_entity,
+    is_demonym,
+    is_junk_entity,
+    same_referent,
+)
+# E1 — keeper election at write. Lives at the shared ``data`` layer (takes a
+# conn; the canon must not) so a fragment/alias endpoint rewrites to its elected
+# entity_profiles keeper BEFORE the nexus write. Degrade-not-break: never raises.
+from ..._entity_resolve import resolve_keeper
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +134,10 @@ async def _promote_candidates(
         target_id=target_id,
         target_version=target_version,
     )
+    # E1 — one keeper-election memo for the whole promotion sweep (endpoints
+    # repeat across proposed edges; the fallback probe is an un-indexed scan and
+    # this loop can issue up to 2×max_promotions calls). Fresh each run.
+    keeper_cache: dict[str, str] = {}
     for r in rows:
         raw_subj = str(r["source_entity"] or "").strip()
         raw_obj = str(r["target_entity"] or "").strip()
@@ -136,14 +149,34 @@ async def _promote_candidates(
         subj, _ = canonicalize_entity(raw_subj, "entity")
         obj, _ = canonicalize_entity(raw_obj, "entity")
         subj, obj = subj.strip(), obj.strip()
+        # E1 — CANONICALIZE-AT-WRITE: after the surface canon, resolve each
+        # endpoint to its elected entity_profiles KEEPER's canonical_name (the
+        # same any-class + merged_aliases keeper election ingestion uses), so a
+        # fragment ('SNSC', 'Resistance') or an alias converges onto the one
+        # graph actor instead of minting a distinct node. resolve_keeper NEVER
+        # raises and returns the input unchanged on any miss/error — the
+        # per-row try/except in this loop plus that contract keep one bad probe
+        # from sinking the sweep. This runs BEFORE the same_referent self-loop
+        # gate below so two surfaces that fold onto ONE keeper collapse to a
+        # self-loop and are correctly dropped (fix N4).
+        subj = (
+            await resolve_keeper(conn, subj, entity_class="entity", cache=keeper_cache)
+        ).strip()
+        obj = (
+            await resolve_keeper(conn, obj, entity_class="entity", cache=keeper_cache)
+        ).strip()
         # D3: drop a true-junk endpoint (clock-time / quantifier / numeric /
-        # residual-HTML token) so it never graduates into a first-class nexus.
-        # Demonyms are NOT junk here — canonicalize_entity already collapsed them
-        # to their country above, so is_junk_entity returns False and the
-        # canonical country flows through. is_demonym is still tested below to
-        # catch any non-curated/edge case that survived canonicalization.
+        # residual-HTML token, + the DQ M7 vague / quantifier-plural endpoints
+        # "West"/"Islamic"/"Leader"/"annual"/"Hundreds") so it never graduates
+        # into a first-class nexus. Demonyms are NOT junk here — canonicalize_entity
+        # already collapsed them to their country above, so is_junk_entity returns
+        # False and the canonical country flows through. is_demonym is still tested
+        # below to catch any non-curated/edge case that survived canonicalization.
+        # DQ M8: same_referent (not a bare lower() equality) drops a self-loop
+        # whose endpoints canonicalize to the SAME referent, incl. a plain
+        # singular/plural pair ("Houthi"/"Houthis") the canon does not map.
         if (
-            not subj or not obj or subj.lower() == obj.lower()
+            not subj or not obj or same_referent(subj, obj)
             or is_junk_entity(subj) or is_junk_entity(obj)
             or is_demonym(subj) or is_demonym(obj)
         ):

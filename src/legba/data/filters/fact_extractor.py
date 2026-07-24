@@ -48,11 +48,14 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from .._entity_canon import (
+    _REGION_ADJECTIVE_MAP,
     canonicalize_entity,
     is_demonym,
     is_junk_entity,
+    is_known_org_surface,
     is_org_surface,
     is_place_surface,
+    is_region_surface,
 )
 from ..provenance.writes import (
     resolve_fact_source_credibility,
@@ -611,6 +614,19 @@ def _is_roster_triple(subject: str, predicate: str, value: str) -> bool:
     _, val_canon_cls = canonicalize_entity(value, "entity")
     if val_canon_cls == "country":
         return True  # "Kylian Mbappe member of Iraq" — squad-as-country
+    # F1 (2026-07-06 adversarial review) — an ORGANIZATION value is a legit
+    # membership target (an IGO / alliance / bloc: "France member of European
+    # Union", "Nigeria member of African Union", "South Korea member of United
+    # Nations", "Brazil member of World Trade Organization"), NEVER a roster
+    # artifact. Exempt it BEFORE the value-person drop, because the NER
+    # title-token heuristic mis-types a multi-word org name as person and would
+    # otherwise DELETE the real membership fact. Uses the SAME gazetteer guard
+    # as the M1 person-object gate (canon organization typing, which is
+    # authoritative over the noisy NER class).
+    if (val_canon_cls == "organization"
+            or is_org_surface(value)
+            or is_known_org_surface(value)):
+        return False
     val_cls = _classify_entity_text(value, predicate=pred, slot="object")
     if val_cls == "person":
         return True  # "Harry Kane member of Jude Bellingham" — person/person
@@ -651,6 +667,123 @@ def _is_employment_country_subject(subject: str, predicate: str) -> bool:
         return False
     _, subj_cls = canonicalize_entity(subject, "entity")
     return subj_cls == "country"
+
+
+# ---------------------------------------------------------------------------
+# DQ M1/M2/M3 (2026-07-06 fact-write audit) — predicate-argument TYPE +
+# relation-DIRECTION + demonym/temporal SUBJECT gates the earlier D6 pass did
+# not scope for. The live audit found the extractor still laundering:
+#   * M1 — semantically absurd / direction-inverted membership ("NATO member of
+#     Turkiye" inverted; "Russia member of 188,000 barrels" quantity object;
+#     "Russia member of <person>" person object);
+#   * M2 — demonym / relative-temporal SUBJECTS ("Chinese founded by Jin
+#     Mingri", "250 years ago founded by …", "December last year operates in …");
+#   * M3 — nationality-adjective VALUES that become false geographic facts
+#     ("Kyiv capital of Russian", "US conflict with Iranian").
+# Temporal SUBJECTS/VALUES are caught by the existing is_junk_entity loop
+# (the shared canon's _is_temporal_surface is now relative-phrase aware); these
+# helpers add the type/direction/demonym slice. All reuse the shared canon —
+# no forked gazetteers/regexes.
+# ---------------------------------------------------------------------------
+
+#: 'member of' / 'part of' assert containment in an ORG / PLACE. The OBJECT must
+#: be an org/place; a quantity/number object is already dropped by
+#: is_junk_entity, so this gate owns only the PERSON-object case.
+_MEMBER_PART_PREDICATES: frozenset[str] = frozenset({"member of", "part of"})
+
+#: F2 (2026-07-06 adversarial review) — M3 demonym-VALUE normalization
+#: ("Russian" -> "Russia") is SCOPED to this tight ALLOWLIST of GEO / inter-state
+#: RELATIONAL predicates where a country/continent object is the natural type.
+#: A demonym VALUE under a LANGUAGE / ETHNICITY / NATIONALITY predicate ("Putin
+#: speaks Russian", "ethnic group: Russian", "written in Russian", "native
+#: language: Chinese") is the LANGUAGE/PEOPLE, not the country, and must be left
+#: intact — so an ALLOWLIST (not a denylist) is used: an unlisted predicate
+#: leaves the value byte-identical, so a NEW language predicate can never
+#: silently corrupt a value. Person-agentive relations ("founded by",
+#: "employed by", "spokesperson for") are deliberately EXCLUDED too — their
+#: object is a person/org, not the country.
+_DEMONYM_VALUE_GEO_PREDICATES: frozenset[str] = frozenset({
+    # geographic containment / location
+    "capital of", "located in", "part of", "member of",
+    "headquartered in", "based in", "operates in",
+    # inter-state relations (object is naturally a country / continent)
+    "conflict with", "at war with", "war with", "allied with", "ally of",
+    "opponent of", "borders", "border with", "neighbor of", "neighbour of",
+    "controls", "occupies", "annexed", "administers", "claims",
+    "signed agreement with", "sanctioned by", "supplies to", "trades with",
+    "exports to", "imports from", "diplomatic relations with",
+    "recognizes", "recognises",
+})
+
+
+def _normalize_demonym_value(predicate: str, value: str) -> str:
+    """M3: collapse a nationality-adjective / region-adjective VALUE to its
+    canonical country / continent referent via the shared canon ("Russian" ->
+    "Russia", "Iranian" -> "Iran", "African" -> "Africa"), so a bare adjective
+    never lands as a fact value ("US conflict with Iranian" -> "… with Iran").
+
+    SCOPED (F2) to :data:`_DEMONYM_VALUE_GEO_PREDICATES` — only a GEO / inter-
+    state relational predicate normalizes; a LANGUAGE / ETHNICITY predicate
+    ("Putin speaks Russian", "ethnic group Russian") leaves the value intact.
+    Only a curated national demonym or region adjective is touched — every other
+    value is returned UNCHANGED (this is NOT a broad canonicalization of the
+    write path, which deliberately preserves raw surfaces for the resolver)."""
+    pred = normalize_predicate((predicate or "").strip().lower())
+    if pred not in _DEMONYM_VALUE_GEO_PREDICATES:
+        return value
+    s = " ".join(str(value or "").split()).strip()
+    if not s:
+        return value
+    low = s.lower()
+    if is_demonym(s) or low in _REGION_ADJECTIVE_MAP:
+        canon, _ = canonicalize_entity(s, "entity")
+        if canon and canon.lower() != low:
+            return canon
+    return value
+
+
+def _is_member_part_person_object(subject: str, predicate: str, value: str) -> bool:
+    """M1: 'member of' / 'part of' require an org/place OBJECT — a PERSON object
+    ("Russia member of <person>") is a mis-extraction. The quantity/number
+    object is already dropped by is_junk_entity; this covers the PERSON object a
+    NON-person subject slips past :func:`_is_roster_triple` (which needs a
+    person SUBJECT).
+
+    GAZETTEER-GUARDED (conservative, no over-reject): a value the canon /
+    gazetteers recognise as an org / country / place / region is a VALID
+    containment target and is kept EVEN WHEN the noisy NER heuristic mis-types a
+    multi-word org ("African Union", "European Commission") or an institution
+    word as person. Only a value that is a person by the NER heuristic AND is not
+    a recognised org/place is dropped (a clear person NAME like "Emmanuel
+    Macron")."""
+    pred = normalize_predicate((predicate or "").strip().lower())
+    if pred not in _MEMBER_PART_PREDICATES:
+        return False
+    _, canon_cls = canonicalize_entity(value, "entity")
+    if canon_cls in ("organization", "country", "location"):
+        return False
+    if is_org_surface(value) or is_place_surface(value) or is_region_surface(value):
+        return False
+    return _classify_entity_text(value, predicate=pred, slot="object") == "person"
+
+
+def _is_inverted_membership(subject: str, predicate: str, value: str) -> bool:
+    """M1: an ORGANIZATION is not a 'member of' a COUNTRY — the direction is
+    inverted (the country is the member of the org): "NATO member of Turkiye",
+    "UN member of Iran".
+
+    Gazetteer-backed country typing + canon org typing, so a legit "Nigeria
+    member of African Union" (country subject) and "EU member of WTO" (org
+    value, not a country) both pass untouched. Restricted to 'member of' — a
+    subdivision legitimately being 'part of' a country is left alone."""
+    pred = normalize_predicate((predicate or "").strip().lower())
+    if pred != "member of":
+        return False
+    _, subj_cls = canonicalize_entity(subject, "entity")
+    if subj_cls != "organization":
+        return False
+    _, val_cls = canonicalize_entity(value, "entity")
+    return val_cls == "country"
 
 
 def _text_is_sports_dominated(text: str) -> bool:
@@ -1270,10 +1403,33 @@ class FactExtractorHandler:
         # country-subject inversion check above misses it.
         if _is_nongeo_containment_inversion(subject, predicate, value):
             return "nongeo_containment_inversion"
+        # DQ M2 (2026-07-06 fact audit) — a bare national demonym SUBJECT
+        # ("Chinese founded by Jin Mingri", "Ukrainian conflict with Russia") is
+        # a nationality adjective, not a named entity. (A demonym VALUE is
+        # normalized to its country upstream in the write loop; a demonym
+        # SUBJECT is a mis-extraction and dropped.) Checked before the roster
+        # gate so it carries its own reason (a demonym subject can NER-classify
+        # person and otherwise get tagged sports_roster_triple).
+        if is_demonym(subject):
+            return "demonym_subject"
+        # DQ M1 — inverted membership: an org is not a 'member of' a country
+        # ("NATO member of Turkiye", "UN member of Iran"). Gazetteer-backed, so
+        # it deterministically owns the reason (org acronyms NER-classify person
+        # and would otherwise be tagged sports_roster_triple).
+        if _is_inverted_membership(subject, predicate, value):
+            return "inverted_membership"
         # Sports-roster shape ("Mbappe member of Iraq" / person member of
         # person) even when the text topic gate let a mixed signal through.
+        # (Kept AHEAD of the person-object gate below so a person-SUBJECT roster
+        # triple keeps its established sports_roster_triple reason.)
         if _is_roster_triple(subject, predicate, value):
             return "sports_roster_triple"
+        # DQ M1 — 'member of'/'part of' with a clear PERSON object that the
+        # roster gate missed (its subject was not NER-classified person):
+        # "Russia member of <person>". Gazetteer-guarded (a recognised org/place
+        # object is never treated as a person).
+        if _is_member_part_person_object(subject, predicate, value):
+            return "member_part_person_object"
         # DQ Phase 5 — trailing spaced-possessive tokenizer artifact on either
         # endpoint ("FRANCE 24 's", "Donald Trump 's"): a malformed surface, not
         # an entity. Always-on (mechanical, zero false positives).
@@ -1341,6 +1497,14 @@ class FactExtractorHandler:
             value = _scrub_entity_surface(str(triple.get("object", triple.get("value", ""))))
             if not subject or not predicate or not value:
                 continue
+            # DQ M3 — normalize a nationality-adjective VALUE to its country /
+            # continent lemma before the gates + dedup + write ("Russian" ->
+            # "Russia"), so a bare adjective never lands as a fact value and the
+            # geographic-junk class ("Kyiv capital of Russian") is at least
+            # well-typed. SCOPED (F2) to geo / relational predicates — a
+            # language/ethnicity predicate ("speaks Russian") is left intact.
+            # Only a curated demonym / region adjective is touched.
+            value = _normalize_demonym_value(predicate, value)
             # Reuse the NER numbers/dates/units rejection on BOTH endpoints.
             if _is_nonentity_candidate(subject) or _is_nonentity_candidate(value):
                 continue

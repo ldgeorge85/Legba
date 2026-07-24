@@ -360,6 +360,8 @@ def test_journal_wave1_instrument_tools_all_present():
         "get_assessments", "get_graph_structure", "get_structural_balance",
         "get_critic_scores", "get_calibration", "get_run_health",
         "get_source_health", "get_budget_status", "get_journal_delta",
+        # VOICES LV-1: the chorus DIFF pass's this-cycle faculty-reads reader
+        "get_lens_reads",
     }
     assert set(JOURNAL_READ_TOOLS) == expected, (
         "JOURNAL_READ_TOOLS drifted from the Wave 1 §5 read surface "
@@ -543,3 +545,51 @@ def test_journal_grant_invariant_only_nonwrite_packs():
             f"{fname} grants the live write-fact pack {WRITE_PACK_ID!r} — forbidden "
             "(§7.6: the journal proposes, it never writes facts)"
         )
+
+
+# ---------------------------------------------------------------------------
+# B0-2 (read-truth): the priming slice is CITABLE — each rendered row carries
+# its signal id as [[ref:<uuid>]] so the prompt's "cite every factual
+# assertion" demand is satisfiable against the slice itself (titles-only rows
+# forced the model to either skip citing the slice or fabricate refs).
+# ---------------------------------------------------------------------------
+
+
+def test_priming_slice_rows_carry_ref_markers():
+    from uuid import uuid4
+
+    from legba.data.analysts.journal_assessor import _render_user_prompt
+
+    sids = [uuid4() for _ in range(3)]
+    inputs = [
+        {"id": sids[0], "title": "Strait transit halted"},
+        # title resolved via the payload fallback still gets its ref
+        {"id": sids[1], "payload": {"title": "Grid failure in the south"}},
+        # a LONG title is truncated to 200 chars but keeps the trailing ref
+        {"id": sids[2], "title": "X" * 500},
+        # no id -> renders title-only (never a fabricated/empty ref)
+        {"title": "Unattributed row"},
+        # no title -> skipped entirely
+        {"id": uuid4()},
+    ]
+    prompt = _render_user_prompt(inputs)
+    lines = [ln for ln in prompt.splitlines() if ln.startswith("- ")]
+    assert f"- Strait transit halted [[ref:{sids[0]}]]" in lines
+    assert f"- Grid failure in the south [[ref:{sids[1]}]]" in lines
+    assert f"- {'X' * 200} [[ref:{sids[2]}]]" in lines
+    assert "- Unattributed row" in lines
+    assert len(lines) == 4  # the titleless row was skipped
+    # The instruction now admits the slice refs as citable inputs.
+    assert "slice rows" in prompt
+
+
+def test_priming_slice_keeps_sixty_row_cap():
+    from uuid import uuid4
+
+    from legba.data.analysts.journal_assessor import _render_user_prompt
+
+    inputs = [{"id": uuid4(), "title": f"signal {i}"} for i in range(80)]
+    prompt = _render_user_prompt(inputs)
+    lines = [ln for ln in prompt.splitlines() if ln.startswith("- ")]
+    assert len(lines) == 60  # [:60] row cap preserved
+    assert all("[[ref:" in ln for ln in lines)

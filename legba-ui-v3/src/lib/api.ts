@@ -264,6 +264,44 @@ export async function triggerBackfill(
 }
 
 // ---------------------------------------------------------------------------
+// Consult model picker (F1) — which registered LLM plane answers a consult /
+// deep_consult request. "opus" = the billed Anthropic Opus plane (the default,
+// preserving today's behavior); "core" = the free self-hosted core plane.
+// The registry maps this friendly value → a sanctioned component id server-side.
+// Mirrors `CONSULT_MODEL_ALLOWLIST` in `consult_api.py`.
+// ---------------------------------------------------------------------------
+
+export type ConsultModel = 'opus' | 'core'
+
+/** Dropdown options — value + operator-facing label (order = display order). */
+export const CONSULT_MODEL_OPTIONS: { value: ConsultModel; label: string }[] = [
+  { value: 'opus', label: 'Opus (Anthropic · billed)' },
+  { value: 'core', label: 'Core (free)' },
+]
+
+const CONSULT_MODEL_STORAGE_KEY = 'legba_consult_model'
+
+/** Last-chosen plane, persisted across panel opens; defaults to the Opus plane. */
+export function loadConsultModel(): ConsultModel {
+  try {
+    return localStorage.getItem(CONSULT_MODEL_STORAGE_KEY) === 'core'
+      ? 'core'
+      : 'opus'
+  } catch {
+    return 'opus'
+  }
+}
+
+export function saveConsultModel(model: ConsultModel): void {
+  try {
+    localStorage.setItem(CONSULT_MODEL_STORAGE_KEY, model)
+  } catch {
+    // Ignore storage failures (private mode, quota) — the choice still applies
+    // for this session, it just won't persist.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Deep consult (anchor §5 PIECE 4) — the DETACHED staged workflow. Submit
 // returns a task id; poll status until completed → a lineage-walkable finding.
 // Mirrors `src/legba/data/registry/deep_consult_api.py`.
@@ -292,6 +330,8 @@ export async function submitDeepConsult(body: {
   scope_predicate?: string | null
   emit_facts?: boolean
   emit_hypotheses?: boolean
+  // F1 model picker — the LLM plane the deep workflow runs on (default: opus).
+  model?: ConsultModel
 }): Promise<DeepConsultSubmit> {
   return apiPost<DeepConsultSubmit>('/deep_consult', body)
 }
@@ -362,9 +402,10 @@ export async function loadConsultSession(
 }
 
 // ---------------------------------------------------------------------------
-// Journal (JOURNAL_ASSESSOR_PLAN §9 / Wave 3) — the reflective voice's read
-// surface. The open consolidation + recent entries, each cited ref already
-// resolved server-side to its (kind, title) so a per-claim provenance chip can
+// Journal / Voices (JOURNAL_ASSESSOR_PLAN §9 / Wave 3; Voices panel step 1,
+// planning/VOICES_PANEL_SPEC.md §3) — the reflective voice's read surface. The
+// open consolidation + recent entries, each cited ref already resolved
+// server-side to its (kind, title) so a per-claim provenance chip can
 // deep-link via `selectRow(kind, id, label)` without a second round-trip.
 // Mirrors `src/legba/data/registry/journal_api.py`.
 // ---------------------------------------------------------------------------
@@ -389,10 +430,22 @@ export interface JournalClaim {
   refs: JournalRef[]
 }
 
-/** One `journal_entries` row hydrated for the panel. */
+/** The `entry_kind` vocabulary the `kind` filter accepts (VOICES_PANEL_SPEC
+ *  §3.1). `lens`/`lens_diff` are accepted by the API today (harmless — no such
+ *  rows exist pre-LV-1) even though nothing in step 1 generates those chips. */
+export type JournalEntryKind =
+  | 'entry'
+  | 'consolidation'
+  | 'chronicle'
+  | 'lens'
+  | 'lens_diff'
+  | string
+
+/** One `journal_entries` row at `fields=full` weight (today's shape, plus
+ *  §3.4's verify fields). Mirrors `JournalEntryOut`. */
 export interface JournalEntry {
   id: string
-  entry_kind: 'entry' | 'consolidation' | string
+  entry_kind: JournalEntryKind
   title: string
   body: string
   claims: JournalClaim[]
@@ -403,6 +456,32 @@ export interface JournalEntry {
   produced_at: string
   analyst_id: string | null
   analyst_version: string | null
+  /** §3.4 — the 'Faithfulness verify' critique's gate score. `null` when no
+   *  such critique exists yet (never fabricated — the honest-absence pill
+   *  renders `—`). */
+  verify_score: number | null
+  /** §3.4 — the critique body text (full-only), naming each unsupported /
+   *  contested span as a `  - [judge_contradicted] ...` /
+   *  `  - [judge_unsupported] ...` / `  - [no_citation] ...` line. `null`
+   *  when no critique exists. */
+  verify_body: string | null
+}
+
+/** One `journal_entries` row at `fields=summary` weight (§3.3) — the
+ *  grouped-list read. Mirrors `JournalEntrySummaryOut`: a DISTINCT shape (no
+ *  `body`/`claims`/`cited_substrate_refs`/`verify_body`), not a partial
+ *  `JournalEntry`, so a summary row can never be mistaken for a hydrated one. */
+export interface JournalEntrySummary {
+  id: string
+  entry_kind: JournalEntryKind
+  title: string
+  honesty_flags: string[]
+  period_start: string
+  period_end: string
+  produced_at: string
+  analyst_id: string | null
+  analyst_version: string | null
+  verify_score: number | null
 }
 
 /** The substrate-derived calibration posture for the §10 honesty banner —
@@ -418,7 +497,7 @@ export interface JournalCalibration {
   produced_at: string | null
 }
 
-/** `GET /journal` body. Mirrors `JournalOut`. */
+/** `GET /journal?fields=full` body (default). Mirrors `JournalOut`. */
 export interface JournalResponse {
   consolidation: JournalEntry | null
   entries: JournalEntry[]
@@ -426,14 +505,58 @@ export interface JournalResponse {
   calibration: JournalCalibration
 }
 
-export async function fetchJournal(
-  opts: { limit?: number; cursor?: string } = {},
-): Promise<JournalResponse> {
+/** `GET /journal?fields=summary` body — the SAME envelope, summary-weight
+ *  rows. Mirrors `JournalSummaryOut`. */
+export interface JournalSummaryResponse {
+  consolidation: JournalEntrySummary | null
+  entries: JournalEntrySummary[]
+  next_cursor: string | null
+  calibration: JournalCalibration
+}
+
+/** Build the shared query string for both fetch functions below — `kind` is
+ *  repeatable (`?kind=entry&kind=chronicle`, matching FastAPI's `Query(list)`
+ *  binding), everything else is a single value. */
+function journalQueryString(opts: {
+  limit?: number
+  cursor?: string
+  kind?: JournalEntryKind[]
+  fields?: 'summary' | 'full'
+}): string {
   const params = new URLSearchParams()
   if (opts.limit != null) params.set('limit', String(opts.limit))
   if (opts.cursor) params.set('cursor', opts.cursor)
+  if (opts.fields) params.set('fields', opts.fields)
+  for (const k of opts.kind ?? []) params.append('kind', k)
   const qs = params.toString()
-  return apiGet<JournalResponse>(`/journal${qs ? `?${qs}` : ''}`)
+  return qs ? `?${qs}` : ''
+}
+
+export async function fetchJournal(
+  opts: {
+    limit?: number
+    cursor?: string
+    kind?: JournalEntryKind[]
+    fields?: 'full'
+  } = {},
+): Promise<JournalResponse> {
+  return apiGet<JournalResponse>(`/journal${journalQueryString(opts)}`)
+}
+
+/** `fields=summary` variant — the grouped-list read (§2b/§3.3): list-cheap
+ *  rows, no body/claims, `_resolve_refs` never runs server-side. */
+export async function fetchJournalSummary(
+  opts: { limit?: number; cursor?: string; kind?: JournalEntryKind[] } = {},
+): Promise<JournalSummaryResponse> {
+  return apiGet<JournalSummaryResponse>(
+    `/journal${journalQueryString({ ...opts, fields: 'summary' })}`,
+  )
+}
+
+/** `GET /journal/{id}` — a single row at full weight, for the reader pane's
+ *  on-select fetch (§3.3). */
+export async function fetchJournalEntry(id: string): Promise<JournalEntry> {
+  return apiGet<JournalEntry>(`/journal/${encodeURIComponent(id)}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -481,4 +604,82 @@ export async function getSystemAnalystCadence(): Promise<AnalystCadenceRow[]> {
 /** Per-source firing matrix (signals + poll-outcome backed). */
 export async function getSystemSourceFiring(): Promise<SourceFiringRow[]> {
   return apiGet<SourceFiringRow[]>('/v3/system/source-firing')
+}
+
+/** One escalation-delivery audit row. Mirrors a `public.alert_sink_deliveries`
+ *  row (migration 0061) served by `GET /api/v1/v3/system/escalations`.
+ *  status: 'delivered' | 'failed' | 'logged_only' | 'retrying'. */
+export interface EscalationDeliveryRow {
+  id: string
+  alert_row_id: string | null
+  channel_name: string | null
+  sink_kind: string
+  sink_target: string | null
+  target_id: string | null
+  severity: string | null
+  effective_confidence: number | null
+  status: 'delivered' | 'failed' | 'logged_only' | 'retrying' | string
+  error_message: string | null
+  attempt_number: number
+  attempted_at: string
+  delivered_at: string | null
+  payload_summary: Record<string, unknown>
+}
+
+/** One (sink_kind, status) non-delivery tally over the window — the W1-T3
+ *  integrity-sweep canary breakdown (failed / logged_only only). */
+export interface EscalationNonDelivery {
+  sink_kind: string
+  status: 'failed' | 'logged_only'
+  n: number
+  sample_error: string | null
+}
+
+/** 24h rollup over `alert_sink_deliveries` — deliberately UNfiltered so the
+ *  health signal is honest regardless of the row-list filter. `non_delivery`
+ *  (= failed + logged_only) is the count the canary alarms on. */
+export interface EscalationDeliverySummary {
+  window_hours: number
+  total: number
+  delivered: number
+  failed: number
+  logged_only: number
+  retrying: number
+  other: number
+  non_delivery: number
+  by_sink_status: EscalationNonDelivery[]
+}
+
+/** `GET /api/v1/v3/system/escalations` payload: a 24h summary + recent rows. */
+export interface EscalationDeliveriesResponse {
+  summary: EscalationDeliverySummary
+  rows: EscalationDeliveryRow[]
+}
+
+/** Optional filters for the escalation-delivery read route. */
+export interface EscalationDeliveriesQuery {
+  status?: string
+  sink_kind?: string
+  target_id?: string
+  severity?: string
+  window_hours?: number
+  limit?: number
+}
+
+/** Recent escalation deliveries + a 24h non-delivery health summary
+ *  (audit finding C3 / decision D1 — the human-visible alert edge). */
+export async function getSystemEscalations(
+  q: EscalationDeliveriesQuery = {},
+): Promise<EscalationDeliveriesResponse> {
+  const params = new URLSearchParams()
+  if (q.status) params.set('status', q.status)
+  if (q.sink_kind) params.set('sink_kind', q.sink_kind)
+  if (q.target_id) params.set('target_id', q.target_id)
+  if (q.severity) params.set('severity', q.severity)
+  if (q.window_hours != null) params.set('window_hours', String(q.window_hours))
+  if (q.limit != null) params.set('limit', String(q.limit))
+  const qs = params.toString()
+  return apiGet<EscalationDeliveriesResponse>(
+    `/v3/system/escalations${qs ? `?${qs}` : ''}`,
+  )
 }

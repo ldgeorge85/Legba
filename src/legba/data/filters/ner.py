@@ -178,6 +178,89 @@ _SOFTWARE_CUES: frozenset[str] = frozenset({
 })
 
 # ---------------------------------------------------------------------------
+# M11 — non-Latin NER routing (translate-then-NER).
+#
+# The hosted /extract endpoint runs spaCy ``en_core_web_trf`` (English-only)
+# to seed the entity spans GLiREL relates. Non-Latin scripts (Arabic /
+# Cyrillic / Hebrew / CJK / Devanagari / Thai) yield essentially ZERO spaCy
+# spans → zero triples → zero entities (measured live: `ar` 1,880 signals /
+# 0 with entities; Russian + Ukrainian telegram likewise once M12 lands). The
+# fix routes these through the /translate (NLLB-200) endpoint on the SAME
+# hosted plane FIRST, then NERs the English translation. Latin-script
+# languages (fr / es / de / pt / it / nl / tr …) are deliberately EXCLUDED:
+# English spaCy still recognises their proper nouns (measured live: fr/es/de
+# all extract), so translating them would burn NLLB calls for little gain.
+#
+# The set below is exactly the NLLB_LANG_CODES (legba-models/app/main.py)
+# whose script is non-Latin. Operators can extend it via
+# ``NERMultilingualConfig.translate_languages``.
+# ---------------------------------------------------------------------------
+
+_NON_LATIN_TRANSLATE_LANGS: frozenset[str] = frozenset({
+    "ar", "fa", "he", "ru", "uk", "zh", "ja", "ko", "hi", "th", "ur",
+})
+
+# A Latin letter: ASCII + Latin-1 supplement/extended-A/B + extended additional.
+_LATIN_CHAR_RE = re.compile(r"[A-Za-zÀ-ɏḀ-ỿ]")
+
+# Script -> coarse NLLB source-lang, used ONLY as a fallback when
+# language_detect missed a non-Latin body (returned 'und' / 'xx'). Ordered
+# strong-signal-first: kana -> ja and hangul -> ko are exclusive scripts, so
+# they win over Han (which Japanese shares) when present.
+_SCRIPT_RANGES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("ja", re.compile(r"[぀-ヿ]")),                    # Hiragana+Katakana
+    ("ko", re.compile(r"[가-힣ᄀ-ᇿ]")),       # Hangul
+    ("ru", re.compile(r"[Ѐ-ԯ]")),                    # Cyrillic (+suppl.)
+    ("ar", re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿ]")),  # Arabic
+    ("he", re.compile(r"[֐-׿]")),                    # Hebrew
+    ("hi", re.compile(r"[ऀ-ॿ]")),                    # Devanagari
+    ("th", re.compile(r"[฀-๿]")),                    # Thai
+    ("zh", re.compile(r"[一-鿿㐀-䶿]")),       # Han (JP shares)
+)
+
+
+def _is_majority_non_latin(text: str) -> bool:
+    """True when most alphabetic characters in ``text`` are non-Latin script.
+
+    Used to catch signals whose language_detect result is missing / ``und`` /
+    ``xx`` but whose body is clearly a non-Latin script the English NER cannot
+    read."""
+    latin = 0
+    total = 0
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        total += 1
+        if _LATIN_CHAR_RE.match(ch):
+            latin += 1
+    if total == 0:
+        return False
+    return latin * 2 < total
+
+
+def _dominant_script_lang(text: str) -> str | None:
+    """Best-effort coarse source-language from the dominant non-Latin script.
+
+    Returns an NLLB source-lang code (``ru`` / ``ar`` / ``zh`` / ...) or
+    ``None`` when no non-Latin script is present. Kana → ``ja`` and Hangul →
+    ``ko`` short-circuit (exclusive scripts); otherwise the highest-count
+    script wins. This is a fallback ONLY — the detected language
+    (language_detect) is always preferred. Ukrainian shares Cyrillic with
+    Russian, so an *undetected* Ukrainian body infers ``ru`` here; NLLB still
+    translates it acceptably and named entities survive either way."""
+    best_lang: str | None = None
+    best_count = 0
+    for lang, pat in _SCRIPT_RANGES:
+        c = len(pat.findall(text))
+        if c == 0:
+            continue
+        if lang in ("ja", "ko"):
+            return lang  # exclusive script — strong signal, take immediately
+        if c > best_count:
+            best_count, best_lang = c, lang
+    return best_lang
+
+# ---------------------------------------------------------------------------
 # Non-entity rejection
 #
 # The /extract relation triples routinely include endpoints that are
@@ -225,6 +308,19 @@ _ORDINAL_RE = re.compile(r"^\d+(?:st|nd|rd|th)$", re.IGNORECASE)
 _CLOCK_RE = re.compile(r"^\d{1,2}(?::\d{2}){0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?$", re.IGNORECASE)
 _LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)  # any unicode letter
 _STRIP_CHARS = " \t\n\r\"'`.,;:!?()[]{}<>«»“”‘’"
+
+#: Markdown residue in raw feed text (B0-7 — telegram ``payload.text`` carries
+#: "[**title**](url)" verbatim). Stripped BEFORE the /extract hop so the NER
+#: never sees link/bold syntax and cannot emit spans wearing it (mid-name
+#: residue like "S**ergey" that a name-level junk gate can't reject without
+#: losing the referent). Conservative by construction: the link pattern
+#: requires "](" ADJACENCY (a legitimate bracket in prose — "[sic] (see
+#: appendix)" — has no adjacent "](", so it is untouched) and the bold pattern
+#: only rewrites PAIRED "**…**" markers. The URL group disallows whitespace
+#: (real markdown URLs never carry spaces — they'd be %-encoded), so a
+#: malformed "](" followed by prose cannot swallow words up to a distant ")".
+_MD_LINK_RE = re.compile(r"!?\[([^\]]*)\]\([^)\s]*\)")
+_MD_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 
 
 def _is_nominal_word(tok: str) -> bool:
@@ -312,8 +408,22 @@ def _classify_entity_text(
     if lower_tokens & _SOFTWARE_CUES:
         return "software"
 
+    # An ARTICLE-prefixed surface ("the/a/an X") is never a person — persons do
+    # not take an article ("the Indian Ocean", "The Economist", "the Kerch
+    # Strait", "the Russian Foreign Ministry"), but organisations / locations /
+    # events do. With no cue matched above, such a surface must fall through to
+    # the generic `entity` bucket rather than the person default below.
+    # (E6-faucet-2, 2026-07-12 review: the two-cap-tokens→person default is the
+    # mechanical root of the 53% person-skew AND the article-twin merge blockage
+    # — persons never auto-merge, so a mis-classed "the X" can never fold onto
+    # its bare "X" twin. An exact match — no trailing-punct strip — so a name
+    # initial "A." is not mistaken for the article "a".)
+    if tokens and tokens[0].lower() in {"the", "a", "an"}:
+        return "entity"
+
     # Heuristic: multi-token title-cased name with no cues → person
-    # (two capitalised tokens is most often a first+last name).
+    # (two capitalised tokens is most often a first+last name). Kept for
+    # UN-prefixed surfaces — in news text those really are mostly people.
     title_tokens = [tok for tok in tokens if tok[:1].isupper()]
     if len(title_tokens) >= 2:
         return "person"
@@ -386,8 +496,41 @@ class NERMultilingualConfig(BaseModel):
         ),
     )
     text_fields: list[str] = Field(
-        default_factory=lambda: ["title", "body", "summary", "raw_body"],
-        description="Ordered list of payload fields to concatenate as /extract input.",
+        default_factory=lambda: ["title", "body", "summary", "raw_body", "text"],
+        description=(
+            "Ordered list of payload fields to concatenate as /extract input. "
+            "``text`` is included (M12) so telegram signals — which carry their "
+            "message body in ``payload.text`` and leave title/summary/raw_body "
+            "empty — get NER'd instead of silently extracting nothing "
+            "(matches the language_detect filter's field set)."
+        ),
+    )
+    translate_before_ner: bool = Field(
+        default=True,
+        description=(
+            "M11 — when True, non-Latin-script signals (by detected language or "
+            "script) are translated to English via the hosted /translate "
+            "(NLLB-200) endpoint BEFORE the /extract NER hop, because the "
+            "endpoint's spaCy en_core_web_trf is English-only and extracts ~0 "
+            "entities from Arabic / Cyrillic / CJK / etc. text. Best-effort: a "
+            "translate failure falls back to extracting the original text. Set "
+            "False to disable (the non-Latin gap then stays open)."
+        ),
+    )
+    translate_languages: list[str] = Field(
+        default_factory=lambda: sorted(_NON_LATIN_TRANSLATE_LANGS),
+        description=(
+            "Source languages routed through translate-then-NER. Default = the "
+            "NLLB-200 source codes whose script the English NER cannot read "
+            "(ar/fa/he/ru/uk/zh/ja/ko/hi/th/ur). Latin-script languages are "
+            "excluded by default (English spaCy still recognises their proper "
+            "nouns); operators can add them here. Codes must be in the hosted "
+            "NLLB set or the translate call 4xx's and falls back to direct NER."
+        ),
+    )
+    translate_target_language: str = Field(
+        default="en",
+        description="NLLB target language for the pre-NER translate hop.",
     )
 
     @field_validator("languages")
@@ -405,6 +548,16 @@ class NERMultilingualConfig(BaseModel):
     @field_validator("default_language")
     @classmethod
     def _normalise_default(cls, v: str) -> str:
+        return v.lower()
+
+    @field_validator("translate_languages")
+    @classmethod
+    def _normalise_translate_langs(cls, v: list[str]) -> list[str]:
+        return [c.lower() for c in v if isinstance(c, str) and c]
+
+    @field_validator("translate_target_language")
+    @classmethod
+    def _normalise_translate_target(cls, v: str) -> str:
         return v.lower()
 
 
@@ -460,11 +613,17 @@ class NERMultilingualHandler:
             else set(ENTITY_CLASSES)
         )
         self._client = nlp_client
+        # M11 — non-Latin source languages routed through translate-then-NER.
+        self._translate_langs: set[str] = {
+            c.lower() for c in config.translate_languages
+        }
         # Health-state counters.
         self._signals_in = 0
         self._signals_out = 0
         self._signals_dropped = 0
         self._signals_failed = 0
+        self._translate_calls = 0
+        self._translate_failures = 0
         self._last_error: str | None = None
         self._last_success_at: datetime | None = None
         self._activated = False
@@ -594,8 +753,49 @@ class NERMultilingualHandler:
             self._signals_failed += 1
             return self._annotate(signal, entities=[], language=None)
 
+        # M11 — the hosted /extract runs spaCy en_core_web_trf (English-only),
+        # so a non-Latin-script body extracts ~0 entities. Translate it to
+        # English first (NLLB-200 on the same hosted plane) and NER the
+        # translation. Best-effort: a translate failure falls back to
+        # extracting the original text (still contributes geo/time; the gap
+        # stays explicit via the translate-failure counter, never silent).
+        extract_text = truncated
+        # M13 — the English translation the M11 route produces is DISCARDED after
+        # NER today, which forces every downstream reader (journal / chronicle /
+        # slice renderers) to narrate over the raw non-Latin title and the
+        # transliterated NER surface (the Rubio-inversion class). Persist it:
+        # ``payload.text_en`` = the combined-text translation NER already ran on,
+        # and ``payload.title_en`` = a SEPARATE short title translation (one extra
+        # hosted /translate call). Best-effort like the translate hop — a failure
+        # leaves the field absent, never fails the run. Only for signals that
+        # actually went through the translate route (translate_src not None).
+        text_en: str | None = None
+        title_en: str | None = None
+        translate_src = self._translate_source_lang(language, truncated)
+        if translate_src is not None:
+            translated = await self._maybe_translate(
+                truncated, translate_src, ctx, signal,
+            )
+            if translated:
+                text_en = translated[: self._config.max_text_chars]
+                extract_text = text_en
+            # Translate the TITLE separately — it is short (its own +1 call) and
+            # is what every slice/journal row renders. Respect the same max-chars
+            # truncation. Only when a non-empty raw title exists.
+            raw_title = (
+                signal.payload.get("title")
+                if isinstance(signal.payload, dict) else None
+            )
+            if isinstance(raw_title, str) and raw_title.strip():
+                title_src = raw_title.strip()[: self._config.max_text_chars]
+                translated_title = await self._maybe_translate(
+                    title_src, translate_src, ctx, signal,
+                )
+                if translated_title:
+                    title_en = translated_title[: self._config.max_text_chars]
+
         try:
-            data = await self._client.extract(truncated)
+            data = await self._client.extract(extract_text)
         except NlpServiceAuthError as exc:
             self._last_error = f"auth: {exc!s}"
             self._signals_failed += 1
@@ -627,11 +827,17 @@ class NERMultilingualHandler:
         self._last_error = None
 
         triples = data.get("triples", []) if isinstance(data, dict) else []
-        emitted = self._triples_to_entities(triples, text=truncated, language=language)
+        emitted = self._triples_to_entities(triples, text=extract_text, language=language)
 
         self._signals_out += 1
         self._last_success_at = datetime.now(tz=timezone.utc)
-        return self._annotate(signal, entities=emitted, language=language)
+        return self._annotate(
+            signal,
+            entities=emitted,
+            language=language,
+            text_en=text_en,
+            title_en=title_en,
+        )
 
     # ----------------------------------------------------------- health_check
 
@@ -688,6 +894,9 @@ class NERMultilingualHandler:
                 "languages_configured": self._config.languages,
                 "languages_loaded": self.loaded_languages,
                 "signals_failed": self._signals_failed,
+                "translate_calls": self._translate_calls,
+                "translate_failures": self._translate_failures,
+                "translate_languages": sorted(self._translate_langs),
                 "vocabulary_size": len(self._vocabulary),
             },
         )
@@ -714,10 +923,97 @@ class NERMultilingualHandler:
                     return code
         return self._config.default_language
 
+    def _translate_source_lang(self, language: str, text: str) -> str | None:
+        """M11 — decide whether (and from which source language) to translate a
+        signal to English before the /extract NER hop.
+
+        Returns the NLLB source-language code to translate FROM, or ``None`` to
+        run NER directly on the original text (English + Latin-script bodies).
+
+        Preference:
+          1. The detected language (language_detect / language_hint, via
+             :meth:`_pick_language`) when it is a configured non-Latin source
+             lang — the reliable primary signal.
+          2. Fallback for a missed/`und`/`xx` detection: if the body is
+             majority non-Latin script, infer a coarse source lang from the
+             dominant script. Only used when (1) did not already match.
+        """
+        if not self._config.translate_before_ner or self._client is None:
+            return None
+        target = self._config.translate_target_language
+        lang = (language or "").lower()
+        if lang and lang != target and lang in self._translate_langs:
+            return lang
+        if lang not in self._translate_langs and _is_majority_non_latin(text):
+            inferred = _dominant_script_lang(text)
+            if (
+                inferred
+                and inferred != target
+                and inferred in self._translate_langs
+            ):
+                return inferred
+        return None
+
+    async def _maybe_translate(
+        self,
+        text: str,
+        source_lang: str,
+        ctx: FilterContext,
+        signal: Signal,
+    ) -> str | None:
+        """Translate ``text`` -> target language via the hosted /translate
+        (NLLB-200) endpoint. Best-effort: returns the translated string, or
+        ``None`` on any failure so the caller falls back to the original text.
+
+        Translate failures increment a counter surfaced in health detail but do
+        NOT flip the handler to ``degraded`` on their own — the subsequent
+        /extract on the original text may still succeed (e.g. English signals
+        are never translated), and a translate-only outage is a partial
+        (non-Latin-only) degradation, not a full NER outage.
+        """
+        if self._client is None:                                # pragma: no cover
+            return None
+        try:
+            data = await self._client.translate(
+                text,
+                source_lang=source_lang,
+                target_lang=self._config.translate_target_language,
+            )
+        except (NlpServiceAuthError, NlpServiceUnavailable) as exc:
+            self._translate_failures += 1
+            self._last_error = f"translate {source_lang}: {exc!s}"
+            ctx.logger.debug(
+                "ner_multilingual.translate_failed signal_id=%s src=%s err=%s",
+                signal.signal_id, source_lang, exc,
+            )
+            return None
+        except Exception as exc:                                # pragma: no cover
+            self._translate_failures += 1
+            self._last_error = f"translate {source_lang}: {exc!s}"
+            ctx.logger.warning(
+                "ner_multilingual.translate_error signal_id=%s src=%s err=%s",
+                signal.signal_id, source_lang, exc,
+            )
+            return None
+        translated = data.get("translated") if isinstance(data, dict) else None
+        if isinstance(translated, str) and translated.strip():
+            self._translate_calls += 1
+            return translated.strip()
+        return None
+
     def _extract_text(self, signal: Signal) -> str:
         """Concatenate the configured payload text fields into a single
         /extract input. Title goes first to preserve the most newsworthy
         content within the 512-token model limit.
+
+        Markdown link/bold syntax is stripped from the joined text (B0-7):
+        telegram ``payload.text`` arrives as raw markdown ("[**title**](url)"),
+        and feeding it verbatim makes the NER emit spans still wearing the
+        syntax ("Ayatollah Ali Khamenei**](https://f24.my", "S**ergey").
+        Defense-in-depth with the canon's junk gate — this fixes the MID-NAME
+        residue class the name-level gate can't reject without losing the
+        referent. Conservative: only "[text](url)" -> text and "**text**" ->
+        text; legitimate brackets in prose are untouched.
         """
         if not isinstance(signal.payload, dict):
             return ""
@@ -734,7 +1030,12 @@ class NERMultilingualHandler:
                 continue
             seen.add(stripped)
             parts.append(stripped)
-        return "\n".join(parts)
+        text = "\n".join(parts)
+        # Link wrapper first — its inner text may itself be bold-wrapped
+        # ("[**t**](url)" -> "**t**" -> "t").
+        text = _MD_LINK_RE.sub(r"\1", text)
+        text = _MD_BOLD_RE.sub(r"\1", text)
+        return text.strip()
 
     def _triples_to_entities(
         self,
@@ -810,12 +1111,25 @@ class NERMultilingualHandler:
         *,
         entities: list[dict[str, Any]],
         language: str | None,
+        text_en: str | None = None,
+        title_en: str | None = None,
     ) -> Signal:
-        """Return a copy of ``signal`` with ``payload['entities']`` set."""
+        """Return a copy of ``signal`` with ``payload['entities']`` set.
+
+        M13: when the M11 translate route ran, ``text_en`` (the combined-text
+        translation NER consumed) and ``title_en`` (the separate title
+        translation) are stamped onto the payload so downstream readers narrate
+        over English rather than the raw non-Latin surface. Both are best-effort:
+        a ``None`` (translate failure / not the translate route) leaves the field
+        absent, never an empty/placeholder value."""
         new_payload = dict(signal.payload) if isinstance(signal.payload, dict) else {}
         new_payload["entities"] = entities
         new_payload["ner_language"] = language
         new_payload["entities_hash"] = _entities_hash(entities)
+        if text_en:
+            new_payload["text_en"] = text_en
+        if title_en:
+            new_payload["title_en"] = title_en
         return signal.model_copy(update={"payload": new_payload})
 
 

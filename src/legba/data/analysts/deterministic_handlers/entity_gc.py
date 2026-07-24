@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``entity_gc`` sub-handler — L-203 migration of ``legba.maintenance.entity_gc``.
 
-Entity garbage-collection family. No LLM. Five operations:
+Entity garbage-collection family. No LLM. Seven operations:
 
   1. Mark entities with no signal_entity_links in 30d as ``gc_status=dormant``.
   2. Flag name-similar entity pairs (trigram similarity > 0.6) with
@@ -27,6 +27,27 @@ Entity garbage-collection family. No LLM. Five operations:
      ``pending`` rows the sweep re-counts forever (406/678 and rising). We flip
      them to ``status='orphaned'`` — non-destructive, removes them from the
      governance ``status='pending'`` work-set, and clears the rising flag.
+  6. (E5) Compact merged-entity edges — see the section banner near
+     ``_compact_merged_edges`` below.
+  7. Re-probe + auto-unpause sources that operation 4 auto-paused >= 24h ago
+     (the "auto-unpause re-probe" queued hardening, MASTER_PLAN 2026-07-10
+     ~L319). Operation 4's counting bug is already fixed (bound by the
+     source's last PRODUCED signal, not raw poll-outcome rows — see
+     ``_consecutive_error_streaks``'s ``last_signal`` docstring / T-4a), but a
+     source auto-paused on a transient blip (the ukrinform / nasa.eonet
+     cases: 8 days and unbounded lost to a 1-day upstream hiccup) had no way
+     back except a manual repair — the latch never re-probed. This leg is the
+     complementary self-heal: build the REAL source handler for each eligible
+     paused row (the same ``build_source_handler`` factory + config-unwrap
+     the production poll path already uses) and run its own cheap
+     ``health_check`` — one bounded HTTP request per source, through the
+     SSRF-guarded transport every source already fetches through
+     (``legba.data.sources._egress``). A ``healthy`` result auto-unpauses;
+     ``degraded`` / ``unhealthy`` / a probe exception leaves the source
+     paused (re-tried again next tick — cheap + idempotent). Only rows
+     carrying the ``auto_paused_*`` markers are eligible — an
+     operator-paused or retired source is NEVER touched (see
+     ``_reprobe_paused_sources``).
 
 Output ``data`` keys:
     dormant_entities        int
@@ -34,18 +55,42 @@ Output ``data`` keys:
     orphan_edges            int
     sources_paused          int
     orphan_proposed_edges   int
+    compacted_edges         int
+    sources_unpaused        int
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
+from pydantic import BaseModel, ConfigDict
+
 from ...provenance.models import FindingPayload
+from ...sources._contract import InMemoryStateStore, SourceContext
 from ....runtime.analyst_method import AnalystMethodResult
+from ....runtime.source_factory import build_source_handler
 
 logger = logging.getLogger(__name__)
+
+
+class _RawConfig(BaseModel):
+    """Open BaseModel satisfying ``SourceContext.config`` (typed BaseModel).
+
+    Local equivalent of ``legba.runtime.source_actor._RawConfig`` — that
+    class is private (not in ``source_actor.__all__``) and importing it here
+    would also pull a data->runtime dependency for a single one-line shape.
+    Carries the raw (property-factory-WRAPPED) descriptor config UNCHANGED,
+    exactly what the production runtime hands every source handler's
+    ``ctx.config`` — most handlers ignore it (they read their own typed
+    ``self._config``, set by ``build_source_handler`` at construction), but
+    ACLED and UCDP re-parse ``ctx.config`` themselves inside ``health_check``
+    and documented-expect this exact raw-passthrough shape."""
+
+    model_config = ConfigDict(extra="allow")
+
 
 _DORMANT_DAYS = 30
 _DUP_TRIGRAM_THRESHOLD = 0.6
@@ -56,6 +101,45 @@ _SOURCE_FAILURE_THRESHOLD = 20
 # never truncated by the LIMIT (a productive poll writes no outcome row, so the
 # window only ever holds non-productive — empty/error — polls).
 _SOURCE_STREAK_WINDOW = max(_SOURCE_FAILURE_THRESHOLD + 5, 25)
+
+# --- Op 7: auto-unpause re-probe -------------------------------------------
+# Eligibility floor — a source must have sat auto-paused for at least this
+# long before it is even considered for a re-probe. This is deliberately NOT
+# "probe every paused source every tick": a source that failed 20 consecutive
+# polls a minute ago is almost certainly still down; re-probing immediately
+# just burns a request for no gain. 24h matches the MASTER_PLAN spec ("hourly
+# HEAD after 24h auto-paused") and comfortably exceeds any sane polling
+# cadence (the fastest first-party cadence is minutes, not hours), so a
+# healthy-again source is never stuck waiting more than one entity_gc cadence
+# cycle (6h) beyond the 24h floor before its first re-probe opportunity.
+_REPROBE_MIN_PAUSED_AGE = timedelta(hours=24)
+# Cap on how many eligible sources get re-probed in a single entity_gc run.
+# entity_gc's own cadence (every 6h, see analyst_entity_gc.yaml) already
+# satisfies "hourly-or-better" for any source past the 24h floor (~4 probe
+# opportunities per day once eligible); the cap exists so a future spike in
+# simultaneously-auto-paused sources can't turn one GC tick into a serial
+# fan-out of dozens of live HTTP probes. Re-probing is idempotent and cheap
+# (one bounded request per source via that handler's own health_check), so a
+# source that misses the cap this tick is simply picked up on the next one.
+_REPROBE_MAX_PER_RUN = 10
+# CONTENT-freshness window (2026-07-23 night diagnostics rider — the
+# voa.africa counter-example: HTTP 200 + valid RSS + a ticking
+# ``<lastBuildDate>`` while every actual item sat frozen for 16 months). A
+# re-probe that gates on HTTP status alone would have resurrected voa.africa
+# the moment its upstream 403 block lifted — then, because it has ZERO prior
+# signals/cursor, its first post-unpause poll would have ingested all 20
+# sixteen-month-old items as if they were fresh (the stale-backfill
+# poisoning path: rss.py's since-filter only applies when a cursor already
+# exists; source_actor.py's cursor-persistence). "Fresh" therefore requires
+# the newest item to be within this window of NOW — 14 days comfortably
+# covers every legitimate first-party cadence (the slowest scheduled polls
+# are still sub-daily) while catching a content-dead syndication layer that
+# merely stopped publishing weeks-to-months ago. Deliberately conservative:
+# the false-negative cost (a source that IS back stays paused one more cycle,
+# caught by the next automatic re-probe OR a manual operator look) is far
+# cheaper than the false-positive cost (fossil-content ingestion poisoning
+# the substrate with year-old "signals").
+_REPROBE_FRESHNESS_WINDOW = timedelta(days=14)
 
 
 # ---------------------------------------------------------------------------
@@ -226,21 +310,29 @@ def _consecutive_error_streaks(
 ) -> list[tuple[str, int]]:
     """Pure per-source consecutive-``error``-poll decision — no DB, unit-testable.
 
-    ``rows``: iterable of mappings carrying ``source_id`` and ``outcome``
-    (``'error'`` | ``'empty'``), already grouped per source and ordered
-    NEWEST-FIRST (the SQL guarantees this, mirroring the liveness watchdog's
-    empty-streak read). For each source, count the contiguous LEADING run of
-    ``outcome='error'`` rows; the run breaks on the first non-error row (an
-    ``'empty'`` outcome, or — by ABSENCE — a productive poll, which writes no
-    outcome row at all). Returns ``(source_id, streak_len)`` for every source
-    whose leading error run is ``>= threshold``.
+    ``rows``: iterable of mappings carrying ``source_id``, ``outcome``
+    (``'error'`` | ``'empty'``), ``occurred_at`` (tz-aware datetime) and
+    (optionally) ``last_signal`` (tz-aware datetime — the source's newest produced
+    signal), already grouped per source and ordered NEWEST-FIRST (the SQL
+    guarantees this, mirroring the liveness watchdog's empty-streak read). For each
+    source, count the contiguous LEADING run of ``outcome='error'`` rows; the run
+    breaks on the first non-error row (an ``'empty'`` outcome, or — by ABSENCE — a
+    productive poll, which writes no outcome row at all). Returns
+    ``(source_id, streak_len)`` for every source whose leading error run is
+    ``>= threshold``.
 
-    A PRODUCTIVE poll writes NO ``source_poll_outcomes`` row (it is
-    self-evidencing via its signals), so a recent success does not appear here
-    to break the run — acceptable for an auto-pause guard whose whole point is a
-    source that keeps ERRORING and never produces. The empty-streak (silent but
-    HTTP-200) case is owned by the liveness watchdog; this leg keys only on hard
-    errors so it never auto-pauses a merely-quiet feed."""
+    Signal BOUND (T-4a — mirrors ``liveness_watchdog._evaluate_empty_streaks``): a
+    PRODUCTIVE poll writes NO ``source_poll_outcomes`` row (it is self-evidencing
+    via its signals), so this table alone cannot see successes. The error run
+    therefore counts ONLY the leading rows that occurred SINCE ``last_signal`` — an
+    error poll at or before the source's newest produced signal is STALE evidence
+    and stops the count. Without the bound, a source that produces normally but has
+    old error rows sitting at the top of its outcome window (nothing newer exists
+    because productive polls write none) is re-latched to 'paused' forever off dead
+    errors (the ukrinform/nasa 2026-07-22 fossil-latch class). When ``last_signal``
+    is absent (older callers / a source that has never produced), behavior is
+    unchanged: the contiguous error run alone decides — a source that keeps
+    ERRORING and never produced is exactly what auto-pause is for."""
     if threshold <= 0:
         return []
     by_source: dict[str, list[dict[str, Any]]] = {}
@@ -255,9 +347,21 @@ def _consecutive_error_streaks(
         by_source[sid].append(r)
     failing: list[tuple[str, int]] = []
     for sid in order:
+        outcomes = by_source[sid]
+        # All rows carry the same per-source last_signal; read it off the first.
+        last_signal = outcomes[0].get("last_signal") if outcomes else None
         streak = 0
-        for r in by_source[sid]:
+        for r in outcomes:
             if (r.get("outcome") or "") != "error":
+                break
+            occurred = r.get("occurred_at")
+            # Stale-error bound: an error at/before the newest produced signal is
+            # not part of the current run (the source produced after it) — stop.
+            if (
+                last_signal is not None
+                and occurred is not None
+                and occurred <= last_signal
+            ):
                 break
             streak += 1
         if streak >= threshold:
@@ -285,7 +389,10 @@ async def _pause_failing_sources(pool: Any) -> int:
             f"""
             SELECT po.source_id   AS source_id,
                    po.outcome     AS outcome,
-                   po.occurred_at AS occurred_at
+                   po.occurred_at AS occurred_at,
+                   (SELECT max(s.fetched_at)
+                      FROM signals s
+                     WHERE s.source_id = d.descriptor_id) AS last_signal
             FROM source_descriptors d
             JOIN LATERAL (
                 SELECT source_id, outcome, occurred_at
@@ -328,9 +435,440 @@ async def _pause_failing_sources(pool: Any) -> int:
     return paused
 
 
+async def _fetch_reprobe_candidates(pool: Any, *, min_age: Any, limit: int) -> list[dict[str, Any]]:
+    """Read auto-paused head descriptors eligible for a re-probe.
+
+    Eligibility is narrow and deliberate — only rows carrying BOTH markers
+    op-4 writes (``auto_paused_at`` present, ``auto_paused_reason`` present)
+    qualify, so an operator-paused or retired source (which never gets those
+    keys) is never touched by this leg. ``auto_paused_at`` must be at least
+    ``min_age`` old — a source paused 5 minutes ago is not re-probed on the
+    very next tick. Oldest-paused-first ordering + the caller's ``limit``
+    means a backlog of eligible sources drains fairly across runs rather than
+    the same head-of-list rows starving the tail forever."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT descriptor_id,
+                   kind,
+                   body AS body,
+                   (body->>'auto_paused_at')::timestamptz AS auto_paused_at
+            FROM source_descriptors
+            WHERE is_head
+              AND state = 'paused'
+              AND body ? 'auto_paused_at'
+              AND body ? 'auto_paused_reason'
+              AND (body->>'auto_paused_at')::timestamptz <= (now() - $1::interval)
+            ORDER BY (body->>'auto_paused_at')::timestamptz ASC
+            LIMIT $2
+            """,
+            min_age,
+            limit,
+        )
+    return [dict(r) for r in rows]
+
+
+def _parse_signal_published_at(sig: Any) -> datetime | None:
+    """Best-effort extraction of a yielded ``Signal``'s own content date.
+
+    ``payload["published_at"]`` (an ISO-8601 string or ``None``) is the
+    near-universal convention every first-party source handler writes onto
+    each ``Signal`` it yields (rss / json_api / telegram / discord /
+    mediacloud / acled / ucdp / opensanctions / gdelt / common_crawl /
+    intelmq / firecrawl — grep-verified). This is the item's OWN date (an RSS
+    entry's ``<pubDate>``, a telegram message's ``date``, ...) — NEVER a
+    feed/response-level field like RSS's ``<lastBuildDate>`` or an HTTP
+    ``Last-Modified`` header, both of which a dead syndication layer can keep
+    ticking "today" while every actual item is frozen (the voa.africa case:
+    HTTP 200, valid RSS 2.0, ``<lastBuildDate>`` claims today, all 20
+    ``<pubDate>``s frozen at 2025-03). A missing / unparseable value returns
+    ``None`` — the caller treats that as "not fresh", never as "fresh"."""
+    payload = getattr(sig, "payload", None)
+    if not isinstance(payload, Mapping):
+        return None
+    raw = payload.get("published_at")
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def _probe_content_freshness(
+    *,
+    handler: Any,
+    ctx: SourceContext,
+    auto_paused_at: datetime | None,
+    max_probe_signals: int = 50,
+) -> datetime | None:
+    """Pull from the handler for real and return the newest item date seen.
+
+    Rider (2026-07-23 night diagnostics, voa.africa): an HTTP-status-only
+    gate is provably wrong — voa.africa answers HTTP 200 with a well-formed,
+    current-looking RSS document (``<lastBuildDate>`` ticks "today") while
+    its actual content (every ``<pubDate>``) has been frozen for 16 months.
+    ``health_check()`` alone (status/connectivity) would have resurrected it.
+
+    This calls the SAME ``pull()`` the production poll loop drives — the one
+    code path that actually parses item-level content — against a THROWAWAY
+    ``InMemoryStateStore`` (never persisted back to the real cursor; any
+    ``state_store.set()`` the handler does inside ``pull()`` vanishes with
+    this object) and a bare ``since=None`` (no since-filtering — we want
+    whatever the endpoint currently serves, not a pre-filtered slice, so a
+    fossil feed's fossil items are actually visible to inspect rather than
+    silently dropped by the handler's own recency filter). Reads at most
+    ``max_probe_signals`` from the generator before closing it early — this
+    is still a BOUNDED read (a feed typically returns 20-50 items total; we
+    never drain an unbounded/paginated source like telegram's catch-up walk).
+
+    Returns the MAX parsed ``published_at`` across every signal seen (via
+    :func:`_parse_signal_published_at`), or ``None`` when nothing yielded or
+    nothing yielded a parseable date — the caller treats ``None`` exactly
+    like "not fresh"."""
+    newest: datetime | None = None
+    seen = 0
+    agen = handler.pull(ctx, since=None)
+    try:
+        async for sig in agen:
+            seen += 1
+            dt = _parse_signal_published_at(sig)
+            if dt is not None and (newest is None or dt > newest):
+                newest = dt
+            if seen >= max_probe_signals:
+                break
+    finally:
+        aclose = getattr(agen, "aclose", None)
+        if aclose is not None:
+            with contextlib.suppress(Exception):
+                await aclose()
+    return newest
+
+
+async def _probe_source_health(
+    *, descriptor_id: str, kind: str, body: Mapping[str, Any], deps: Any,
+) -> dict[str, Any]:
+    """Run ONE cheap content-freshness probe for a paused source's own kind.
+
+    Mirrors the production poll path's construction step (``source_actor.
+    SourceActor._make_context`` / ``_build_handler``) at the level this
+    deterministic leg can reach without a live actor:
+
+      * ``handler`` — built via the SAME ``build_source_handler`` factory the
+        runtime's poll loop uses. It unwraps the descriptor's property-factory
+        config shapes internally and threads ``secrets_resolve`` for the
+        kinds that need vault credentials (telegram / mediacloud / acled /
+        opensanctions / firecrawl / discord); most handlers then read their
+        OWN typed, already-unwrapped ``self._config`` at probe time.
+      * ``ctx.config`` — a couple of kinds (ACLED, UCDP) don't cache a typed
+        config at construction and instead re-parse ``ctx.config`` inside
+        their own handler methods, documented on both as expecting "the
+        runtime's raw passthrough" — the property-factory-WRAPPED dict, one
+        open model wrapping ``body['config']`` UNCHANGED (mirrors
+        ``source_actor._RawConfig`` exactly; a local equivalent, not an
+        import, to avoid a data->runtime import edge for one open BaseModel).
+
+    Then it runs the CONTENT-level probe (:func:`_probe_content_freshness`,
+    ``pull()`` against a throwaway state store) rather than the shallow
+    ``health_check()`` — an HTTP-status-only gate is the exact class of bug
+    the voa.africa counter-example demonstrated (200 + valid feed + every
+    item 16 months stale). Every kind's ``pull()`` still runs through the
+    SSRF-guarded transport (``legba.data.sources._egress.
+    guarded_async_client``) every source fetches through — this function does
+    not reimplement a fetcher; it invokes the one the source's own handler
+    already carries, then reads the CONTENT the handler parsed out of it.
+
+    Returns ``{"fresh": bool, "newest_item_at": datetime | None,
+    "reason": str}``. ``fresh`` requires ALL of: the pull raised no
+    exception, at least one signal carried a parseable ``published_at``, that
+    date is newer than ``auto_paused_at`` (proves the source moved AFTER it
+    went dark — not just "slightly less ancient"), AND within
+    ``_REPROBE_FRESHNESS_WINDOW`` of now (proves it is not merely old-but-
+    newer-than-pause). Any failure to prove freshness — including "the probe
+    itself failed" — resolves to ``fresh=False``: the false-negative cost is
+    a later manual look; the false-positive cost is fossil-content ingestion
+    (an unpaused, cursor-less source's FIRST poll would ingest every stale
+    item it just proved exists, per the voa.africa stale-backfill mechanics
+    traced to ``rss.py`` / ``source_actor.py``)."""
+    raw_config: dict[str, Any] = dict((body or {}).get("config") or {})
+    secrets_resolve = getattr(deps, "secrets_resolve", None)
+    auto_paused_at = body.get("auto_paused_at") if isinstance(body, Mapping) else None
+    if isinstance(auto_paused_at, str):
+        try:
+            auto_paused_at = datetime.fromisoformat(auto_paused_at.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            auto_paused_at = None
+    if isinstance(auto_paused_at, datetime) and auto_paused_at.tzinfo is None:
+        auto_paused_at = auto_paused_at.replace(tzinfo=timezone.utc)
+    if not isinstance(auto_paused_at, datetime):
+        auto_paused_at = None
+
+    try:
+        handler = build_source_handler(
+            kind, raw_config, secrets_resolve=secrets_resolve,
+        )
+        ctx = SourceContext(
+            target_id=descriptor_id,
+            target_version=str(((body or {}).get("identity") or {}).get("version", "")),
+            source_id=descriptor_id,
+            config=_RawConfig(**raw_config),
+            state_store=InMemoryStateStore(),
+            secrets_resolve=secrets_resolve,
+        )
+        newest = await _probe_content_freshness(
+            handler=handler, ctx=ctx, auto_paused_at=auto_paused_at,
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed probe just stays paused
+        logger.info(
+            "entity_gc.reprobe.probe_failed descriptor_id=%s kind=%s err=%r",
+            descriptor_id, kind, exc,
+        )
+        return {"fresh": False, "newest_item_at": None, "reason": f"probe_error: {exc!r}"}
+
+    if newest is None:
+        return {
+            "fresh": False, "newest_item_at": None,
+            "reason": "no_parseable_item_dates",
+        }
+    now = datetime.now(timezone.utc)
+    within_window = newest >= now - _REPROBE_FRESHNESS_WINDOW
+    newer_than_pause = auto_paused_at is None or newest > auto_paused_at
+    if within_window and newer_than_pause:
+        return {"fresh": True, "newest_item_at": newest, "reason": "fresh"}
+    reason = (
+        "stale_content"
+        if not within_window
+        else "not_newer_than_auto_pause"
+    )
+    return {"fresh": False, "newest_item_at": newest, "reason": reason}
+
+
+async def _reprobe_paused_sources(pool: Any, deps: Any) -> int:
+    """Op 7 — re-probe + auto-unpause sources op-4 auto-paused >= 24h ago.
+
+    Reads eligible candidates (see ``_fetch_reprobe_candidates``), probes each
+    for CONTENT FRESHNESS (see ``_probe_source_health`` — gates on the
+    newest item's own date, never on HTTP status alone; see the voa.africa
+    counter-example in its docstring), and for every fresh result mirrors the
+    op-4 pause write IN REVERSE — the exact same out-of-band mutation shape
+    (a direct ``state`` column flip + a ``body`` jsonb key strip on the head
+    row), never an API PUT. This is load-bearing: descriptor state is
+    normally carried via content-hash, but op-4's pause write bypasses that
+    (direct row-state write + body-field write, not a re-registration), so an
+    API PUT would either no-op against the stale hash or head-shift back to
+    the pre-pause version and silently UNDO the unpause. The 07-23 manual
+    repair (`UPDATE source_descriptors SET state='active', body=(body-
+    'auto_paused_at')-'auto_paused_reason' WHERE descriptor_id=... AND
+    is_head`) is exactly this shape — this function automates it."""
+    unpaused = 0
+    candidates = await _fetch_reprobe_candidates(
+        pool, min_age=_REPROBE_MIN_PAUSED_AGE, limit=_REPROBE_MAX_PER_RUN,
+    )
+    for row in candidates:
+        descriptor_id = row["descriptor_id"]
+        kind = row["kind"]
+        body = row.get("body") or {}
+        probe = await _probe_source_health(
+            descriptor_id=descriptor_id, kind=kind, body=body, deps=deps,
+        )
+        if not probe["fresh"]:
+            # Newest-item date logged even on a stay-paused verdict — an
+            # operator reading this line sees WHY (per the coordinator rider):
+            # a frozen-content source shows its fossil date every re-probe
+            # tick, distinguishing "still genuinely down" from "content dead".
+            logger.info(
+                "entity_gc.reprobe.still_down descriptor_id=%s kind=%s "
+                "reason=%s newest_item_at=%s paused_since=%s",
+                descriptor_id, kind, probe["reason"], probe["newest_item_at"],
+                row.get("auto_paused_at"),
+            )
+            continue
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE source_descriptors SET
+                    body = (body - 'auto_paused_at') - 'auto_paused_reason',
+                    state = 'active'
+                WHERE descriptor_id = $1
+                  AND is_head
+                  AND state = 'paused'
+                  AND body ? 'auto_paused_at'
+                """,
+                descriptor_id,
+            )
+        # A guarded UPDATE — the WHERE re-checks state/markers at write time
+        # so a concurrent operator action (manual pause/retire) between the
+        # read above and this write can never be clobbered by a stale probe.
+        if result and result.split()[-1] == "1":
+            unpaused += 1
+            logger.info(
+                "entity_gc.reprobe.auto_unpaused descriptor_id=%s kind=%s "
+                "newest_item_at=%s paused_since=%s",
+                descriptor_id, kind, probe["newest_item_at"],
+                row.get("auto_paused_at"),
+            )
+    return unpaused
+
+
 # ---------------------------------------------------------------------------
 # Finding assembly
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# E5 — compaction: re-point a merged loser's OPEN nexus/fact endpoints onto the
+# keeper's canonical_name. merge_pair (entity_researcher) only sets merged_into
+# + folds aliases; the graph edges still carry the loser surface. This bounded,
+# idempotent sweep re-points them (table-only — the AGE graph is not a load-
+# bearing consumer) so structural_balance / graph_mining / the read port see a
+# consistent graph. Collisions with an existing open keeper triple are CLOSED
+# (superseded), never a unique-index violation. It GATES flipping the researcher
+# to apply-mode.
+# ---------------------------------------------------------------------------
+
+
+async def _repoint_nexuses(conn: Any, loser: str, keeper: str) -> int:
+    """Re-point OPEN nexus endpoints from ``loser`` surface to ``keeper``. A
+    re-pointed self-loop (subject==object) is closed; a collision with an
+    existing open keeper triple closes the loser-derived row (superseded_by the
+    survivor) instead of violating idx_nexuses_triple_open. Returns rows touched."""
+    rows = await conn.fetch(
+        """
+        SELECT id, subject, object, intermediary, rel_type
+          FROM nexuses
+         WHERE valid_until IS NULL AND superseded_by IS NULL
+           AND (lower(subject) = lower($1)
+                OR lower(object) = lower($1)
+                OR lower(COALESCE(intermediary, '')) = lower($1))
+        """,
+        loser,
+    )
+    lo = loser.lower()
+    touched = 0
+    for row in rows:
+        new_s = keeper if (row["subject"] or "").lower() == lo else row["subject"]
+        new_o = keeper if (row["object"] or "").lower() == lo else row["object"]
+        new_i = keeper if (row["intermediary"] or "").lower() == lo else row["intermediary"]
+        if new_s and new_o and new_s.lower() == new_o.lower():
+            # a re-pointed self-loop has no meaning — close it (no survivor).
+            await conn.execute(
+                "UPDATE nexuses SET valid_until = now(), updated_at = now() "
+                "WHERE id = $1", row["id"])
+            touched += 1
+            continue
+        collide = await conn.fetchval(
+            """
+            SELECT id FROM nexuses
+             WHERE valid_until IS NULL AND superseded_by IS NULL AND id <> $5
+               AND lower(subject) = lower($1)
+               AND lower(COALESCE(intermediary, '')) = lower(COALESCE($2, ''))
+               AND lower(object) = lower($3)
+               AND lower(rel_type) = lower($4)
+             LIMIT 1
+            """,
+            new_s, new_i, new_o, row["rel_type"], row["id"],
+        )
+        if collide is not None:
+            await conn.execute(
+                "UPDATE nexuses SET valid_until = now(), superseded_by = $2, "
+                "updated_at = now() WHERE id = $1", row["id"], collide)
+        else:
+            await conn.execute(
+                "UPDATE nexuses SET subject = $2, object = $3, intermediary = $4, "
+                "updated_at = now() WHERE id = $1", row["id"], new_s, new_o, new_i)
+        touched += 1
+    return touched
+
+
+async def _repoint_facts(conn: Any, loser: str, keeper: str) -> int:
+    """Re-point OPEN facts.subject from ``loser`` to ``keeper`` (the entity
+    endpoint; ``value`` is often a literal and is left for a later pass). A
+    collision on the open (subject,predicate,value,valid_from) index closes the
+    loser fact. Returns rows touched."""
+    rows = await conn.fetch(
+        """
+        SELECT id, predicate, value, valid_from FROM facts
+         WHERE valid_until IS NULL AND superseded_by IS NULL
+           AND lower(subject) = lower($1)
+        """,
+        loser,
+    )
+    touched = 0
+    for row in rows:
+        collide = await conn.fetchval(
+            """
+            SELECT id FROM facts
+             WHERE valid_until IS NULL AND superseded_by IS NULL AND id <> $5
+               AND lower(subject) = lower($1)
+               AND lower(predicate) = lower($2)
+               AND lower(COALESCE(value, '')) = lower(COALESCE($3, ''))
+               AND COALESCE(valid_from, '1970-01-01 00:00:00+00'::timestamptz)
+                   = COALESCE($4, '1970-01-01 00:00:00+00'::timestamptz)
+             LIMIT 1
+            """,
+            keeper, row["predicate"], row["value"], row["valid_from"], row["id"],
+        )
+        if collide is not None:
+            await conn.execute(
+                "UPDATE facts SET valid_until = now(), superseded_by = $2, "
+                "updated_at = now() WHERE id = $1", row["id"], collide)
+        else:
+            await conn.execute(
+                "UPDATE facts SET subject = $2, updated_at = now() WHERE id = $1",
+                row["id"], keeper)
+        touched += 1
+    return touched
+
+
+async def _compact_merged_edges(pool: Any, batch_limit: int = 200) -> int:
+    """For merged-loser tombstones not yet compacted, re-point their OPEN nexus/
+    fact endpoints onto the keeper canonical_name, then mark the loser compacted
+    (``data.merge.compacted_at`` — the forward-progress gate). Bounded per run;
+    idempotent; degrade-not-break per loser (one bad loser can't sink the sweep)."""
+    total = 0
+    async with pool.acquire() as conn:
+        losers = await conn.fetch(
+            """
+            -- Resolve to the TERMINAL survivor, not the immediate merged_into
+            -- parent (adversarial-review HIGH): in a chain L->K->K2 (K itself
+            -- later merged), the direct parent K is a tombstone — re-pointing
+            -- L's edges onto K's dead surface would strand them. resolve_entity
+            -- (0086, cycle-safe) chases to the live keeper. The k.merged_into IS
+            -- NULL guard defers a loser whose terminal is (degenerately) still a
+            -- tombstone, so it settles after the chain collapses (never strands).
+            SELECT l.id, l.canonical_name AS loser, k.canonical_name AS keeper
+              FROM entity_profiles l
+              JOIN entity_profiles k ON k.id = public.resolve_entity(l.merged_into)
+             WHERE l.merged_into IS NOT NULL
+               AND k.merged_into IS NULL
+               AND NOT (COALESCE(l.data->'merge', '{}'::jsonb) ? 'compacted_at')
+             LIMIT $1
+            """,
+            int(batch_limit),
+        )
+        for r in losers:
+            loser, keeper = str(r["loser"] or ""), str(r["keeper"] or "")
+            try:
+                async with conn.transaction():
+                    if loser and keeper and loser.lower() != keeper.lower():
+                        total += await _repoint_nexuses(conn, loser, keeper)
+                        total += await _repoint_facts(conn, loser, keeper)
+                    await conn.execute(
+                        """
+                        UPDATE entity_profiles
+                           SET data = jsonb_set(
+                                 jsonb_set(COALESCE(data, '{}'::jsonb), '{merge}',
+                                           COALESCE(data->'merge', '{}'::jsonb), true),
+                                 '{merge,compacted_at}', to_jsonb(now()::text), true),
+                               updated_at = now()
+                         WHERE id = $1
+                        """,
+                        r["id"],
+                    )
+            except Exception as exc:  # pragma: no cover - degrade-not-break
+                logger.warning("entity_gc.compact_failed loser=%r err=%s", loser, exc)
+    return total
 
 
 def _build_finding(
@@ -340,12 +878,16 @@ def _build_finding(
     orphan_edges: int,
     sources_paused: int,
     orphan_proposed_edges: int = 0,
+    compacted_edges: int = 0,
+    sources_unpaused: int = 0,
     target_id: str | None,
 ) -> FindingPayload:
     title = (
         f"Entity GC: {dormant_entities} dormant, {duplicate_flags} duplicates, "
         f"{orphan_edges} orphan edges, {sources_paused} sources paused, "
-        f"{orphan_proposed_edges} orphan proposed-edges quarantined"
+        f"{orphan_proposed_edges} orphan proposed-edges quarantined, "
+        f"{compacted_edges} merged-edge re-points, "
+        f"{sources_unpaused} sources re-probed fresh + auto-unpaused"
     )
     if target_id:
         title = f"{title} for {target_id}"
@@ -355,6 +897,8 @@ def _build_finding(
         f"orphan_edges={orphan_edges}",
         f"sources_paused={sources_paused}",
         f"orphan_proposed_edges={orphan_proposed_edges}",
+        f"compacted_edges={compacted_edges}",
+        f"sources_unpaused={sources_unpaused}",
     ])
     tags = ["deterministic", "entity_gc"]
     if (
@@ -363,6 +907,8 @@ def _build_finding(
         or orphan_edges
         or sources_paused
         or orphan_proposed_edges
+        or compacted_edges
+        or sources_unpaused
     ):
         tags.append("gc_actions_taken")
     return FindingPayload(
@@ -378,6 +924,8 @@ def _build_finding(
             "orphan_edges": orphan_edges,
             "sources_paused": sources_paused,
             "orphan_proposed_edges": orphan_proposed_edges,
+            "compacted_edges": compacted_edges,
+            "sources_unpaused": sources_unpaused,
         },
     )
 
@@ -398,6 +946,8 @@ async def handle(
     orphans = 0
     paused = 0
     orphan_proposed = 0
+    compacted = 0
+    unpaused = 0
 
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is not None:
@@ -406,6 +956,8 @@ async def handle(
         run_orphans = bool(options.get("run_orphans", True))
         run_pause = bool(options.get("run_source_pause", True))
         run_orphan_edges = bool(options.get("run_orphan_proposed_edges", True))
+        run_compaction = bool(options.get("run_compaction", True))
+        run_reprobe = bool(options.get("run_source_reprobe", True))
         if run_dormant:
             try:
                 dormant = await _mark_dormant(pool)
@@ -431,6 +983,16 @@ async def handle(
                 orphan_proposed = await _quarantine_orphan_proposed_edges(pool)
             except Exception as exc:
                 logger.warning("entity_gc.orphan_proposed_edges_failed err=%s", exc)
+        if run_compaction:
+            try:
+                compacted = await _compact_merged_edges(pool)
+            except Exception as exc:
+                logger.warning("entity_gc.compaction_failed err=%s", exc)
+        if run_reprobe:
+            try:
+                unpaused = await _reprobe_paused_sources(pool, deps)
+            except Exception as exc:
+                logger.warning("entity_gc.source_reprobe_failed err=%s", exc)
 
     finding = _build_finding(
         dormant_entities=dormant,
@@ -438,6 +1000,8 @@ async def handle(
         orphan_edges=orphans,
         sources_paused=paused,
         orphan_proposed_edges=orphan_proposed,
+        compacted_edges=compacted,
+        sources_unpaused=unpaused,
         target_id=options.get("target_id"),
     )
     return AnalystMethodResult(

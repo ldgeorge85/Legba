@@ -164,7 +164,15 @@ async def test_write_fact_bad_payload_dead_letters(pg_conn):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_write_fact_on_conflict_upserts(pg_conn):
+async def test_write_fact_on_conflict_upserts(pg_conn, monkeypatch):
+    # Pin the pre-Wave-4 OFF path: this test asserts the documented "Holes-A A2:
+    # agreement combines via bounded noisy-OR" 2-source contract
+    # (noisy-OR(0.4, 0.9) == 0.94). Under the live deploy's default
+    # LEGBA_FACT_CONTENTION=1, the ON-CONFLICT merge routes through the Wave-4
+    # coexist path, which folds in a third noisy-OR term (the "agent"
+    # source-credibility nominal) and no longer produces 0.94. Pin explicitly
+    # rather than inherit whatever the host's .env happens to say.
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION", "0")
     actx = _analyst_ctx()
     s1 = await _seed_signal(pg_conn, title="a")
     s2 = await _seed_signal(pg_conn, title="b")
@@ -205,11 +213,20 @@ async def test_write_fact_on_conflict_upserts(pg_conn):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_write_fact_value_change_supersedes_prior(pg_conn):
+async def test_write_fact_value_change_supersedes_prior(pg_conn, monkeypatch):
     """PIECE B auto-supersession on the analyst write path: a new VALUE for an
     existing (subject, predicate) closes the prior open row (valid_until +
     superseded_by → new id) and opens the new one as the single canonical row.
-    A same-value re-assert (different valid_from) does NOT supersede."""
+    A same-value re-assert (different valid_from) does NOT supersede.
+
+    Pin LEGBA_FACT_CONTENTION=0: this tests the pre-Wave-4 PIECE B
+    auto-supersession contract by name. Under the live deploy's default ON
+    setting, a same-tier fuzzy-DISTINCT value pair ("Alice"/"Bob" share no
+    tokens) COEXISTS instead of the prior closing — the Wave-4 contested-claims
+    arbiter working exactly as designed, just not what this OFF-path test
+    expects; see tests/data_pkg/test_writes_contention_coexist.py for the ON-path
+    coverage of that behavior."""
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION", "0")
     actx = _analyst_ctx()
     s1 = await _seed_signal(pg_conn, title="a")
     s2 = await _seed_signal(pg_conn, title="b")
@@ -259,7 +276,7 @@ async def test_write_fact_value_change_supersedes_prior(pg_conn):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_write_fact_replay_of_closed_value_does_not_dangle(pg_conn):
+async def test_write_fact_replay_of_closed_value_does_not_dangle(pg_conn, monkeypatch):
     """PIECE B hardening regression: re-asserting a value that was previously
     CLOSED (superseded) must open a NEW canonical row — NOT upsert into the old
     closed row via ON CONFLICT.
@@ -272,7 +289,13 @@ async def test_write_fact_replay_of_closed_value_does_not_dangle(pg_conn):
          (the partial-on-open unique index hides closed A from conflict
          inference), so B.superseded_by points at a row that actually exists and
          A stays untouched/closed.
+
+    Pin LEGBA_FACT_CONTENTION=0: same family as
+    test_write_fact_value_change_supersedes_prior — the value-replay close/reopen
+    bookkeeping this asserts is the pre-Wave-4 supersession contract; under the
+    live deploy's default ON setting the coexist path changes that bookkeeping.
     """
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION", "0")
     actx = _analyst_ctx()
     s1 = await _seed_signal(pg_conn, title="a")
     vf = datetime(2026, 6, 5, 0, 0, tzinfo=timezone.utc)

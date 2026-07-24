@@ -31,9 +31,12 @@ async def test_get_assessments_returns_assessor_findings(pg_pool, port):
     fid = uuid4()
     async with pg_pool.acquire() as conn:
         await conn.execute(
+            # B0 red-test fix (2026-07-10): country_assessor was RETIRED and
+            # 98bb4dc removed it from _ASSESSMENT_PRODUCER_ANALYSTS — seed a
+            # LIVE producer so the default read can actually return the row.
             "INSERT INTO analyst_outputs (id, kind, title, body, confidence, "
             "analyst_id, produced_at, schema_uri) VALUES "
-            "($1,'finding','BR energy','body',0.8,'country_assessor',$2,'u')",
+            "($1,'finding','BR energy','body',0.8,'country_composition',$2,'u')",
             fid, NOW,
         )
         # a non-assessor finding must NOT surface by default
@@ -46,7 +49,11 @@ async def test_get_assessments_returns_assessor_findings(pg_pool, port):
     out = await port.get_assessments(since_hours=48, limit=10)
     ids = {r["id"] for r in out["rows"]}
     assert str(fid) in ids
-    assert all(r["analyst_id"] in ("country_assessor", "world_assessor") for r in out["rows"])
+    # every returned row must come from the LIVE producer set
+    from legba.runtime.substrate_query_port import _ASSESSMENT_PRODUCER_ANALYSTS
+    assert all(
+        r["analyst_id"] in _ASSESSMENT_PRODUCER_ANALYSTS for r in out["rows"]
+    )
     assert str(fid) in out["refs"]
 
 
@@ -152,7 +159,32 @@ async def test_get_critic_scores_reads_critiques(pg_pool, port):
 
 # ---------------------------------------------------------------------------
 # get_calibration — the HONESTY contract (segregated acute pilot)
+#
+# B0-3 (read-truth): seeded EXACTLY as the writer writes — calibration_tracking
+# emits OutputKind.FINDING (kind='finding', analyst_id='calibration_tracking';
+# NOTHING writes kind='calibration'), and the row's ``data`` column holds the
+# WHOLE FindingPayload dump with the metrics one level down at ``data.data``.
 # ---------------------------------------------------------------------------
+
+
+async def _insert_calibration_finding(conn, metrics: dict, *, superseded_by=None):
+    """Insert an ``analyst_outputs`` row shaped exactly like the live
+    calibration_tracking writer: kind='finding', analyst_id='calibration_tracking',
+    ``data`` = FindingPayload dump with the metrics dict NESTED under data.data."""
+    oid = uuid4()
+    await conn.execute(
+        "INSERT INTO analyst_outputs (id, kind, title, analyst_id, produced_at, "
+        "schema_uri, data, superseded_by) VALUES "
+        "($1,'finding','Calibration','calibration_tracking',$2,'u',$3::jsonb,$4)",
+        oid, NOW,
+        json.dumps({
+            "title": "Calibration", "body": "…", "confidence": 1.0,
+            "evidence": [], "tags": ["deterministic", "calibration_tracking"],
+            "data": {"sub_handler": "calibration_tracking", **metrics},
+        }),
+        superseded_by,
+    )
+    return oid
 
 
 @pytest.mark.asyncio
@@ -161,19 +193,13 @@ async def test_get_calibration_forces_unproven_on_thin_pilot(pg_pool, port):
     sample must report forecast_unproven=True + calibration_thin=True — the
     deterministic verdict the journal's §10 honesty post-step keys off."""
     async with pg_pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO analyst_outputs (id, kind, title, analyst_id, produced_at, "
-            "schema_uri, data) VALUES ($1,'calibration','cal','calibration_tracking',"
-            "$2,'u',$3::jsonb)",
-            uuid4(), NOW,
-            json.dumps({
-                "brier": None, "exogenous_sample_size": 2, "sample_size": 10,
-                "brier_forecast_acute": None, "brier_skill_score": None,
-                "forecast_acute_sample_size": 12, "forecast_acute_ready": False,
-                "forecast_acute_degenerate": False,
-                "forecast_acute_status": "accumulating (n=12/30)",
-            }),
-        )
+        await _insert_calibration_finding(conn, {
+            "brier": None, "exogenous_sample_size": 2, "sample_size": 10,
+            "brier_forecast_acute": None, "brier_skill_score": None,
+            "forecast_acute_sample_size": 12, "forecast_acute_ready": False,
+            "forecast_acute_degenerate": False,
+            "forecast_acute_status": "accumulating (n=12/30)",
+        })
     out = await port.get_calibration()
     assert out["available"] is True
     assert out["forecast_unproven"] is True   # not ready → unproven
@@ -187,19 +213,13 @@ async def test_get_calibration_unproven_when_degenerate_even_if_positive_bss(pg_
     """Ready + positive BSS but DEGENERATE (geography-dominated) is still unproven
     — the honesty guard refuses the skill claim when the pilot isn't probabilistic."""
     async with pg_pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO analyst_outputs (id, kind, title, analyst_id, produced_at, "
-            "schema_uri, data) VALUES ($1,'calibration','cal','calibration_tracking',"
-            "$2,'u',$3::jsonb)",
-            uuid4(), NOW,
-            json.dumps({
-                "brier": 0.1, "exogenous_sample_size": 40, "sample_size": 80,
-                "brier_forecast_acute": 0.12, "brier_skill_score": 0.3,
-                "forecast_acute_sample_size": 40, "forecast_acute_ready": True,
-                "forecast_acute_degenerate": True,
-                "forecast_acute_status": "degenerate — geography-dominated",
-            }),
-        )
+        await _insert_calibration_finding(conn, {
+            "brier": 0.1, "exogenous_sample_size": 40, "sample_size": 80,
+            "brier_forecast_acute": 0.12, "brier_skill_score": 0.3,
+            "forecast_acute_sample_size": 40, "forecast_acute_ready": True,
+            "forecast_acute_degenerate": True,
+            "forecast_acute_status": "degenerate — geography-dominated",
+        })
     out = await port.get_calibration()
     assert out["forecast_unproven"] is True     # degenerate → still unproven
     assert out["calibration_thin"] is False      # exogenous n=40 → not thin
@@ -208,22 +228,75 @@ async def test_get_calibration_unproven_when_degenerate_even_if_positive_bss(pg_
 @pytest.mark.asyncio
 async def test_get_calibration_proven_when_ready_nondegenerate_positive_bss(pg_pool, port):
     async with pg_pool.acquire() as conn:
+        await _insert_calibration_finding(conn, {
+            "brier": 0.08, "exogenous_sample_size": 40, "sample_size": 80,
+            "brier_forecast_acute": 0.1, "brier_skill_score": 0.25,
+            "forecast_acute_sample_size": 35, "forecast_acute_ready": True,
+            "forecast_acute_degenerate": False,
+            "forecast_acute_status": "ready",
+        })
+    out = await port.get_calibration()
+    assert out["forecast_unproven"] is False     # ready + non-degenerate + BSS>0
+    assert out["calibration_thin"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_calibration_reads_nested_metrics_from_live_writer_shape(pg_pool, port):
+    """B0-3 core: the metrics surface from the NESTED data.data (the FindingPayload
+    dump), the numbers matching the live substrate (brier_exogenous 0.3976,
+    n_exo=537), and refs carries the row id so the journal can cite it."""
+    async with pg_pool.acquire() as conn:
+        oid = await _insert_calibration_finding(conn, {
+            "brier": 0.3976, "brier_exogenous": 0.3976,
+            "exogenous_sample_size": 537, "sample_size": 600,
+            "insufficient_exogenous": False, "self_consistency_only": False,
+            "brier_forecast_acute": None, "brier_skill_score": None,
+            "forecast_acute_sample_size": 3, "forecast_acute_ready": False,
+            "forecast_acute_degenerate": False,
+            "forecast_acute_status": "accumulating (n=3/30)",
+        })
+    out = await port.get_calibration()
+    assert out["available"] is True
+    assert out["brier"] == 0.3976
+    assert out["brier_exogenous"] == 0.3976
+    assert out["exogenous_sample_size"] == 537
+    assert out["sample_size"] == 600
+    assert out["calibration_thin"] is False
+    assert out["forecast_unproven"] is True
+    assert out["refs"] == [str(oid)]
+    assert out["id"] == str(oid)
+
+
+@pytest.mark.asyncio
+async def test_get_calibration_ignores_legacy_kind_and_superseded_rows(pg_pool, port):
+    """The read is re-pointed: a legacy flat ``kind='calibration'`` row (which no
+    writer produces) is INVISIBLE, and a superseded calibration finding never
+    shadows the live head."""
+    async with pg_pool.acquire() as conn:
+        # legacy-shaped row alone → NOT read (available stays False)
         await conn.execute(
             "INSERT INTO analyst_outputs (id, kind, title, analyst_id, produced_at, "
             "schema_uri, data) VALUES ($1,'calibration','cal','calibration_tracking',"
             "$2,'u',$3::jsonb)",
-            uuid4(), NOW,
-            json.dumps({
-                "brier": 0.08, "exogenous_sample_size": 40, "sample_size": 80,
-                "brier_forecast_acute": 0.1, "brier_skill_score": 0.25,
-                "forecast_acute_sample_size": 35, "forecast_acute_ready": True,
-                "forecast_acute_degenerate": False,
-                "forecast_acute_status": "ready",
-            }),
+            uuid4(), NOW, json.dumps({"brier": 0.9, "exogenous_sample_size": 99}),
         )
     out = await port.get_calibration()
-    assert out["forecast_unproven"] is False     # ready + non-degenerate + BSS>0
-    assert out["calibration_thin"] is False
+    assert out["available"] is False
+
+    async with pg_pool.acquire() as conn:
+        live = await _insert_calibration_finding(conn, {
+            "brier": 0.2, "exogenous_sample_size": 10, "sample_size": 20,
+        })
+        # a SUPERSEDED calibration finding (points at the live head) is skipped
+        await _insert_calibration_finding(
+            conn,
+            {"brier": 0.99, "exogenous_sample_size": 1, "sample_size": 1},
+            superseded_by=live,
+        )
+    out = await port.get_calibration()
+    assert out["available"] is True
+    assert out["id"] == str(live)
+    assert out["brier"] == 0.2
 
 
 @pytest.mark.asyncio

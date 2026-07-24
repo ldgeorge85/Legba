@@ -33,7 +33,6 @@ _DESCRIPTORS_DIR = pathlib.Path(__file__).resolve().parents[2] / "descriptors"
 
 # Descriptors that must validate AND be in the bringup ANALYST_FILES set.
 _NEW_FILES = {
-    "analyst_cross_correlator.yaml": ("cross_correlator", "cross_analyst_correlator"),
     # The facts-table maintenance sweep — same deterministic-sub_handler pattern;
     # wires the built-but-uninvoked fact_decay handler.
     "analyst_fact_decay.yaml": ("fact_decay", "deterministic"),
@@ -54,9 +53,20 @@ _NEW_FILES = {
 #     escalation -> world) and reads the now-retired country_assessor as input →
 #     retired live; left out so a fresh deploy cannot re-create it over a dead
 #     input. See test_meta_synthesizer_subscription_sources for the file contract.
+#   * cross_correlator (2026-07-09, Piece 3 Task C): drifted into a coverage-gap
+#     detector reading RETIRED analyst outputs (0 downstream consumers, emitted
+#     a live "score 0.00" faithfulness head) — commented out of ANALYST_FILES in
+#     scripts/bringup_register_analysts.py. The descriptor keeps receiving edits
+#     post-retirement (its other_analysts list has since grown to 10 entries,
+#     entirely different from the 3-entry set this file used to compare it
+#     against) — TEST_DEBT_RECON.md §3 flags this as an open question (dead vs.
+#     being prepped for reactivation) for whoever's been editing the YAML; this
+#     file only asserts it still validates, per the retired-but-kept-on-disk
+#     contract, and does not presume either way.
 _RETIRED_BUT_VALIDATES = {
     "analyst_hypothesis_lifecycle.yaml": ("hypothesis_lifecycle", "deterministic"),
     "analyst_meta_synthesizer.yaml": ("meta_synthesizer", "meta_findings_synthesizer"),
+    "analyst_cross_correlator.yaml": ("cross_correlator", "cross_analyst_correlator"),
 }
 
 
@@ -126,16 +136,17 @@ def test_meta_synthesizer_subscription_sources():
     assert desc.subscription.targets is None
 
 
-def test_cross_correlator_widens_input_set_and_staggers_cadence():
-    """Per the plan: do NOT register two meta producers with identical input +
-    cadence. The correlator is WIDER (adds country_predictor) and staggered."""
-    synth = _load("analyst_meta_synthesizer.yaml")
-    corr = _load("analyst_cross_correlator.yaml")
-    synth_ids = {a.id for a in synth.subscription.other_analysts}
-    corr_ids = {a.id for a in corr.subscription.other_analysts}
-    assert synth_ids < corr_ids  # correlator strictly wider
-    assert "country_predictor" in corr_ids
-    assert synth.cadence.fallback_schedule != corr.cadence.fallback_schedule
+# test_cross_correlator_widens_input_set_and_staggers_cadence was REMOVED
+# 2026-07-23 (TEST_DEBT_RECON.md Bucket A): it asserted a subscription-widening
+# CONTRACT between meta_synthesizer and cross_correlator (correlator strictly
+# wider, incl. country_predictor) that predates cross_correlator's 2026-07-09
+# retirement from bringup. The live descriptor's other_analysts list was
+# rewritten post-retirement to a 10-entry set that shares no overlap with the
+# old 3-entry comparison set at all — cross_correlator is retired-but-kept-on-
+# disk (see _RETIRED_BUT_VALIDATES above) and is being edited as dead/parked
+# content, not live-synced against meta_synthesizer. A test can't meaningfully
+# gate a subscription contract against something not wired to anything; see
+# TEST_DEBT_RECON.md §3 for the open "dead vs. reactivation-prep" question.
 
 
 def test_competing_hypotheses_is_dispatchable_meta_kind():
@@ -216,10 +227,12 @@ def test_fact_decay_is_deterministic_sub_handler_and_staggered():
     "name,expected_ids",
     [
         ("analyst_meta_synthesizer.yaml", ["country_assessor", "world_assessor"]),
-        (
-            "analyst_cross_correlator.yaml",
-            ["country_assessor", "world_assessor", "country_predictor"],
-        ),
+        # analyst_cross_correlator.yaml case REMOVED 2026-07-23 (TEST_DEBT_RECON.md
+        # Bucket A): hardcoded expected_ids=[country_assessor, world_assessor,
+        # country_predictor] against a descriptor whose live other_analysts list
+        # is now a 10-entry set post-retirement (see _RETIRED_BUT_VALIDATES above)
+        # — same root cause as the removed
+        # test_cross_correlator_widens_input_set_and_staggers_cadence.
     ],
 )
 def test_actor_source_analyst_injection_matches_descriptor(name, expected_ids):

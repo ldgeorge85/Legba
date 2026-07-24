@@ -1961,6 +1961,11 @@ async def _insert_journal_entry(
               for c in (getattr(p, "claims", []) or [])]
     cited_refs = list(getattr(p, "cited_substrate_refs", []) or [])
     honesty_flags = list(getattr(p, "honesty_flags", []) or [])
+    # VOICES LV-1 (migration 0090): the free-form per-row metadata jsonb. Empty
+    # {} for entry/consolidation/chronicle; a lens row carries {"lens_id": ...},
+    # a lens_diff row the {"matrix": {...}}. `getattr` default keeps a legacy
+    # payload (pre-`data`-field) writing cleanly as an empty object.
+    data = getattr(p, "data", {}) or {}
 
     supersedes: UUID | None = None
     if entry_kind == "consolidation":
@@ -1977,13 +1982,15 @@ async def _insert_journal_entry(
             period_start, period_end, honesty_flags,
             superseded_by,
             target_id, target_version, analyst_id, analyst_version,
-            produced_at, derived_from, schema_uri, run_id
+            produced_at, derived_from, schema_uri, run_id,
+            data
         ) VALUES (
             $1, $2, $3, $4, $5::jsonb, $6,
             $7, $8, $9,
             $10,
             $11, $12, $13, $14,
-            $15, $16, $17, $18
+            $15, $16, $17, $18,
+            $19::jsonb
         )
         """,
         row_id,
@@ -2007,6 +2014,9 @@ async def _insert_journal_entry(
         [],  # OFF the chain — always empty (§3.5).
         effective_schema_uri,
         prov.run_id,
+        # VOICES LV-1 (0090): the free-form per-row metadata. json.dumps mirrors
+        # `claims`'s serialization above (the ::jsonb cast on $19 binds it).
+        json.dumps(data, default=_json_default),
     )
     _ = supersedes  # recorded via the prior row's superseded_by pointer above
 

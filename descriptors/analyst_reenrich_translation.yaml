@@ -1,0 +1,111 @@
+# reenrich_translation — TRANSLATION backfill over the pre-T-1a non-Latin backlog.
+#
+# A `deterministic`-kind META analyst over the SHARED raw signal pool. The M11/M12
+# NER lane translated a non-Latin signal to English transiently, NERed the
+# translation, and DISCARDED it — so every signal ingested BEFORE T-1a landed
+# carries payload.title_en = NULL (the exact rows the journal/chronicle narrator
+# read raw + a transliterated NER surface and inverted — the Rubio-inversion class,
+# j7 review). T-1a fixes the FORWARD path (every new non-Latin signal now stamps
+# title_en/text_en at ingest). This analyst is the BACKFILL leg: every time it
+# fires it translates the next batch of candidate signals (payload language in the
+# non-Latin translate set AND payload.title_en IS NULL), draining the ~1.9k backlog
+# over ~1-2 days, then idles (no new candidates arrive). The handler is fully built
+# at legba.data.analysts.deterministic_handlers.reenrich_translation and REUSES the
+# hosted /translate plane (nlp.local.legba_models — it never reimplements translate).
+#
+# Target-agnostic + META: translation is an observation-level property of the shared
+# pool, not a per-target interpretation. The subscription declares NO `targets`
+# selector, so the cadence heartbeat is a SINGLE global sweep per tick (not a
+# per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets. The handler
+# pulls candidate signals directly via deps.pg_pool (it ignores the materialized
+# input slice / time window).
+#
+# Method:
+#   * kind = deterministic — the deterministic kind dispatcher module:run_method.
+#     NO LLM block and no per-day token budget — the run is pure Python over signals
+#     plus the SELF-HOSTED hosted NLP plane (nlp.local.legba_models → /translate,
+#     $0). The runtime threads the process-lifetime hosted NlpServiceClient onto
+#     deps.extras["reenrich_translation_nlp"] whenever the bound sub_handler is
+#     reenrich_translation; if it isn't wired (models-host unreachable at deps-build)
+#     the sweep no-ops that tick (skipped_no_nlp).
+#   * sub_handler = reenrich_translation — injected into the run options at fire
+#     time. The sweep is idempotent + forward-progressing: the field IS the marker
+#     (payload.title_en NULL is the candidate gate), so a row drains the instant its
+#     title_en is stamped and a row whose translate call fails stays a candidate and
+#     is retried next tick. NO marker column / migration is needed.
+#
+# The per-run summary FindingPayload (examined / titles_stamped / texts_stamped /
+# failures) is the cadence receipt — exactly how reenrich_ner / signal_embedder keep
+# a summary while side-writing directly. reenrich_translation is marked TRACE_ONLY
+# in deterministic.py (its real product is the side-written signal enrichment), so
+# the receipt lands in the trace, not in analyst_outputs.
+#
+# Registered via the registry REST API (mirrors reenrich_ner). NO migration: the
+# self-draining title_en-is-marker predicate needs no new column or scan index.
+#
+# ONE-TIME: once the ~1.9k backlog drains (no new candidates arrive — the forward
+# T-1a fix stamps every new non-Latin signal at ingest), this analyst idles cheaply
+# (examined=0 per tick). It may be retired via PUT /descriptors once the backlog is
+# confirmed empty, or left running as a self-healing backstop.
+
+identity:
+  id: reenrich_translation
+  name: Translation Backfill (non-Latin title/text_en)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: reenrich_translation
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared signal pool, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: reenrich_translation
+  # Deterministic kind, NO LLM block: this sweep uses the hosted NLP plane
+  # (nlp.local.legba_models → /translate), not an LLM. The runtime deps-builder
+  # resolves the process-lifetime hosted NlpServiceClient and threads it into
+  # deps.extras["reenrich_translation_nlp"] whenever the bound sub_handler is
+  # reenrich_translation; degrade-not-break if it can't be wired (the sweep no-ops).
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # method.kind=deterministic carries no LLM block and no budget_tokens_per_day
+  # (translation spends zero LLM tokens; the hosted translate plane is self-hosted /
+  # $0). META analyst: no subscription.targets, so the cadence heartbeat is a SINGLE
+  # global sweep per tick, NOT a fan-out. Each translated row is a bounded hosted
+  # /translate round-trip, so the sweep bounds its per-tick batch (max_translate,
+  # default 300) rather than draining in one shot.
+  #
+  # fallback_schedule = "14-59/15 * * * *" — every 15 min (fires :14/:29/:44/:59),
+  # OFFSET from the other maintenance crons so they never fire on the same tick:
+  #   entity_resolution "*/10"        · situation_clustering "5-59/20"
+  #   hypothesis_lifecycle "10-59/20" · integrity_sweep "41 */1"
+  #   fact_contention_arbiter "37 */1"· fact_decay "23 */8"
+  #   signal_summarizer "13-59/15"    · corpus_indexer "7-59/15"
+  #   signal_embedder "11-59/15"      · reenrich_ner "9-59/15"
+  #   reenrich_translation (this) "14-59/15"
+  fallback_schedule: "14-59/15 * * * *"
+  # Idempotent forward-progressing sweep — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND writes a
+# per-run summary finding (suppressed to the trace via the TRACE_ONLY map). The
+# translated fields land directly on the signals rows (payload.title_en /
+# payload.text_en).
+outputs: []

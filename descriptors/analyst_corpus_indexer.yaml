@@ -1,0 +1,94 @@
+# corpus_indexer — async indexing of signals into the OpenSearch full-text corpus.
+#
+# A `deterministic`-kind META analyst over the SHARED raw signal pool. Every time
+# it fires it indexes the next batch of un-indexed signals into the OpenSearch
+# corpus (`legba_signals_corpus`) — the INDEX PLANE of the signal-content-depth
+# program (a BM25 lexical MINING substrate over the whole signal body + keyword/
+# date facets). Signals already live structured in Postgres and, for the RAG
+# corpus, as vectors in Qdrant; this is the third leg — cheap full-text retrieval
+# over the WHOLE corpus, not just the analytic slice. The handler is fully built
+# at legba.data.analysts.deterministic_handlers.corpus_indexer.
+#
+# Target-agnostic + META: indexing is an observation-level property of the shared
+# pool, not a per-target interpretation. The subscription declares NO `targets`
+# selector, so the cadence heartbeat is a SINGLE global sweep per tick (not a
+# per-target fan-out) — see dapr_actors.AnalystActor._cadence_targets. The handler
+# pulls un-indexed signals directly via deps.pg_pool (it ignores the materialized
+# input slice / time window) and indexes ALL modalities.
+#
+# Method:
+#   * kind = deterministic — the deterministic kind dispatcher module:run_method.
+#     NO LLM block and no per-day token budget — the run is pure Python over
+#     signals → the OpenSearch corpus (uses OpenSearch, not an LLM).
+#   * sub_handler = corpus_indexer — injected into the run options at fire time.
+#     The sweep is idempotent + forward-progressing (stamps signals.indexed_at on
+#     every examined row; OpenSearch `_id` = the signal id, so a re-index
+#     overwrites in place), so re-runs are safe. The runtime deps-builder connects
+#     an OpenSearchStore into deps.extras["corpus_indexer_os"]; if it can't
+#     (dep missing / OS unreachable) the sweep no-ops that tick.
+#
+# The per-run summary FindingPayload (examined / indexed / failures) is the
+# cadence receipt — exactly how entity_resolution / signal_summarizer keep a
+# summary while side-writing directly. corpus_indexer is marked TRACE_ONLY in
+# deterministic.py (its real product is the OpenSearch corpus write), so the
+# receipt lands in the trace, not in analyst_outputs.
+#
+# Registered via scripts/bringup_register_corpus_indexer.py or the registry
+# REST API. Migration 0082_signal_indexed_marker.sql adds the indexed_at marker +
+# its partial scan index.
+
+identity:
+  id: corpus_indexer
+  name: Corpus Indexer
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: corpus_indexer
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole shared signal pool, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: corpus_indexer
+  # Deterministic kind, NO LLM block: this sweep uses OpenSearch (the index
+  # plane), not an LLM. The runtime deps-builder connects an OpenSearchStore into
+  # deps.extras["corpus_indexer_os"] whenever the bound sub_handler is
+  # corpus_indexer; degrade-not-break if it can't (the sweep no-ops that tick).
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # method.kind=deterministic carries no LLM block and no budget_tokens_per_day
+  # (indexing spends zero tokens). META analyst: no subscription.targets, so the
+  # cadence heartbeat is a SINGLE global sweep per tick, NOT a fan-out. Indexing
+  # is cheap (no LLM), so a large per-tick batch drains the backlog quickly.
+  #
+  # fallback_schedule = "7-59/15 * * * *" — every 15 min (fires :07/:22/:37/:52),
+  # OFFSET from the other maintenance crons so they never fire on the same tick:
+  #   entity_resolution "*/10"        · situation_clustering "5-59/20"
+  #   hypothesis_lifecycle "10-59/20" · integrity_sweep "41 */1"
+  #   fact_contention_arbiter "37 */1"· fact_decay "23 */8"
+  #   signal_summarizer "13-59/15"    · corpus_indexer (this) "7-59/15"
+  fallback_schedule: "7-59/15 * * * *"
+  # Idempotent forward-progressing sweep — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND writes a
+# per-run summary finding (suppressed to the trace via the TRACE_ONLY map). The
+# indexed docs land directly in the OpenSearch legba_signals_corpus index.
+outputs: []

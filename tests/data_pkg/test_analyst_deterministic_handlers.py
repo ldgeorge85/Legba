@@ -155,9 +155,12 @@ def test_graph_mining_proxy_chains_deterministic_and_scored():
     # Mundane positive chain: X -> Y -> Z.
     g.add_edge("X", "Y", polarity=1)
     g.add_edge("Y", "Z", polarity=1)
-    first = graph_mining._proxy_chains(g)
-    second = graph_mining._proxy_chains(g)
+    # P1: _proxy_chains now returns (chains, truncated); a tiny graph never
+    # trips the path-scan cap.
+    first, first_trunc = graph_mining._proxy_chains(g)
+    second, second_trunc = graph_mining._proxy_chains(g)
     assert first == second, "proxy-chain mining must be deterministic"
+    assert first_trunc is False and second_trunc is False
     # Every chain carries a 0..1 score; ranked desc.
     for c in first:
         assert 0.0 <= c["score"] <= 1.0

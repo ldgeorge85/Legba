@@ -1,0 +1,439 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""legba.data.opensearch — wrapper around `opensearch-py` (AsyncOpenSearch).
+
+The OpenSearch corpus is the INDEX PLANE of the signal-content-depth program: a
+single-node, internal-only, full-text index of the shared signal pool (a MINING
+substrate — BM25 keyword search over the raw bodies + lightweight keyword/date
+facets). Signals already live structured in Postgres (`signals`) and, for the
+RAG corpus, as vectors in Qdrant (`legba.data.qdrant`); this store is the third
+leg — cheap lexical retrieval over the WHOLE corpus body, not just the analytic
+slice.
+
+Shape mirrors :mod:`legba.data.qdrant` deliberately: a soft-import guard (so the
+module imports cleanly on a host without ``opensearch-py`` installed — the
+descriptor-model code + the deterministic test suite import this transitively),
+an ``__init__(cfg)`` / ``from_env()`` classmethod, an idempotent ``ensure_index``
+create-if-absent, and I/O passthroughs (``bulk_index`` / ``search`` / ``get``)
+that keep all opensearch-py wire handling in ONE place. No module-level
+singleton — callers build via :meth:`OpenSearchStore.from_env`.
+
+This is the INDEX plane only. The READ tools (``search_corpus`` /
+``read_document`` on the ``substrate_read`` pack) are a SEPARATE build.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any, Iterable, Mapping, Sequence
+
+try:
+    from opensearchpy import AsyncOpenSearch
+    from opensearchpy.helpers import async_bulk
+except ImportError:  # pragma: no cover — opensearch-py must be installed in-image
+    AsyncOpenSearch = None  # type: ignore[assignment]
+    async_bulk = None  # type: ignore[assignment]
+
+from .config import OpenSearchConfig
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Index mapping (the schema ensure_index materializes) + the signal projection
+# ---------------------------------------------------------------------------
+#
+# Single-node → number_of_replicas 0 (no replica shard can allocate anyway).
+# Text fields use the `english` analyzer for BM25 stemming/stopwords; the facet
+# fields are keyword (exact-match term filters). `published_at` is a payload
+# STRING (not a clean column), so it is mapped lenient (ignore_malformed) — a
+# non-ISO value is dropped from the index rather than failing the whole doc.
+
+CORPUS_INDEX_MAPPING: dict[str, Any] = {
+    "settings": {
+        "index": {
+            "number_of_replicas": 0,
+        },
+    },
+    "mappings": {
+        "properties": {
+            # BM25 text (english analyzer)
+            "title": {"type": "text", "analyzer": "english"},
+            "distilled_body": {"type": "text", "analyzer": "english"},
+            "raw_body": {"type": "text", "analyzer": "english"},
+            "summary": {"type": "text", "analyzer": "english"},
+            "best_body": {"type": "text", "analyzer": "english"},
+            "entities_text": {"type": "text", "analyzer": "english"},
+            # keyword facets (exact-match term filters)
+            "source_id": {"type": "keyword"},
+            "geo": {"type": "keyword"},
+            "tags": {"type": "keyword"},
+            "entity_classes": {"type": "keyword"},
+            "language": {"type": "keyword"},
+            "modality": {"type": "keyword"},
+            "retention_class": {"type": "keyword"},
+            "canonical_url": {"type": "keyword"},
+            "license_class": {"type": "keyword"},
+            # numeric
+            "source_credibility": {"type": "float"},
+            # dates — fetched_at is a clean column; published_at is a payload
+            # string, so map it lenient.
+            "fetched_at": {"type": "date"},
+            "published_at": {"type": "date", "ignore_malformed": True},
+        },
+    },
+}
+
+#: BM25 multi_match target fields (title + best_body carry the analytic weight;
+#: raw_body/summary/distilled_body/entities_text broaden recall).
+_SEARCH_FIELDS: tuple[str, ...] = (
+    "title^2",
+    "best_body^1.5",
+    "distilled_body",
+    "summary",
+    "raw_body",
+    "entities_text",
+)
+
+#: best_body preference order (first non-empty wins) — OUR distilled brief first,
+#: then the full body, then the teaser, then rarer manual/derived text fields.
+_BEST_BODY_FIELDS: tuple[str, ...] = (
+    "distilled_body",
+    "raw_body",
+    "summary",
+    "description",
+    "content_text",
+)
+
+
+def _as_dict(v: Any) -> dict[str, Any]:
+    """Coerce a jsonb value to a dict (asyncpg may hand back a str or a dict)."""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        import json
+
+        try:
+            parsed = json.loads(v)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _as_str_list(v: Any) -> list[str]:
+    """text[]/list → a clean list of non-empty strings (drops empties)."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v.strip() else []
+    if isinstance(v, (list, tuple, set)):
+        out: list[str] = []
+        for x in v:
+            if x is None:
+                continue
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    return []
+
+
+def _as_float(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso(v: Any) -> str | None:
+    """datetime → ISO 8601 string; pass a str through; else None."""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, str):
+        return v.strip() or None
+    return None
+
+
+def _first_nonempty(payload: Mapping[str, Any], keys: Sequence[str]) -> str:
+    for k in keys:
+        val = payload.get(k)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
+
+
+def _entities_text(payload: Mapping[str, Any]) -> str:
+    """Join the NER MENTION texts (payload.entities[].text — under ``text``, NOT
+    ``name``; class is under ``class``). Order-preserving de-dup so a repeated
+    mention does not bloat the field."""
+    ents = payload.get("entities")
+    if not isinstance(ents, list):
+        return ""
+    seen: set[str] = set()
+    out: list[str] = []
+    for e in ents:
+        if not isinstance(e, Mapping):
+            continue
+        t = e.get("text")
+        if isinstance(t, str) and t.strip():
+            key = t.strip()
+            if key not in seen:
+                seen.add(key)
+                out.append(key)
+    return " ".join(out)
+
+
+def _license_class(row: Mapping[str, Any], payload: Mapping[str, Any]) -> str | None:
+    """Lightweight license metadata: an explicit ``payload.license_class`` if the
+    ingest set one, else the manual-batch provenance license (raw_provenance ->
+    provenance -> license), else None. Internal-only corpus, so this is a facet
+    hint, not an enforcement gate."""
+    lc = payload.get("license_class")
+    if isinstance(lc, str) and lc.strip():
+        return lc.strip()
+    prov = _as_dict(row.get("raw_provenance"))
+    inner = prov.get("provenance")
+    if isinstance(inner, Mapping):
+        lic = inner.get("license")
+        if isinstance(lic, str) and lic.strip():
+            return lic.strip()
+    lic = prov.get("license")
+    if isinstance(lic, str) and lic.strip():
+        return lic.strip()
+    return None
+
+
+def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a ``signals`` row → an OpenSearch corpus doc.
+
+    ``row`` is any mapping over the signal columns + ``payload`` (an asyncpg
+    ``Record`` or a plain dict). The returned doc carries ``_id`` = the signal id
+    (so a re-index OVERWRITES in place — idempotent), plus the text/keyword/date
+    fields declared in :data:`CORPUS_INDEX_MAPPING`. None/empty fields are dropped
+    so a doc stays lean and a null never reaches a date/float mapping.
+    """
+    r = dict(row)
+    payload = _as_dict(r.get("payload"))
+
+    doc: dict[str, Any] = {
+        "_id": str(r.get("id")),
+        # text
+        "title": payload.get("title"),
+        "distilled_body": payload.get("distilled_body"),
+        "raw_body": payload.get("raw_body"),
+        "summary": payload.get("summary"),
+        "best_body": _first_nonempty(payload, _BEST_BODY_FIELDS) or None,
+        "entities_text": _entities_text(payload) or None,
+        # keyword facets (columns)
+        "source_id": r.get("source_id"),
+        "geo": _as_str_list(r.get("geo")),
+        "tags": _as_str_list(r.get("tags")),
+        "entity_classes": _as_str_list(r.get("entity_classes")),
+        "language": r.get("language"),
+        "modality": r.get("modality"),
+        "retention_class": r.get("retention_class"),
+        "canonical_url": r.get("canonical_url"),
+        "license_class": _license_class(r, payload),
+        # numeric / dates
+        "source_credibility": _as_float(r.get("source_credibility")),
+        "fetched_at": _iso(r.get("fetched_at")),
+        "published_at": payload.get("published_at"),
+    }
+    # Drop None / empty-string / empty-list values (keep _id always).
+    return {
+        k: v
+        for k, v in doc.items()
+        if k == "_id" or (v is not None and v != "" and v != [])
+    }
+
+
+class OpenSearchStore:
+    """Async wrapper around ``AsyncOpenSearch`` for the signal corpus index.
+
+    Exposes only what the index-plane needs:
+
+      * ``ensure_index(name, mapping)`` — idempotent create-if-absent (HEAD then
+        create on 404).
+      * ``bulk_index(index, docs)`` — bulk upsert; each doc's ``_id`` = the signal
+        id so a re-index overwrites in place. Returns the success count.
+      * ``search(index, query, filters, size)`` — BM25 multi_match over the text
+        fields + keyword term filters; returns scored rows.
+      * ``get(index, doc_id)`` — the ``_source`` of one doc, or ``None``.
+    """
+
+    def __init__(self, cfg: OpenSearchConfig):
+        if AsyncOpenSearch is None:  # pragma: no cover
+            raise RuntimeError("opensearch-py is not installed")
+        self._cfg = cfg
+        self._client: "AsyncOpenSearch | None" = None
+
+    @classmethod
+    def from_env(cls) -> "OpenSearchStore":
+        return cls(OpenSearchConfig.from_env())
+
+    @property
+    def client(self) -> "AsyncOpenSearch":
+        if self._client is None:
+            raise RuntimeError("OpenSearchStore not connected")
+        return self._client
+
+    @property
+    def cfg(self) -> OpenSearchConfig:
+        return self._cfg
+
+    async def connect(self) -> None:
+        if self._client is not None:
+            return
+        self._client = AsyncOpenSearch(
+            hosts=[{"host": self._cfg.host, "port": self._cfg.port}],
+            use_ssl=self._cfg.use_ssl,
+            verify_certs=self._cfg.verify_certs,
+        )
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+    # ------------------------------------------------------------------
+    # Index management
+    # ------------------------------------------------------------------
+
+    async def ensure_index(self, name: str, mapping: Mapping[str, Any]) -> bool:
+        """Create ``name`` with ``mapping`` if it doesn't exist. Idempotent.
+
+        Returns True if newly created, False if it already existed. Tolerates a
+        create race (another writer created it between the HEAD and the create).
+        """
+        exists = await self.client.indices.exists(index=name)
+        if exists:
+            return False
+        try:
+            await self.client.indices.create(index=name, body=dict(mapping))
+        except Exception as exc:  # create race / already-exists → no-op
+            if getattr(exc, "status_code", None) == 400 and (
+                "resource_already_exists" in str(exc)
+            ):
+                return False
+            raise
+        return True
+
+    # ------------------------------------------------------------------
+    # Doc I/O passthroughs
+    # ------------------------------------------------------------------
+
+    async def bulk_index(self, index: str, docs: Iterable[Mapping[str, Any]]) -> int:
+        """Bulk-index ``docs`` (each carrying ``_id``) into ``index``.
+
+        Idempotent by design: a doc's ``_id`` = the signal id, so a re-index
+        OVERWRITES the same doc in place rather than duplicating it. Returns the
+        number of docs successfully indexed. A transport/connection failure
+        RAISES (the caller leaves the batch un-stamped → retried next tick); a
+        per-doc mapping error is logged and counted as a non-success (it is NOT
+        re-raised) so one poison doc never wedges the batch.
+        """
+        actions: list[dict[str, Any]] = []
+        for doc in docs:
+            d = dict(doc)
+            _id = d.pop("_id", None)
+            action: dict[str, Any] = {
+                "_op_type": "index",
+                "_index": index,
+                "_source": d,
+            }
+            if _id is not None:
+                action["_id"] = str(_id)
+            actions.append(action)
+        if not actions:
+            return 0
+        success, errors = await async_bulk(
+            self.client, actions, raise_on_error=False, stats_only=False
+        )
+        if errors:
+            logger.warning(
+                "opensearch.bulk_index index=%s indexed=%d errors=%d first_err=%s",
+                index,
+                success,
+                len(errors),
+                str(errors[0])[:300],
+            )
+        return int(success)
+
+    async def search(
+        self,
+        index: str,
+        query: str | None,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        size: int = 10,
+    ) -> list[dict[str, Any]]:
+        """BM25 multi_match over the text fields + keyword term filters.
+
+        ``filters`` maps a keyword field → a scalar (term) or a list (terms).
+        A falsy ``query`` degrades to match_all (filter-only browse). Returns
+        ``[{"id", "score", "source"}]`` sorted by BM25 score.
+        """
+        must: list[dict[str, Any]] = []
+        if query:
+            must.append(
+                {
+                    "multi_match": {
+                        "query": query,
+                        "fields": list(_SEARCH_FIELDS),
+                        "type": "best_fields",
+                    }
+                }
+            )
+        else:
+            must.append({"match_all": {}})
+
+        filter_clauses: list[dict[str, Any]] = []
+        for field, value in (filters or {}).items():
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple, set)):
+                vals = [v for v in value if v is not None]
+                if vals:
+                    filter_clauses.append({"terms": {field: list(vals)}})
+            else:
+                filter_clauses.append({"term": {field: value}})
+
+        body = {
+            "size": int(size),
+            "query": {"bool": {"must": must, "filter": filter_clauses}},
+        }
+        resp = await self.client.search(index=index, body=body)
+        hits = (resp.get("hits") or {}).get("hits") or []
+        rows: list[dict[str, Any]] = []
+        for h in hits:
+            rows.append(
+                {
+                    "id": h.get("_id"),
+                    "score": h.get("_score"),
+                    "source": h.get("_source") or {},
+                }
+            )
+        return rows
+
+    async def get(self, index: str, doc_id: str) -> dict[str, Any] | None:
+        """Fetch one doc's ``_source`` by id; ``None`` on a 404."""
+        try:
+            resp = await self.client.get(index=index, id=str(doc_id))
+        except Exception as exc:
+            if getattr(exc, "status_code", None) == 404:
+                return None
+            raise
+        return resp.get("_source")
+
+
+__all__ = [
+    "CORPUS_INDEX_MAPPING",
+    "OpenSearchStore",
+    "signal_to_doc",
+]

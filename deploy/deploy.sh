@@ -31,6 +31,8 @@
 #   --seed             Run the curated knowledge-seed sequence (world_baseline,
 #                      sipri_arms_transfers; wikidata_leaders/acled need network/
 #                      creds and are opt-in via env, see SEED_SOURCES below).
+#                      The curated seed DATA is OPERATOR-PROVIDED (not bundled) —
+#                      --seed degrades to a no-op if the seed files are absent.
 #                      Seeds run BEFORE the runtime boots (nlp_client footgun).
 #   --no-caddy         Skip the caddy TLS edge (loopback-only stack). Recommended
 #                      for any non-legba validation stack (no 443/ACME contention).

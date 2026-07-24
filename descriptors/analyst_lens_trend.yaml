@@ -1,0 +1,90 @@
+# lens_trend — the trend-continuation faculty (VOICES LV-1; build spec
+# planning/VOICES_BUILD_DESIGN.md §4, plan planning/VOICES_PLAN_2026-07-21.md).
+#
+# One of FOUR function-typed faculty ids on the journal_assessor kind (DL-1/DL-3).
+# The kind module maps this id → entry_kind='lens' in journal_entries — append-
+# only, OFF the fact/finding/nexus chain, V1 faithfulness verify fires on every
+# read (the same gate the chronicle rides; keyed on identity.kind, not id). It
+# reads the VERIFIED tower top through ONE declared falsifiable prior and writes
+# an interpretive read; it never asserts a new fact. NO publish edge.
+#
+# The declared prior LIVES in the persona module (legba.prompts.lens_trend) — the
+# descriptor content hash IS the prior version (DL-2). Re-authoring the prior is a
+# descriptor PUT with a visible hash change.
+#
+# Cadence: WEEKLY, staggered AFTER the chronicle's Monday 06:00 beat (§4.1) — off
+# the 00:00/12:00 cadence burst window. Model plane: $0 core for gather/voice/
+# verify (the 2026-07-14 hard rule — Anthropic is consult/deep_consult only).
+
+identity:
+  id: lens_trend
+  name: "Voices — Trend-Continuation Faculty"
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: journal_assessor             # SAME kind module; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: voices_lv1
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick.
+  other_analysts: []
+  substrate:
+    direct_queries: false            # reads via the granted pack only, governed
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  # COLON form ('module:ATTR') — a dotted path silently falls back to the kind
+  # default and loses the entire lens stance + declared prior.
+  prompt_module: "legba.prompts.lens_trend:LENS_SYSTEM"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the GATHER investigation
+      expected_family: llm_provider
+    verify:
+      # The lens gate: cited FACT claims graded post-persist by the V1
+      # faithfulness pass (perspective exempt, read never mutated; critique row
+      # lands with analyzed_output_id = the read id). $0 core plane.
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the lens VOICE
+      expected_family: llm_provider
+    max_tokens: 12288                 # a lens read is narrower than a full weekly record
+  budget_tokens_per_day: 600000       # weekly agent — lighter than the chronicle's 1M
+  gather:
+    max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling)
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "30 6 * * 1"     # weekly — Mondays 06:30 UTC (staggered, §4.1)
+  cooldown_seconds: 518400            # 6d — below the 7d interval (the below-7d guard)
+
+grounding:
+  enabled: false                      # OFF by default (§4.3) — a lens cites tower
+                                      # conclusions (already grounding-corrected
+                                      # upstream) or weighs them; revisit if live
+                                      # reads show stale-fact creep into fact claims
+
+# Grant invariant (§7.6 / §4.2): journal_read ONLY — the tower-top read surface
+# (assessments, findings, situations, contentions, journal delta). substrate_read
+# is DELIBERATELY OMITTED: a lens interprets the tower's verified conclusions, it
+# does not reach past them into the raw corpus (that is a later gated capability).
+# NO journal_propose (a v1 faculty proposes nothing) and NO publish sink.
+action_packs:
+  - pack_id: journal_read
+
+outputs: []                           # JournalPayload → journal_entries
+                                      # (entry_kind='lens'); no sinks in v1

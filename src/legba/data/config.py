@@ -162,6 +162,45 @@ class QdrantConfig:
 
 
 @dataclass(frozen=True)
+class OpenSearchConfig:
+    """OpenSearch full-text corpus (the INDEX PLANE of the signal pool).
+
+    Single-node, internal-only, no-auth — a lexical MINING substrate over the raw
+    signal bodies (BM25 keyword search + keyword/date facets), complementing the
+    structured Postgres `signals` and the Qdrant vector RAG corpus. Mirrors
+    :class:`QdrantConfig`'s bare-fallback convention (LEGBA_DATA_*  ->  the bare
+    OPENSEARCH_* form). ``host`` defaults to the compose service name.
+    """
+
+    host: str = "opensearch"
+    port: int = 9200
+    use_ssl: bool = False
+    verify_certs: bool = False
+    # Single canonical corpus index (the deterministic corpus_indexer sweep + the
+    # backfill both write here; the future substrate_read search tools read here).
+    index: str = "legba_signals_corpus"
+
+    @classmethod
+    def from_env(cls) -> "OpenSearchConfig":
+        return cls(
+            host=os.getenv(
+                "LEGBA_DATA_OPENSEARCH_HOST", os.getenv("OPENSEARCH_HOST", "opensearch")
+            ),
+            port=int(
+                os.getenv(
+                    "LEGBA_DATA_OPENSEARCH_PORT", os.getenv("OPENSEARCH_PORT", "9200")
+                )
+            ),
+            use_ssl=os.getenv("LEGBA_DATA_OPENSEARCH_SSL", "false").lower() == "true",
+            verify_certs=os.getenv(
+                "LEGBA_DATA_OPENSEARCH_VERIFY_CERTS", "false"
+            ).lower()
+            == "true",
+            index=os.getenv("LEGBA_DATA_OPENSEARCH_INDEX", "legba_signals_corpus"),
+        )
+
+
+@dataclass(frozen=True)
 class RedisConfig:
     """Redis hot-state buffer (`kv.redis.cluster_main`)."""
 
@@ -257,6 +296,7 @@ class DataConfig:
 
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
+    opensearch: OpenSearchConfig = field(default_factory=OpenSearchConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     nats: NatsConfig = field(default_factory=NatsConfig)
     registry: RegistryBootstrap = field(default_factory=RegistryBootstrap)
@@ -266,6 +306,7 @@ class DataConfig:
         return cls(
             postgres=PostgresConfig.from_env(),
             qdrant=QdrantConfig.from_env(),
+            opensearch=OpenSearchConfig.from_env(),
             redis=RedisConfig.from_env(),
             nats=NatsConfig.from_env(),
             registry=RegistryBootstrap.from_env(),

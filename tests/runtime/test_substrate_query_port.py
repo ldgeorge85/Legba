@@ -1195,9 +1195,46 @@ async def test_list_findings_sql_executes(port):
             analyst_id="country_assessor",
             severity="high",
             since_hours=48,
+            include_superseded=True,
             limit=5,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_list_findings_excludes_superseded_by_default(port, pg_pool):
+    """R1 / W2-T1 (read-truth): the shared list_findings handler (consult +
+    journal_read + deep_consult all route here) serves only LIVE finding heads
+    by default — a superseded revision must not double-count."""
+    tid = "lf-superseded-gate"
+    successor = await _insert_finding(pg_pool, title="Live head", target_id=tid)
+    stale = await _insert_finding(
+        pg_pool, title="Stale revision", target_id=tid, superseded_by=successor,
+    )
+
+    out = await port.list_findings(target_id=tid, limit=10)
+    ids = {r["id"] for r in out["rows"]}
+    assert str(successor) in ids
+    assert str(stale) not in ids
+    assert out["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_findings_include_superseded_flag_relaxes_gate(port, pg_pool):
+    """include_superseded=True is the explicit history/audit opt-in — both the
+    live head and its superseded ancestor surface."""
+    tid = "lf-superseded-optin"
+    successor = await _insert_finding(pg_pool, title="Live head", target_id=tid)
+    stale = await _insert_finding(
+        pg_pool, title="Stale revision", target_id=tid, superseded_by=successor,
+    )
+
+    out = await port.list_findings(
+        target_id=tid, include_superseded=True, limit=10,
+    )
+    ids = {r["id"] for r in out["rows"]}
+    assert {str(successor), str(stale)} <= ids
+    assert out["count"] == 2
 
 
 @pytest.mark.asyncio

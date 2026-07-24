@@ -245,3 +245,82 @@ def test_legit_short_forms_still_survive_stopword_gate():
     # The stopword add must not swallow real short forms exempted FIRST.
     for legit in ("US", "UK", "EU", "UN", "WHO", "NATO"):
         assert is_junk_entity(legit) is False, legit
+
+
+# ---------------------------------------------------------------------------
+# B0-7 (2026-07-10) — markdown / URL residue gate + fold, and the overlong cap.
+# Telegram payload.text carried raw markdown ("[**title**](url)") into
+# /extract; NER minted 115 junk profiles wearing the syntax (live exemplar:
+# "Ayatollah Ali Khamenei**](https://f24.my"). Paired behavior mirrors the
+# HTML-residue class: the write path REJECTS the residue span, while the fold
+# re-points a historical junk row onto its clean survivor at the next merge.
+# ---------------------------------------------------------------------------
+
+
+def test_b07_live_exemplar_is_junk_and_folds_onto_clean_survivor():
+    exemplar = "Ayatollah Ali Khamenei**](https://f24.my"
+    assert is_junk_entity(exemplar) is True
+    assert identity_fold(exemplar) == identity_fold("Ayatollah Ali Khamenei")
+    assert is_junk_entity("Ayatollah Ali Khamenei") is False
+
+
+@pytest.mark.parametrize(
+    "residue",
+    [
+        "Ayatollah Ali Khamenei**](https://f24.my",   # the live exemplar
+        "see https://f24.my/C2Ba.g",                   # URL scheme anywhere
+        "http://example.com",                          # bare http URL
+        "Khamenei](https://x.y)",                      # link-syntax residue
+        "Ali **Khamenei",                              # bold residue
+        "Reuters | World News",                        # pipe / table residue
+        "Iran\nbegins funeral",                        # embedded newline
+        "Iran\rbegins funeral",                        # carriage return
+    ],
+)
+def test_b07_markdown_url_residue_is_junk(residue):
+    assert is_junk_entity(residue) is True, residue
+
+
+def test_b07_overlong_cap_rejects_over_120_chars():
+    # Cap raised 80→120 by the adversarial review: genuine treaty/UN-body FULL
+    # names run long (UNRWA official name = 82 chars, the Hague cultural-
+    # property convention = 91, longest live legit = 118) while the live junk
+    # band starts at 153 (153/183/688-char swallowed sentences).
+    assert is_junk_entity("A" + "b" * 120) is True   # 121 chars — junk band
+    assert is_junk_entity("A" + "b" * 78) is False   # 79 chars
+    # Genuine long referents the 80-cap would have silently frozen out
+    # platform-wide (live rows, caught by the review) must PASS the gate:
+    assert is_junk_entity(
+        "the United Nations Relief and Works Agency for Palestine "
+        "Refugees in the Near East") is False        # 82 chars — UNRWA
+    assert is_junk_entity(
+        "the Hague Convention for the Protection of Cultural Property "
+        "in the Event of Armed Conflict") is False   # 91 chars — treaty
+    # The longest real country official name stays comfortably under the cap.
+    assert is_junk_entity(
+        "United Kingdom of Great Britain and Northern Ireland") is False
+
+
+@pytest.mark.parametrize(
+    "legit", ["O'Brien", "AT&T", "Ali Khamenei", "Ayatollah Ali Khamenei"]
+)
+def test_b07_legitimate_names_still_pass_the_gate(legit):
+    assert is_junk_entity(legit) is False, legit
+
+
+def test_b07_full_markdown_link_wrapper_folds_to_inner_text():
+    # "[**Ali Khamenei**](https://x.y)" folds onto the clean referent key.
+    wrapped = "[**Ali Khamenei**](https://x.y)"
+    assert identity_fold(wrapped) == identity_fold("Ali Khamenei")
+    assert identity_fold(wrapped) == "alikhamenei"
+    # ... and stays junk-shaped at write time (never minted forward).
+    assert is_junk_entity(wrapped) is True
+
+
+def test_b07_markdown_fold_is_idempotent():
+    for s in [
+        "[**Ali Khamenei**](https://x.y)",
+        "Ayatollah Ali Khamenei**](https://f24.my",
+        "Ali **Khamenei",
+    ]:
+        assert identity_fold(s) == identity_fold(identity_fold(s)), s

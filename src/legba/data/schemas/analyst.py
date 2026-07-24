@@ -649,6 +649,18 @@ class GroundingBlock(BaseModel):
         Literal["substrate", "situations", "graph_structure", "vector:world_context"]
     ] = Field(default_factory=lambda: ["substrate"])
     max_facts: int = Field(default=30, ge=1, le=200)
+    # M22 — the FOCUSED ``vector:world_context`` RAG query theme. The RAG query is
+    # built as a natural "<target-country> — <rag_theme>" phrase (see
+    # analyst_deps_builder._world_context_query), which retrieves the curated
+    # country-background corpus FAR better than the pre-M22 query (the unit name +
+    # em-dash-joined slice-entity pile, which diluted the geo/topic anchor with
+    # person names the officeholder-stripped corpus never contains). Set it to a
+    # short phrase naming the CORPUS-PRESENT facets this unit reasons over —
+    # government structure, political system, military/security, economy, society —
+    # NOT the unit's abstract risk label. Only consulted when ``vector:world_context``
+    # is in ``sources``; when unset, the builder falls back to a cleaned form of the
+    # descriptor name. Max 200 chars.
+    rag_theme: str | None = Field(default=None, max_length=200)
 
 
 class AnalystDescriptor(BaseModel):

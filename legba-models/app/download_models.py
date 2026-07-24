@@ -8,7 +8,7 @@ from transformers import (
 )
 
 MODELS = {
-    "nllb": "facebook/nllb-200-distilled-600M",
+    "nllb": "facebook/nllb-200-distilled-1.3B",
     "classifier": "MoritzLaurer/deberta-v3-base-zeroshot-v2.0",
     "glirel": "jackboyla/glirel-large-v0",
     "t5": "google-t5/t5-small",

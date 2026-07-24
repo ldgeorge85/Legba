@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -46,6 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 from . import consult_persistence
+from .consult_api import resolve_consult_model_override
 from .api import RegistryAPIDeps, require_bearer
 from .descriptor import Family
 from .errors import DescriptorNotFound
@@ -77,6 +78,11 @@ class DeepConsultRequest(BaseModel):
     scope_predicate: str | None = Field(default=None, max_length=2048)
     emit_facts: bool = True
     emit_hypotheses: bool = True
+    # F1 model picker — which registered LLM plane runs the deep workflow's
+    # plan/analyze stages. None / absent ⇒ "opus" (the billed Anthropic Opus
+    # plane, the default). "core" routes to the free self-hosted core plane.
+    # Mapped friendly→component id server-side off the SAME allowlist as chat.
+    model: Literal["opus", "core"] | None = None
 
 
 class DeepConsultSubmitResponse(BaseModel):
@@ -171,14 +177,22 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
             f"{sidecar_url}/v1.0/actors/{ACTOR_TYPE}/{actor_id}/method/run"
         )
         run_id = str(uuid4())
+        # F1 model picker: thread the plane override (None for the Opus default,
+        # so the deep run keeps the descriptor primary unchanged). The deep_consult
+        # kind validates it against the same allowlist and stamps it into the
+        # workflow input, so the workflow's stage deps + budget key off the plane.
+        _chosen_model, llm_component_override = resolve_consult_model_override(
+            body.model,
+        )
+        first_input: dict[str, Any] = {
+            "question": body.question,
+            "scope_predicate": body.scope_predicate,
+        }
+        if llm_component_override is not None:
+            first_input["llm_component_override"] = llm_component_override
         invoke_body = {
             "trigger_kind": "method",
-            "inputs": [
-                {
-                    "question": body.question,
-                    "scope_predicate": body.scope_predicate,
-                }
-            ],
+            "inputs": [first_input],
             "options": {
                 "run_id": run_id,
                 "submitted_by": _principal,

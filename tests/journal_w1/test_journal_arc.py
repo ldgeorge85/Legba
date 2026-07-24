@@ -23,7 +23,11 @@ from legba.data.analysts.agency.agency import AgencyOutcome
 from legba.data.analysts.agency.tools import ToolResult
 from legba.data.analysts.inline_target import InlineTargetDeps
 from legba.data.analysts.journal_assessor import (
+    NarrateToolCallLeakError,
+    _apparatus_lead_flag,
+    _is_tool_call_leak,
     _reflect_claims,
+    _rewrite_gathered_citations,
     run_method,
 )
 
@@ -283,3 +287,412 @@ async def test_honesty_drops_flags_when_substrate_proves_the_leg():
     )
     result = await run_method([{"title": "s"}], _options(binding), deps)
     assert result.finding.honesty_flags == []
+
+
+# ---------------------------------------------------------------------------
+# V4 — the GATHER [N] → journal [[ref:uuid]] citation bridge
+# ---------------------------------------------------------------------------
+
+
+def _corpus_extension(n_to_uuid: dict[int, Any]) -> dict[int, dict[str, Any]]:
+    """A minimal {N -> citation entry} map shaped like inline_target's GATHER
+    citation-extension (only ``signal_id`` is load-bearing for the rewrite)."""
+    return {
+        n: {"signal_id": str(u), "title": f"doc {n}", "source": None,
+            "snippet": None, "source_text": None, "source_truncated": False}
+        for n, u in n_to_uuid.items()
+    }
+
+
+def test_v4_rewrites_gathered_ordinal_to_ref_marker():
+    u = uuid4()
+    body = "Grain corridor talks stalled again [1]."
+    out, count = _rewrite_gathered_citations(body, _corpus_extension({1: u}))
+    assert count == 1
+    assert f"[[ref:{u}]]" in out
+    assert "[1]" not in out
+
+
+def test_v4_leaves_unmapped_ordinal_untouched_never_fabricates():
+    # [2] has no extension entry — it must NOT be rewritten (no invented ref).
+    u = uuid4()
+    body = "First point [1]. Second point [2]."
+    out, count = _rewrite_gathered_citations(body, _corpus_extension({1: u}))
+    assert count == 1
+    assert f"[[ref:{u}]]" in out
+    assert "[2]" in out  # the unmapped ordinal survives verbatim
+
+
+def test_v4_leaves_native_ref_markers_untouched():
+    # The journal's native [[ref:uuid]] path (priming slice / instrument reads)
+    # must be byte-for-byte unchanged — it never matches the ordinal regex.
+    ref = uuid4()
+    body = f"The nexus flipped [[ref:{ref}]]."
+    out, count = _rewrite_gathered_citations(body, _corpus_extension({1: uuid4()}))
+    assert count == 0
+    assert out == body
+
+
+def test_v4_normalizes_fullwidth_bracket_before_rewrite():
+    # The core plane emits 【N】/［N］ non-deterministically — normalize FIRST so a
+    # variant-bracketed gathered marker still rewrites (the fullwidth lesson).
+    u = uuid4()
+    body = "Heat strain in the Gulf 【1】 and rail stress ［1］."
+    out, count = _rewrite_gathered_citations(body, _corpus_extension({1: u}))
+    assert count == 2
+    assert "【1】" not in out and "［1］" not in out
+    assert out.count(f"[[ref:{u}]]") == 2
+
+
+def test_v4_entry_with_no_extension_is_identity():
+    body = "A plain entry with a stray [1] and no gathered docs."
+    out, count = _rewrite_gathered_citations(body, {})
+    assert count == 0
+    assert out == body
+
+
+def test_v4_no_ref_when_extension_entry_lacks_uuid():
+    # An extension entry with no resolvable signal_id → leave the ordinal (a
+    # corpus doc with no id is present-but-unmapped, never a fabricated ref).
+    body = "Something happened [1]."
+    ext = {1: {"signal_id": None, "title": "doc", "source": None,
+               "snippet": None, "source_text": None, "source_truncated": False}}
+    out, count = _rewrite_gathered_citations(body, ext)
+    assert count == 0
+    assert out == body
+
+
+@pytest.mark.asyncio
+async def test_v4_full_arc_gathered_corpus_doc_becomes_citable():
+    """End-to-end: GATHER surfaces a corpus doc via search_corpus, the narrator
+    cites it [1], and the post-NARRATE bridge turns it into a bound fact claim so
+    it is journal-citable (J4 — the [N] no longer dies at render)."""
+    doc_id = uuid4()
+    binding = _FakeBinding(outputs={
+        # The GATHER round's search_corpus returns one numbered corpus doc.
+        "search_corpus": {"rows": [
+            {"id": str(doc_id), "score": 9.1, "source": {
+                "title": "Strait transit incident",
+                "raw_body": "A tanker was detained overnight in the strait.",
+            }},
+        ]},
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"tool": "search_corpus", "args": {"query": "strait"}}',   # GATHER round 1
+        '{"done": true}',                                            # GATHER round 2
+        "field notes: a tanker was detained [1].",                  # field-notes seam
+        # narrate: cite the gathered corpus doc [1]
+        "A tanker was detained overnight in the strait [1].",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="P", max_rounds=2, agency_binding=binding,
+    )
+    result = await run_method([{"title": "seed"}], _options(binding), deps)
+    payload = result.finding
+    # The gathered [N] was rewritten to a durable [[ref:uuid]] and bound as a fact.
+    assert "[1]" not in payload.body
+    assert f"[[ref:{doc_id}]]" in payload.body
+    assert doc_id in payload.cited_substrate_refs
+    fact_claims = [c for c in payload.claims if c.kind == "fact" and doc_id in c.refs]
+    assert fact_claims, "the gathered corpus doc should be a bound fact claim"
+    # The bridge recorded a trace step.
+    assert any(
+        s.get("kind") == "gathered_citation_bridge" for s in result.intermediate_steps
+    )
+
+
+# ---------------------------------------------------------------------------
+# V2.2 — the DETERMINISTIC apparatus-lead honesty flag
+# ---------------------------------------------------------------------------
+
+
+def test_apparatus_lead_fires_on_checking_senses_opening():
+    # The exact 07-23 regression shape.
+    body = ("I start by checking the health of my senses this morning. "
+            "Most feeds are fresh.")
+    assert _apparatus_lead_flag(body) == ["apparatus_lead"]
+
+
+def test_apparatus_lead_fires_on_opened_the_dashboard():
+    body = "I opened the health dashboard first. Twelve feeds are wired."
+    assert _apparatus_lead_flag(body) == ["apparatus_lead"]
+
+
+def test_apparatus_lead_silent_on_world_first_opening():
+    # The persona-compliant lead: names what the world did, apparatus is a
+    # closing note.
+    body = ("Khamenei signaled openness to talks overnight, the sharpest shift "
+            "in weeks. My feeds stayed fresh throughout.")
+    assert _apparatus_lead_flag(body) == []
+
+
+def test_apparatus_lead_silent_on_world_first_with_start_open_verbs():
+    # A WORLD lead that happens to use start/open/look-at framing (with no
+    # apparatus subject) must NOT trip the flag — the verb alone is not the tell.
+    for body in (
+        "The week opens with a summit in Riyadh on Monday.",
+        "Talks start with a handshake in Geneva.",
+        "I look at the map and Sudan is burning.",
+    ):
+        assert _apparatus_lead_flag(body) == [], body
+
+
+def test_apparatus_lead_silent_when_apparatus_is_a_closing_note():
+    # A legal apparatus mention LATE in the entry must not trip the lead check.
+    body = ("A grain-corridor deal collapsed in Istanbul.\n\n"
+            "Late note: I checked source health and three feeds are stalled.")
+    assert _apparatus_lead_flag(body) == []
+
+
+def test_apparatus_lead_ignores_leading_title_line():
+    # A markdown/bold title is not the lead — the first PROSE sentence is.
+    body = ("# The Strait\n\nA tanker was detained overnight in the strait. "
+            "The world moved.")
+    assert _apparatus_lead_flag(body) == []
+
+
+@pytest.mark.asyncio
+async def test_apparatus_lead_flag_stamped_on_apparatus_opening_entry():
+    """Full arc: an entry that OPENS apparatus-facing gets the deterministic
+    apparatus_lead honesty flag ALONGSIDE the forced calibration flags — annotate,
+    never block (the body is untouched)."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = [
+        '{"done": true}',                                       # GATHER
+        "field notes",                                          # seam
+        "I start by checking the health of my senses. Feeds look fresh.",  # narrate
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="P", max_rounds=1, agency_binding=binding,
+    )
+    result = await run_method([{"title": "s"}], _options(binding), deps)
+    flags = set(result.finding.honesty_flags)
+    assert "apparatus_lead" in flags
+    # It ANNOTATES — the substrate flags are still present and the body is intact.
+    assert {"forecast_unproven", "calibration_thin"} <= flags
+    assert "checking the health of my senses" in result.finding.body
+
+
+@pytest.mark.asyncio
+async def test_apparatus_lead_flag_absent_on_world_first_entry():
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = [
+        '{"done": true}',
+        "field notes",
+        "Khamenei signaled openness to talks overnight. My feeds stayed fresh.",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="P", max_rounds=1, agency_binding=binding,
+    )
+    result = await run_method([{"title": "s"}], _options(binding), deps)
+    assert "apparatus_lead" not in set(result.finding.honesty_flags)
+
+
+def test_apparatus_lead_flag_is_idempotent():
+    # The stamp is guarded against duplicates (mirrors the @> array_append guard).
+    body = "I start by checking the health of my senses. All quiet."
+    flags = ["forecast_unproven"]
+    for _flag in _apparatus_lead_flag(body):
+        if _flag not in flags:
+            flags.append(_flag)
+    for _flag in _apparatus_lead_flag(body):  # second application — no dup
+        if _flag not in flags:
+            flags.append(_flag)
+    assert flags.count("apparatus_lead") == 1
+
+
+# ---------------------------------------------------------------------------
+# task #236 — the deterministic NARRATE tool-call-leak guard (§4.4).
+#
+# Caught live 2026-07-24: lens_trend's inaugural run wrote a journal entry
+# whose ENTIRE body was ``{"tool": "get_assessments", "args": {}}`` (39
+# chars) — the core-plane model emitted tool-call JSON as its final NARRATE
+# turn instead of prose, and (pre-fix) that junk became BOTH body and title.
+# ---------------------------------------------------------------------------
+
+# The exact live junk string from the incident.
+_LIVE_JUNK = '{"tool": "get_assessments", "args": {}}'
+
+
+# --- unit-level: the predicate itself -------------------------------------
+
+
+def test_guard_fires_on_the_exact_live_junk_string():
+    assert _is_tool_call_leak(_LIVE_JUNK) is True
+
+
+def test_guard_fires_on_fenced_json_tool_call():
+    fenced = '```json\n{"tool": "get_lens_reads", "args": {"since": null}}\n```'
+    assert _is_tool_call_leak(fenced) is True
+
+
+def test_guard_fires_on_openai_style_tool_calls_array():
+    array_shape = '[{"tool_calls": [{"function": "get_run_health"}]}]'
+    assert _is_tool_call_leak(array_shape) is True
+
+
+def test_guard_fires_on_short_degenerate_json_below_prose_floor():
+    # {} alone isn't tool-call-key-shaped (no keys at all) but IS whole-string
+    # JSON under the min-prose floor — still exhaust, not an entry.
+    assert _is_tool_call_leak("{}") is True
+
+
+def test_guard_does_not_false_positive_on_prose_containing_a_json_snippet():
+    # The check is WHOLE-STRING — prose that merely quotes/mentions a
+    # JSON-shaped span mid-paragraph must NEVER trip it (unlike
+    # inline_target._extract_json, which deliberately hunts for a JSON object
+    # anywhere in the text — the opposite of what this guard needs).
+    prose = (
+        "The nexus flipped polarity overnight. A raw feed dump included a "
+        'payload that looked like {"tool": "get_assessments"} in the debug '
+        "trace, which was odd, but the underlying claim "
+        "[[ref:11111111-1111-1111-1111-111111111111]] holds regardless. "
+        "I keep wondering what else this window is missing."
+    )
+    assert _is_tool_call_leak(prose) is False
+
+
+def test_guard_does_not_false_positive_on_ordinary_short_prose():
+    # Short but NOT JSON at all — json.loads fails immediately, so the
+    # min-prose floor (which only applies to successfully-parsed JSON) never
+    # engages. A terse legitimate entry must never be treated as a leak.
+    assert _is_tool_call_leak("Quiet morning. Nothing moved.") is False
+
+
+def test_guard_does_not_false_positive_on_a_long_legitimate_entry():
+    entry = (
+        "# A quiet window\n\nThe nexus flipped polarity overnight "
+        "[[ref:11111111-1111-1111-1111-111111111111]]. I keep wondering "
+        "whether this is a genuine shift or noise in the feed. Three "
+        "assessors went quiet this cycle, which makes me uneasy about what "
+        "we're missing in the wider picture right now."
+    )
+    assert _is_tool_call_leak(entry) is False
+
+
+# --- full arc: retry recovers ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_narrate_leak_triggers_one_retry_and_recovers():
+    """The exact live incident shape: NARRATE's FINAL round (round_idx ==
+    _NARRATE_MAX_TOOL_ROUNDS - 1, where a tool call can never be EXECUTED
+    regardless of whether its name is recognized — see the
+    `round_idx < _NARRATE_MAX_TOOL_ROUNDS - 1` guard in the tool-routing
+    branch) emits the live junk. This is exactly why the pre-fix code wrote
+    it verbatim as the entry: it fell through the tool-routing branch with
+    nowhere else to go. The retry (with the hard prose-only instruction)
+    returns clean prose, and THAT becomes the entry. No exception; the run
+    completes normally."""
+    ref = uuid4()
+    binding = _FakeBinding(outputs={
+        "get_run_health": {"rows": [], "quiet_analysts": [], "refs": []},
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"done": true}',                                   # GATHER round 1
+        "field notes: the nexus flipped.",                  # field-notes seam
+        '{"tool": "get_run_health", "args": {}}',           # narrate round 1: EXECUTED
+        _LIVE_JUNK,                                          # narrate round 2 (FINAL): LEAKS
+        f"The nexus flipped polarity overnight [[ref:{ref}]]. "  # retry: clean
+        "I keep wondering what we're not seeing.",
+    ]
+    llm = _ScriptedLLM(scripted)
+    deps = InlineTargetDeps(
+        llm=llm, system_prompt="P", max_rounds=1, agency_binding=binding,
+    )
+    result = await run_method([{"title": "s"}], _options(binding), deps)
+    payload = result.finding
+    # The recovered retry content is what got written — never the junk.
+    assert "nexus flipped polarity overnight" in payload.body
+    assert _LIVE_JUNK not in payload.body
+    assert ref in payload.cited_substrate_refs
+    # The title was derived from the RECOVERED body, not the junk.
+    assert payload.title != _LIVE_JUNK
+    # 5 LLM calls: GATHER + field-notes + narrate round1(tool) + round2(leak) + retry.
+    assert len(llm.calls) == 5
+    # The legitimate round-1 tool call still executed normally.
+    assert ("get_run_health", {}) in binding.calls
+    # The leak + recovery were traced.
+    kinds = [s.get("kind") for s in result.intermediate_steps if s.get("phase") == "narrate"]
+    assert "tool_call_leak" in kinds
+    assert "tool_call_leak_recovered" in kinds
+    assert "tool_call_leak_fatal" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_narrate_leak_retry_appends_hard_instruction_not_a_new_round():
+    """The retry must NOT consume a _NARRATE_MAX_TOOL_ROUNDS slot — it is a
+    separate, later safety net. max_rounds=1 on the GATHER side is unrelated;
+    this asserts the retry fires even though the narrate loop's own round cap
+    (_NARRATE_MAX_TOOL_ROUNDS, module-level, not descriptor-configurable) was
+    never widened for this test."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": False, "calibration_thin": False,
+    }})
+    scripted = [
+        '{"done": true}',
+        "notes",
+        '{"name": "get_source_health", "arguments": {}}',  # leaks (sibling key shape)
+        "A clean entry after the retry.",
+    ]
+    llm = _ScriptedLLM(scripted)
+    deps = InlineTargetDeps(
+        llm=llm, system_prompt="P", max_rounds=1, agency_binding=binding,
+    )
+    result = await run_method([{"title": "s"}], _options(binding), deps)
+    assert result.finding.body == "A clean entry after the retry."
+
+
+# --- full arc: fatal path ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_narrate_leak_persists_through_retry_raises_fatal():
+    """When the retry ALSO leaks, the run RAISES (hard_fail) rather than
+    writing junk as the entry — a failed run self-retries next cadence; a
+    written junk entry poisons the panel + verify ledger and does not."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = [
+        '{"done": true}',
+        "field notes",
+        _LIVE_JUNK,                                   # narrate: LEAKS
+        '{"tool": "get_run_health", "args": {}}',      # retry: LEAKS AGAIN
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="P", max_rounds=1,
+        agency_binding=binding,
+    )
+    with pytest.raises(NarrateToolCallLeakError):
+        await run_method([{"title": "s"}], _options(binding), deps)
+
+
+@pytest.mark.asyncio
+async def test_narrate_leak_fatal_never_writes_a_finding():
+    """Belt-and-braces on the fatal path: run_method raising means the caller
+    (the actor run path) never receives an AnalystMethodResult to persist —
+    there is no partial/junk payload constructed anywhere past the raise."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = ['{"done": true}', "notes", "{}", "{}"]  # both turns leak (min-prose floor)
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="P", max_rounds=1,
+        agency_binding=binding,
+    )
+    try:
+        await run_method([{"title": "s"}], _options(binding), deps)
+        assert False, "expected NarrateToolCallLeakError"
+    except NarrateToolCallLeakError:
+        pass  # exactly the expected failure mode — nothing else escaped

@@ -25,6 +25,17 @@
 #
 # Volume + network names match the running substrate exactly — don't change them.
 
+# H2 (audit 2026-07-06): docker's default json-file driver has NO rotation, so
+# a chatty container (a dead telethon session flooded the runtime at ~2 GB/day)
+# grows an unbounded *-json.log until the disk fills. This anchor caps every
+# container that references it at 100 MB × 5 files = 500 MB max. A global
+# /etc/docker/daemon.json default is the belt for anything not referencing it.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
 services:
   # ============================================================
   # SUBSTRATE — always on (no profile)
@@ -135,6 +146,38 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # opensearch — the full-text signal CORPUS (Stage 1, signal-content-depth
+  # program): a stored+indexed mining substrate over signal bodies. Internal-only,
+  # loopback, security plugin OFF (no TLS/auth — same loopback-trust posture as
+  # qdrant/redis). single-node dev mode; the host needs vm.max_map_count=262144
+  # (persisted in /etc/sysctl.d/99-opensearch.conf).
+  opensearch:
+    image: opensearchproject/opensearch:2.19.4
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx2g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 3g
+    ports:
+      - "127.0.0.1:9200:9200"  # loopback-only
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
   nats:
     image: nats:2-alpine
     # B-1: optional token authorization. When LEGBA_NATS_TOKEN is set in .env
@@ -183,6 +226,7 @@ services:
   # ============================================================
 
   dapr-placement:
+    logging: *default-logging
     # Pinned for reproducibility (P-14). `latest` resolved to 1.17.9 on the
     # dev rig at pin time (identical digest); keep all three Dapr containers
     # — placement, scheduler, sidecar — on the same pinned tag.
@@ -224,6 +268,7 @@ services:
     restart: "no"
 
   dapr-scheduler:
+    logging: *default-logging
     image: daprio/dapr:1.17.9  # pinned (P-14) — see dapr-placement note
     profiles: ["dapr", "runtime"]
     # Graceful etcd flush window: docker's default 10s SIGTERM->SIGKILL can
@@ -273,6 +318,7 @@ services:
     restart: "no"
 
   dapr-sidecar:
+    logging: *default-logging
     image: daprio/dapr:1.17.9  # pinned (P-14) — see dapr-placement note
     profiles: ["dapr", "runtime"]
     # Infra tuning: container backstop (daprd sidecar — actor/workflow gRPC).
@@ -377,6 +423,7 @@ services:
   # ============================================================
 
   legba-registry:
+    logging: *default-logging
     image: legba/legba-registry:latest
     build:
       context: .
@@ -414,6 +461,7 @@ services:
   # legba-runtime-dapr — Dapr-actor host. Activates the `dapr` profile
   # transitively because daprd is its sidecar.
   legba-runtime-dapr:
+    logging: *default-logging
     image: legba/legba-runtime-dapr:latest
     build:
       context: .
@@ -506,6 +554,7 @@ services:
   # the workflow engine's gRPC channel — added under the `dapr-workflow`
   # profile so the canonical `up -d` doesn't pull it until P-CUT cuts over.
   legba-dapr-workflow-worker:
+    logging: *default-logging
     # Dedicated image = runtime image + dspy 3.0 (docker/Dockerfile.worker).
     # dspy/litellm live ONLY here, never in the base runtime image / the
     # analyst inference hot path (operator hard rule). Build with:
@@ -594,6 +643,7 @@ services:
   # (legba-media/app/main.load_backends) flips a kind from 503 to live with no
   # other change. Full notes: legba-media/USAGE.md.
   legba-media:
+    logging: *default-logging
     image: legba/legba-media:latest
     build:
       context: ./legba-media
@@ -636,6 +686,7 @@ services:
   # the registry is in the activation set; 502s otherwise. SPA from
   # /srv/legba-ui (populated by the one-shot legba-ui-build job).
   legba-caddy:
+    logging: *default-logging
     image: caddy:2-alpine
     # App service: activates under the `runtime` profile (canonical bring-up).
     profiles:
@@ -676,6 +727,8 @@ volumes:
     name: legba_postgres_data
   qdrant_data:
     name: legba_qdrant_data
+  opensearch_data:
+    name: legba_opensearch_data
   nats_data:
     name: legba_nats_data
   ui_dist:

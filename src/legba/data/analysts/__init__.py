@@ -101,6 +101,12 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
     # The 11th OutputKind's producer — Legba's first-person reflective voice
     # (plan §4.8 leg 1). OUTPUT_KIND = OutputKind.JOURNAL, off-chain.
     "journal_assessor",
+    # E4 — the entity de-fragmentation analyst (global META, LLM-adjudicated
+    # merges). OUTPUT_KIND = TRACE_ONLY; real product = entity_profiles merges.
+    "entity_researcher",
+    # S-1 — the per-signal salience scorer (global META sweep, $0-plane LLM).
+    # OUTPUT_KIND = TRACE_ONLY; real product = signals.salience writes.
+    "signal_salience",
 )
 
 
@@ -115,6 +121,11 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
 from ..schemas.analyst import register_analyst_kind as _register_analyst_kind
 
 _register_analyst_kind("journal_assessor")
+# E4 entity_researcher is likewise an EXTENSION kind (not in the closed
+# AnalystKind enum) — register its identity.kind so model_validate accepts it.
+_register_analyst_kind("entity_researcher")
+# S-1 signal_salience is an EXTENSION kind (not in the closed AnalystKind enum).
+_register_analyst_kind("signal_salience")
 
 
 def discover_analyst_kinds() -> dict[str, KindHandler]:

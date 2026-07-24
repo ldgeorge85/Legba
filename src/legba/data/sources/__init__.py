@@ -171,6 +171,25 @@ else:
         "build_gdelt_sql",
     ])
 
+# GDELT 15-minute file-dump handler. Replacement acquisition path for GDELT
+# after the keyless DOC 2.0 API (json_api kind, source.gdelt.doc_api) started
+# 429-ing at the IP level (verified 2026-07-21) — see gdelt_files.py's module
+# docstring. Pure Python (stdlib zipfile/csv + httpx, both existing deps);
+# the try/except mirrors the gdelt (BigQuery) pattern above for safety across
+# parallel-wave merges even though this module has no optional dependency.
+try:                                                        # pragma: no cover
+    from .gdelt_files import (                              # noqa: F401
+        GDELTFilesConfig,
+        GDELTFilesSourceHandler,
+    )
+except Exception:                                           # pragma: no cover
+    pass
+else:
+    __all__.extend([
+        "GDELTFilesConfig",
+        "GDELTFilesSourceHandler",
+    ])
+
 # IntelMQ collector bridge (L-140). The IntelMQ package itself is an
 # optional extra (legba[intelmq]); the bridge module is pure Python and
 # imports IntelMQ lazily inside on_configure / health_check, so the module

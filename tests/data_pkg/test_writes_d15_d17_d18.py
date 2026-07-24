@@ -42,6 +42,23 @@ from legba.data.provenance._core import from_analyst
 from legba.data.provenance.models import FactPayload, NexusPayload
 
 
+@pytest.fixture(autouse=True)
+def _pin_fact_contention_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This file tests the D15/D17/D18/A1/A2 write-path remediation — a layer
+    that predates and is orthogonal to the Wave 4 contention-coexist feature.
+    The live deploy's ``.env`` sets ``LEGBA_FACT_CONTENTION=1`` (loaded
+    eagerly at ``legba.data.config`` import time), which would route
+    ``supersede_prior_facts()``/``_insert_fact()`` calls here through
+    ``_supersede_prior_facts_coexist()`` — a FETCH-then-decide path that calls
+    ``conn.fetch(...)``, a method ``RecordingConn`` below does not implement
+    (none of these tests exercise multi-row coexistence; that is
+    ``test_writes_contention_coexist.py``'s job). Pin the flag OFF so this
+    file always exercises the OFF-path contract it is named for, regardless
+    of the host's ``.env``.
+    """
+    monkeypatch.setenv("LEGBA_FACT_CONTENTION", "0")
+
+
 # ---------------------------------------------------------------------------
 # Fake conn — records every execute/fetchval and returns scripted results.
 # ---------------------------------------------------------------------------

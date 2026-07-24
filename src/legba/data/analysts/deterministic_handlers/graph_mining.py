@@ -30,8 +30,13 @@ The handler degrades gracefully:
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
+import itertools
 import logging
 import os
+import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 from uuid import UUID
@@ -40,6 +45,21 @@ import networkx as nx
 
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
+# M20 (2026-07-06 mining audit) — the shared canon spine vets edge endpoints so
+# the "interesting" shortlist stops amplifying NER fragments / vague tokens
+# (``West`` / ``Leader`` / ``Parl``) and mis-signed neutral edges into headline
+# geopolitical signal. ``canonicalize_entity`` types a surface (country /
+# location / organization); ``is_junk_entity`` drops the vague / fragment
+# tokens; ``same_referent`` drops a self-loop.
+from ..._entity_canon import (
+    COUNTRY_CLASS,
+    DEFAULT_CLASS,
+    LOCATION_CLASS,
+    ORGANIZATION_CLASS,
+    canonicalize_entity,
+    is_junk_entity,
+    same_referent,
+)
 from ._graph_metrics_sink import write_graph_metric
 
 # P1-T9: the shortest-path + broker engine lives in the LEAF module
@@ -62,8 +82,37 @@ logger = logging.getLogger(__name__)
 # Cap to keep deterministic mining bounded (``_MAX_NODES`` is imported from the
 # graph_paths leaf above so the cap is single-sourced). Larger subgraphs should
 # be scoped at the descriptor level (predicate filter) rather than here.
+#
+# P1 EVENT-LOOP FREEZE FIX (2026-07-24): ``_proxy_chains`` calls networkx
+# ``all_simple_paths`` — worst-case EXPONENTIAL path enumeration — over the live
+# reified-nexus graph. Measured live: ~1,980 vertices, max degree 474, avg 8.72,
+# p99 ~99, 120 nodes at degree >= 27. A pairwise all_simple_paths walk over that
+# spins for tens of minutes holding the GIL (caught by py-spy at the 2026-07-24
+# 12:52 freeze; MainThread active+gil ~33 min until the watchdog killed it),
+# starving healthchecks + the reminder dispatch on the SAME asyncio loop. The
+# ``cutoff=`` below bounds each DFS to <= ``_MAX_PROXY_PATH_LEN`` edges (a proxy
+# cut-out is subject->intermediary->object = 2 hops; >3 strains the analytic
+# "cut-out" reading), and — critically — ``all_simple_paths`` is a GENERATOR, so
+# ``itertools.islice(..., _MAX_PROXY_PATHS_SCANNED)`` makes worst-case work
+# LINEAR in the scan cap instead of exponential. The cap is total paths CONSUMED
+# across all source->target pairs (the enumeration input), distinct from
+# ``_MAX_PROXY_CHAINS`` (the scored top-K OUTPUT). When the scan cap bites the
+# finding is stamped ``proxy_chains_truncated: true`` (no silent truncation —
+# the platform honesty rule).
 _MAX_PROXY_PATH_LEN = 3
 _MAX_PROXY_CHAINS = 200
+# Total simple paths enumerated (consumed from the generators) across the whole
+# pairwise walk before the miner stops scanning. 50k keeps a pathological
+# 474-degree-hub run to well under a second while still surfacing every genuine
+# short cut-out on the real graph (the top-K is re-scored from whatever was
+# scanned). Overridable via LEGBA_MAX_PROXY_PATHS for operator tuning.
+_MAX_PROXY_PATHS_SCANNED = 50_000
+# Belt 3: a wall-clock ceiling (seconds) on the off-loop CPU compute. If mining
+# somehow still overruns (a networkx pathology the path cap misses), the run is
+# abandoned with a logged warning + an honest partial/empty finding rather than
+# hanging a worker thread. 0/negative disables the guard. Overridable via
+# LEGBA_GRAPH_MINING_BUDGET_S.
+_GRAPH_MINING_BUDGET_S = 25.0
 _MAX_INTERESTING = 12  # shared "interesting" shortlist cap (#99 contract).
 # A negative-polarity nexus whose valid_from is within this window counts as a
 # "new" hostile edge; recency score decays linearly to 0 across it.
@@ -82,6 +131,40 @@ def _reify_discovered_chains_enabled() -> bool:
     return os.getenv("LEGBA_REIFY_DISCOVERED_CHAINS", "").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def _max_proxy_paths_scanned() -> int:
+    """Total-paths-scanned cap for :func:`_proxy_chains` (P1 freeze bound).
+
+    Read at call time (not import) so an operator env tweak takes effect on the
+    next run. Falls back to :data:`_MAX_PROXY_PATHS_SCANNED` on any bad value; a
+    non-positive value is coerced to the default (the cap is a safety floor —
+    disabling it re-opens the exponential blow-up, so we never honor <= 0).
+    """
+    raw = os.getenv("LEGBA_MAX_PROXY_PATHS", "").strip()
+    if not raw:
+        return _MAX_PROXY_PATHS_SCANNED
+    try:
+        val = int(raw)
+    except ValueError:
+        return _MAX_PROXY_PATHS_SCANNED
+    return val if val > 0 else _MAX_PROXY_PATHS_SCANNED
+
+
+def _graph_mining_budget_s() -> float:
+    """Wall-clock ceiling (seconds) for the off-loop CPU compute (belt 3).
+
+    Read at call time. Non-numeric → the default; <= 0 DISABLES the guard (the
+    path cap is the primary bound, so an operator may legitimately turn the
+    wall-clock belt off).
+    """
+    raw = os.getenv("LEGBA_GRAPH_MINING_BUDGET_S", "").strip()
+    if not raw:
+        return _GRAPH_MINING_BUDGET_S
+    try:
+        return float(raw)
+    except ValueError:
+        return _GRAPH_MINING_BUDGET_S
 
 
 # ---------------------------------------------------------------------------
@@ -210,16 +293,31 @@ def _proxy_chains(
     *,
     max_chains: int = _MAX_PROXY_CHAINS,
     max_path_len: int = _MAX_PROXY_PATH_LEN,
-) -> list[dict[str, Any]]:
+    max_paths_scanned: int | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
     """Find indirect paths whose endpoints have no direct edge.
 
-    Returns a list of ``{actor, target, via, length, polarity_sign}``
-    dicts. The polarity_sign is the product of edge polarities along the
-    path — useful for hostile-via-proxy detection (negative product) and
-    laundering-detection (positive via hostile intermediate).
+    Returns ``(chains, truncated)`` where ``chains`` is a list of
+    ``{actor, target, via, length, polarity_sign, score}`` dicts (the
+    deterministic scored top-``max_chains``) and ``truncated`` is ``True`` iff the
+    total-paths-scanned cap bit (i.e. the pairwise ``all_simple_paths`` walk was
+    stopped early — the returned top-K is then from a PARTIAL enumeration and the
+    caller must stamp the honesty marker). The polarity_sign is the product of
+    edge polarities along the path — useful for hostile-via-proxy detection
+    (negative product) and laundering-detection (positive via hostile
+    intermediate).
+
+    P1 FREEZE BOUND: ``all_simple_paths`` is worst-case exponential and runs
+    synchronously; on the dense live graph it froze the event loop for ~33 min.
+    ``cutoff=max_path_len`` bounds path length, and ``itertools.islice`` over the
+    (lazy generator) enumeration caps total paths CONSUMED at
+    ``max_paths_scanned`` (default :func:`_max_proxy_paths_scanned`), making the
+    worst case linear in the cap rather than exponential in the graph.
     """
+    if max_paths_scanned is None:
+        max_paths_scanned = _max_proxy_paths_scanned()
     if g.number_of_nodes() < 3:
-        return []
+        return [], False
     simple = nx.DiGraph()
     edge_polarity: dict[tuple[str, str], int] = {}
     for u, v, d in g.edges(data=True):
@@ -230,49 +328,188 @@ def _proxy_chains(
 
     # DETERMINISM FIX (#99): the old code early-broke after the first
     # ``max_chains`` paths in ``list(g.nodes())`` order — WHICH chains surfaced
-    # depended on arbitrary node insertion order. Instead enumerate ALL chains
-    # (bounded by the n^2 pair walk + cutoff), SCORE each, then return a
-    # deterministic top-K. Score rewards a negative sign-product cut-out (the
-    # hostile-via-proxy / laundering shape this miner exists to find) and
-    # shorter, tighter chains. A stable secondary sort key (the chain tuple)
-    # makes ties deterministic regardless of node order.
+    # depended on arbitrary node insertion order. Instead enumerate chains
+    # (bounded by the n^2 pair walk + cutoff + the P1 total-scan cap), SCORE
+    # each, then return a deterministic top-K. Score rewards a negative
+    # sign-product cut-out (the hostile-via-proxy / laundering shape this miner
+    # exists to find) and shorter, tighter chains. A stable secondary sort key
+    # (the chain tuple) makes ties deterministic regardless of node order.
+    #
+    # P1: iterate the pairwise cut-out candidates through ONE islice-bounded
+    # chain of generators so the total number of enumerated simple paths is
+    # capped at ``max_paths_scanned`` regardless of how dense any single hub is.
+    # Node order is sorted → the SCAN is deterministic, so a truncated run still
+    # returns a stable (if partial) top-K for a fixed graph.
     nodes = sorted(simple.nodes())
-    scored: list[tuple[float, tuple[str, ...], dict[str, Any]]] = []
-    for actor in nodes:
-        for target in nodes:
-            if actor == target or simple.has_edge(actor, target):
-                continue
-            try:
-                paths = nx.all_simple_paths(
-                    simple, actor, target, cutoff=max_path_len
-                )
-            except nx.NetworkXError:  # pragma: no cover
-                continue
-            for path in paths:
-                if len(path) < 3:  # must have at least one intermediary
+
+    def _candidate_paths() -> Iterable[list[str]]:
+        for actor in nodes:
+            for target in nodes:
+                if actor == target or simple.has_edge(actor, target):
                     continue
-                via = path[1:-1]
-                sign = 1
-                for u, v in zip(path[:-1], path[1:]):
-                    sign *= edge_polarity.get((u, v), 1)
-                hops = len(path) - 1
-                # Interestingness: a negative sign-product cut-out is the
-                # headline shape (score 1.0 base); a positive one is mundane
-                # (0.4). Tighter chains rank above sprawling ones.
-                base = 1.0 if sign < 0 else 0.4
-                score = base * (1.0 / float(hops))
-                chain = {
-                    "actor": actor,
-                    "target": target,
-                    "via": via,
-                    "length": hops,
-                    "polarity_sign": sign,
-                    "score": round(score, 4),
-                }
-                scored.append((score, tuple(path), chain))
+                try:
+                    yield from nx.all_simple_paths(
+                        simple, actor, target, cutoff=max_path_len
+                    )
+                except nx.NetworkXError:  # pragma: no cover
+                    continue
+
+    scored: list[tuple[float, tuple[str, ...], dict[str, Any]]] = []
+    scanned = 0
+    truncated = False
+    for path in _candidate_paths():
+        if scanned >= max_paths_scanned:
+            truncated = True
+            break
+        scanned += 1
+        if len(path) < 3:  # must have at least one intermediary
+            continue
+        # Endpoints come from the path itself (the walk only emits actor->target
+        # pairs with no direct edge, so path[0]/path[-1] ARE the cut-out ends).
+        actor, target = path[0], path[-1]
+        via = path[1:-1]
+        sign = 1
+        for u, v in zip(path[:-1], path[1:]):
+            sign *= edge_polarity.get((u, v), 1)
+        hops = len(path) - 1
+        # Interestingness: a negative sign-product cut-out is the
+        # headline shape (score 1.0 base); a positive one is mundane
+        # (0.4). Tighter chains rank above sprawling ones.
+        base = 1.0 if sign < 0 else 0.4
+        score = base * (1.0 / float(hops))
+        chain = {
+            "actor": actor,
+            "target": target,
+            "via": via,
+            "length": hops,
+            "polarity_sign": sign,
+            "score": round(score, 4),
+        }
+        scored.append((score, tuple(path), chain))
+    if truncated:
+        logger.warning(
+            "graph_mining.proxy_chains.truncated scanned=%d cap=%d nodes=%d "
+            "edges=%d — top-K is from a PARTIAL enumeration",
+            scanned, max_paths_scanned, simple.number_of_nodes(),
+            simple.number_of_edges(),
+        )
     # Deterministic: score desc, then the full path tuple asc as the tiebreak.
     scored.sort(key=lambda t: (-t[0], t[1]))
-    return [c for _, _, c in scored[:max_chains]]
+    return [c for _, _, c in scored[:max_chains]], truncated
+
+
+# ---------------------------------------------------------------------------
+# Off-loop CPU bundle (P1 event-loop freeze fix)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _CpuMiningResult:
+    """Plain container for the three pure-CPU mining products.
+
+    Deliberately NOT a coroutine / asyncpg-touching object — an instance of this
+    is the whole output of the off-loop worker, so nothing actor-/pool-bound
+    crosses the thread boundary. A ``@dataclass`` gives a free ``__eq__`` so the
+    off-loop result can be compared directly against an inline reference.
+    """
+
+    communities: list[list[str]]
+    modularity: float | None
+    centrality: dict[str, dict[str, float]]
+    proxy_chains: list[dict[str, Any]]
+    proxy_chains_truncated: bool
+    # True only on the wall-clock-budget abandon path: the empty products above
+    # are an ABANDONED run, not a genuinely empty graph. Kept distinct so the
+    # finding can flag it as prominently as truncation (the honesty rule).
+    mining_abandoned: bool = False
+
+
+def _mine_graph_cpu(g: "nx.MultiDiGraph") -> _CpuMiningResult:
+    """Run the three CPU-heavy mining phases over an IN-MEMORY graph.
+
+    P1 FREEZE FIX: this is the pure-compute core that ``handle`` runs OFF the
+    asyncio event loop (``asyncio.to_thread``). It touches ONLY the passed
+    networkx graph — no asyncpg connection, no Dapr actor state, no ``deps`` —
+    so it is safe to run on a worker thread while the loop keeps servicing
+    healthchecks + the reminder dispatch. ``handle`` does every DB read BEFORE
+    calling this (nexus/AGE augmentation) and every DB write AFTER (reify /
+    recent-hostile / graph_metrics), so the seam is clean.
+
+    The two heaviest phases are ``_centrality`` (k-sampled betweenness) and
+    ``_proxy_chains`` (bounded ``all_simple_paths``); community detection is
+    comparatively cheap. Bundling all three keeps the thread hand-off to ONE
+    round trip per run.
+    """
+    communities, modularity = _detect_communities(g)
+    centrality = _centrality(g)
+    proxy_chains, proxy_truncated = _proxy_chains(g)
+    return _CpuMiningResult(
+        communities=communities,
+        modularity=modularity,
+        centrality=centrality,
+        proxy_chains=proxy_chains,
+        proxy_chains_truncated=proxy_truncated,
+    )
+
+
+async def _run_mining_offloop(
+    g: "nx.MultiDiGraph",
+    *,
+    budget_s: float | None = None,
+) -> tuple[_CpuMiningResult, list[str]]:
+    """Execute :func:`_mine_graph_cpu` on a worker thread with a wall-clock belt.
+
+    Returns ``(result, warnings)``. On a clean run ``warnings`` is empty. If the
+    compute exceeds ``budget_s`` (default :func:`_graph_mining_budget_s`; <= 0
+    disables the belt) the run is ABANDONED and an EMPTY :class:`_CpuMiningResult`
+    is returned with a ``graph_mining.cpu_budget_exceeded`` warning so the
+    finding is honest-empty rather than the whole plane hanging. The primary
+    bound is still the path cap inside ``_proxy_chains`` — this belt only catches
+    a networkx pathology that the path cap misses.
+
+    Threading note: we drive ``_mine_graph_cpu`` through a single-worker
+    ``ThreadPoolExecutor`` so we can ``concurrent.futures`` wait WITH a timeout
+    (``asyncio.to_thread`` gives no cancellation). If the timeout fires the
+    background thread cannot be force-killed (Python has no thread kill), so the
+    executor is left to drain in the background (``shutdown(wait=False)``) — it
+    holds the GIL intermittently but the event loop is already unblocked by the
+    time we return, and the path cap makes an unbounded spin unreachable in
+    practice.
+    """
+    if budget_s is None:
+        budget_s = _graph_mining_budget_s()
+    loop = asyncio.get_running_loop()
+
+    if budget_s <= 0:
+        # Belt disabled — still OFF-loop (to_thread), just no wall-clock abandon.
+        result = await asyncio.to_thread(_mine_graph_cpu, g)
+        return result, []
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="graph_mining_cpu"
+    )
+    fut = loop.run_in_executor(executor, _mine_graph_cpu, g)
+    try:
+        result = await asyncio.wait_for(fut, timeout=budget_s)
+        executor.shutdown(wait=False)
+        return result, []
+    except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
+        # Do NOT wait for the runaway thread — release the loop immediately.
+        executor.shutdown(wait=False)
+        logger.warning(
+            "graph_mining.cpu_budget_exceeded budget_s=%.1f nodes=%d edges=%d "
+            "— abandoned mining, emitting honest-empty finding",
+            budget_s, g.number_of_nodes(), g.number_of_edges(),
+        )
+        empty = _CpuMiningResult(
+            communities=[], modularity=None, centrality={},
+            proxy_chains=[], proxy_chains_truncated=False,
+            mining_abandoned=True,
+        )
+        return empty, [
+            f"graph_mining.cpu_budget_exceeded budget_s={budget_s:.1f} "
+            f"nodes={g.number_of_nodes()} edges={g.number_of_edges()}"
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +592,134 @@ def _label_polarity(label: str) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# M20 (2026-07-06 mining audit) — hostile-edge vetting.
+#
+# The ``new_hostile_edge`` interesting-item pulls OPEN negative-polarity nexuses.
+# The live audit found three false-signal shapes surfacing as TOP findings:
+#   1. a NEUTRAL rel_type carrying polarity=-1 relabeled "hostile tie"
+#      ("Iran -[conducted via]-> Mohammad Baqer", "Trump -[involved in]-> Italy");
+#   2. FRAGMENT / vague endpoints ("West", "Leader", "Parl");
+#   3. subject-attribution collapse — a protest-AT-a-location edge emitted as
+#      "<state> hostile to <person>" ("Australia -[hostile to]-> Isaac Herzog",
+#      from "Hundreds protest Israeli president's visit … Australia's parliament").
+# Because this is an UNVERIFIED structural analyst (confidence 1.0, no verify
+# pass), false content inherits max confidence. These guards are CONSERVATIVE —
+# a real interstate hostile edge (Russia/Ukraine, Israel/Iran, Pakistan/
+# Afghanistan, US/Hezbollah) survives every one.
+# ---------------------------------------------------------------------------
+
+#: A real actor class (entity_profiles / canon). A bare generic-``entity``-class
+#: endpoint with NO real-actor class is a fragment ("Parl", "Fed") — not vetted.
+_ACTOR_CLASSES: frozenset[str] = frozenset(
+    {COUNTRY_CLASS, ORGANIZATION_CLASS, LOCATION_CLASS, "person"}
+)
+
+_STATE_CLASSES: frozenset[str] = frozenset({COUNTRY_CLASS, LOCATION_CLASS})
+
+
+def _norm_rel(rel: Any) -> str:
+    """Fold a rel_type to a case/space/punct-insensitive key so the stored
+    lowercase-spaced form ("hostile to") and the CamelCase vocabulary form
+    ("HostileTo") compare equal."""
+    return re.sub(r"[^a-z0-9]+", "", str(rel or "").lower())
+
+
+#: The ONLY rel_types that make an edge a genuine hostile tie — the negative
+#: POLARITY labels (:data:`_NEGATIVE_LABELS`) plus the observed stored form "in
+#: active conflict with". A polarity=-1 nexus whose rel_type is NOT one of these
+#: (a mis-signed "conducted via" / "involved in" / "operates in") is NOT emitted
+#: as a hostile tie.
+_HOSTILE_REL_KEYS: frozenset[str] = frozenset(
+    _norm_rel(x) for x in _NEGATIVE_LABELS
+) | {_norm_rel("in active conflict with")}
+
+
+def _is_hostile_rel(rel: Any) -> bool:
+    """True only for a genuine hostility rel_type (see :data:`_HOSTILE_REL_KEYS`)."""
+    return _norm_rel(rel) in _HOSTILE_REL_KEYS
+
+
+#: M20 F2 — EXPLICIT-TARGETING hostility rel_types. Unlike the GENERIC
+#: co-occurrence label "hostile to" (where the protest-AT-a-location collapse
+#: mints "<state> hostile to <person>"), these name a state ACTING ON a specific
+#: NAMED person — an assassination / decapitation / arming indicator ("<state>
+#: Targets <named person>", "<state> SuppliesWeaponsTo <named person>"). That is
+#: a genuine state->person I&W signal, so the subject-attribution guard (c) is
+#: scoped to NOT fire for these. Add any future explicit-targeting /
+#: assassination-class label here.
+_EXPLICIT_TARGETING_REL_KEYS: frozenset[str] = frozenset(
+    {_norm_rel("Targets"), _norm_rel("SuppliesWeaponsTo")}
+)
+
+
+def _is_explicit_targeting_rel(rel: Any) -> bool:
+    """True for an explicit-targeting rel_type (see :data:`_EXPLICIT_TARGETING_REL_KEYS`)."""
+    return _norm_rel(rel) in _EXPLICIT_TARGETING_REL_KEYS
+
+
+def _canon_class(name: str) -> str:
+    """Canon's class for a surface (country / location / organization / entity).
+    The canon never returns ``person`` (it does not do person detection); person
+    typing comes from the entity_profiles class set instead."""
+    _canon, cls = canonicalize_entity(str(name or ""), "entity")
+    return cls
+
+
+def _class_set(raw: Any) -> set[str] | None:
+    """Coerce a fetched ``entity_profiles.entity_class`` array to a set. ``None``
+    (endpoint ABSENT from entity_profiles) is preserved as ``None`` so vetting can
+    give an absent-but-canon-typed endpoint the benefit of the doubt."""
+    if raw is None:
+        return None
+    return {str(c) for c in raw if c}
+
+
+def _is_canonical_actor(name: str, ep_classes: set[str] | None) -> bool:
+    """True when an endpoint is a plausible actor (i.e. NOT dropped by the
+    class-vet). The genuine fragment drop is :func:`is_junk_entity` — applied
+    SEPARATELY upstream — so this vet must not ALSO drop a REAL actor merely
+    because the live store mis-typed it.
+
+    Canon typing (country / location / organization) is authoritative. Otherwise:
+      * an endpoint ABSENT from entity_profiles (``ep_classes is None``) is kept
+        (benefit of the doubt);
+      * an endpoint PROFILED only as the generic ``entity`` class is treated the
+        SAME as absent and kept — real actors are routinely mis-typed ``{entity}``
+        in the live store (Hamas / IRGC / ISIS / Wagner / Lavrov are ALL bare
+        ``{entity}``; dropping them here silently discarded live hostile edges
+        like ``Lavrov -[hostile to]-> United States``). A bare fragment ("Parl",
+        "Fed", "West", "Leader") is caught by :func:`is_junk_entity` upstream, not
+        here;
+      * a real actor class in the profile set keeps it.
+    """
+    if _canon_class(name) in _ACTOR_CLASSES:
+        return True
+    if ep_classes is None:
+        return True
+    if ep_classes & _ACTOR_CLASSES:
+        return True
+    # Profiled ONLY as the generic 'entity' class → treat the SAME as absent
+    # (kept). is_junk_entity already removed the genuine fragments upstream.
+    return ep_classes.issubset({DEFAULT_CLASS})
+
+
+def _is_state_surface(name: str, ep_classes: set[str] | None) -> bool:
+    """True when the surface names a STATE / place (country or location)."""
+    if _canon_class(name) in _STATE_CLASSES:
+        return True
+    return bool(ep_classes and (ep_classes & _STATE_CLASSES))
+
+
+def _is_person_only(ep_classes: set[str] | None) -> bool:
+    """True when the surface is a bare PERSON — entity_profiles rows exist and are
+    ALL ``person`` (no competing country/org/location actor). Used only to gate
+    the state->person attribution collapse; an ambiguous surface with any
+    non-person actor class (e.g. "Hezbollah" = entity+person) is NOT person-only,
+    so "United States -[hostile to]-> Hezbollah" survives."""
+    return bool(ep_classes) and ep_classes.issubset({"person"})
+
+
 async def _augment_from_nexuses(deps: Any, g: "nx.MultiDiGraph") -> int:
     """Add directed SIGNED edges from the OPEN ``nexuses`` rows (PIECE A).
 
@@ -417,16 +782,30 @@ async def _recent_hostile_edges(deps: Any) -> list[dict[str, Any]]:
         return []
     try:
         async with pool.acquire() as conn:
+            # M20: also fetch the nexus confidence (feeds the per-edge quality
+            # score) + the DISTINCT entity_profiles class set for each endpoint
+            # (feeds the fragment / state->person attribution guards in
+            # _build_interesting). A NULL class array = the surface is absent from
+            # entity_profiles (benefit-of-the-doubt on vetting).
             rows = await conn.fetch(
                 """
-                SELECT subject, object, polarity, rel_type, valid_from
-                  FROM nexuses
-                 WHERE valid_until IS NULL AND superseded_by IS NULL
-                   AND polarity < 0
-                   AND valid_from IS NOT NULL
+                SELECT n.subject, n.object, n.polarity, n.rel_type,
+                       n.valid_from, n.confidence,
+                       (SELECT array_agg(DISTINCT ep.entity_class)
+                          FROM entity_profiles ep
+                         WHERE lower(ep.canonical_name) = lower(n.subject))
+                         AS subject_classes,
+                       (SELECT array_agg(DISTINCT ep.entity_class)
+                          FROM entity_profiles ep
+                         WHERE lower(ep.canonical_name) = lower(n.object))
+                         AS object_classes
+                  FROM nexuses n
+                 WHERE n.valid_until IS NULL AND n.superseded_by IS NULL
+                   AND n.polarity < 0
+                   AND n.valid_from IS NOT NULL
                    -- #99: exclude our own inferred reifications from re-discovery.
-                   AND COALESCE(source_type, '') <> 'inferred'
-                 ORDER BY valid_from DESC
+                   AND COALESCE(n.source_type, '') <> 'inferred'
+                 ORDER BY n.valid_from DESC
                  LIMIT 200
                 """
             )
@@ -443,6 +822,11 @@ async def _recent_hostile_edges(deps: Any) -> list[dict[str, Any]]:
             "polarity": int(r["polarity"] or 0),
             "rel_type": r["rel_type"],
             "valid_from": r["valid_from"],
+            "confidence": r["confidence"],
+            "subject_classes": list(r["subject_classes"])
+            if r["subject_classes"] is not None else None,
+            "object_classes": list(r["object_classes"])
+            if r["object_classes"] is not None else None,
         })
     return out
 
@@ -576,6 +960,10 @@ def _build_interesting(
         bet = float(m.get("betweenness", 0.0))
         if bet <= 0.0:
             continue
+        # M20: a fragment / vague token ("West", "Leader", "Parl") is not a
+        # meaningful structural broker — drop it from the shortlist.
+        if is_junk_entity(str(node)):
+            continue
         norm_bet = bet / max_bet if max_bet > 0 else 0.0
         # cross-community-ness: 1.0 if the broker's graph neighbours (proxied
         # here by community membership of the centrality cohort) span more than
@@ -606,6 +994,45 @@ def _build_interesting(
     # --- new hostile edges ------------------------------------------------
     now = now or datetime.now(tz=timezone.utc)
     for r in recent_hostile:
+        subj, obj = str(r.get("subject") or ""), str(r.get("object") or "")
+        rel = r.get("rel_type") or ""
+        if not subj or not obj:
+            continue
+        # M20 (b): require an ACTUAL hostility rel_type. polarity<0 was already
+        # filtered upstream, but a mis-signed NEUTRAL rel_type (a polarity=-1
+        # "conducted via" / "involved in" / "operates in") is NOT a hostile tie
+        # and must not be relabeled as one.
+        if not _is_hostile_rel(rel):
+            continue
+        # M20 (a): drop a vague / fragment endpoint ("West", "Leader", "Parl",
+        # "Fed", …) and a canonicalize-to-self self-loop before it becomes
+        # headline signal. is_junk_entity is the SINGLE fragment authority (F1).
+        if is_junk_entity(subj) or is_junk_entity(obj) or same_referent(subj, obj):
+            continue
+        subj_cls = _class_set(r.get("subject_classes"))
+        obj_cls = _class_set(r.get("object_classes"))
+        # M20 (a) + F1: keep endpoints typed by canon OR profiled as a real actor.
+        # A profiled-only-generic-'entity' endpoint is treated the SAME as absent
+        # (kept) — the genuine fragments were already dropped by is_junk_entity
+        # above, so this vet must NOT also discard a real actor the live store
+        # merely mis-typed {entity} (Hamas / IRGC / Lavrov).
+        if not _is_canonical_actor(subj, subj_cls) or not _is_canonical_actor(obj, obj_cls):
+            continue
+        # M20 (c) + F2: subject-attribution guard — under a GENERIC co-occurrence
+        # hostility label ("hostile to" / "in active conflict with") a STATE /
+        # place is not meaningfully hostile to a bare foreign PERSON; that shape is
+        # the "protesters in X" / leader-visit-at-location collapse ("Australia
+        # hostile to Isaac Herzog"). But an EXPLICIT-TARGETING rel_type (a state
+        # that literally Targets / SuppliesWeaponsTo a NAMED person) is a genuine
+        # assassination / decapitation / arming I&W signal and MUST survive — so
+        # the guard is scoped to NOT fire for those. State->state / state->org /
+        # person->* hostility all survive either way.
+        if (
+            not _is_explicit_targeting_rel(rel)
+            and _is_state_surface(subj, subj_cls)
+            and _is_person_only(obj_cls)
+        ):
+            continue
         vf = r.get("valid_from")
         if not isinstance(vf, datetime):
             continue
@@ -618,11 +1045,13 @@ def _build_interesting(
         if recency <= 0.0:
             continue
         pol_mag = abs(int(r.get("polarity", 0) or 0)) or 1
-        score = recency * float(pol_mag)
+        # M20 (d): fold the backing nexus confidence into the per-edge quality
+        # score so a thinly-corroborated hostile edge ranks below a solid one.
+        conf = r.get("confidence")
+        conf_factor = 1.0 if conf is None else max(0.0, min(1.0, float(conf)))
+        score = recency * float(pol_mag) * conf_factor
         if score > 1.0:
             score = 1.0
-        subj, obj = str(r["subject"]), str(r["object"])
-        rel = r.get("rel_type") or "HostileTo"
         items.append({
             "kind": "new_hostile_edge",
             "label": f"{subj} -[{rel}]-> {obj}",
@@ -640,6 +1069,13 @@ def _build_interesting(
             continue  # only the hostile-via-proxy / cut-out shape is "interesting"
         actor, target = str(c.get("actor")), str(c.get("target"))
         via = [str(v) for v in (c.get("via") or [])]
+        # M20 (a): a chain touching a vague / fragment token ("West", "Leader")
+        # at ANY position is not a trustworthy cut-out — drop it.
+        if (
+            is_junk_entity(actor) or is_junk_entity(target)
+            or any(is_junk_entity(v) for v in via)
+        ):
+            continue
         path_label = " -> ".join([actor, *via, target])
         # The chain already carries a 0..1 interestingness score from the miner.
         score = float(c.get("score", 0.0))
@@ -675,11 +1111,14 @@ def _build_finding(
     warnings: list[str],
     augment_counters: dict[str, int],
     target_id: str | None,
+    proxy_chains_truncated: bool = False,
+    mining_abandoned: bool = False,
 ) -> FindingPayload:
     """Pack handler outputs into the typed FindingPayload."""
     title = (
         f"Graph mining over {node_count} nodes / {edge_count} edges"
         f"{' for ' + target_id if target_id else ''}"
+        f"{' — ABANDONED (CPU budget)' if mining_abandoned else ''}"
     )
     body_lines = [
         f"communities={len(communities)} "
@@ -692,9 +1131,25 @@ def _build_finding(
             f"age_augmented edges={augment_counters['edges_pulled']} "
             f"nodes_added={augment_counters['nodes_added']}"
         )
+    if mining_abandoned:
+        # Honesty: the empty result is an ABANDONED run over a real graph, NOT an
+        # empty graph — say so as prominently as truncation.
+        body_lines.append(
+            "mining ABANDONED — CPU wall-clock budget exceeded; the empty "
+            "communities/centrality/proxy_chains are NOT a real empty graph"
+        )
+    if proxy_chains_truncated:
+        body_lines.append(
+            "proxy_chains TRUNCATED — top-K from a partial enumeration "
+            f"(scan cap {_max_proxy_paths_scanned()})"
+        )
     tags = ["deterministic", "graph_mining"]
     if proxy_chains:
         tags.append("proxy_chains_present")
+    if proxy_chains_truncated:
+        tags.append("proxy_chains_truncated")
+    if mining_abandoned:
+        tags.append("mining_abandoned")
     return FindingPayload(
         title=title[:2048],
         body="\n".join(body_lines)[:65536],
@@ -707,6 +1162,12 @@ def _build_finding(
             "modularity": modularity,
             "centrality": centrality,
             "proxy_chains": proxy_chains,
+            # P1: honest truncation marker — True iff the proxy-chain path-scan
+            # cap bit and the returned top-K is from a PARTIAL enumeration.
+            "proxy_chains_truncated": bool(proxy_chains_truncated),
+            # P1: honest abandon marker — True iff the CPU wall-clock budget bit
+            # and the empty products are an abandoned run, not an empty graph.
+            "mining_abandoned": bool(mining_abandoned),
             "interesting": interesting,
             "node_count": node_count,
             "edge_count": edge_count,
@@ -745,9 +1206,28 @@ async def handle(
         keep = list(g.nodes())[:_MAX_NODES]
         g = g.subgraph(keep).copy()
 
-    communities, modularity = _detect_communities(g)
-    centrality = _centrality(g)
-    proxy_chains = _proxy_chains(g)
+    # P1 EVENT-LOOP FREEZE FIX (2026-07-24): the three CPU-heavy mining phases
+    # (community detection, k-sampled betweenness, and — the caught culprit —
+    # bounded ``all_simple_paths`` proxy-chain enumeration) run OFF the asyncio
+    # event loop on a worker thread, so even the internally-bounded work cannot
+    # block the reminder dispatch / healthchecks on the MAIN loop. All DB reads
+    # (nexus/AGE augmentation) already happened ABOVE on-loop; all DB writes
+    # (reify / recent-hostile / graph_metrics) happen BELOW on-loop; the off-loop
+    # function touches ONLY the in-memory graph. A wall-clock belt inside
+    # ``_run_mining_offloop`` abandons a pathological run with an honest-empty
+    # finding rather than hanging a worker thread.
+    cpu, cpu_warnings = await _run_mining_offloop(g)
+    warnings.extend(cpu_warnings)
+    communities = cpu.communities
+    modularity = cpu.modularity
+    centrality = cpu.centrality
+    proxy_chains = cpu.proxy_chains
+    if cpu.proxy_chains_truncated:
+        # No silent truncation (platform honesty rule): the proxy-chain top-K is
+        # from a PARTIAL enumeration because the path-scan cap bit.
+        warnings.append(
+            f"graph_mining.proxy_chains_truncated cap={_max_proxy_paths_scanned()}"
+        )
 
     # #99 (operator-gated, default OFF): reify discovered negative cut-out chains
     # back as first-class `source_type="inferred"` nexuses. Shares the nexus opt-in
@@ -792,6 +1272,8 @@ async def handle(
             "centrality_node_count": len(centrality),
             "top_centrality": centrality,
             "proxy_chain_count": len(proxy_chains),
+            "proxy_chains_truncated": bool(cpu.proxy_chains_truncated),
+            "mining_abandoned": bool(cpu.mining_abandoned),
             "interesting": interesting,
             "node_count": node_count,
             "edge_count": edge_count,
@@ -811,6 +1293,8 @@ async def handle(
         warnings=warnings,
         augment_counters=augment_counters,
         target_id=options.get("target_id"),
+        proxy_chains_truncated=cpu.proxy_chains_truncated,
+        mining_abandoned=cpu.mining_abandoned,
     )
     return AnalystMethodResult(
         finding=finding,

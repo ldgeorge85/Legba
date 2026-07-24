@@ -127,6 +127,18 @@ ROUNDS_CEILING = 30
 #: substrate calls in a single round.
 MAX_TOOLS_PER_BATCH = 5
 
+#: F1 model picker — the sanctioned LLM planes a consult / deep_consult request
+#: may switch to per-request. The registry front door maps the operator's
+#: friendly choice ("opus"/"core") to one of THESE component ids and threads it
+#: as ``inputs[0]["llm_component_override"]``; the runtime's by-id resolver is
+#: bound to this set so ONLY these two planes ever resolve at run time (a raw
+#: component id that somehow reached the override field is refused). "opus" =
+#: the billed Anthropic Opus plane (the ACTIVATE-time default — no override
+#: needed); "core" = the free self-hosted core (openai_compat) plane.
+LLM_OVERRIDE_ALLOWLIST = frozenset(
+    {"llm.anthropic.opus_4_7", "llm.primary.openai_compat"}
+)
+
 
 def _default_max_tokens() -> int:
     """Per-LLM-call output budget, env-tunable via ``LEGBA_CONSULT_MAX_TOKENS``.
@@ -264,6 +276,23 @@ class SubstrateQueryPort(Protocol):
         k: int = 6,
     ) -> dict[str, Any]: ...
 
+    # Stage 1 — the OpenSearch full-text corpus (index legba_signals_corpus):
+    # BM25 lexical search over the WHOLE raw body of every ingested signal +
+    # a by-id fetch of one signal's full indexed doc.
+    async def search_corpus(
+        self,
+        *,
+        query: str,
+        filters: dict[str, Any] | None = None,
+        size: int = 10,
+    ) -> dict[str, Any]: ...
+
+    async def read_document(
+        self,
+        *,
+        doc_id: str,
+    ) -> dict[str, Any]: ...
+
     async def query_nexuses(
         self,
         *,
@@ -333,6 +362,7 @@ class SubstrateQueryPort(Protocol):
         analyst_id: str | None = None,
         severity: str | None = None,
         since_hours: int | None = None,
+        include_superseded: bool = False,
         limit: int = 20,
     ) -> dict[str, Any]: ...
 
@@ -463,6 +493,8 @@ Available tools:
   - inspect_entity(name) — canonical entity profile + recent facts.
   - vector_search(query, [limit]) — semantic similarity over signal embeddings.
   - search_context(query, [corpus], [country], [k]) — semantic search over the CURATED reference corpora (world_context = country/topic priors + doctrine summaries; tradecraft = analytic standards / SAT handbooks). Returns cited chunks (corpus, doc_id, title, section, countries, source_url, effective_date). corpus narrows to one of world_context / tradecraft; country filters to chunks tagged for that country. This is BACKGROUND / method knowledge, NOT live substrate — use it to ground an assessment or recall a technique, not as current evidence.
+  - search_corpus(query, [filters], [size]) — LEXICAL BM25 keyword search over the FULL raw text of ALL ingested signals (the live news/report corpus, ~106k docs), returning scored rows. Optional keyword filters narrow by facet: geo, tags, source_id, language, modality, entity_classes, retention_class, license_class (a scalar or a list per key). Use it to FIND source documents by keyword across the whole corpus (broader recall than search_signals' title+summary FTS and complementary to vector_search's semantic match). A row's id is the signal id — pass it to read_document for the full body.
+  - read_document(doc_id) — fetch ONE signal's full stored body + metadata by its doc_id (the signal id, e.g. from a search_corpus / search_signals hit) when you need the WHOLE article text, not a snippet. Returns status ('found' / 'not_found') and the full indexed document (title, raw_body, facets).
   - query_nexuses([subject], [object], [rel_type], [polarity], [limit]) — open signed/typed relationships (A->[intermediary]->B; polarity +1 supportive / -1 antagonistic / 0 neutral/dual-use).
   - query_hypotheses([target_id], [status], [situation_id], [limit]) — competing-hypothesis (ACH) rows (thesis vs counter_thesis, evidence balance, status: active / confirmed / refuted).
   - get_timeline(subject, [limit]) — time-ordered merge of current facts and recent signals about one subject.
@@ -472,7 +504,7 @@ Available tools:
   - query_brokers(camp_a, camp_b, [max_hops<=3], [limit]) — entities that SIT ON paths between two entity sets (the broker between two camps), ranked by how many A->B paths run through them.
 
 Finished intelligence — the platform's OWN analysis (analysis-derived; consult these FIRST, they encode prior work — weigh per the provenance rules above):
-  - list_findings([target_id], [analyst_id], [severity], [since_hours], [limit]) — recent findings the platform already produced (country/world situational assessments, meta-findings); effective_confidence folds in the critic's grade. Cite the finding id.
+  - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit]) — recent LIVE findings the platform already produced (country/world situational assessments, meta-findings; superseded revisions are excluded unless include_superseded=true); effective_confidence folds in the critic's grade. Cite the finding id.
   - list_situations([status], [target_id], [since_hours], [limit]) — ongoing clustered situation frames, each with intensity_score + event_count (rank severity by these); call with NO filters (limit 20-30) for a world-state survey. Pass a returned situation_id to query_hypotheses for its ACH rows.
   - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method 'naive_mean' ⇒ no trend could be fit, low-confidence; 'auto_arima' ⇒ fitted). Cite the id.
   - list_targets() — the monitored targets + their ids (e.g. country_g20_ir); call this to resolve a place/topic to a valid target_id before query_hypotheses / compare_targets / list_findings.
@@ -681,6 +713,101 @@ def _trim_args(args: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+# The list-bearing result keys `_bounded_tool_json` may drop whole trailing
+# entries from (in probe order). Covers the port readers' shapes: most return
+# "rows", get_timeline returns "items", search_corpus returns "results".
+_BOUNDED_JSON_LIST_KEYS = ("rows", "items", "results")
+
+
+def _bounded_tool_json(tool_result: Any, limit: int) -> str:
+    """Serialize a tool result for a conversation message under a size budget,
+    JSON-SAFELY (R2 / W2-T3 — truncation honesty).
+
+    The old ``json.dumps(result)[:N]`` chop silently handed the model INVALID
+    mid-JSON — a row cut in half reads as corrupt data and the model cannot
+    even tell anything is missing. Instead: when the full dump exceeds
+    ``limit``, drop WHOLE trailing rows from the result's list-bearing key
+    (``rows`` / ``items`` / ``results``) and mark the payload with an explicit
+    ``"truncated": true`` + ``"<key>_total": <n>`` so the model KNOWS the view
+    is partial. When no whole-row cut can fit (one giant row, or a non-mapping
+    result), fall back to a valid-JSON envelope
+    ``{"truncated": true, "raw_prefix": "<chopped dump>"}``.
+
+    Always returns valid JSON of length <= ``limit`` (for any sane limit —
+    a degenerate limit smaller than the envelope itself still returns the
+    minimal envelope). Non-serializable input degrades to an honest error
+    envelope rather than raising.
+    """
+    try:
+        full = json.dumps(tool_result)
+    except (TypeError, ValueError):
+        # Review fix (B0 batch): json.dumps ESCAPING inflates the repr prefix
+        # (up to ~6x on non-ASCII/control chars), so a character-bounded slice
+        # alone can overshoot ``limit``. Shrink-until-fits on the FINAL
+        # serialized envelope — same monotone loop as the raw_prefix path.
+        raw = repr(tool_result)
+        cut = max(0, limit - 128)
+        while True:
+            envelope = json.dumps({
+                "truncated": True,
+                "error": "unserializable tool result",
+                "raw_prefix": raw[:cut],
+            })
+            if len(envelope) <= limit or cut == 0:
+                return envelope
+            cut = cut // 2
+    if len(full) <= limit:
+        return full
+
+    # Preferred cut: drop whole trailing rows so every surviving row stays
+    # intact + citable, then flag the drop explicitly.
+    if isinstance(tool_result, dict):
+        list_key = next(
+            (
+                k for k in _BOUNDED_JSON_LIST_KEYS
+                if isinstance(tool_result.get(k), list) and tool_result[k]
+            ),
+            None,
+        )
+        if list_key is not None:
+            seq = tool_result[list_key]
+            trimmed = dict(tool_result)
+            trimmed["truncated"] = True
+            trimmed[f"{list_key}_total"] = len(seq)
+            trimmed[list_key] = []
+            # Budget for the rows themselves = limit minus the empty envelope
+            # (all other keys + the marker), with slack for separators.
+            row_budget = limit - len(json.dumps(trimmed)) - 2
+            kept: list[Any] = []
+            used = 0
+            for row in seq:
+                try:
+                    row_len = len(json.dumps(row)) + 2  # + ", " separator
+                except (TypeError, ValueError):
+                    break
+                if used + row_len > row_budget:
+                    break
+                kept.append(row)
+                used += row_len
+            if kept:
+                trimmed[list_key] = kept
+                out = json.dumps(trimmed)
+                if len(out) <= limit:
+                    return out
+            # No whole row fits (or the estimate missed) — fall through.
+
+    # Fallback: chop the serialized dump but keep VALID JSON by carrying the
+    # chopped text as a string value inside an honest envelope. json escaping
+    # can inflate the re-encoded prefix, so shrink until it fits.
+    prefix = full
+    while True:
+        out = json.dumps({"truncated": True, "raw_prefix": prefix})
+        if len(out) <= limit or not prefix:
+            return out
+        overshoot = len(out) - limit
+        prefix = prefix[: max(0, len(prefix) - max(overshoot, 64))]
+
+
 def _coerce_uuid_list(raw: Any) -> list[UUID]:
     if not isinstance(raw, list):
         return []
@@ -716,6 +843,8 @@ _KNOWN_TOOLS = {
     "inspect_entity",
     "vector_search",
     "search_context",
+    "search_corpus",
+    "read_document",
     "query_nexuses",
     "query_hypotheses",
     "get_timeline",
@@ -814,6 +943,16 @@ async def _dispatch_tool(
                 country=args.get("country"),
                 k=int(args.get("k", 6)),
             )
+        if name == "search_corpus":
+            return await port.search_corpus(
+                query=str(args.get("query", "")),
+                filters=args.get("filters"),
+                size=int(args.get("size", 10)),
+            )
+        if name == "read_document":
+            return await port.read_document(
+                doc_id=str(args.get("doc_id", "")),
+            )
         if name == "query_nexuses":
             polarity = args.get("polarity")
             return await port.query_nexuses(
@@ -877,6 +1016,11 @@ async def _dispatch_tool(
                 severity=args.get("severity"),
                 since_hours=int(args["since_hours"])
                     if args.get("since_hours") is not None else None,
+                # R1 / W2-T1: superseded findings excluded by default; opt in
+                # for history/audit reads.
+                include_superseded=str(
+                    args.get("include_superseded", False)
+                ).lower() in ("true", "1"),
                 limit=int(args.get("limit", 20)),
             )
         if name == "list_situations":
@@ -1163,6 +1307,17 @@ class ConsultOnDemandDeps:
 
     llm: LLMHandlerLike
     substrate: SubstrateQueryPort
+    # F1 model picker: an OPTIONAL allowlist-bound by-id LLM resolver the runtime
+    # threads at deps-build. When a request carries ``llm_component_override``,
+    # ``run_method`` calls this to build a FRESH handler for THAT plane for the
+    # one request, instead of the cached ``llm`` (the ACTIVATE-time primary =
+    # Opus default). None (hand-built test/embedder deps) ⇒ the override is
+    # ignored and the cached primary is used, unchanged. The resolver only
+    # resolves the sanctioned planes (see LLM_OVERRIDE_ALLOWLIST); it raises
+    # otherwise, and run_method degrades to the cached primary on any failure.
+    resolve_llm_component: (
+        Callable[[str], Awaitable[LLMHandlerLike]] | None
+    ) = None
     # Per-LLM-call output budget — env-tunable, see _default_max_tokens().
     max_tokens: int = field(default_factory=_default_max_tokens)
     # Wall-clock budget for the tool loop — env-tunable, see
@@ -1221,6 +1376,42 @@ async def run_method(
         scope_predicate = str(scope_predicate)
 
     analyst_id = options.get("analyst_id")
+
+    # --- F1 model picker: optional per-request LLM plane override ------
+    # The registry front door maps the operator's friendly choice ("opus"/"core")
+    # to a sanctioned stack-component id and threads it on the question row as
+    # ``llm_component_override``. Resolve THAT component fresh for this run — the
+    # cached ``deps.llm`` is the ACTIVATE-time primary (Opus default), shared
+    # across concurrent runs, so we never mutate it. Absent / None ⇒ the cached
+    # primary, unchanged (today's behavior).
+    #
+    # FAIL CLOSED (F-A): when an override IS present but cannot be honored we
+    # RAISE rather than falling back to the cached primary. A silent fallback
+    # would BILL Opus while the front door echoes the requested plane and the
+    # actor's budget re-keys to the chosen ($0) plane — a silent cost + an
+    # honesty lie. We raise ``ValueError`` (the module's existing hard-error
+    # type → classified "hard" by the actor → surfaced as outcome!="success");
+    # the consult front door then renders an actionable provider-error message
+    # (H4a). The deep path already fails closed by construction (an unresolvable
+    # ``llm_component_id`` errors when the workflow stage deps build).
+    active_llm = deps.llm
+    override_component = first.get("llm_component_override")
+    if override_component:
+        if deps.resolve_llm_component is None:
+            raise ValueError(
+                f"llm plane override {override_component!r} requested but no "
+                f"by-id resolver is wired for this analyst"
+            )
+        try:
+            active_llm = await deps.resolve_llm_component(str(override_component))
+        except Exception as exc:  # noqa: BLE001 — fail closed, never bill Opus
+            raise ValueError(
+                f"requested llm plane {override_component!r} is unavailable: {exc}"
+            ) from exc
+        logger.info(
+            "consult_on_demand.llm_override.active override=%s subprovider=%s",
+            override_component, getattr(active_llm, "subprovider", None),
+        )
 
     # --- Step trace + live telemetry (Piece 1, D5) --------------------
     # ``steps`` is the durable trace returned as ``intermediate_steps``.
@@ -1314,7 +1505,7 @@ async def run_method(
         rounds_used = round_idx + 1
         try:
             content, usage = await _reason_via_llm(
-                deps.llm,
+                active_llm,
                 messages=messages,
                 max_tokens=deps.max_tokens,
                 temperature=deps.temperature,
@@ -1469,7 +1660,9 @@ async def run_method(
             tool_messages.append({
                 "role": "tool",
                 "name": call["tool"],
-                "content": json.dumps(tool_result)[:8000],
+                # R2 / W2-T3: JSON-safe cut with an explicit truncated marker —
+                # never a blind mid-JSON chop the model can't detect.
+                "content": _bounded_tool_json(tool_result, 8000),
             })
         messages = messages + [
             {"role": "assistant", "content": content},
@@ -1487,7 +1680,7 @@ async def run_method(
         )
         try:
             content, usage = await _reason_via_llm(
-                deps.llm,
+                active_llm,
                 messages=messages
                 + [
                     {
@@ -1531,7 +1724,7 @@ async def run_method(
         collected_refs=collected_refs,
         rounds_used=rounds_used,
         forced_final=forced_final,
-        subprovider=getattr(deps.llm, "subprovider", None),
+        subprovider=getattr(active_llm, "subprovider", None),
     )
     # Project the per-round tool trace into the payload's data bag so the
     # consult front door (consult_api._project_consult_response reads
@@ -1655,6 +1848,7 @@ __all__ = [
     "HANDLER_VERSION",
     "KIND_NAME",
     "LLMHandlerLike",
+    "LLM_OVERRIDE_ALLOWLIST",
     "MAX_TOOL_ROUNDS",
     "OUTPUT_KIND",
     "PROMPT_MODULE_PATH",

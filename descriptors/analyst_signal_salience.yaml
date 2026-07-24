@@ -1,0 +1,95 @@
+# signal_salience — the S-1 per-signal CONSEQUENCE scorer (Phase S).
+#
+# A global META analyst kind (no subscription.targets => single global sweep per
+# tick, the entity_researcher / relationship_reifier precedent). Each tick it:
+#   1. SELECTS the bounded un-scored recent-text pool (signals.salience IS NULL,
+#      modality='text', within a recent window), newest-first,
+#   2. SCORES each signal via the LLM provider plane (the $0 core plane,
+#      gpt-oss-120b — {event_class, actor_rank, magnitude}; NEVER Anthropic),
+#      with an ECHO-BOUND parse (the model echoes the signal id) + degrade-to-
+#      unscored, and stamps `authority` DETERMINISTICALLY from the source's
+#      S1-T8 source_class (never model-chosen — the anti-tabloid-authority guard),
+#   3. WRITES signals.salience for EVERY examined row (a real score, or a
+#      degraded marker), draining the pool idempotently (the signal_summarizer
+#      marker precedent).
+#
+# score_mode gates the ONLY mutating behavior. It ships 'dry_run' (scores +
+# reports, mutates nothing) so a live dry-run proof can confirm the model ranks
+# the worked examples correctly (the E6c reclassify discipline: a controlled
+# proof before flipping to 'apply' via a descriptor PUT). The per-run summary is
+# a cadence receipt (TRACE_ONLY, in analyst_traces.output_payload); the
+# signals.salience writes are the real product, consumed by Phase-S consumption
+# (S-2 slice ordering) + the advisory judge (S-3).
+
+identity:
+  id: signal_salience
+  name: Signal Salience Scorer (per-signal consequence)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: signal_salience
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: phase_s_salience_layer
+
+subscription:
+  # No `targets` block => META analyst (single global sweep; _cadence_targets
+  # returns None). The scorer reads/writes signals directly via deps.pg_pool
+  # (the entity_researcher precedent); it does NOT consume a per-target slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true        # reads/writes signals via deps.pg_pool
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # method.kind is a constrained Literal; runtime dispatch is on identity.kind
+  # (signal_salience). llm_planner matches the single-turn chat_complete scoring
+  # shape the kind uses (same as entity_researcher).
+  kind: llm_planner
+  # The OPERATIVE scoring prompt is _SALIENCE_SYSTEM in signal_salience.py
+  # (run_method hardcodes it, so the two never drift); this block only documents
+  # the task + satisfies the schema's "llm_planner requires system_prompt" guard.
+  system_prompt: |
+    SIGNAL SALIENCE SCORER. Given a numbered list of news signals (each with an
+    `id`), score each for CONSEQUENCE — how much the world would move if it is
+    true — returning a JSON array of {id, event_class, actor_rank, magnitude,
+    confidence}. event_class + actor_rank are closed taxonomies; magnitude is
+    0..1 where a head-of-state death / kinetic strike / mass-casualty event
+    outranks a routine procurement item or a sports/culture meme. ECHO the id so
+    the score binds to the right signal. (The authoritative prompt with worked
+    examples + anchors lives in code as _SALIENCE_SYSTEM.)
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1400           # one batched score array per ~12 signals
+    temperature: 0.0           # deterministic scoring
+    # --- kind-specific options (read by _build_signal_salience) --------------
+    score_mode: apply             # LIVE (flipped 2026-07-13 after the dry-run proof:
+                                  # 300 examined / 300 scored / 0 degraded on gpt-oss,
+                                  # sane ranking — strike 0.9 > meme 0.05; ids echoed
+                                  # reliably so the no-positional-fallback bind is safe).
+                                  # 'dry_run' = scores + reports, writes nothing (revert).
+    max_rows: 300                 # signals scored per tick (hourly)
+    batch_size: 12                # signals per LLM scoring call
+    window_hours: 96              # bound to a recent window (backfill 72h + margin,
+                                  # then forward); capacity >> inflow keeps it full
+  budget_tokens_per_day: 4000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Hourly at :07 past — a fresh slot offset from the other signal sweeps
+  # (summarizer / embedder / reenrich) so they spread across the clock. Capacity
+  # (~7.2k/day) far exceeds the ~1.4k/day text inflow, so the window stays full.
+  fallback_schedule: "7 * * * *"
+  cooldown_seconds: 3000         # 50m (below the 1h interval)
+
+outputs: []

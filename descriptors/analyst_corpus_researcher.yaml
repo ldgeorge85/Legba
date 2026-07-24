@@ -1,0 +1,194 @@
+# Stage 4 (signal-content-depth) — autonomous CORPUS RESEARCHER.
+#
+# A "unit" in the P2-T2 sense: NOT a new Python kind module — just an
+# inline_target DESCRIPTOR carrying its OWN method.system_prompt + eval.rubric.
+# The descriptor-supplied prompt drives synthesis; the cite-the-prose [N] markers
+# + the faithfulness-verify gate already cover inline_target findings for free, so
+# this unit inherits provenance + verify with ZERO new code.
+#
+# WHAT IT IS: the first of the Stage-4 mining analysts. Where the per-country
+# units read a fixed 72h signal slice, THIS analyst is the autonomous researcher —
+# each tick it AUTONOMOUSLY picks ONE research question (an active situation, an
+# under-covered development, a thinly-sourced claim) and DEEP-INVESTIGATES it over
+# the FULL-TEXT OpenSearch corpus (~106k signal bodies) via the substrate_read
+# GATHER tools (search_corpus / read_document / list_situations / search_signals /
+# query_facts), then emits ONE cited, verify-passed research finding.
+#
+# META analyst (NO `subscription.targets` ⇒ `_cadence_targets` returns None ⇒ one
+# global sweep per cadence, `target_filter=None`). The GATHER binding self-allows
+# `substrate_read` under GLOBAL_SCOPE on the META path (actor_output_emit
+# ._gather_binding_for_target, the journal_assessor precedent), so the agentic
+# loop gets its tools without a per-target allow-list.
+#
+# CORE plane only ($0, self-hosted) — NEVER Anthropic (consult/deep_consult are the
+# only sanctioned Opus users). The corpus is the analytic SUBSTRATE the whole
+# signal-content-depth program built toward; this analyst is the payoff — it MINES
+# the stored full text rather than re-deriving from the fresh teaser slice.
+
+identity:
+  id: corpus_researcher
+  name: Autonomous Corpus Researcher
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: stage4_mining
+
+subscription:
+  # NO `targets` block ⇒ META analyst (single global sweep; _cadence_targets
+  # returns None). This unit does NOT consume a per-target signal slice — it
+  # gathers its own evidence live through the substrate_read GATHER tools
+  # (search_corpus over the full corpus, list_situations, query_facts, …). Mirrors
+  # the competing_hypotheses META precedent (direct_queries, no targets).
+  substrate:
+    direct_queries: true
+    # gather_only: this META researcher skips the coarse cadence slice and gathers
+    # its own evidence via the GATHER tools (search_corpus over the full corpus).
+    # ROOT CAUSE of the earlier empty synthesis FOUND + FIXED: the [N] gathered-block
+    # rendering was UNBOUNDED, so a broad search_corpus (20+ rows) ballooned the
+    # synthesis prompt → EMPTY CORE-plane completion. Now bounded
+    # (_GATHER_MAX_CITED_SIGNALS + short per-block previews; full source_text stays
+    # in the citation entry for the verify judge).
+    gather_only: false   # v1 slice-based (empty-slice synthesis unreliable on CORE plane; deferred)
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# No per-target grounding preamble: a META researcher has no target_geo, and it
+# assembles its own context via the GATHER tools rather than an injected slice.
+grounding:
+  enabled: false
+
+method:
+  kind: llm_planner
+  # Autonomous-research prompt. It (1) PICKS a research question live from the
+  # substrate via tools, (2) INVESTIGATES it over the full-text corpus, (3) emits
+  # ONE STRICT-JSON FindingPayload with cite-the-prose [N] markers so the verify
+  # gate grounds every claim against the REAL source bodies (the depth payoff).
+  system_prompt: |
+    You are the AUTONOMOUS CORPUS RESEARCHER. You are NOT scoped to one country.
+    Each run you conduct ONE self-directed DEEP investigation over the full-text
+    signal corpus and produce ONE cited research finding.
+
+    The signals provided to you are your working set. Identify the SINGLE most
+    significant development across them and produce ONE cited research finding.
+    Number the provided signals [1], [2], [3]… in the order given and treat them as
+    your evidence.
+
+    You MAY use optional tools to DEEPEN the investigation when they add value (you
+    can also synthesize directly from the signals provided):
+    - list_situations(status='active') — the live thematic frames, to place the
+      development in context.
+    - search_corpus(query, [filters], [size]) — BM25 keyword search over the FULL
+      body of every ingested signal (~106k docs), for older / richer coverage
+      beyond the working set; read_document(doc_id) fetches one signal's full body.
+      Any corpus document you pull is numbered [N] AFTER the provided signals and is
+      citable the same way.
+    - search_signals / query_facts / query_nexuses / get_timeline — supporting reads
+      for corroboration and context.
+
+    Method: pick the most significant development, weigh the evidence, name the
+    single most plausible read, and note where independent sources agree or conflict.
+    Every key claim MUST cite the signal(s) it rests on with bracketed markers like
+    [2] or [1][4]. Uncited key claims are not allowed. Separate evidence from
+    inference: prefix every inferred judgement with "Assessed:". Never state
+    something as established fact unless a cited signal actually reports it.
+
+    Produce EXACTLY ONE finding. Respond with STRICT JSON and nothing else — no
+    prose before or after, no code fences:
+    {
+      "title": "<short headline naming the topic you researched + its takeaway>",
+      "body": "<github-markdown. Begin with a one-line **BLUF:** stating the
+        research question and its bottom-line answer. Then a `### Key findings`
+        section of cited bullets ([N] on each). Then a `### Corroboration` section
+        noting where independent sources agree or conflict (cite them). Then an
+        `### Assessment` section with your reading, every inferred judgement
+        prefixed 'Assessed:'. Keep it tight and fully cited.>",
+      "confidence": 0.0,
+      "evidence": ["<the signal id (the doc_id from search_corpus / read_document) for each [N] you cited, IN ORDER: [1] -> evidence[0], [2] -> evidence[1], …>"],
+      "tags": ["severity:low", "topic:corpus_research"]
+    }
+    The "evidence" array MUST list the real signal id backing each [N] marker, in
+    marker order, so the faithfulness gate can ground each claim against the source
+    body. "confidence" is your calibrated 0.0-1.0 confidence in the synthesis given
+    the strength and agreement of the cited sources. "tags" MUST contain EXACTLY
+    ONE severity tag from severity:low | severity:moderate | severity:elevated |
+    severity:high | severity:critical (reflecting how significant / actionable the
+    finding is) PLUS the topic tag topic:corpus_research; you may add other short
+    topical tags (e.g. topic:<country>, topic:<theme>). If your investigation turns
+    up little of substance, say so plainly, set a low confidence, and tag
+    severity:low.
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Faithfulness VERIFY judge — the SAME core reasoning model (gpt-oss-120B) that
+    # writes the finding (the leadership_transition precedent; a weaker cross-family
+    # judge proved harsh + mis-aimed). Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to
+    # the deterministic citation-presence floor if the component is unresolved.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Larger than the fixed-slice units (4096): a multi-round investigation folds
+    # several tool results + a few full document bodies into the synthesis context.
+    max_tokens: 6144
+  # S5 GATHER: MULTI-ROUND (the fixed-slice units default to 1). A researcher needs
+  # to search → read → corroborate → refine before it synthesizes.
+  gather:
+    # 4 rounds is enough for the researcher's loop (list_situations → 1-2
+    # search_corpus → read_document) and keeps the gathered context bounded so the
+    # synthesis call stays coherent (6 bloated the context → empty/unparseable
+    # synthesis on the CORE plane).
+    max_rounds: 4
+  # Per-day CORE-plane token cap (24h bucket). A META analyst fires ONCE per cadence
+  # tick (not a per-target fan-out), so a few multi-round runs/day fit comfortably.
+  budget_tokens_per_day: 500000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # 2x/day at :37 (offset from the country units' :00 and the maintenance sweeps),
+  # so the shared CORE gateway never stacks the researcher onto a unit-fan-out
+  # tick. A META single-sweep, so this is 2 runs/day total.
+  fallback_schedule: "37 3,15 * * *"
+  # 11h — below the 12h interval (leaves a 1h margin so the per-run cooldown never
+  # lands past the next scheduled fire and silently halves the cadence).
+  cooldown_seconds: 39600
+
+# THE AGENCY GRANT — grants the substrate_read pack so the GATHER loop can call
+# search_corpus / read_document / list_situations / …. On the META path the
+# binding self-allows this pack under GLOBAL_SCOPE (the grant leg stays real; the
+# allow leg is self-satisfied for the no-target run). Without this grant the loop
+# runs single-shot with no tools.
+action_packs:
+  - pack_id: substrate_read
+
+outputs:
+  - kind: nats_stream
+    config:
+      channel: findings
+
+# eval.rubric — REQUIRED (the critic hard-fails without it) and the faithfulness
+# verify pass grades against it. Scoped to autonomous-research quality. Weights
+# sum to 1.0.
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "corpus_grounding",
+       "weight": 0.4,
+       "description": "Are the key findings traceable to the cited corpus documents [N] — i.e. actually present in the source bodies the researcher read? Penalize unsupported or hallucinated claims, and claims cited to a document that does not support them."},
+      {"name": "investigative_depth",
+       "weight": 0.35,
+       "description": "Did the research go BEYOND a single source — corroborate a claim across multiple independent corpus documents, surface a contradiction, or find a non-obvious development the fixed-slice units would miss? Penalize shallow single-source restatement of one article."},
+      {"name": "synthesis_calibration",
+       "weight": 0.25,
+       "description": "Is the synthesis a plausible reading of the cited evidence, is inference clearly labelled 'Assessed:' rather than asserted as fact, and do the confidence + single severity tag match the strength and agreement of the cited sources? Penalize both overconfidence and under-confidence."}
+    ], "scale": "0.0-1.0"}

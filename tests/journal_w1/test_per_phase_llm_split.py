@@ -140,10 +140,21 @@ class _IdHandler:
 
 @pytest.mark.asyncio
 async def test_deps_build_resolves_two_distinct_handlers():
-    """journal_assessor: BOTH refs set → deps.llm is the gpt-oss/primary component,
-    deps.narrate_llm() is the Opus/narrate component — DIFFERENT handlers + ids."""
+    """journal_assessor: BOTH refs set → deps.llm and deps.narrate_llm() are
+    resolved via two INDEPENDENT factory calls (the per-phase split machinery
+    is live) even though, as of 2026-07-06, both refs point at the same $0
+    core-plane component (`llm.primary.openai_compat`) — the journal voice was
+    deliberately moved off Opus onto the core plane (operator standing rule:
+    every scheduled analyst incl. the journal VOICE runs $0; never call the
+    journal/analysts "Opus-billed"). The split still resolves two DISTINCT
+    handler INSTANCES (proving the narrate ref is genuinely wired, not a
+    silent fallback-to-primary no-op) — see
+    test_deps_build_falls_back_when_no_narrate_ref for the actual no-split
+    fallback-identity case."""
     # The factory is keyed by component id (the production llm_handler_factory
-    # contract), so it lets us prove the two refs resolved to two distinct planes.
+    # contract), so it lets us prove the two refs resolved via two distinct
+    # factory calls (two distinct object instances), regardless of whether
+    # the component ids they were called with happen to match.
     async def factory(component_id: str) -> Any:
         return _IdHandler(component_id)
 
@@ -156,18 +167,20 @@ async def test_deps_build_resolves_two_distinct_handlers():
     )
     assert kind_deps.llm.component_id == "llm.primary.openai_compat"   # gpt-oss gather
     assert kind_deps.llm_narrate is not None
-    assert kind_deps.narrate_llm().component_id == "llm.anthropic.opus_4_7"  # Opus voice
-    # DIFFERENT handlers.
+    assert kind_deps.narrate_llm().component_id == "llm.primary.openai_compat"  # core-plane voice (was Opus)
+    # DIFFERENT handler INSTANCES (the split resolves via two independent
+    # factory calls) even though both now carry the SAME component id.
     assert kind_deps.llm is not kind_deps.narrate_llm()
-    assert kind_deps.llm.component_id != kind_deps.narrate_llm().component_id
-    # The split flips on the gather Reasoning:high + threads the Opus narrate cap.
+    # The split flips on the gather Reasoning:high + threads the narrate cap.
     assert kind_deps.gather_reasoning_high is True
     assert kind_deps.narrate_tokens() == 16384
 
 
 @pytest.mark.asyncio
 async def test_deps_build_consolidator_resolves_two_distinct_handlers():
-    """The consolidation tier carries the SAME split (24576 narrate cap)."""
+    """The consolidation tier carries the SAME split (24576 narrate cap). Both
+    refs resolve to the $0 core plane (see test_deps_build_resolves_two_distinct_handlers
+    for why `llm.anthropic.opus_4_7` is no longer the expected narrate id)."""
     async def factory(component_id: str) -> Any:
         return _IdHandler(component_id)
 
@@ -179,7 +192,8 @@ async def test_deps_build_consolidator_resolves_two_distinct_handlers():
         llm_handler_factory=factory,
     )
     assert kind_deps.llm.component_id == "llm.primary.openai_compat"
-    assert kind_deps.narrate_llm().component_id == "llm.anthropic.opus_4_7"
+    assert kind_deps.narrate_llm().component_id == "llm.primary.openai_compat"
+    assert kind_deps.llm is not kind_deps.narrate_llm()
     assert kind_deps.gather_reasoning_high is True
     assert kind_deps.narrate_tokens() == 24576
 

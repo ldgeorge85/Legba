@@ -151,15 +151,15 @@ docker exec legba-legba-registry-1 python -m legba.data.migrate
 > A fresh deploy applies the single proven baseline
 > (`deploy/baseline/0001_baseline.sql`) and then this runner applies any FUTURE
 > (`0054`+) migrations. The baseline pre-seeds the ledger to `0053`; on a
-> baseline-provisioned DB `migrate` then applies the seven post-baseline
-> migrations (`0054`–`0060`) and advances the head to `0060`. (`deploy/deploy.sh`
+> baseline-provisioned DB `migrate` then applies the thirty-two post-baseline
+> migrations (`0054`–`0085`) and advances the head to `0085`. (`deploy/deploy.sh`
 > does both steps for you.)
 
-Verify (migration head should be **0060**; ISO countries table fully seeded):
+Verify (migration head should be **0085**; ISO countries table fully seeded):
 
 ```
 docker exec legba-postgres-1 psql -U legba -d legba \
-    -c "SELECT name FROM legba_data_migrations ORDER BY name"   # head 0060
+    -c "SELECT name FROM legba_data_migrations ORDER BY name"   # head 0085
 docker exec legba-postgres-1 psql -U legba -d legba \
     -c "SELECT count(*) FROM iso_countries"                     # expect 249
 ```

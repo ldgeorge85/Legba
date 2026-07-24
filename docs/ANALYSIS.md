@@ -238,19 +238,19 @@ connection — the receipt vs. side-write split is called out in the Writes colu
 
 | Kind | `method.kind` | Reads | Core op | Writes (`OutputKind`) | LLM? | Cadence |
 |---|---|---|---|---|---|---|
-| **`inline_target`** (the 7 bounded UNITS) | `llm_planner` | one desk's 72h signal slice + grounding preamble (`subscription.targets`, `has_tag("g20") or has_tag("watch")`) — two units (`leadership_transition`, `internal_stability`) also opportunistically pull `vector:world_context` RAG chunks (§7.9) | 7-phase envelope WAKE→ORIENT(token-budget packed, ≤200 backstop)→PLAN→GROUND→REASON→REFLECT→NARRATE, then the mandatory faithfulness VERIFY | **FINDING** (cited) | yes (one `chat_complete` + the faithfulness verify judge, currently the same core model) | **2×/day** staggered per unit across the clock (`0 1,13` / `0 4,16` / `0 7,19` / `0 10,22` / `0 2,14` / `0 5,17` / `0 9,21`) |
+| **`inline_target`** (the 7 bounded UNITS) | `llm_planner` | one desk's 72h signal slice + grounding preamble (`subscription.targets`, `has_tag("g20") or has_tag("watch")`) — one unit (`internal_stability`) also opportunistically pulls guarded `vector:world_context` RAG-pilot chunks (§7.9) | 7-phase envelope WAKE→ORIENT(token-budget packed, ≤200 backstop)→PLAN→GROUND→REASON→REFLECT→NARRATE, then the mandatory faithfulness VERIFY | **FINDING** (cited) | yes (one `chat_complete` + the faithfulness verify judge, currently the same core model) | **2×/day** staggered per unit across the clock (`0 1,13` / `0 4,16` / `0 7,19` / `0 10,22` / `0 2,14` / `0 5,17` / `0 9,21`) |
 | **`relationship_reifier`** | `llm_planner` (META) | `proposed_edges` co-mention pairs + open facts | small-LLM types each pair → canonical predicate + **signed polarity** | **NEXUS** side-write (`write_nexus`); FINDING receipt | yes (8B-path, 384-tok JSON/pair) | **12h** (`45 */12 * * *`) |
 | **`deterministic` / `graph_mining`** | `deterministic` (`sub_handler: graph_mining`) | signed `nexus` rows + the Apache AGE subgraph | `networkx` communities / centrality / proxy-chains | `graph_metrics` sink + **FINDING** | **no** | **12h** (`52 */12 * * *`) |
 | **`competing_hypotheses`** (alias `ach`) | `llm_planner` (META) | focal situations × current facts × signed nexuses | evidence × hypothesis matrix + diagnosticity → `confirmed` / `refuted` | **HYPOTHESIS** side-write (`write_hypothesis`); FINDING receipt | yes (LLM proposes set + scores cells, budget-gated) | **12h** (`50 */12 * * *`) |
 | **`predictor`** | `stat_forecaster` | a 14d (`336h`) signal window for the target | daily-aggregated AutoARIMA forecast (point + CI) | **PREDICTION** | no LLM in the critical path (optional narrative only) | **RETIRED + STOPPED** — forecast-as-claim (`country_predictor` retired, `india_energy_predictor` cadence-nulled); ~539 historical prediction rows remain in the DB, unread; forecasting now returns only via the scored `forecast_scoreboard` (§7.10) |
 | `cross_target_raw` | `llm_planner` | raw signals across N subscribed targets | one multi-target pass | FINDING (`cross_target=true`) | yes | available kind — not in the live bring-up set (no descriptor) |
 | `meta_findings_synthesizer` (the COMPOSITIONS) | `llm_planner` (META) | other analysts' verify-passed findings, composed bottom-up: the 7 units → `country_composition`; the country reads → `region_composition` (5 region frames); the region reads → `world_assessor`; **plus** `escalation_composition`, which fuses the `escalation`-unit head of every desk into one thematic cross-desk read | verify-floored, cited second-order synthesis (a T7 correlation guard caps shared-lineage double-counting) | FINDING (`meta=true`) + its own faithfulness VERIFY | yes | per-country `30 11,23`; per-region `45 11,23`; thematic escalation `30 8,20`; global world `0 0,12` |
-| `cross_analyst_correlator` | `llm_planner` | many analysts' outputs | contradiction / agreement / blind-spot detector | FINDING | yes | 12h (`45 */12 * * *`) |
+| `cross_analyst_correlator` | `llm_planner` | the LIVE composition + unit findings (read-slice repointed off the retired `country_assessor`/`country_predictor`) | contradiction / agreement / blind-spot detector; supersedes prior same-`situation_signature` heads | FINDING (+ mandatory faithfulness VERIFY) | yes | 12h (`45 */12 * * *`) |
 | `critic` | `critic` | one analyst output + its `eval.rubric` | LLM judge → per-dimension scores | **CRITIQUE** | yes (heterogeneity-guarded) | 2h (`0 */2 * * *`) |
 | `optimizer` (`unit_optimizer`) | `dspy_compile` | one measured unit's traces ⋈ critiques | DSPy + GEPA compile (Dapr Workflow) with a real before/after **faithfulness** delta; human-gated, never auto-promotes on a degenerate/non-positive delta | **PROMPT_MODULE_CANDIDATE** | yes (isolated worker) | weekly (`0 4 * * 1`); the old `country_optimizer` monolith is cadence-FROZEN — descriptor still `state=active`, `fallback_schedule` nulled (§6) |
 | `consult_on_demand` | `react_loop` | free-form question + scope predicate | single-turn ReAct over 4 read tools | FINDING | yes | on-demand (no `fallback_schedule`) |
 | `deep_consult` | `react_loop` | free-form deep-research question | schedules the deep-consult Dapr Workflow | FINDING | yes (within the workflow) | on-demand (no `fallback_schedule`) |
-| **`journal_assessor`** (extension kind) | `llm_planner` (META, in-actor GATHER one-soul arc) | the whole organism via its own `journal_read` self-instruments (its own last entry / consolidation, plus `get_assessments` / `get_graph_structure` / `get_critic_scores` / `get_calibration` / `get_run_health` / `get_budget_status` / …) | one-soul PLAN→GATHER→NARRATE arc; narrate a coherent first-person POV OVER the system | **JOURNAL** → `journal_entries`, OFF-chain (empty `derived_from`) | yes (per-phase split: gpt-oss / vLLM gather + Opus 4.8 voice) | **ON cadence** — 12h entry (`0 0,12`) + daily consolidation (`0 2`); an introspective instrument that writes only `journal_entries` and cannot pollute product output (§3.10) |
+| **`journal_assessor`** (extension kind) | `llm_planner` (META, in-actor GATHER one-soul arc) | the whole organism via its own `journal_read` self-instruments (its own last entry / consolidation, plus `get_assessments` / `get_graph_structure` / `get_critic_scores` / `get_calibration` / `get_run_health` / `get_budget_status` / …) | one-soul PLAN→GATHER→NARRATE arc; narrate a coherent first-person POV OVER the system | **JOURNAL** → `journal_entries`, OFF-chain (empty `derived_from`) | yes (both phases now on the core plane — gpt-oss / vLLM gather + core-plane voice; Anthropic is reserved for consult/deep_consult only) | **ON cadence** — 12h entry (`0 0,12`) + daily consolidation (`0 2`); an introspective instrument that writes only `journal_entries` and cannot pollute product output (§3.10) |
 | **`scorecard_producer`** | `deterministic` (`sub_handler`, META) | already-verified claims (14-day window) per active desk tagged `g20`/`watch` | high-precision banding rules (severity × effective_confidence, demote-never-promote); one honest row per desk | **SCORECARD** side-write; TRACE_ONLY receipt | **no** ($0) | daily (`40 4 * * *`) |
 | **`forecast_scoreboard`** | `deterministic` (`sub_handler`, META) | the `acute_forecasts` pilot table | weekly issue → **exogenous** resolve → count of the acute-binary forecast pilot; abstains on a degenerate p-vector | `acute_forecasts` rows; TRACE_ONLY receipt (never a claim/finding) | **no** ($0) | weekly |
 | **`unit_correctness_scorer`** | `deterministic` (`sub_handler`, META) | each unit's findings vs operator gold labels (`unit_reference_labels`) | per-unit faithfulness + correctness-vs-reference (honest-null when a unit has 0 labels) | FINDING (the skill-scoreboard feed) | **no** ($0) | daily |
@@ -282,8 +282,9 @@ write). The kind handler stays pure so the optimizer can replay it
 deterministically. This is the kind the **seven bounded reasoning units**
 instantiate — one narrow question each, fanned out across the 25 country desks (the
 19 G20 members plus the 6-desk watch tier; §3.11, §8) — and the kind that carries the
-**knowledge-grounding** injection (§7.9), including — on two units — the live
-opportunistic `vector:world_context` RAG (§7.9); a
+**knowledge-grounding** injection (§7.9), including — on one unit
+(`internal_stability`) — the live opportunistic, guarded `vector:world_context`
+RAG pilot (§7.9); a
 landed unit finding then clears the mandatory **faithfulness verify** pass (§6.2).
 The earlier monolithic `country_assessor` was an `inline_target` too, now retired
 and stopped — nothing in the spine reads it, though its ~1.2k historical findings
@@ -460,6 +461,21 @@ output read) or the narrow `referenced_outputs`. A "global situational-awareness
 coordinator" is not a special construct — it is a `cross_analyst_correlator` with
 a wide subscription.
 
+Three 2026-07-06 fixes make it a real reader instead of a blind one. (1) Its
+`READ_SLICE` was **repointed off the retired `country_assessor` / `country_predictor`**
+onto the **live composition + unit layer** — it now correlates real verified
+findings instead of degrading to "insufficient data" blind_spots over an empty read.
+(2) It **enters the mandatory faithfulness verify pass** like every other finding
+producer, so its `effective_confidence` is clamped by `min(confidence, faithfulness)`
+(§6.2). (3) It **supersedes prior same-relationship heads via a stable
+`situation_signature`** (`_situation_signature`, from `correlation_type` + the sorted
+referenced-target set): a fresh run about the same relationship supersedes the older
+head via the write-path fold rather than piling up duplicates, and a `blind_spot` head
+**decays only when its scope is revisited** — a still-real coverage gap is re-asserted
+each ~12h cadence and its fresh head supersedes the prior, while a gap the correlator
+has stopped asserting expires on a decay TTL (M17). (A `0079` reversible sweep closed
+the historical stale heads left over from the old read slice.)
+
 ### 3.5 `consult_on_demand`
 
 `consult_on_demand.py`. The one kind with **no scheduled cadence** — purely
@@ -487,6 +503,19 @@ richer investigative readers `query_nexuses` / `query_hypotheses` / `get_timelin
 tools are deliberately excluded — consult is a read over substrate. It emits a
 `ConsultResponsePayload` (carried into substrate as a finding, and returned
 directly to non-runtime dispatchers) with `cited_substrate_refs`.
+
+**Per-request plane picker.** Each consult / deep_consult request may pick which
+registered LLM plane answers it: `model = "opus"` (the Anthropic Opus plane, billed,
+**the default** — omitting the field preserves prior behaviour) or `model = "core"`
+(the free self-hosted core plane). A server-side allowlist maps the friendly value
+to a component id (`consult_api.py` — `"opus" → llm.anthropic.opus_4_7`,
+`"core" → llm.primary.openai_compat`), so the client never names a component. It is
+**fail-closed**: if a chosen non-default plane can't be honored the run raises rather
+than silently billing the default, and a provider outage surfaces as a graceful HTTP
+503 naming the *other* plane (not a bare 502). Budget accounting keys off the chosen
+plane; the shared per-day consult token cap still binds on both. The Consult and
+DeepConsult panels carry a matching model dropdown ("Opus (Anthropic · billed)"
+default / "Core (free)") that remembers the last choice.
 
 ### 3.6 `predictor`
 
@@ -583,18 +612,18 @@ this one (a partial-unique index enforces at-most-one open consolidation). Like
 NARRATE, the persona re-loaded every phase as the attention mechanism), **not**
 the `deep_consult` Dapr workflow (that path rides the broken long-activity
 round-trip, task #86). The GATHER loop is capped at `max_rounds: 6` (a hard
-ceiling). The model planes are split per phase: the heavy GATHER investigation
-loop runs on the **local gpt-oss / vLLM plane** (the core OpenAI-compatible
-`llm.primary.openai_compat` stack component, with a "Reasoning: high" directive
-injected into the gather system prompt only), while the **voice** — the in-voice
-field-notes seam and the NARRATE synthesis — runs on the **Anthropic plane
-(Opus 4.8)** (`method.llm.narrate` → `llm.anthropic.opus_4_7`). So Anthropic spend
-is just the bounded final voice synthesis (`max_tokens` governs only the Opus
-narrate; it is never sent to the vLLM gather, which serves its own budget); the
-deep agentic loop is local. The deps-builder reads the optional
-`method.llm.narrate.raw` (`method.llm` is an open dict, no schema change) and
-resolves a second handler — an analyst without `method.llm.narrate` falls back to
-the single primary handler, byte-unchanged.
+ceiling). **Both phases now run on the core plane.** The two-handler structure is
+kept — the heavy GATHER investigation loop runs on the **local gpt-oss / vLLM plane**
+(the core OpenAI-compatible `llm.primary.openai_compat` stack component, with a
+"Reasoning: high" directive injected into the gather system prompt only), and the
+**voice** — the in-voice field-notes seam and the NARRATE synthesis — is a *second*
+handler (`method.llm.narrate`) that **also resolves to `llm.primary.openai_compat`**
+now (it previously ran on the Anthropic Opus plane). So the journal costs **no
+Anthropic spend at all**: the billed Anthropic Opus plane is reserved for the
+on-demand consult / deep_consult kinds only (§3.5). The deps-builder still reads the
+optional `method.llm.narrate.raw` (`method.llm` is an open dict, no schema change)
+and resolves that second handler — an analyst without `method.llm.narrate` falls
+back to the single primary handler, byte-unchanged.
 
 **Packs and propose-and-gate — the hygiene invariant.** The journal is granted
 **only two** packs — `journal_read` (14 read tools including 9 self-instruments:
@@ -650,9 +679,9 @@ tier: Israel, Iran, North Korea, Pakistan, Taiwan, Ukraine) and answers **one
 narrow question**. Each run assembles a cited
 72h raw-signal slice **plus a Tier-1 grounding preamble of accumulated facts, signed
 nexuses, and situations** (§7.9) — so a unit integrates over accumulated state, not
-just the newest window; two units (`leadership_transition`, `internal_stability`)
-additionally pull opportunistic `vector:world_context` RAG chunks under a relevance
-floor + country filter (§7.9) — then synthesizes a
+just the newest window; one unit (`internal_stability`)
+additionally pulls opportunistic, guarded `vector:world_context` RAG-pilot chunks
+under a relevance floor + country filter (§7.9) — then synthesizes a
 strict-JSON `FindingPayload` whose prose carries `[N]` markers mapped to the
 signal ids **and a machine-checkable `data.indicators[]` block** (pre-registered
 warning signposts the I&W analysts diff, leg 6), then clears the mandatory
@@ -763,7 +792,15 @@ LLM. Coalescing is proven against these handlers (§2.4). Each shares one contra
 
 The source baseline's `ner_multilingual` filter writes entity mentions into
 `signals.payload.entities`, but resolving those mentions into the entity substrate
-is a separate, **continuous** job this handler owns. Each fire folds the next batch
+is a separate, **continuous** job this handler owns. Two 2026-07-06 coverage fixes
+to that upstream filter widen what reaches this handler at all: **telegram** messages
+carry their body in `payload.text` (previously skipped by the field list → 0
+entities), so `text` was added to the NER text fields (M12); and **non-Latin scripts**
+(Arabic / Cyrillic / Hebrew / CJK) yielded essentially zero spaCy spans, so those
+bodies are now **translated to English via the hosted NLLB `/translate` endpoint
+before extraction** (M11) — both **forward-only**, so re-enriching the ~9k older
+telegram / non-Latin signals is a separate operator job (see the backlog, §7.8).
+Each fire folds the next batch
 of un-resolved signals (selected `entities_resolved_at IS NULL`, oldest-first,
 bounded `LIMIT`) into the graph:
 
@@ -779,6 +816,18 @@ It stamps `entities_resolved_at = NOW()` on each processed signal so a backlog o
 zero-entity signals can never starve newly-arriving ones, and re-running is safe
 (upserts + `ON CONFLICT`). This handler is what keeps the live entity graph current
 (§8).
+
+**The pre-lookup is alias/article-aware + class-guarded (2026-07-06).** After the
+Phase-4 entity merge, new resolutions were **re-fragmenting** — "the Strait of
+Hormuz" forked a fresh node from "Strait of Hormuz" — so the dedup pre-lookup now
+rewrites an article/case/alias variant onto an existing keeper's canonical surface
+before the dedup key, and a **fallback-elected keeper is never class-mutated**
+(a geographic keeper adopting an incoming variant is not silently retyped). Two more
+gates ride the same write path: a **junk gate** drops numeric / quantity / possessive
+surfaces, and a **conservative class validation** corrects only high-confidence
+mistypes (a region → `location`, a sports team / org → `organization`) and **never
+downgrades a confident `person`**. A `0076` reversible migration folded the leftover
+historical fragments (`entity_profiles` 12,257 → 12,144).
 
 ### 4.2 `cross_source_dedup` — links duplicate observations
 
@@ -805,7 +854,8 @@ subscription filters against so a target sees one row per duplicate set.
 | Sub-handler | What it does |
 |---|---|
 | `cross_source_coalesce` | the substrate-wide sibling of `cross_source_dedup` (§4.2): a periodic, no-LLM cross-source **linker** that closes the "same real-world event, different source, different wording, no shared `content_hash`" gap. It embeds recent canonical signals across **all** sources into one shared Qdrant collection and reuses the ingest dedupe's tier-3 (cosine) + tier-4 (temporal window + title Levenshtein) logic to link near-duplicates — **link-never-collapse** via `signal_aliases`, raw rows never deleted. It has **no** non-vector fallback (exact-hash is `cross_source_dedup`'s job), so when its embedding service or Qdrant port is absent it refuses **loud** (emits a `coalesce_unavailable` finding, writes zero aliases — declared SEAM #19) rather than fabricating links. **Off-by-default** (not in the default bring-up set; its `enabled` option defaults False — an operator must opt in) |
-| `graph_mining` | community detection, structural-balance triads, proxy-chain mining over the Apache AGE graph |
+| `graph_mining` | community detection, structural-balance triads, proxy-chain mining over the Apache AGE graph. Its "interesting" **hostile-edge shortlist is now vetted** (2026-07-06): canonical class-checked endpoints only (drops NER fragments like `Parl`/`Fed`/`West`/`Leader`), a genuine hostility `rel_type` **and** negative polarity required (a neutral "conducted via" edge isn't relabeled hostile), a subject-attribution guard (so "protesters in X" is **not** emitted as "State X hostile to \<person\>", while a real "State →Targets→ person" survives), and a per-edge quality score |
+| `thematic_proposal` | proposes thematic (non-geo) situation frames for uncovered hot topics. **Absence / negation-framed compositions are excluded** from candidacy, and each slug derives from the stable `situation_signature` (one situation = one slug) so proposals **dedup** rather than piling up variants (2026-07-06) |
 | `anomaly_detection` | signal-volume rate spikes, sentiment-shift z-scores, novel-entity emergence over `time_bucket()` windows on the primary Postgres pool |
 | `structural_balance` | signed-edge triadic balance on the entity-relationship graph (§7.3) |
 | `calibration_tracking` | analyst confidence-vs-outcome (Brier score, reliability bins, drift) (§7.4) |
@@ -1080,6 +1130,28 @@ composition's `[[ref:<uuid>]]` →
 sub-claim bridge and checks each composed clause against the cited sub-claim's own
 text (the thematic and world branches additionally apply the T7 shared-lineage
 anti-double-counting floor at grade time).
+
+**Calibration of the pass (2026-07-06 — M13 / M14 / M15).** Three guards were added
+so the floor stops mis-scoring *honest* findings, all **demote-only** (they flag /
+adjust the folded confidence, never delete):
+
+- **M13 — stale-leader guard.** A finding that calls the current US officeholder
+  "former" (or names a wrong current holder) is flagged, and the temporal-grounding
+  preamble now carries a current-officeholder anchor — closing the stale-cutoff
+  "former President" error class (§7.9) at grade time as well as at grounding time.
+- **M14 — null-result rubric + parser fixes.** An honest corpus-scoped **absence**
+  finding ("no proliferation activity; the N signals focus on unrelated topics") is
+  now graded as a faithful **survey** of the cited evidence rather than as uncited
+  fabrication; and the citation-marker parser now **expands range markers** (`[1-92]`
+  → the integer members, capped so `[1-999999]` can't fan out) and treats explicit
+  `[no citation]` lines as **floor-exempt**, so a range-cited or deliberately-uncited
+  clause is no longer crushed to ~0.
+- **M15 — target-consistency guard.** A per-country UNIT finding whose named
+  subject-country contradicts its desk (it names a *different* country and never its
+  own target geo) is flagged as a cross-target leak. (A `0080` migration also closed
+  the historical cross-target mislabels this guard now catches at write time.)
+
+The fold stays `effective_confidence = min(confidence, faithfulness)` throughout.
 
 **The critic (rubric grader).** The critic is a separate LLM judge against the
 analyzed analyst's `eval.rubric`, with the heterogeneity guard of §3.8. Rubrics
@@ -1426,7 +1498,12 @@ more-finished than the data.
   lowercase-spaced form.
 - ~~**`signals.source_credibility` is 100% NULL**~~ — **FIXED (Phase D)**: populated
   at the canonical signal write-path via host lookup against the scored
-  `source_credibility` table (unknown host → NULL by design).
+  `source_credibility` table (unknown host → NULL by design). **State/social media
+  now explicitly seeded (2026-07-06, migration `0080`):** un-scored state-affiliated
+  hosts were previously out-crediting their own seeded peers, so `presstv.ir` 0.25 /
+  `irna.ir` 0.30 / `ukrinform.net` 0.45 / `t.me` (telegram) 0.30 were seeded — all
+  **below** the 0.5 ingestion nominal — matching the existing tehrantimes/tass state
+  band.
 - ~~**`graph_metrics` sink empty**~~ — **FIXED (Phase D)**: `structural_balance` /
   `graph_mining` / `nexus_decay` now write a `graph_metrics` row per run
   (`deterministic_handlers/_graph_metrics_sink.py`).
@@ -1450,6 +1527,25 @@ more-finished than the data.
   is stamped (`resolved_by='status_transition'`), so `calibration_tracking` now
   computes a real Brier instead of `n = 0`. See the residual caveat below — this is
   a *self-consistency* Brier, not calibration against exogenous reality.
+
+**2026-07-06 audit remediation — write-path gates (migrations `0076`–`0080`):**
+
+- **Fact write-path gates sharpened.** A **predicate-argument / relation-direction
+  gate** rejects inversions ("NATO member of Turkiye") and quantity/person objects
+  for `member`/`part` predicates; a **demonym + relative-temporal subject reject**
+  drops those subjects; and **adjective-nationality VALUE normalization** is scoped
+  to geographic/relational predicates only ("Kyiv capital of Russian" → Russia, while
+  "speaks Russian" is untouched). Crucially, a pre-existing **over-aggressive
+  "sports roster" gate was fixed** — it had been silently dropping real IGO-membership
+  facts ("France member of European Union" and peers), which now land. A `0077`
+  reversible migration closed the historical semantic/demonym/temporal junk facts
+  (reversible `valid_until`).
+- **Nexus write-path gates added.** A junk / vague-endpoint gate (relative-time and
+  vague-bloc / adjective singletons) fires at **both** producers, a same-referent
+  **self-edge** gate drops A→A loops, and **demonym / plural dyad canonicalization**
+  stops "Russia|Russian × Ukraine|Ukrainian" inflating dyad counts. A `0078`
+  reversible migration swept the historical nexus junk / self-edges and canonicalized
+  the dyads.
 
 **Residual (genuine, still open):**
 
@@ -1530,8 +1626,8 @@ analyst that doesn't declare the block is untouched. Grounding is opted IN on **
 seven bounded reasoning units** (`leadership_transition`, `energy_security`,
 `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`,
 `economic_coercion`), which read
-`sources: [substrate, situations, graph_structure]` (two of them also add
-`vector:world_context` — Tier 2 below) — the retired `country_assessor`
+`sources: [substrate, situations, graph_structure]` (one of them,
+`internal_stability`, also adds `vector:world_context` — Tier 2 below) — the retired `country_assessor`
 monolith carried it first. Because this preamble is drawn from **accumulated** facts,
 signed nexuses, and situations (not just the 72h raw window), a unit reasons over
 state that integrates over time — e.g. lines like "US head of government Trump since
@@ -1539,24 +1635,46 @@ state that integrates over time — e.g. lines like "US head of government Trump
 **Canary passed live:** a US unit's context now contains
 "United States — head of state: Donald Trump (since 2025-01-20)".
 
-**Tier 2 — vector `world_context` RAG (now LIVE).** A curated unstructured-brief
-collection (free-text background the structured facts can't carry) is **wired and
-serving** — this is no longer a future seam. The embedder-through-port leg (L-114)
-that Tier 2 waited on is **built and SEAM #11 is RESOLVED**: the query is embedded
-through the stack embedder port (**bge-m3, 1024-dim**) and cosine-searched against
-two live **Qdrant** collections — `tradecraft` (analytic-tradecraft / SAT
-standards, ~1,716 chunks) and `world_context` (country/topic priors + doctrine
-summaries, ~293 chunks). When a `GroundingBlock` lists `vector:world_context`, the
-resolver runs **inline opportunistic RAG**: it retrieves chunks under a
-**relevance floor** with a **country filter**, and is **degrade-not-drop** — an
-empty or below-floor corpus yields no chunks and the run proceeds on the structured
-tiers rather than injecting an empty or off-topic preamble. RAG is currently
-**flipped ON for two units** (`leadership_transition` and `internal_stability` —
-`grounding.sources` includes `vector:world_context`); the other five units carry
-only the structured sources today, and the expansion to more units is staggered and
-review-gated per unit (an `rag_watch` harness measures the pre/post faithfulness
-delta before each flip). The corpora are loaded by the Lane-4 vector loader
+**Tier 2 — vector `world_context` RAG (a GUARDED, MEASURED PILOT).** A curated
+unstructured-brief collection (free-text background the structured facts can't carry)
+is **wired and serving**, but deliberately as a *pilot*, not a finished capability.
+The embedder-through-port leg (L-114) that Tier 2 waited on is **built and SEAM #11 is
+RESOLVED**: the query is embedded through the stack embedder port (**bge-m3,
+1024-dim**) and cosine-searched against two live **Qdrant** collections — `tradecraft`
+(analytic-tradecraft / SAT standards, ~1,716 chunks) and `world_context`
+(country/topic priors + doctrine summaries, ~293 chunks). When a `GroundingBlock`
+lists `vector:world_context`, the resolver runs **inline opportunistic RAG**: it
+retrieves chunks under a **relevance floor** with a **country filter**, and is
+**degrade-not-drop** — an empty or below-floor corpus yields no chunks and the run
+proceeds on the structured tiers rather than injecting an empty or off-topic preamble.
+
+**Recalibrated + re-activated on `internal_stability` ONLY (2026-07-06).** The
+embedder (bge-m3) was never the problem — the fixes were in *retrieval usage*: a
+focused `"<country> <theme>"` query (replacing a diluted unit-name + entity blob),
+**doc contextualization** (chunks embedded with a `"<Country> — <section>"` lead), the
+293-point corpus **re-embedded in place** (`scripts/reembed_world_context.py`), and
+the relevance floor lowered **0.65 → 0.55** (on-target now ~0.6, off-target ~0.42).
+RAG is currently **flipped ON for one unit — `internal_stability`** — and
+`leadership_transition` RAG is **OFF** (the 2026-07-03 rollback is now live). The
+other units carry only the structured sources; expansion is staggered and
+review-gated per unit.
+
+**A real per-run auto-rollback guard** (`src/legba/runtime/rag_rollback.py`) replaces
+the old comments-only one: it re-checks a disabled-units env
+(`LEGBA_WORLD_CONTEXT_DISABLED_UNITS`) plus a persisted state file
+(`LEGBA_RAG_ROLLBACK_STATE`) on **every** run, so a rollback suppresses injection on
+the *next* run **without a restart**. Triggers are a faithfulness drop / low-faith
+ratio / token-cost rise (≥ 35%), actuated by `scripts/rag_watch.py --enforce`. Per-run
+trace instrumentation records `world_context_top_score` / `retained` / `min_score` so
+the measurement is honest. The injected priors remain **non-citable** (a fenced
+background block, no `[N]` ids). The corpora are loaded by the Lane-4 vector loader
 (`data/rag/lane4_loader.py` + `chunker.py`) via `scripts/manual_ingest_vectors.py`.
+
+> **Known limit (honest).** Firing RAG has *historically thickened the
+> low-faithfulness tail* even with the non-citable header; the guard reverts if that
+> recurs, which is exactly why this stays a pilot and not a shipped default. The pilot
+> state file currently lives at an **ephemeral path** — moving it to a volume for
+> persistence is a tracked follow-up (§7.11 backlog / `SEAMS.md`).
 
 ### 7.10 Forecasting and prediction — the methodology under test
 
@@ -1762,7 +1880,9 @@ disputed value as settled truth:
 
 **Build / validation state (honest).** All waves (0, 1, 2, 2b, 4, 5) are **built,
 deployed, and enabled on this instance** (the contested-claims schema landed at
-migrations `0054`–`0055`; the live migration head is now **0060**; both
+migrations `0054`–`0055`; the live migration head is now **0085** (the 2026-07-06
+audit remediation added `0076`–`0080` — entity re-fold, junk-fact / junk-nexus /
+stale-head sweeps, and the state-media credibility seed); both
 `LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` ship **OFF by
 default** in code and compose, set to `1` only here via the gitignored `.env`).
 Proven **live**: the detect-only arbiter (Q·C·R·F surfaced the better-supported
@@ -1790,8 +1910,8 @@ The analysis plane is live in the real stack, cold-startable from empty volumes
   register-a-target with a `g20`/`watch` coverage tag, no code change.
 - Each desk is coalesced (§2) into the **seven bounded reasoning units**
   (`inline_target`), each answering one narrow question over the desk's 72h slice
-  plus its accumulated-state grounding preamble (two units also pull live
-  `world_context` vector RAG), emitting a cited finding that then
+  plus its accumulated-state grounding preamble (one unit, `internal_stability`, also
+  pulls the guarded live `world_context` vector RAG pilot), emitting a cited finding that then
   clears the mandatory **faithfulness verify** pass (§6.2) — with full `derived_from`
   provenance and per-analyst receipt chains.
 - `country_composition` synthesizes each desk's seven verify-passed unit findings

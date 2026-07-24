@@ -75,6 +75,15 @@ subscription:
     - id: region_composition
       data_types: [finding]
       time_window: 24h
+    # B0-4 (MASTER_PLAN 2026-07-10): the cross-region THEMATIC composition —
+    # the world's one LEGAL cited cross-region object. Its target-LESS head is
+    # admitted by _assemble_world_region_slice as a labeled `thematic` block,
+    # verify-floored like every other input (a weak head is floored out, never
+    # injected). Before this the world read composed one-region-each blocks
+    # only and structurally could not carry a claim spanning two regions.
+    - id: escalation_composition
+      data_types: [finding]
+      time_window: 24h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 

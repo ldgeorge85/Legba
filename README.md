@@ -117,8 +117,10 @@ carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
   ("chain-consistent (single-node)" — an honest badge, not a tamper-proof claim).
 - **On-demand consult** — ask questions against the live substrate
   (`POST /api/v1/consult`; ReAct over governed read tools).
-- **An introspective journal** — the system's first-person voice about its own
-  state, kept off the product chain so it can never pollute findings.
+- **An introspective journal + voice roster** — the system's first-person voice
+  about its own state, plus a weekly third-person chronicle and four
+  falsifiable-prior "lens" reads with a chorus diff — all kept off the product
+  chain so they can never pollute findings.
 - **Measured experiments, labeled as such** — a prompt self-optimizer and an
   acute-forecast scoreboard exist behind honesty gates; neither claims skill it
   hasn't measured ([details](docs/STATUS.md)).

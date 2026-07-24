@@ -531,6 +531,67 @@ _NUMBER_WORD_ENTITIES: frozenset[str] = frozenset({
     "twentieth", "thirtieth",
 })
 
+# ---------------------------------------------------------------------------
+# DQ M7 (2026-07-06 nexus-write audit) — VAGUE single-token endpoints the two
+# nexus gates (proposed_edge_governance / relationship_reifier) minted as
+# relationship endpoints and pushed into the signed / hostility graph:
+#   "West hostile to the Islamic Revolution", "IRNA co occurs with Islamic",
+#   "United States hostile to Leader", "Europe co occurs with annual".
+# A bare directional / bloc adjective, a bare ideological adjective, a bare
+# generic leadership role, or a bare frequency adjective is NEVER a resolvable
+# actor — as a nexus endpoint it is noise. Consumed by :func:`is_junk_entity`.
+# ---------------------------------------------------------------------------
+
+#: Bare vague tokens that are never a specific actor. CURATED + tight
+#: (whole-surface, single-token). A REAL single-token actor (a country / an
+#: alias / a demonym → country) is EXEMPTED in :func:`is_junk_entity` BEFORE this
+#: set is consulted, so "China" / "NATO" / "Iran" / "Hamas" / "Houthi" are never
+#: touched. Deliberately EXCLUDES sectarian / ethnic nouns (Shia / Sunni / Arab /
+#: Muslim) and institution fragments (State / Army / Report / Parliament) — those
+#: collide with real referents too readily; only the unambiguously-vague
+#: directional / ideological / role / frequency adjectives are members.
+_VAGUE_ENDPOINT_TOKENS: frozenset[str] = frozenset({
+    # directional / bloc adjectives — no single referent as a bare token
+    "west", "western", "eastern", "northern", "southern",
+    # ideological adjective (audit: "Islamic") + closest sibling
+    "islamic", "islamist",
+    # generic leadership role (audit: "Leader")
+    "leader", "leaders", "leadership",
+    # frequency adjectives (audit: "annual")
+    "annual", "annually", "yearly", "daily", "weekly", "monthly",
+    "quarterly", "biannual", "semiannual", "biennial",
+    # E1 / j4 (2026-07-10): the BARE "Resistance" fragment. The M12/reenrich
+    # telegram backfill minted it as a `person` and the reifier forged
+    # `Resistance —hostile to→ United States`, which led the journal's entry.
+    # Matched EXACT-on-stripped (is_junk_entity :1078 tests `low in`), and the
+    # canon strips a leading article first, so this rejects ONLY "Resistance" /
+    # "the Resistance" — never "Axis of Resistance" or "French Resistance"
+    # (a real coalition/movement keeper keeps its full surface).
+    "resistance",
+})
+
+#: M20 (2026-07-06 mining audit) — TRUNCATED institution / agency abbreviations
+#: the NER emitted as clipped fragments ("Parl" from "Parliament", "Fed" from a
+#: "Federal …" span). These are NOT the full institution WORDS deliberately
+#: excluded from :data:`_VAGUE_ENDPOINT_TOKENS` above (a whole "Parliament" /
+#: "State" collides with real referents) — they are broken clippings that name no
+#: single actor as a bare nexus endpoint. Surfacing them as hostile-edge
+#: endpoints ("Parl hostile to X", "Fed hostile to Y") amplifies an NER error
+#: into headline geopolitical signal. Consumed by :func:`is_junk_entity`.
+_TRUNCATED_INSTITUTION_FRAGMENTS: frozenset[str] = frozenset({
+    "parl", "fed",
+})
+
+#: DQ M7 — bare PLURAL quantifier words ("Hundreds", "Millions", "Thousands")
+#: the nexus gates minted as endpoints ("Hundreds hostile to Israel", "Iraq
+#: involved in millions"). The SINGULAR magnitude words already live in
+#: :data:`_NUMBER_WORD_ENTITIES`; their plurals slip past it (and past the
+#: DIGIT-only numeric predicate + the "hundreds of X" ``_QUANTIFIER_RE``, which
+#: needs the trailing "of X"). A bare quantifier plural is never a referent.
+_QUANTIFIER_PLURAL_ENTITIES: frozenset[str] = frozenset({
+    "hundreds", "thousands", "millions", "billions", "trillions", "dozens",
+})
+
 
 # ---------------------------------------------------------------------------
 # JUNK PREDICATES — the live junk classes the review confirmed. Each matches on
@@ -599,13 +660,16 @@ _HTML_RESIDUE_RE = re.compile(r"</?[a-z][^>]*>|&[a-z]+;|&#\d+;", re.IGNORECASE)
 
 
 def _strip_residue_for_fold(s: str) -> str:
-    """Return ``s`` with HTML tags / entities / partial-tag residue removed.
+    """Return ``s`` with HTML / markdown residue + partial-tag fragments removed.
 
     Used ONLY to build the identity fold (NOT the forward surface form — a
     residue-bearing span stays junk-rejected at write time). Turns "Iran</p" ->
     "Iran", "/>Iranian" -> "Iranian", "the Middle East.</p" -> "the Middle East.",
-    "State's < a" -> "State's", so a junk-shaped historical row folds onto its
-    clean survivor. Pure + deterministic + idempotent.
+    "State's < a" -> "State's"; and (B0-7, the telegram markdown leak)
+    "[**Ali Khamenei**](https://x.y)" -> "Ali Khamenei",
+    "Ayatollah Ali Khamenei**](https://f24.my" -> "Ayatollah Ali Khamenei",
+    so a junk-shaped historical row folds onto its clean survivor.
+    Pure + deterministic + idempotent.
     """
     if not s:
         return ""
@@ -619,6 +683,15 @@ def _strip_residue_for_fold(s: str) -> str:
     s = re.sub(r"^\s*/?>\s*", " ", s)
     # Any HTML entity that survived the unescape (defensive).
     s = re.sub(r"&[a-z]+;|&#\d+;", " ", s, flags=re.IGNORECASE)
+    # Markdown residue (B0-7): a COMPLETE link/image wrapper first
+    # ("[**t**](url)" -> "**t**", "![alt](url)" -> "alt"), …
+    s = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", s)
+    # … then a TRAILING partial-link fragment — anything from a residual "](
+    # to end-of-string (the truncated-span analogue of the partial tag above;
+    # "Khamenei**](https://f24.my" drops the URL tail), …
+    s = re.sub(r"\]\(.*$", " ", s, flags=re.DOTALL)
+    # … then bare bold markers left behind by either pass.
+    s = s.replace("**", "")
     return _WHITESPACE_RE.sub(" ", s).strip()
 
 #: Money / currency tokens the live review found leaking as entities:
@@ -677,15 +750,300 @@ _SPORTS_NOISE_RE = re.compile(
 #: "decades", "a century", "millennia". NER drags the hyphenated age compound
 #: in verbatim (spaced hyphens are the GLiREL tokenization), and bare
 #: time-span nouns are not entities. Anchored on the stripped surface.
+#: NOTE (adversarial #2): bare SINGULAR "century" is deliberately NOT matched
+#: here — it is a real brand ("Century Aluminum"); "a century"/"the century"
+#: (modified) is caught by :func:`_is_temporal_surface` instead, and the plural
+#: "centuries" stays junk here.
 _AGE_TIME_RE = re.compile(
     r"""^\s*(?:
             \d[\d,]*\s*-?\s*years?\s*-?\s*old   # "51 - year - old", "24-year-old"
           | (?:a|an|the)?\s*
-            (?:centur(?:y|ies)|decades?|millenni(?:um|a)|generations?)
+            (?:centuries|decades?|millenni(?:um|a)|generations?)
         )\s*$
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+
+# ---------------------------------------------------------------------------
+# DQ M5 (2026-07-06 audit) — entity-write junk classes the earlier predicates
+# missed: number+unit quantity ("188,000 barrels", "770 bln won", "four million
+# euros"), a possessive-KINSHIP referring expression ("Donald Trump's son"), and
+# a bare temporal / duration surface ("last week", "the 21st century", "Today").
+# These were the P5 FACT gate's remit but were never reached on the entity path;
+# they are added here (the ONE canon) so is_junk_entity rejects them everywhere.
+# ---------------------------------------------------------------------------
+
+#: Measurement / currency UNIT nouns that trail a quantity ("188,000 barrels",
+#: "70 bln euros", "seven tons"). A surface built ONLY of numbers + qualifiers +
+#: one of these unit nouns is a quantity, never an entity. Curated + conservative
+#: — a nominal token anywhere in the surface keeps it (so "Boeing 737", "five US
+#: senators", "Boat People" are NOT flagged).
+_UNIT_NOUNS: frozenset[str] = frozenset({
+    "barrel", "barrels", "bpd", "bbl", "bbls",
+    "won", "euro", "euros", "dollar", "dollars", "yen", "yuan", "rupee",
+    "rupees", "pound", "pounds", "ruble", "rubles", "rouble", "roubles",
+    "dinar", "dinars", "riyal", "riyals", "rial", "rials", "shekel",
+    "shekels", "franc", "francs", "lira", "peso", "pesos", "hryvnia",
+    "hryvnias", "hryvnie", "dirham", "dirhams", "rand", "baht", "ringgit",
+    "cent", "cents", "percent", "crore", "lakh",
+    "tonne", "tonnes", "ton", "tons", "kg", "kilograms", "kilogram",
+    "litre", "litres", "liter", "liters", "gallon", "gallons",
+    "hectare", "hectares", "acre", "acres", "km", "kilometre", "kilometres",
+    "kilometer", "kilometers", "mile", "miles", "metre", "metres", "meter",
+    "meters", "mw", "gw", "kwh", "twh", "mwh", "kt", "ounce", "ounces",
+    "troop", "troops", "soldier", "soldiers", "missile", "missiles",
+    "drone", "drones", "rocket", "rockets", "warhead", "warheads",
+    "people", "casualties", "casualty", "death", "deaths",
+})
+
+#: Currency symbol characters + compound codes ("$", "US$", "usd"), recognised as
+#: a currency marker inside :func:`_is_quantity_unit_phrase`. A bare symbol token
+#: ("$"), a compound-prefixed number ("US$525", "$5B"), or a bare code ("usd")
+#: all mark the surface as carrying money — the review found the spaced-symbol
+#: shapes ("$ 307 mln", "€ 1.5B") leaking because the old set held only currency
+#: WORDS ("dollar"), not symbols.
+_CURRENCY_SYMBOL_CHARS = "$€£¥₹₩₽"
+_CURRENCY_CODES: frozenset[str] = frozenset({
+    "usd", "eur", "gbp", "jpy", "cny", "inr", "krw", "aud", "cad", "chf",
+    "hkd", "sgd", "rmb", "rs", "us$", "s$", "c$", "hk$", "a$", "nz$", "r$",
+    "n$", "aed", "sar", "qar", "kwd", "zar", "ngn", "php", "idr", "myr",
+})
+_CURRENCY_PREFIX_RE = re.compile(rf"^[a-z]{{0,3}}[{re.escape(_CURRENCY_SYMBOL_CHARS)}]")
+#: A magnitude abbreviation glued to a number token ("1.5B", "307mln", "5bn").
+_MAGNITUDE_SUFFIX_RE = re.compile(
+    r"(?:k|m|mn|mln|mil|b|bn|bln|bil|t|tn|tln|trn|trln)$", re.IGNORECASE)
+
+
+def _qty_number_core(t: str) -> tuple[bool, bool]:
+    """Return ``(is_number, wore_currency_prefix)`` for a candidate quantity token.
+
+    Strips an optional leading currency cluster (``$`` / ``US$`` / ``€``) and a
+    trailing magnitude / percent suffix (``B`` / ``mln`` / ``%``) and reports
+    whether the remainder is a bare number — so ``"$5B"``, ``"€1.5b"``,
+    ``"307mln"`` and ``"US$525"`` all read as numbers (the second flag also
+    marks the surface as carrying a currency)."""
+    s = t
+    m = _CURRENCY_PREFIX_RE.match(s)
+    had_cur = bool(m)
+    if m:
+        s = s[m.end():]
+    s = s.rstrip("%")
+    s = _MAGNITUDE_SUFFIX_RE.sub("", s)
+    return (bool(_NUM_TOKEN_RE.match(s)), had_cur)
+
+#: COUNT-noun "units" (point/seat/vote) that also occur in PLACE names
+#: ("Five Points", "Four Points" — real neighborhoods use spelled number-WORDS).
+#: Junk quantity only when paired with a DIGIT number ("300 seats", "45 votes"),
+#: NOT a number-word — so a number-word place name is kept (adversarial #4).
+_COUNT_UNIT_NOUNS: frozenset[str] = frozenset({
+    "vote", "votes", "seat", "seats", "point", "points",
+})
+
+#: Magnitude words / abbreviations that count as part of the NUMBER, not a unit
+#: ("770 bln won", "20 M barrels"). Distinct from _UNIT_NOUNS.
+_MAGNITUDE_TOKENS: frozenset[str] = frozenset({
+    "bn", "bln", "b", "mn", "mln", "m", "k", "tn", "tln", "trn", "trln", "t",
+    "billion", "million", "thousand", "trillion", "hundred", "bil", "mil",
+})
+
+#: Filler tokens carrying no entity content inside a quantity phrase. Extended
+#: (2026-07-12 review) with the connectors / approximators / time-words the live
+#: relic shapes wear: "per" ("per day"), "almost"/"just"/"only", "additional"/
+#: "further"/"initial", "between"/"as"/"high"/"low", "cubic" ("cubic meters"),
+#: "worth", and the temporal tails ("per day", "-year-old"). These fire ONLY
+#: alongside a real number + a currency/unit marker (see _is_quantity_unit_phrase),
+#: so a real name ("New Year", "Fort Worth") is never flagged.
+_QTY_QUALIFIERS: frozenset[str] = frozenset({
+    "of", "the", "a", "an", "and", "at", "least", "most", "more", "less",
+    "than", "about", "around", "approximately", "nearly", "over", "under",
+    "up", "to", "some", "several", "roughly",
+    "per", "almost", "just", "only", "additional", "further", "initial",
+    "between", "estimated", "as", "high", "low", "cubic", "worth", "point",
+    "day", "days", "year", "years", "hour", "hours", "month", "months",
+    "week", "weeks",
+})
+
+#: A bare number token: leading digit, then digits / thousands-separators /
+#: decimals only ("188,000", "1.34", "55.3").
+_NUM_TOKEN_RE = re.compile(r"^[0-9][0-9,.]*$")
+
+
+def _is_quantity_unit_phrase(stripped: str) -> bool:
+    """True when ``stripped`` is ENTIRELY a number + a measurement/currency unit.
+
+    Conservative by construction: EVERY token must be a number
+    (digit-token / spelled number-word / magnitude), a quantity qualifier, or a
+    unit noun, AND the surface must contain at least one number AND at least one
+    unit noun. A single nominal token (a real name) keeps the surface — so
+    "Boeing 737", "Group of 20", "five US senators" are NOT flagged, while
+    "188,000 barrels" / "770 bln won" / "four million euros" are.
+    """
+    tokens = [t.strip(_STRIP_CHARS).lower() for t in stripped.split()]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return False
+    has_digit = has_num_word = has_unit = has_count_unit = False
+    for t in tokens:
+        if _NUM_TOKEN_RE.match(t):
+            has_digit = True
+        elif t in _NUMBER_WORD_ENTITIES or t in _MAGNITUDE_TOKENS:
+            has_num_word = True
+        elif t in _UNIT_NOUNS:
+            has_unit = True
+        elif t in _COUNT_UNIT_NOUNS:
+            has_count_unit = True
+        elif t in _QTY_QUALIFIERS:
+            continue
+        elif t in _CURRENCY_CODES or all(ch in _CURRENCY_SYMBOL_CHARS for ch in t):
+            # a bare currency symbol ("$") / code ("usd") — a money marker.
+            has_unit = True
+        else:
+            # a number wearing a currency prefix and/or magnitude suffix
+            # ("$5B", "€1.5b", "307mln", "US$525") — the spaced-symbol shapes the
+            # old set missed. A currency prefix ALSO marks the surface as money.
+            is_num, had_cur = _qty_number_core(t)
+            if not is_num:
+                return False  # a nominal token — not a pure quantity phrase
+            has_digit = True
+            if had_cur:
+                has_unit = True
+    # A measurement/currency unit is junk with ANY number (digit or word):
+    # "188,000 barrels", "four million euros", "seven tons".
+    if has_unit and (has_digit or has_num_word):
+        return True
+    # A count-noun unit (point/seat/vote) is junk ONLY with a DIGIT number
+    # ("300 seats", "45 votes") — a number-WORD form is a place ("Five Points").
+    if has_count_unit and has_digit:
+        return True
+    return False
+
+
+#: Possessive-KINSHIP referring expression ("Donald Trump's son", "Netanyahu's
+#: wife"): a name + possessive clitic + a SPECIFIC kinship noun. Not a resolvable
+#: entity. The kinship set is deliberately TIGHT (singular blood/marriage
+#: relations only) so a real title ("The Battle for the World's Children") — the
+#: generic "children" / "family" — is NOT caught.
+_POSSESSIVE_KINSHIP_RE = re.compile(
+    r"['’ʼ‘]s\s+(?:son|sons|daughter|daughters|wife|husband|brother|brothers"
+    r"|sister|sisters|father|mother|widow|nephew|niece|cousin|grandson"
+    r"|granddaughter)\s*$",
+    re.IGNORECASE,
+)
+
+#: Temporal MODIFIERS that turn a brand-ambiguous noun into a clear duration
+#: phrase ("last week", "the 21st century", "this month").
+_TEMPORAL_MODIFIERS: frozenset[str] = frozenset({
+    "the", "a", "an", "this", "last", "next", "coming", "past", "previous",
+    "first", "second", "third", "fourth", "fifth", "sixth",
+})
+
+#: Bare single-token temporal surfaces that are ALWAYS junk — no common
+#: brand/entity collision ("yesterday", "morning", "midnight").
+_TEMPORAL_BARE_JUNK: frozenset[str] = frozenset({
+    "weekend", "month", "year", "decade", "morning", "afternoon", "evening",
+    "night", "midnight", "yesterday", "tomorrow", "hour",
+})
+
+#: Brand-AMBIGUOUS temporal nouns: real single-token referents exist (Today the
+#: NBC show, Noon the retailer, Century Aluminum, The Week / The Day outlets), so
+#: these are junk ONLY when carrying a temporal modifier ("last week", "the day")
+#: — NEVER as a bare token (adversarial #2).
+_TEMPORAL_MODIFIED_NOUNS: frozenset[str] = frozenset({
+    "today", "noon", "century", "centuries", "week", "weeks", "day", "days",
+    "month", "months", "year", "years", "quarter", "quarters", "hour", "hours",
+    "decade", "decades", "weekend",
+})
+
+_YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
+_ORDINAL_CENTURY_RE = re.compile(r"^\d{1,3}(?:st|nd|rd|th)\s+century$", re.IGNORECASE)
+_PAST_N_RE = re.compile(
+    r"^past\s+\d+\s+(?:hours?|days?|weeks?|months?|years?)$", re.IGNORECASE
+)
+
+#: DQ M2 (2026-07-06 fact-write audit) — a RELATIVE-past/forward duration phrase
+#: ("250 years ago", "3 days ago", "two decades earlier"). A real entity is
+#: NEVER "N <unit> ago", so this is a zero-false-positive temporal reject that
+#: the bare/modified-noun logic below misses (it LEADS with a number, not a
+#: temporal modifier). Anchored on the whole surface.
+_RELATIVE_AGO_RE = re.compile(
+    r"^\d+\s+(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?"
+    r"|decades?|centuries)\s+(?:ago|earlier|later|back)$",
+    re.IGNORECASE,
+)
+
+#: DQ M2 — calendar MONTH names, used ONLY in COMBINATION with a RELATIVE
+#: temporal modifier ("December last year", "last November"). A BARE month is
+#: deliberately NOT junk (name collisions: Theresa May, the name "August",
+#: "March on Washington"), and a NAMED CALENDAR DATE / event ("September 11",
+#: "October 7", "March 2022") is NOT junk either (F4) — a month is temporal only
+#: when a relative modifier is present AND every other token is temporal. Full
+#: names only (abbreviations like "mar"/"may"/"aug" collide too readily).
+_MONTH_NAMES: frozenset[str] = frozenset({
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+})
+
+#: F4 (2026-07-06 review) — the RELATIVE temporal modifiers that turn a month /
+#: noun into junk ("last November", "December last year"). A subset of
+#: _TEMPORAL_MODIFIERS excluding the article/positional members ("the"/"a"/"an"/
+#: "first".."sixth") so a bare "Month <day-or-year-number>" is NOT dropped.
+_RELATIVE_TEMPORAL_MODIFIERS: frozenset[str] = frozenset({
+    "last", "next", "this", "coming", "previous", "past",
+})
+
+
+def _is_temporal_surface(stripped: str) -> bool:
+    """True when ``stripped`` is a bare/modified temporal-duration surface (junk).
+
+    Conservative on brand collisions (adversarial #2): a brand-ambiguous bare
+    token ("Today", "Noon", "Century", "Week", "Day") is KEPT; it is junk only
+    with a temporal modifier ("last week", "the day"). Clearly-temporal bare
+    tokens ("yesterday", "morning", "midnight") and every date/period SHAPE
+    ("2026", "the 21st century", "past 24 hours") stay junk.
+    """
+    low = stripped.strip().lower()
+    if not low:
+        return False
+    # Date / period SHAPES — allow a leading article ("the 2026", "the 21st
+    # century", "the past 24 hours").
+    no_article = _ARTICLE_RE.sub("", low).strip()
+    if (
+        _YEAR_RE.match(no_article)
+        or _ORDINAL_CENTURY_RE.match(no_article)
+        or _PAST_N_RE.match(no_article)
+        or _RELATIVE_AGO_RE.match(no_article)     # DQ M2 — "250 years ago"
+    ):
+        return True
+    tokens = low.split()
+    if len(tokens) == 1:
+        return tokens[0] in _TEMPORAL_BARE_JUNK  # brand-ambiguous bare -> kept
+    # <modifier(s)> <temporal noun>: "last week", "the first day", "a year".
+    if tokens[0] in _TEMPORAL_MODIFIERS and tokens[-1] in _TEMPORAL_MODIFIED_NOUNS:
+        mids = tokens[1:-1]
+        if all(t in _TEMPORAL_MODIFIERS or t.isdigit() for t in mids):
+            return True
+    # DQ M2 / F4 — a MONTH is a relative-date phrase ("December last year",
+    # "last November") ONLY when it carries a RELATIVE modifier (last/next/this/
+    # coming/previous/past) AND every non-month token is temporal. A bare
+    # "Month <day/year>" ("September 11", "October 7", "March 2022") is a named
+    # calendar DATE / event and is KEPT; a bare month or a name ("Theresa May",
+    # "Black September", "March on Washington") is likewise untouched.
+    if any(t in _MONTH_NAMES for t in tokens):
+        others = [t for t in tokens if t not in _MONTH_NAMES]
+        if (
+            others
+            and any(t in _RELATIVE_TEMPORAL_MODIFIERS for t in others)
+            and all(
+                t in _TEMPORAL_MODIFIERS
+                or t in _TEMPORAL_MODIFIED_NOUNS
+                or t in _TEMPORAL_BARE_JUNK
+                or t.isdigit()
+                for t in others
+            )
+        ):
+            return True
+    return False
 
 
 def is_demonym(name: str) -> bool:
@@ -712,7 +1070,17 @@ def is_junk_entity(name: str) -> bool:
       * age / time-span tokens (``51 - year - old``, ``centuries``);
       * sports / competition-structure noise (``World Cup``, ``Group F``);
       * pure article / function word (``the`` / ``and`` / ``of``);
-      * length ≤ 2 (``F1`` / ``Xi`` / ``Co``).
+      * vague bloc / adjective / role singleton (``West`` / ``Islamic`` /
+        ``Leader`` / ``annual``) + bare quantifier plural (``Hundreds`` /
+        ``Millions``) — DQ M7 (nexus endpoints);
+      * truncated institution / agency abbreviation (``Parl`` / ``Fed``) — M20
+        (an NER clipping, not an actor);
+      * markdown / URL residue (``http(s)://``, ``](``, ``**``, a pipe, an
+        embedded newline) — B0-7 (telegram ``payload.text`` carries raw
+        markdown into /extract);
+      * length ≤ 2 (``F1`` / ``Xi`` / ``Co``) or length > 120 (a swallowed
+        sentence / headline, never a name — live junk band starts at 153,
+        max 688; genuine treaty/UN-body full names run to 118).
 
     NOT junk-dropped (the canon's strip handles them so the referent survives):
     a trailing-possessive surface (``"Abu Dhabi 's"`` strips to ``"Abu Dhabi"``,
@@ -727,6 +1095,28 @@ def is_junk_entity(name: str) -> bool:
     # A COMPLETE tag / entity, OR any bare '<'/'>' left over from a truncated
     # partial tag ("Iran</p", "/>Iranian", "… < a") — both are malformed spans.
     if _HTML_RESIDUE_RE.search(raw) or "<" in raw or ">" in raw:
+        return True
+    # B0-7 (2026-07-10 live junk audit) — markdown / URL residue, also tested
+    # on the RAW form (the strip peels edge punctuation and collapses newlines,
+    # which would hide the residue). Telegram payload.text carries raw markdown
+    # ("[**title**](url)") into /extract, and NER emits spans still wearing it
+    # ("Ayatollah Ali Khamenei**](https://f24.my").
+    low_raw = raw.lower()
+    # A URL scheme anywhere — a name carrying "http(s)://" is link residue.
+    if "http://" in low_raw or "https://" in low_raw:
+        return True
+    # Markdown link-syntax residue ("…**](https://f24.my").
+    if "](" in raw:
+        return True
+    # Markdown bold residue — "**" is never part of a real name.
+    if "**" in raw:
+        return True
+    # A pipe is table / feed-delimiter residue ("Reuters | World"), not a name.
+    if "|" in raw:
+        return True
+    # An embedded newline / carriage return — an entity span never crosses a
+    # line break; this is a multi-line NER swallow.
+    if "\n" in raw or "\r" in raw:
         return True
 
     stripped = _strip_name(raw)
@@ -748,6 +1138,17 @@ def is_junk_entity(name: str) -> bool:
     # that slips past the DIGIT-only numeric predicate; never a referent (DQ P4).
     if low in _NUMBER_WORD_ENTITIES:
         return True
+    # DQ M7 — a bare vague adjective / bloc / role singleton ("West", "Islamic",
+    # "Leader", "annual") or a bare quantifier plural ("Hundreds", "Millions").
+    # A real single-token actor (country / alias / demonym) was already exempted
+    # above, so only genuinely vague endpoints reach here.
+    if low in _VAGUE_ENDPOINT_TOKENS or low in _QUANTIFIER_PLURAL_ENTITIES:
+        return True
+    # M20 — a TRUNCATED institution / agency abbreviation ("Parl", "Fed") is an
+    # NER clipping, not an actor. Dropped so the graph-mining hostile-edge / broker
+    # shortlist stops amplifying it into headline signal.
+    if low in _TRUNCATED_INSTITUTION_FRAGMENTS:
+        return True
     if _CLOCK_RE.match(stripped):
         return True
     if _QUANTIFIER_RE.match(stripped):
@@ -760,7 +1161,24 @@ def is_junk_entity(name: str) -> bool:
         return True
     if low in _SPORTS_NOISE_LITERALS or _SPORTS_NOISE_RE.match(stripped):
         return True
+    # DQ M5 — number+unit quantity ("188,000 barrels", "770 bln won", "four
+    # million euros"), possessive-kinship ("Donald Trump's son"), bare temporal
+    # ("last week", "the 21st century", "Today"). Ported from the P5 fact gate.
+    if _is_quantity_unit_phrase(stripped):
+        return True
+    if _POSSESSIVE_KINSHIP_RE.search(stripped):
+        return True
+    if _is_temporal_surface(stripped):
+        return True
     if len(stripped) <= 2:
+        return True
+    # B0-7 — overlong cap at 120 (raised from 80 by the adversarial review):
+    # genuine referents run long — full treaty/convention/UN-body names (the
+    # UNRWA official name = 82, the Hague cultural-property convention = 91,
+    # longest live legit = 118) — while the live junk band starts at 153
+    # (153/183/688-char swallowed sentences). Past 120 is prose the NER
+    # dragged in whole, never a referent. No length ceiling existed before.
+    if len(stripped) > 120:
         return True
     return False
 
@@ -809,8 +1227,12 @@ def _country_name_set() -> frozenset[str]:
         # pycountry stores under a different head (or not at all): "Türkiye"
         # vs the common "Turkey", and Kosovo (no ISO-3166-1 assignment). Both
         # are demonym-map values, so the COUNTRY_CLASS typing must recognise
-        # them or the collapse would land short of a country.
+        # them or the collapse would land short of a country. "turkiye" is the
+        # common ASCII spelling of the official "Türkiye" (pycountry's head) that
+        # the gazetteer would otherwise miss, so the direction/type gates that
+        # rely on COUNTRY typing (DQ M1 inverted-membership) recognise it.
         "turkey",
+        "turkiye",
         "kosovo",
         # pycountry stores PS as "Palestine, State of" with no common_name, so
         # bare "Palestine" (the dominant live surface form) never typed as a
@@ -879,6 +1301,11 @@ _ORG_SUFFIX_TOKENS: frozenset[str] = frozenset({
     "university", "college", "institute", "institution", "academy",
     "foundation", "association", "federation", "union", "league",
     "organization", "organisation", "society", "syndicate", "consortium",
+    # F1 (2026-07-06 review) — IGO / regional-bloc heads that end in these
+    # ("East African Community", "Pacific Islands Forum", "Caribbean Community"):
+    # a multi-token surface ending here names a body, never a person, so the
+    # membership fact ("Kenya member of East African Community") is preserved.
+    "community", "forum",
     # Military / paramilitary / mission org suffixes — the live review (DQ P4)
     # found these mis-typed PERSON ("225th Separate Assault Regiment", "United
     # Cajun Navy", "Frasers Centrepoint Trust"). A multi-token surface ending in
@@ -962,6 +1389,12 @@ def is_org_surface(name: str) -> bool:
     if not stripped:
         return False
     lo = stripped.lower()
+
+    # DQ M6 — a curated sports team / supranational-org acronym is an
+    # organization regardless of token count (these are whole-surface matches,
+    # zero false-positive by construction).
+    if lo in _SPORTS_TEAM_SURFACES or lo in _KNOWN_ORG_SURFACES:
+        return True
 
     # Institutional head ("Bank of England") — unambiguous, accept immediately.
     if _ORG_HEAD_RE.match(stripped):
@@ -1138,6 +1571,94 @@ def is_place_surface(name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# DQ M6 (2026-07-06 audit) — CONSERVATIVE class relabel for the 29.5% of rows
+# that fall to the generic 'entity' bucket. Two tight, unambiguous gazetteers:
+# geographic REGIONS -> location, and sports TEAMS / supranational ORG acronyms
+# -> organization. Curated whole-surface (or article-stripped whole-surface)
+# matches only, so a real entity is NEVER mis-relabeled.
+# ---------------------------------------------------------------------------
+
+#: Named geographic REGIONS (sub/supra-national) that are unambiguous LOCATIONS
+#: but are not ISO countries, so the country gazetteer misses them and NER
+#: routinely mis-types them person/organization ("the West Bank" -> org because
+#: it ends in "bank"). Article-stripped whole-surface match. Curated: only
+#: unambiguous places (no "Georgia"-style country/state homonyms).
+_KNOWN_REGIONS: frozenset[str] = frozenset({
+    "west bank", "gaza", "gaza strip", "middle east", "the levant", "levant",
+    "strait of hormuz", "horn of africa", "sahel", "maghreb", "mesopotamia",
+    "anatolia", "donbas", "donbass", "crimea", "golan heights", "golan",
+    "sinai", "sinai peninsula", "kurdistan", "nagorno-karabakh", "transnistria",
+    "abkhazia", "south ossetia", "xinjiang", "west coast", "east coast",
+    "gulf coast", "west africa", "east africa", "north africa",
+    "southern africa", "central africa", "sub-saharan africa", "the balkans",
+    "south china sea", "east china sea", "sea of azov", "indo-pacific",
+    "asia-pacific", "pacific rim", "arabian peninsula", "iberian peninsula",
+    "korean peninsula", "great lakes region",
+})
+
+
+def is_region_surface(name: str) -> bool:
+    """True when ``name`` is a curated geographic REGION (a LOCATION).
+
+    Article-stripped, lower-cased whole-surface match against :data:`_KNOWN_REGIONS`.
+    Conservative — only unambiguous non-country regions are members.
+    """
+    stripped = _strip_name(str(name or ""))
+    if not stripped:
+        return False
+    return _strip_leading_article(stripped).lower() in _KNOWN_REGIONS
+
+
+#: Well-known sports TEAMS (franchises) NER mis-types person/entity. Curated
+#: whole-surface (lower-cased) set — ZERO false positives by construction (a
+#: full "City Nickname" surface, never a bare nickname). Bounded to major North
+#: American leagues + a few globally-covered clubs that appear in the feed.
+_SPORTS_TEAM_SURFACES: frozenset[str] = frozenset({
+    # MLB (the live example + division-mates)
+    "minnesota twins", "new york yankees", "boston red sox", "los angeles dodgers",
+    "chicago cubs", "san francisco giants", "houston astros", "atlanta braves",
+    # NBA
+    "los angeles lakers", "boston celtics", "golden state warriors",
+    "chicago bulls", "new york knicks", "miami heat",
+    # NFL
+    "green bay packers", "dallas cowboys", "kansas city chiefs",
+    "new england patriots", "pittsburgh steelers", "san francisco 49ers",
+    # NHL
+    "toronto maple leafs", "montreal canadiens", "detroit red wings",
+    # global football clubs (unambiguous full names)
+    "manchester united", "manchester city", "real madrid", "bayern munich",
+    "paris saint-germain", "inter milan", "ac milan", "borussia dortmund",
+})
+
+
+def is_sports_team_surface(name: str) -> bool:
+    """True when ``name`` is a curated sports TEAM full surface (an organization)."""
+    stripped = _strip_name(str(name or ""))
+    if not stripped:
+        return False
+    return stripped.lower() in _SPORTS_TEAM_SURFACES
+
+
+#: Supranational / institutional ORG acronyms + short names that are single
+#: tokens (so the org-suffix gazetteer, which needs >=2 tokens, misses them) and
+#: are unambiguously organizations — never person/location. Curated whole-surface
+#: (lower-cased). Kept tight to well-known bodies that appear in the feed.
+_KNOWN_ORG_SURFACES: frozenset[str] = frozenset({
+    "opec", "opec+", "nato", "asean", "brics", "ecowas", "mercosur", "gcc",
+    "imf", "wto", "unicef", "unesco", "unhcr", "interpol", "opcw", "iaea",
+    "wipo", "unctad", "unrwa",
+})
+
+
+def is_known_org_surface(name: str) -> bool:
+    """True when ``name`` is a curated supranational/institutional org acronym."""
+    stripped = _strip_name(str(name or ""))
+    if not stripped:
+        return False
+    return stripped.lower() in _KNOWN_ORG_SURFACES
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -1193,12 +1714,20 @@ def canonicalize_entity(name: str, ner_class: str) -> tuple[str, str]:
     if not canonical:
         return "", cls
 
-    # TYPE CORRECTION — gazetteer wins, then the org pattern, then place. A
-    # country name is never a person; an NWS office / corporate / institutional
-    # surface is never a person; a geographic surface is never a person.
-    # Priority mirrors the resolver: country > organization > location.
+    # TYPE CORRECTION — gazetteer wins, then region, then the org pattern, then
+    # place. A country name is never a person; an NWS office / corporate /
+    # institutional surface is never a person; a geographic surface is never a
+    # person. Priority mirrors the resolver: country > organization > location.
     if _is_country_name(canonical):
         return canonical, COUNTRY_CLASS
+    # DQ M6 — a curated geographic REGION is an unambiguous LOCATION; it is
+    # checked BEFORE the org gazetteer so "the West Bank" (ends in "bank") types
+    # location, not organization. Adversarial #3: NEVER downgrade a confident
+    # PERSON classification — several region tokens are also surnames
+    # ("Golan"/Menahem Golan, "Levant"/Oscar Levant, "Sinai", "Anatolia"), so a
+    # mention NER typed 'person' keeps person; only a non-person mention relabels.
+    if cls != "person" and is_region_surface(canonical):
+        return canonical, LOCATION_CLASS
     if canonical in _ALIAS_ORG:
         return canonical, ORGANIZATION_CLASS
     if _is_org_pattern(canonical) or is_org_surface(canonical):
@@ -1244,13 +1773,98 @@ def identity_fold(name: str) -> str:
     return _NON_ALNUM_RE.sub("", low)
 
 
+#: DQ M4 — leading-article regex for :func:`lookup_key`, mirroring the SQL
+#: ``regexp_replace(..., '^(the|a|an)\s+', '')`` used by the alias/article-aware
+#: pre-lookup so the Python-computed key and the DB-side normalization agree
+#: byte-for-byte.
+_LOOKUP_ARTICLE_RE = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
+
+
+def lookup_key(name: str) -> str:
+    """Article/case/whitespace-normalized key for the entity PRE-LOOKUP (DQ M4).
+
+    Lower-cases, collapses whitespace, and strips a single leading article
+    (the/a/an) — nothing else, so it matches EXACTLY the DB-side normalization
+    ``regexp_replace(regexp_replace(lower(btrim(x)),'^(the|a|an)\\s+',''),
+    '\\s+',' ','g')`` the alias/article-aware pre-lookup applies to
+    ``canonical_name`` and to each ``merged_aliases`` element. So "the Strait of
+    Hormuz" and "Strait of Hormuz" produce the SAME key and converge onto the
+    existing keeper instead of forking a new row. Pure + deterministic.
+    """
+    s = _WHITESPACE_RE.sub(" ", str(name or "")).strip().lower()
+    s = _LOOKUP_ARTICLE_RE.sub("", s).strip()
+    return _WHITESPACE_RE.sub(" ", s).strip()
+
+
+# ---------------------------------------------------------------------------
+# DQ M8 (2026-07-06 nexus-write audit) — the NEXUS SELF-EDGE gate.
+#
+# nexus subject/object are FREE TEXT (no entity FK), so the P4 entity fold never
+# rewrote them. Two endpoints that name the SAME referent under the canon
+# therefore leaked as a self-loop edge: a continent + its adjective ("Africa" co
+# occurs with "African"), a country + its demonym / plural ("Iran"/"Iranians",
+# "Israel"/"Israeli"), an alias pair ("US"/"United States"), or a plain
+# singular / plural the canon does not map ("Houthi"/"Houthis"). A self-loop is
+# not a relationship. Both nexus producers drop an edge for which
+# :func:`same_referent` is True.
+# ---------------------------------------------------------------------------
+
+
+def _singularize_surface(low: str) -> str:
+    """Guarded regular-plural → singular for a lower-cased canonical surface.
+
+    Strips ONLY a clear regular plural, and ONLY on a SINGLE-token surface whose
+    stem stays >= 5 chars, so "houthis"->"houthi" / "militants"->"militant" fold
+    while short / ambiguous forms ("hamas" vs "hama", "gas") and multi-word
+    country names ("united states") are left untouched. Used ONLY by
+    :func:`same_referent`. Pure + deterministic + idempotent on a singular."""
+    if " " in low:
+        return low  # only fold a single-token plural; phrases collapse via canon
+    if len(low) > 6 and low.endswith("ies"):
+        return low[:-3] + "y"
+    if len(low) > 6 and low.endswith("es") and low[-3] in "sxz":
+        return low[:-2]
+    if len(low) > 5 and low.endswith("s") and not low.endswith("ss"):
+        return low[:-1]
+    return low
+
+
+def same_referent(a: str, b: str) -> bool:
+    """True when two entity surfaces name the SAME referent under the canon (M8).
+
+    Backs the nexus SELF-EDGE gate: an edge whose subject and object are the same
+    referent is a self-loop, not a relationship, and is dropped by both nexus
+    producers. Both surfaces route through :func:`canonicalize_entity` (which
+    collapses demonyms / regions / aliases + strips); if still distinct, a
+    GUARDED single-token regular-plural normalization (:func:`_singularize_surface`)
+    is applied to each and compared, so a plain plural the canon does not map
+    ("Houthi"/"Houthis") still folds.
+
+    Conservative: two genuinely distinct names return False; an empty / fully-
+    stripped-away endpoint returns False (the caller's own guards handle it).
+    Pure + deterministic + symmetric."""
+    ca, _ = canonicalize_entity(str(a or ""), DEFAULT_CLASS)
+    cb, _ = canonicalize_entity(str(b or ""), DEFAULT_CLASS)
+    if not ca or not cb:
+        return False
+    la, lb = ca.lower(), cb.lower()
+    if la == lb:
+        return True
+    return _singularize_surface(la) == _singularize_surface(lb)
+
+
 __all__ = [
     "canonicalize_entity",
     "identity_fold",
+    "lookup_key",
+    "same_referent",
     "is_demonym",
     "is_junk_entity",
     "is_org_surface",
     "is_place_surface",
+    "is_region_surface",
+    "is_sports_team_surface",
+    "is_known_org_surface",
     "COUNTRY_CLASS",
     "ORGANIZATION_CLASS",
     "LOCATION_CLASS",
@@ -1258,4 +1872,6 @@ __all__ = [
     "_JUNK_ENTITIES",
     "_DEMONYM_MAP",
     "_REGION_ADJECTIVE_MAP",
+    "_VAGUE_ENDPOINT_TOKENS",
+    "_QUANTIFIER_PLURAL_ENTITIES",
 ]

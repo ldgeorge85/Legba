@@ -223,65 +223,30 @@ def test_derive_signature_still_none_for_contentless_meta():
 # ---------------------------------------------------------------------------
 # End-to-end synthetic clustering — one canonical head per (analyst_id, target)
 # ---------------------------------------------------------------------------
-
-
-def _sup_row(finding: FindingPayload, analyst_id: str, produced_at: datetime):
-    """A finding_supersession input row shaped like the analyst_outputs slice:
-    ``data`` is the full composition model_dump (nested situation_signature)."""
-    return {
-        "id": str(uuid4()),
-        "produced_at": produced_at,
-        "analyst_id": analyst_id,
-        "data": finding.model_dump(mode="python"),
-    }
-
-
-async def test_composition_heads_fold_to_one_canonical_per_analyst_target():
-    us = await _compose("country_g20_us", "country_composition")
-    india = await _compose("country_g20_in", "country_composition")
-    world = await _compose(None, "world_assessor")
-
-    t0 = datetime(2026, 6, 30, tzinfo=timezone.utc)
-    # 3 US cycles, 2 India cycles (SAME analyst as US), 2 world cycles.
-    us_rows = [_sup_row(us, "country_composition", t0 + timedelta(hours=h)) for h in (0, 1, 2)]
-    in_rows = [_sup_row(india, "country_composition", t0 + timedelta(hours=h)) for h in (0, 1)]
-    world_rows = [_sup_row(world, "world_assessor", t0 + timedelta(hours=h)) for h in (0, 1)]
-
-    result = await det_run_method(
-        us_rows + in_rows + world_rows,
-        {"sub_handler": "finding_supersession"},
-        None,
-    )
-    data = result.finding.data
-    # 3 clusters (US, India, world) — NOT collapsed despite US+India sharing an
-    # analyst_id (target_id keeps them apart).
-    assert data["clustered_count"] == 3
-    # 2 (US) + 1 (India) + 1 (world) older heads superseded.
-    assert data["superseded_count"] == 4
-    # 3 distinct live situations remain.
-    assert data["latest_count"] == 3
-
-    by_sig = {c["situation_signature"]: c for c in data["clusters"]}
-    us_sig = "sit:composition:country_composition:country_g20_us"
-    in_sig = "sit:composition:country_composition:country_g20_in"
-    world_sig = "sit:composition:world_assessor:world"
-    assert set(by_sig) == {us_sig, in_sig, world_sig}
-
-    # US cluster: the newest cycle is canonical, the other two superseded, and its
-    # membership is EXACTLY the US rows (no India row leaked in).
-    us_cluster = by_sig[us_sig]
-    us_ids = {r["id"] for r in us_rows}
-    assert us_cluster["latest_finding_id"] == us_rows[-1]["id"]  # newest produced_at
-    assert set(us_cluster["superseded_finding_ids"]) == us_ids - {us_rows[-1]["id"]}
-    assert len(us_cluster["superseded_finding_ids"]) == 2
-    assert us_cluster["reason"] == "situation_id"  # 'sit:'-prefixed → explicit
-
-    # India cluster is disjoint from US.
-    in_cluster = by_sig[in_sig]
-    in_ids = {r["id"] for r in in_rows}
-    assert in_cluster["latest_finding_id"] == in_rows[-1]["id"]
-    assert set(in_cluster["superseded_finding_ids"]) == in_ids - {in_rows[-1]["id"]}
-    assert us_ids.isdisjoint(in_ids)
+#
+# test_composition_heads_fold_to_one_canonical_per_analyst_target (+ its
+# _sup_row helper) was REMOVED 2026-07-23 (TEST_DEBT_RECON.md Bucket H). It
+# drove country_composition/world_assessor findings through
+# det_run_method(..., {"sub_handler": "finding_supersession"}, None) and
+# asserted clustered_count == 3 — but finding_supersession._cluster()
+# unconditionally skips every row whose analyst_id is in
+# _COMPOSITION_ANALYST_IDS (which includes BOTH analyst_ids this test used),
+# so clustered_count/superseded_count were structurally guaranteed 0, not a
+# flaky edge case. The exclusion and this test were added in the SAME commit
+# (4204d7e, S8-T3); the exclusion's own docstring says composition-head
+# folding was moved to a DIFFERENT function, fold_prior_composition_heads
+# (added FU6, commit 9bda4db), invoked from the composition WRITE path — not
+# from det_run_method/_cluster. That function already has its own dedicated,
+# passing coverage in test_correlation_head_fold.py and test_dq_followups.py
+# (both directly import + call it). `git log -S_COMPOSITION_ANALYST_IDS`
+# turned up no incident where the exclusion silently regressed (only the
+# introducing commit + one unrelated hygiene touch), so per this recon's own
+# stated criterion ("recommend (a) [delete] unless a prior incident is
+# found") this E2E path was dead weight testing a mechanism the code
+# deliberately routes around, superseded by the more precise sibling
+# coverage. If a prior incident surfaces later, recovering this test from
+# git history (option (b): repurpose to assert clustered_count == 0, proving
+# the exclusion itself) is straightforward.
 
 
 # ---------------------------------------------------------------------------

@@ -155,6 +155,44 @@ def test_submit_returns_202_and_task_id(monkeypatch):
     sent = captured["body"]
     assert sent["inputs"][0]["question"].startswith("What is the state")
     assert sent["options"]["run_id"]
+    # F1: no model chosen ⇒ the Opus default ⇒ NO override threaded.
+    assert "llm_component_override" not in sent["inputs"][0]
+
+
+def test_submit_model_core_threads_override(monkeypatch):
+    """F1 model picker: model='core' threads the sanctioned component id into the
+    deep submit invoke body; the deep_consult kind stamps it into the workflow."""
+    envelope = {
+        "outcome": "success",
+        "mode": "deep_consult",
+        "task_id": "deep_consult.global.abcd1234",
+        "status": "running",
+        "run_id": "abcd1234-0000-0000-0000-000000000000",
+    }
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(deep_api.httpx, "AsyncClient", _stub_dapr(envelope, captured))
+
+    app = _build_app(_StatusPg(None))
+    client = TestClient(app)
+    r = client.post(
+        "/api/v1/deep_consult",
+        json={"question": "q", "model": "core"},
+    )
+    assert r.status_code == 202, r.text
+    assert (
+        captured["body"]["inputs"][0]["llm_component_override"]
+        == "llm.primary.openai_compat"
+    )
+
+
+def test_submit_model_invalid_422(monkeypatch):
+    envelope: dict[str, Any] = {}
+    monkeypatch.setattr(deep_api.httpx, "AsyncClient", _stub_dapr(envelope, {}))
+    app = _build_app(_StatusPg(None))
+    r = TestClient(app).post(
+        "/api/v1/deep_consult", json={"question": "q", "model": "sonnet"},
+    )
+    assert r.status_code == 422
 
 
 def test_submit_404_when_descriptor_absent(monkeypatch):

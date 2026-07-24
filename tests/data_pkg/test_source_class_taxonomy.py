@@ -43,6 +43,7 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_ucdp_ged.yaml": "analysis",  # S1-T9 conflict-event dataset (parallel branch)
     "source_gdelt_bigquery.yaml": "reporting",
     "source_gdelt_doc_api.yaml": "reporting",
+    "source_gdelt_files.yaml": "reporting",  # 15-min file-dump replacement for doc_api (429s)
     "source_intelmq_cisa_kev.yaml": "official",
     "source_mediacloud.yaml": "reporting",
     "source_opensanctions_bulk.yaml": "official",
