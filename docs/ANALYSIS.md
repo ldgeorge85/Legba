@@ -54,15 +54,20 @@ It has four moving parts:
 
 Those four parts are the *mechanics*. The **product** they assemble is a
 bottom-up reasoning spine (§3.11): seven bounded reasoning units answer one narrow
-question each per country desk — the 19 G20 members plus a six-desk
+question each per country desk — the 19 G20 members plus a 13-desk
 high-consequence **watch tier** (Israel, Iran, North Korea, Pakistan, Taiwan,
-Ukraine), 25 desks in all; a per-country composition, then a per-region
+Ukraine, and the escalation-risk band Sudan, Mali, Burkina Faso, Niger,
+DR Congo, Myanmar, Haiti), 32 desks in all; a per-country composition, then a per-region
 composition, then a world composition synthesize the *verified* sub-claims (a
 thematic `escalation_composition` also fuses the escalation dimension across every
 desk); a deterministic banded scorecard writes one honest per-desk verdict; two
 deterministic indications-&-warning analysts diff the structured indicators
-run-over-run and name starved collection cells; and a skill scoreboard reports how
-well each unit and each forecast actually did. Every claim on that spine is cited
+run-over-run and name starved collection cells; a skill scoreboard reports how
+well each unit and each forecast actually did; and a deterministic **alert
+loop** (§4.4.1) watches the verified state for transitions worth an
+operator's attention — band crossings, verified high-severity findings,
+contested-claim flips, baseline deviations, watchlist hits — each alert
+carrying its verification posture and a receipt link. Every claim on that spine is cited
 to source, checked by the faithfulness verify pass (which measures *groundedness —
 does each claim follow from its cited evidence — not truth in the world*), and
 drillable through a receipt chain to the original signal.
@@ -256,6 +261,22 @@ connection — the receipt vs. side-write split is called out in the Writes colu
 | **`unit_correctness_scorer`** | `deterministic` (`sub_handler`, META) | each unit's findings vs operator gold labels (`unit_reference_labels`) | per-unit faithfulness + correctness-vs-reference (honest-null when a unit has 0 labels) | FINDING (the skill-scoreboard feed) | **no** ($0) | daily |
 | **`indicator_tracker`** (I&W) | `deterministic` (`sub_handler`, META) | the two most-recent indicator-bearing findings per unit-stream (`data.indicators[]`) | diffs each pre-registered indicator `id` slug run-over-run; emits a FINDING when a status FLIPS (esp. `not_observed → triggered` — a warning signpost firing); `force_trace_only` when nothing flipped | FINDING | **no** ($0) | 30-min heartbeat (`15-59/30 * * * *`) |
 | **`collection_gap`** (I&W) | `deterministic` (`sub_handler`, META) | the banded SCORECARD rows (`kind='scorecard'`) over the window | ranks the STARVED desk × dimension cells (`insufficient-evidence` bands), names why + how persistently + which source classes would feed them; `force_trace_only` when nothing is starved | FINDING | **no** ($0) | monthly (`0 6 1 * *`) |
+| **`alert_trigger_scan`** | `deterministic` (`sub_handler`, META) | verified state transitions: scorecard bands, high-severity verified findings, contention flips, desk-baseline deviation, watchlist hits | five deterministic trigger classes over durable watermarks (a transition never re-fires); per-desk cap 3 + honest rollup; hands off to the alert-sink dispatcher (§4.4.1) | **ALERT** side-write; TRACE_ONLY receipt | **no** ($0) | 10-min (`3-59/10 * * * *`) |
+| **`geo_convergence_scan`** | `deterministic` (`sub_handler`, META) | recent signals' geo tags + trustworthy-precision points | two-tier honest binning (1° cells for point-trustworthy geo only; country bins for ISO2) + source-FAMILY diversity ≥3; formation/dissolution edges on the 0091 watermarks (§4.4.2) | ALERT/FINDING side-writes; TRACE_ONLY receipt | **no** ($0) | 30-min (`7-59/30 * * * *`) |
+| **`band_calibration_tracker`** | `deterministic` (`sub_handler`, META) | scorecard band transitions + the `band_calibration_claims` table | logs each band transition as a resolvable claim; grades at 14/28-day horizons (`hard_band_at_horizon_v1`); **explicitly NO Brier** (§6.5) | FINDING (structural-exempt) | **no** ($0) | daily (`35 3 * * *`) |
+| **`fact_decay_scan`** | `deterministic` (`sub_handler`, META) | open `facts` + their `derived_from` signal timestamps | per-class MISP decay curves + corroborations-as-sightings → the `fact_decay_states` **readout sidecar**; NEVER mutates a fact's confidence (§4.4.4) | FINDING (per-state readout) | **no** ($0) | daily (`52 4 * * *`) |
+| **`source_track_record`** | `deterministic` (`sub_handler`, META) | resolved/surfaced `fact_contention` groups past the earned lag | per-source win/loss record (Beta(2,2)-smoothed, Wilson-bounded) → `source_track_records`; fills the arbiter's earned-weight seam (§7.11) | FINDING (readout) | **no** ($0) | daily (`23 4 * * *`) |
+| **`narrative_mapper`** | `deterministic` (`sub_handler`, META) | contested-claim families + their carrier sources' publish times | reifies narratives + the directed source-echo graph (`narratives` / `narrative_echo_edges`); DETECT-ONLY, descriptive-not-causal (§4.4.5) | FINDING (readout) | **no** ($0) | daily (`17 5 * * *`) |
+| **`desk_baseline`** | `deterministic` (`sub_handler`, META) | per-desk signal/finding counts (28d), neighbour desks | statistical baseline (lags, rolling means, time-since-event, spillover; Poisson-floored sigma) → `desk_baselines`; **NOT a forecast** (§4.4.3) | FINDING (readout) | **no** ($0) | daily (`23 4 * * *`) |
+| **`evidence_archiver`** | `deterministic` (`sub_handler`, META) | verified-cited signals with no archived copy | fetches + content-addresses original bytes (SSRF/politeness/20MB/license-gated) → the CAS store + `evidence_archive` sidecar (`ARCHITECTURE.md` §8.6) | FINDING (run readout) | **no** ($0) | 30-min (`19-59/30 * * * *`) |
+| **`analyst_traces_retention`** | `deterministic` (`sub_handler`, META) | `analyst_traces` older than the TTL | FK-safe age-only purge; ships **disabled** (`LEGBA_ANALYST_TRACES_TTL_DAYS`, default 0) | TRACE_ONLY | **no** ($0) | daily (draft, OFF machinery) |
+
+The nine 2026-07 rows (from `alert_trigger_scan` down) all **ship
+`state: draft`** — registration creates no live actor, and flipping
+`draft → active` is a deliberate deploy/operator step; on the reference
+deployment the alert + readout family runs on cadence. Their behaviour is
+detailed in §4.4 (the alert loop + readout family) and §6.5–§6.6 (the
+calibration + gold-set legs).
 
 Each cadence pairs with a `cooldown_seconds` held **below** the interval — a
 cooldown stamped at run-completion that equals the interval lands past the next
@@ -280,8 +301,8 @@ JSON downgrades to an unstructured finding rather than crashing), NARRATE (stamp
 `derived_from` lineage and tags), PERSIST (the actor host does the substrate
 write). The kind handler stays pure so the optimizer can replay it
 deterministically. This is the kind the **seven bounded reasoning units**
-instantiate — one narrow question each, fanned out across the 25 country desks (the
-19 G20 members plus the 6-desk watch tier; §3.11, §8) — and the kind that carries the
+instantiate — one narrow question each, fanned out across the 32 country desks (the
+19 G20 members plus the 13-desk watch tier; §3.11, §8) — and the kind that carries the
 **knowledge-grounding** injection (§7.9), including — on one unit
 (`internal_stability`) — the live opportunistic, guarded `vector:world_context`
 RAG pilot (§7.9); a
@@ -336,7 +357,7 @@ declares:
   actor fans out one worker run per matched desk. A META analyst (the compositions,
   the scorecard) **omits** `targets` entirely (`AnalystActor._cadence_targets()`
   returns `None` → exactly one global run with `target_filter=None`). One field
-  flips a kind between the 25 per-desk runs and one global run. Adding a desk is
+  flips a kind between the 32 per-desk runs and one global run. Adding a desk is
   register-a-target (tag it `g20` or `watch`), no code change.
 - `cadence.fallback_schedule` + `cadence.cooldown_seconds`
   (`schemas/analyst.py:455`) — each unit fires **2×/day** on a staggered hour pair
@@ -442,6 +463,32 @@ applies the faithfulness-verify floor, so a composition admits only verify-passe
 sub-claims; the thematic and world branches additionally run a T7 correlation
 guard that collapses shared-lineage evidence so two desks resting on one wire
 signal are not double-counted.
+
+**Two-tier composition evidence (2026-07, flag-gated).** Under
+`LEGBA_COMPOSITION_TIERED_EVIDENCE` (**default OFF in code** — flipping it ON
+also moves the basis bar from the historical `0.0` floor to `0.50`, so even an
+empty periphery is not byte-identical; enabled on the reference deployment)
+the composition read splits into two explicitly-labeled tiers:
+
+- **The basis** — verify-passed findings whose
+  `effective_confidence = min(confidence, faithfulness)` clears the **0.50
+  floor** (`LEGBA_COMPOSITION_VERIFY_FLOOR` pins it explicitly; the tiered
+  default mirrors the scorecard's faithfulness floor). Only the basis may
+  carry unhedged assertions.
+- **The periphery** — below-floor / unverified claim-bearing findings, capped
+  at **8** (worst-first by severity then recency, body excerpts capped), fed
+  to the LLM under an explicit weak-evidence label. Periphery material is
+  admissible **only as hedged context**: a composed clause resting *solely*
+  on periphery citations without hedged attribution draws a **counted**
+  `unhedged_periphery_citation` soft verify failure (§6.2) — the hedging
+  contract is enforced at grade time, not requested politely. Conflicts
+  between periphery and basis are surfaced as **"tensions worth watching"**,
+  never silently merged.
+
+Each tiered composition records an additive `data.evidence_tiers` envelope —
+"built on N verified + M weak signals" (`basis_count` / `periphery_count` /
+`periphery_ids` / `floor`) — and the periphery ids join `derived_from`, so
+the weak leg is visible in lineage rather than laundered.
 
 ### 3.4 `cross_analyst_correlator`
 
@@ -650,6 +697,31 @@ renders entries with provenance chips that deep-link to the cited record, stylin
 `legba.prompts.journal_assessor:JOURNAL_SYSTEM` (entry) and
 `legba.prompts.journal_consolidator:CONSOLIDATOR_SYSTEM` (consolidation).
 
+**The voice roster + two honesty guards (2026-07).** The journal has since
+grown from two tiers into a roster: the 12h `entry` beat and the daily
+consolidation are joined by a weekly third-person **`chronicle`**, four
+falsifiable-prior faculty **`lens`** reads (trend / base-rate / capability /
+intent), and a **`lens_diff`** chorus pass that narrates where the four
+faculty reads agree, split, or outlie — all append tiers on the same
+off-chain kind (the tier remains the descriptor; see `DATA_MODEL.md`,
+"Several tiers, one kind"). Two deterministic guards ride the shared
+finalization so the voice cannot fabricate numbers:
+
+- **The numeric-fabrication guard** (`_source_health_number_check`,
+  `journal_assessor.py`). Any whole-fleet source-health count the prose
+  asserts (`active_total` / `total_wired` …) is validated against the
+  deterministic `get_source_health` read; a mismatch flags the entry
+  **`source_health_fabricated`** with the mismatches recorded as an honesty
+  step — annotate, never rewrite: the prose is preserved so the fabrication
+  stays visible. Degrade-not-drop on a failed read (no tool binding / no
+  claim / read failure → no flag, never a fake pass). It fires on every
+  tier, including the lens reads that motivated it.
+- **The empty-read fallback.** A faculty lens whose narrate comes back
+  *empty* gets exactly one fallback pass redirected to reason over the
+  **verified tower corpus** (its stored, verified material); a read still
+  empty after the fallback stays honestly empty — content is never
+  fabricated to fill a cycle.
+
 > **Honest caveats.** The `change`-apply path (on accept of a `change` proposal)
 > is import-verified but **not yet exercised against a live registry**; the
 > `correction` and `self_revision` apply paths **are** tested end-to-end. The
@@ -666,7 +738,7 @@ The kinds above are the *mechanics*; this is how they compose into the product.
 The spine is built bottom-up out of **existing** kinds configured by descriptor —
 no new Python kind was added for any leg — and every leg is cited and, where it
 makes a factual claim, faithfulness-verified (§6.2). The exemplar domain shown is
-geopolitics / the 25 country desks; nothing in the machinery is desk-specific — the
+geopolitics / the 32 country desks; nothing in the machinery is desk-specific — the
 fan-out predicate (`has_tag("g20") or has_tag("watch")`) and the unit prompts are
 configuration, and adding a desk is register-a-target with the right coverage tag.
 
@@ -674,9 +746,10 @@ configuration, and adding a desk is register-a-target with the right coverage ta
 `energy_security`, `escalation`, `narrative_coordination`, `internal_stability`,
 `military_posture`, `economic_coercion` are each a topic-scoped
 `inline_target` descriptor that fans out one run per desk
-(`has_tag("g20") or has_tag("watch")` — the 19 G20 members plus the 6-desk watch
-tier: Israel, Iran, North Korea, Pakistan, Taiwan, Ukraine) and answers **one
-narrow question**. Each run assembles a cited
+(`has_tag("g20") or has_tag("watch")` — the 19 G20 members plus the 13-desk watch
+tier: Israel, Iran, North Korea, Pakistan, Taiwan, Ukraine, and the
+escalation-risk band Sudan, Mali, Burkina Faso, Niger, DR Congo, Myanmar,
+Haiti) and answers **one narrow question**. Each run assembles a cited
 72h raw-signal slice **plus a Tier-1 grounding preamble of accumulated facts, signed
 nexuses, and situations** (§7.9) — so a unit integrates over accumulated state, not
 just the newest window; one unit (`internal_stability`)
@@ -694,7 +767,10 @@ boast. Adding a unit is a new descriptor, not new code.
 A per-country second-order finding that reads the seven verified units *for that
 country* and writes a hedged, cited synthesis. Its `READ_SLICE` honors the run's
 `target_filter` and admits **only** faithfulness-verify-passed sub-claims above the
-floor — unverified sub-claims never enter the composition. A country whose seven
+floor — unverified sub-claims never enter the composition as assertable
+evidence (under the two-tier evidence flag a labeled, capped periphery of
+weak/unverified claims may additionally inform *hedged* context, with unhedged
+use a counted verify failure — §3.3). A country whose seven
 units produced no verify-passed sub-claim yields an empty slice, and the kind emits
 an honest `confidence = 0.0` "no source findings to synthesize" finding rather than
 inventing a read. `derived_from` back-walks one hop to the units, two hops to
@@ -714,7 +790,7 @@ verify floor and its own faithfulness verify.
 `world_assessor` was **repointed off `inline_target`** onto
 `meta_findings_synthesizer`: it is no longer a first-order raw-signal one-pager
 (that verdict-from-nowhere framing was retired). It now composes over the **five
-region reads** (not the 25 country reads directly) into one cited, hedged world
+region reads** (not the 32 country reads directly) into one cited, hedged world
 view that drills region → country → units → source, and runs the same faithfulness
 verify over its own citations. Its `READ_SLICE` world branch degrades honestly: a
 region with a present region head feeds in `region` mode; a region with no head
@@ -768,7 +844,12 @@ spine actually does is reported honestly, per leg, with no aggregate boast:
 plus **correctness-vs-reference** against operator gold labels, **honest-null**
 when a unit has no labels; the exogenous calibration **Brier** (§7.4) and the
 acute-forecast **BSS** (§7.10) are each reported separately, and a *no-skill* or
-*insufficient-sample* result is **published, not hidden**.
+*insufficient-sample* result is **published, not hidden**. The 2026-07 wave
+adds two more separately-reported legs: **band calibration** — every scorecard
+band change logged as a resolvable claim and graded deterministically at
+14/28-day horizons, explicitly *without* a Brier (§6.5) — and an **operator
+correctness** figure from a weekly pinned gold-set labeling loop, additive and
+**never pooled** with the deterministic recall/reference leg (§6.6).
 
 Honest state of the spine today: the live scorecard is a **mix** — some countries
 band from verified claims while others (e.g. the US) read all-insufficient because
@@ -861,12 +942,146 @@ subscription filters against so a target sees one row per duplicate set.
 | `calibration_tracking` | analyst confidence-vs-outcome (Brier score, reliability bins, drift) (§7.4) |
 | `adversarial_signals` | flags coordinated / manipulative signal patterns |
 | `entity_gc` | garbage-collects stale / orphan entity profiles |
-| `fact_decay` / `nexus_decay` | time-based confidence decay of facts and reified relationships |
+| `fact_decay` / `nexus_decay` | time-based confidence decay of facts and reified relationships. The historical confidence-*mutating* `fact_decay` leg is superseded in practice by the readout-only `fact_decay_scan` sidecar model (§4.4.4) — decay is now computed beside the facts and consumed behind a flag, never written into them |
 | `finding_supersession` | links near-duplicate findings for the same situation so a newer finding supersedes the prior one (never a destructive delete; mirrors `signal_aliases`) |
 
 **Future seam:** `finding_supersession` links near-dup findings, but full
 finding-level supersession enforcement and situation clustering across the feed are
 not yet end-to-end.
+
+### 4.4 The 2026-07 wave — the alert loop + the readout family
+
+Nine deterministic analysts landed in the 2026-07-28 wave (the §3.0 rows from
+`alert_trigger_scan` down). All are LLM-free ($0), all register `state: draft`
+(activation is a deliberate operator step), and the readout half shares one
+honesty pattern with the contested-claims sidecar (§7.11): **derived, fully
+recomputable, wholesale-refreshed — never a mutation of the primary rows.**
+The alert half feeds the modular sink plane documented in `ARCHITECTURE.md`
+§8.5 (dispatcher, per-outcome ledger, cooldown coalescing, webhook + ntfy
+sinks); this section covers what fires and why.
+
+#### 4.4.1 `alert_trigger_scan` — deterministic triggers over verified state
+
+The rule that makes alerting trustworthy: **a trigger fires on a verified
+state *transition*, never on a level, and never twice.** Five trigger
+classes:
+
+- **`band_crossing`** — a scorecard band moved. Both directions alert:
+  up-ladder = `deterioration` (high), down-ladder = `improvement` (medium);
+  moving into/out of `insufficient-evidence` reads `evidence-lost` /
+  `evidence-gained` (medium). Bands rest on already-verified claims (§3.11
+  leg 7), so this class is verification-gated by construction.
+- **`verified_finding`** — a new high/critical-severity finding that has
+  *cleared verification*: a faithfulness critique exists and
+  `min(confidence, faithfulness) ≥ 0.50`, superseded rows excluded,
+  structural-exempt analysts excluded. A **24h late-verify window** means a
+  finding whose verify lands minutes after the scan still alerts on the next
+  pass rather than slipping through.
+- **`contention_flip`** — a contested-claim group's `status` /
+  `surfaced_fact_id` changed (the exact fields the arbiter tail moves,
+  §7.11), gated on the same verified bar via a citing finding.
+- **`baseline_deviation`** — the desk's current 24h count exceeds its own
+  28-day `mean + 2σ` **and** an absolute floor (10 signals / 3 findings — no
+  σ-noise alerts on quiet desks). **Rising-edge only**: one alert per
+  excursion, silently re-armed on the falling edge. The scan prefers a fresh
+  (≤48h) `desk_baselines` sidecar row (§4.4.3) and falls back byte-identically
+  to the inline computation, stamping `baseline_source` either way.
+- **`watchlist_hit`** — operator-defined standing watches (`/v3/watchlist`,
+  mig 0105): an **entity** (alias/fold-resolved through the entity substrate;
+  unresolvable matches nothing rather than degrading to a text scan), a
+  free-text **topic** (Postgres `tsquery`, `simple` config — AND-of-terms, no
+  stemming; the limits are stated, not hidden), or a **place** (ISO2
+  countries, or point+radius admitted only on trustworthy-precision geo).
+  Per-watch cap 3 + an honest rollup; a new watch never pages history
+  (`produced_at ≤ created_at` guard).
+
+**Watermark semantics** (`alert_trigger_watermarks`, mig 0091): the first-ever
+scan per class **seeds silently** (no alert storm on activation); afterwards a
+candidate fires only when the live value differs from the stored watermark,
+and the watermark advances **only after the alert row lands** — a rejected
+write retries next scan, so delivery toward the sinks is at-least-once and a
+fired transition never re-fires. A **per-desk cap** (3, worst-first by
+severity) folds the remainder into a single honest `rollup` candidate whose
+members' watermarks still advance. Output is `kind='alert'` rows in
+`analyst_outputs` with `derived_from` naming the basis; fan-out goes through
+the shared dispatcher, and a missing dispatcher is *recorded*
+(`fanout_unavailable`), never silently dropped.
+
+#### 4.4.2 `geo_convergence_scan` — convergence without fake precision
+
+Detects distinct source **families** converging on one place. Two honesty
+rules do the work:
+
+- **Two-tier binning.** 1°×1° cells are fed **only** by point-trustworthy
+  geo — sub-country precision (`region` / `municipality` / `address`) or
+  authoritative source geometry; everything else bins at **country**
+  granularity off the ISO2 tags. A country-centroid geocode is never
+  cell-binned — the contamination that would otherwise manufacture "three
+  sources converge on one square degree" out of three centroids.
+- **Family diversity, not volume.** A convergence needs **≥ 3 distinct
+  source families** — a single outlet (or family of outlets) re-covering a
+  story can never fire it.
+
+Formation fires once and dissolution once (info-severity), on the same 0091
+watermark table (no migration of its own); a persisting convergence never
+re-fires, and the first scan seeds silently.
+
+#### 4.4.3 `desk_baseline` — a falsifiable prior, never a forecast
+
+Computes each desk's own statistical activity baseline into the
+`desk_baselines` sidecar (mig 0103): per-desk daily counts for two metrics
+(`signal_volume_24h`, `high_sev_findings_24h`) with a feature recipe of lags
+(1/7/28d), rolling means (7/28d), time-since-last-high-severity-event, and
+**land-neighbour spillover** — pure stdlib, with
+`robust_sigma = max(stddev, √mean)` (a Poisson floor so a near-zero desk
+cannot produce a degenerate σ). Deviation is `within | above | below` against
+`expected ± 2σ` with the same absolute floors the alert trigger uses. The
+migration header, the analyst docstring, and the summary finding all state it
+plainly: **this is NOT a forecast** — it is a falsifiable prior over our own
+collection counts, consumed by the `baseline_deviation` trigger and read at
+`GET /api/v1/v3/eval/desk_baselines`.
+
+#### 4.4.4 Fact decay — aging as a readout, consumption behind a flag
+
+`fact_decay_scan` computes per-fact confidence decay into the
+`fact_decay_states` sidecar (mig 0098) and **never mutates a fact** (a DB
+test asserts the facts rows byte-unchanged). Per-class curves
+(lifetime days / decay speed, MISP polynomial `1 − (t/lifetime)^(1/speed)`):
+
+| Class | Lifetime | Speed |
+|---|---|---|
+| `structural` | 1460d | 0.20 |
+| `officeholder` | 730d | 0.25 |
+| `affiliation` | 365d | 0.30 |
+| `stance` | 180d | 0.30 |
+| `event` | 45d | 0.50 |
+| *(default)* | 120d | 0.30 |
+
+Seed/curated facts age at 2× the lifetime. **Corroborations are sightings**:
+`last_sighting_at` is the newest signal timestamp across the fact's
+`derived_from` (falling back to `created_at`, with `sighting_source` recording
+which) — a re-sighted fact's clock resets. States are
+`fresh | aging | stale | revoke_candidate` (revoke when the decayed
+confidence falls to ≤ 0.20, checked first). **Consumption is flag-gated**:
+`LEGBA_FACT_DECAY_WEIGHTING` (default OFF) lets the grounding read weight by
+decayed confidence; at OFF the grounding SQL is byte-identical (asserted).
+
+#### 4.4.5 Narratives + the source-echo graph — detect-only, descriptive-not-causal
+
+`narrative_mapper` reifies each contested-claim family into a first-class
+**narrative** (mig 0102: 1:1 with a contention — carrier sources, first/last
+seen, the lead source, the maximum echo lag, value variants) and builds the
+directed **source-echo graph** (`narrative_echo_edges`: leader→follower
+co-carriage counts, echo ratio, lag statistics, and a `systematic` flag that
+needs real floors — minimum co-carriage, ratio ≥ 0.6 inside a 48h window —
+before it asserts anything). The honesty posture is carried *verbatim* in the
+migration header, the analyst docstring, and every route envelope:
+**descriptive, not causal** — an echo edge says "B tends to publish the same
+contested claims after A, at this lag", never "A drives B" — and an empty
+systematic set is published as-is ("none systematic yet"), never dressed up
+as coordination. Read at `GET /api/v1/v3/narratives` + `/narratives/echo`.
+(Code note: the in-code classes were renamed `Propagation*`
+(`PropagationEdge` / `PropagationEdgeOut`); the tables keep the echo names.)
 
 ---
 
@@ -1153,6 +1368,78 @@ adjust the folded confidence, never delete):
 
 The fold stays `effective_confidence = min(confidence, faithfulness)` throughout.
 
+**The judge route + judge provenance (2026-07-28 wave).** The judge LLM is no
+longer implicitly "whatever `method.llm.verify` says" — it resolves through an
+explicit, opt-in ladder (`analyst_deps_builder.resolve_judge_route`):
+
+1. **The opt-in gate comes first.** An analyst whose `method.llm` block
+   carries *neither* a `judge` nor a `verify` key gets **no judge route at
+   all** — nothing downstream can conscript it into judging.
+2. `LEGBA_JUDGE_STACK_REF` (env) — **repoints** every opted-in analyst's
+   judge at one component (the drop-in slot for a future dedicated judge
+   model). Because the gate runs first, the env can retarget but never
+   *enable* judging.
+3. `method.llm.judge` → 4. `method.llm.verify` (today's live key on every
+   descriptor) → 5. `method.llm.primary`.
+
+Every critique now stamps **`judge_llm_ref`** — which model actually judged —
+both top-level and in `data.verification` (empty = the deterministic floor
+alone ran). Failures are classified **hard vs. soft** (`fail_class`,
+`_FAIL_CLASS_BY_REASON` in `verify.py`): the entity-scramble class —
+`unresolved_citation`, `judge_contradicted`, `stale_leader`,
+`stale_leader_vs_facts`, `cross_target_leak` — is **hard**; the
+unsupported-inference class — `no_citation`, `judge_unsupported`,
+`hedge_laundering`, `double_counted`, `indicator_uncited_triggered`,
+`unhedged_periphery_citation` — is **soft** (an unknown reason defaults
+soft). An AST drift guard (`tests/data_pkg/test_verify_claim_ledger.py`)
+parses `verify.py`, collects every reason literal the module can emit, and
+asserts the table covers exactly that set in both directions. And the pass
+now persists a full per-claim **`claim_verdicts` ledger *including SUPPORTED
+claims*** (`supported | hard_fail | soft_fail`, capped 120 claims × 300
+chars with an honest `claim_verdicts_truncated` flag) — previously only
+failures were recorded, so the UI's citation-hover verdict card had nothing
+to show for a clean claim. All of this is labels-and-provenance: **none of it
+changes the score**.
+
+Two more guards ride the same pass:
+
+- **`stale_leader_vs_facts`** — officeholder claims in the prose are
+  reconciled against the substrate's *current open officeholder facts* (not
+  just the M13 curated anchor); a claim naming a superseded holder draws a
+  distinct **hard** flag. Flag-never-correct (the seed facts can themselves
+  be stale — the guard annotates, it never rewrites), fail-open and bounded,
+  and kept as its own reason so calibration can tell the facts-backed flag
+  from the regex-anchored M13 one.
+- A dormant **independence judge profile**: `LEGBA_JUDGE_PROMPT_PROFILE ∈
+  current (default) | independent` swaps only the generic judge system
+  prompt for an independent-reviewer framing (the M14 survey / absence
+  rubrics are profile-invariant); `scripts/temp_ab_replay.py
+  --judge-profile` exists for the measured flip when a second model arrives.
+
+Downstream, findings reads stamp **`below_floor`** — `true` for a *graded*
+finding whose `effective_confidence` sits under the 0.50 floor, `null` for an
+ungraded one (annotate-not-exclude; never a fabricated verdict).
+
+**The structural-claims deterministic verify profile (2026-07).**
+Deterministic analysts don't hallucinate — but they *can* miscount, and until
+this wave their findings simply read `verify_exempt: structural` (the
+19-analyst `STRUCTURAL_VERIFY_EXEMPT_ANALYSTS` set in `provenance/kinds.py`).
+An opt-in subset (`STRUCTURAL_CLAIMS_VERIFY_ANALYSTS`: `geo_convergence_scan`,
+`indicator_tracker`, `thematic_proposal`, `narrative_mapper`) now declares
+machine-checkable **structural claims** (`data.structural_claims`) whose
+asserted quantities the verify pass **re-derives from the finding's own
+lineage** — operations `count` / `distinct_count` / `sum` / `equals`,
+including an `@derived_from` basis sentinel checked against the actual
+`derived_from` list. Outcomes per claim: `supported` /
+**`structural_miscount`** (the number does not re-derive — a flagged
+critique) / `unverifiable_structural`. The read-side badge upgrades
+`structural` → **`structural-verified`** only when claims existed, at least
+one was checkable, and there were zero miscounts and zero unverifiables — so
+the badge now distinguishes *checked* deterministic output from merely
+*exempt* deterministic output. Gate: `LEGBA_STRUCTURAL_VERIFY_GATE` (default
+**OFF** = compute-and-show, never demote — the structural critique's score is
+pinned 1.0; ON makes it carry the re-derivation fraction).
+
 **The critic (rubric grader).** The critic is a separate LLM judge against the
 analyzed analyst's `eval.rubric`, with the heterogeneity guard of §3.8. Rubrics
 are operator-authored content the descriptor's `eval.rubric` field points at — the
@@ -1231,6 +1518,61 @@ judge-unavailable / under-paired / sub-margin delta. So even a hand-flipped
 The candidate lands in `analyst_outputs` as a `PROMPT_MODULE_CANDIDATE` row; no
 prompt goes live without clearing this gate.
 
+### 6.5 Band calibration — the scorecard graded as resolvable claims
+
+The scorecard asserts bands; since 2026-07 those assertions are **held to
+account**. `band_calibration_tracker` (deterministic META, daily) logs every
+scorecard band *transition* as a resolvable claim in
+`band_calibration_claims` (mig 0093 — one claim per
+`(desk, dimension, scorecard_row_id)`, never overwritten) and grades each
+claim deterministically at **14- and 28-day horizons** under the pinned
+resolution spec `hard_band_at_horizon_v1`: at the horizon the desk's then-live
+band either **`held`** or moved further (**`worsened`** / **`improved`**) —
+all three count as the change *confirming* (it stuck or continued) — or
+**`reverted`** (against);
+`insufficient` / `unresolvable` claims are **excluded from both denominators
+but reported**, and a zero-denominator window publishes an honest `None`
+rather than a rate. The product is **persistence and reversal rates**,
+surfaced as an additive `band_calibration` section on
+`GET /api/v1/v3/eval/calibration`.
+
+The honesty line is structural, not editorial: bands are **not
+probabilities**, so **no Brier score, Brier skill score, or forecast-skill
+claim exists or *can* exist for this harness** — the `HONESTY_NOTE` carrying
+that sentence rides every summary finding and the eval route (`no_brier:
+true`), the claims table has no probability column by design, and claimable
+directions are restricted to real movements (`deterioration` /
+`improvement`). This leg answers "do our band changes *stick*?", which is a
+different — and honestly answerable — question from "were we right?".
+
+### 6.6 The correctness gold-set loop — operator verdicts, never pooled
+
+Faithfulness measures groundedness, not correctness; the reference-label leg
+(§3.11 leg 8) is honest but tiny. The gold-set loop grows a real correctness
+sample at a sustainable cost — **8 findings a week, labeled by the
+operator**:
+
+- **A pinned weekly stratified sample.** Verified-only finding heads (a
+  faithfulness critique must exist), one per unit for coverage, the fill
+  chosen by **rendezvous hashing** (`sha256("week:finding_id")`, highest
+  wins — deterministic for a given week across re-reads), with a weekly
+  parity rotation that alternates preferring high- vs. low-faithfulness
+  bands so the sample doesn't silently favor easy reads. The first read of a
+  week **pins** it (`goldset_week_samples`, insert-on-conflict-do-nothing) —
+  the worksheet cannot shift under the labeler.
+- **Closed-vocabulary verdicts.** `GET /v3/eval/goldset/worksheet` renders
+  the week; `POST /v3/eval/goldset/label` records one of
+  `correct | partially_correct | incorrect | unresolvable` into
+  `correctness_labels` (UNIQUE per finding — re-labeling overwrites; a
+  `finding_snapshot` is stored at label time so later supersession cannot
+  orphan the verdict).
+- **Additive, segregated scoring.** `/v3/eval/scores` grows an
+  **operator-correctness** figure per unit (correct=1.0, partial=0.5,
+  incorrect=0.0; `unresolvable` excluded) that is **never pooled** with the
+  deterministic source-overlap `correctness_vs_reference` leg — an
+  all-unresolvable week reads honestly empty rather than averaging to a
+  number.
+
 ---
 
 ## 7. Analytical methodology
@@ -1281,7 +1623,10 @@ over vague rumour.
 **Fact confidence decays** when a fact receives no new corroboration (active decay
 after a quiet window, contradiction override, corroboration boost, temporal
 expiration on `valid_until`, supersession of a same-subject/predicate fact). The
-relevant decay sub-handlers are `fact_decay` and `nexus_decay`.
+relevant decay sub-handlers are `fact_decay` and `nexus_decay` — and since
+2026-07 fact decay is computed as a **readout sidecar** (`fact_decay_scan`,
+per-class curves, corroborations-as-sightings) that never mutates the fact
+rows, with consumption flag-gated (§4.4.4).
 
 > **Fact write-path supersession model (updated 2026-06-29 — task #101 Holes-A
 > + Holes-B; see §7.8, §7.11).** The **default** write path is
@@ -1878,11 +2223,55 @@ disputed value as settled truth:
 - **UI** — a `ContestedBadge` component mounts in the **Why** provenance trail
   (fact-keyed) and the target **Claims** panel (subject-keyed).
 
-**Build / validation state (honest).** All waves (0, 1, 2, 2b, 4, 5) are **built,
+**The arbiter tail (2026-07-28 wave) — from detection to accountable
+surfacing.** The machinery above answers *who disputes what*; the tail
+(migration 0097) decides when a **winner** may be surfaced and keeps every
+decision accountable:
+
+- **Soak.** The tie-break layers wait out a soak window
+  (`LEGBA_CONTENTION_SURFACE_SOAK_HOURS`, default **48h**) so a fresh dispute
+  is not adjudicated on arrival-order evidence; a Q·C·R·F-*decisive* winner is
+  not soak-gated (the deterministic score already earned it).
+- **Weighted tie-break.** On a deterministic near-tie abstain, a weight —
+  distinct-source count + source-*type* diversity + credibility mass (+ the
+  earned term below) — may break it, but only past soak, only with ≥ 2
+  distinct sources on the winning side, and only past a dominance ratio
+  (default 1.5). The **earned-track-record** term ships as a seam behind
+  `LEGBA_CONTENTION_EARNED_WEIGHT` (**default 0.0 = OFF, byte-identical**):
+  when enabled, per-source weights come **live** from the
+  `source_track_records` readout (mig 0099 — Beta(2,2)-smoothed,
+  Wilson-lower-bounded win rates over how each source's claims fared in
+  *previously resolved* contentions), computed with a **72h lag** and a
+  **self-exclusion guard** — the contention being decided is excluded from
+  the record that decides it, so the loop cannot feed itself (acyclicity).
+- **A cached LLM near-tie adjudicator.** Only past soak, only on a genuine
+  near-tie, only under `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` (default OFF),
+  bounded exactly as before (≤ 10 calls/pass, 256 tokens, 30s, self-hosted
+  plane only) — and now **cached** per `(contention_id,
+  evidence_fingerprint)` in `fact_contention_tiebreak` (`verdict ∈
+  pick | unsure`): the same evidence is never re-asked, and a transport
+  failure degrades to abstain **uncached** (only genuine verdicts persist).
+- **Coexistence surfacing.** A surfaced winner is stamped `surfaced_by`
+  (`deterministic` / `llm`), `surfaced_at`, and a human-readable
+  `surface_rationale`; every change appends the prior record to a capped,
+  newest-first `surface_history`. The losing fact is **never mutated** —
+  invariant B15 stands, asserted in tests; surfacing is presentation with
+  receipts, not supersession.
+- **Re-open on new evidence.** The decision is recomputed every pass over an
+  evidence fingerprint, so new evidence re-opens the dispute (the prior
+  surface survives in history) — and the moving `status` /
+  `surfaced_fact_id` pair is exactly what the `contention_flip` alert class
+  fingerprints (§4.4.1).
+- **Read-side flags.** The grounding/read annotation
+  (`LEGBA_CONTENTION_SURFACING`) defaults **ON**; the slice-reorder
+  preference (`LEGBA_CONTENTION_SURFACING_PREFER`) defaults **OFF**.
+
+**Build / validation state (honest).** All waves (0, 1, 2, 2b, 4, 5) plus the
+arbiter tail are **built,
 deployed, and enabled on this instance** (the contested-claims schema landed at
-migrations `0054`–`0055`; the live migration head is now **0085** (the 2026-07-06
-audit remediation added `0076`–`0080` — entity re-fold, junk-fact / junk-nexus /
-stale-head sweeps, and the state-media credibility seed); both
+migrations `0054`–`0055`; the tail's surfacing columns + tie-break cache at
+`0097` and the earned-record table at `0099`; the live migration head is now
+**0105**; both
 `LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` ship **OFF by
 default** in code and compose, set to `1` only here via the gitignored `.env`).
 Proven **live**: the detect-only arbiter (Q·C·R·F surfaced the better-supported
@@ -1904,9 +2293,11 @@ The analysis plane is live in the real stack, cold-startable from empty volumes
 - Real RSS/API sources (BBC, Deutsche Welle, Al Jazeera, and ~50 poll sources in
   all) produce enriched signals, each carrying geo, language, and entity classes
   promoted to indexed columns.
-- Those signals fan out on `legba.signals.>` to the **25 country desks** — the 19
-  G20 members plus a high-consequence **watch tier** (Israel, Iran, North Korea,
-  Pakistan, Taiwan, Ukraine; `country_watch_il/ir/kp/pk/tw/ua`). Adding a desk is
+- Those signals fan out on `legba.signals.>` to the **32 country desks** — the 19
+  G20 members plus a 13-desk high-consequence **watch tier** (Israel, Iran,
+  North Korea, Pakistan, Taiwan, Ukraine, and the escalation-risk band Sudan,
+  Mali, Burkina Faso, Niger, DR Congo, Myanmar, Haiti; descriptor ids
+  `country_watch_<iso2>`). Adding a desk is
   register-a-target with a `g20`/`watch` coverage tag, no code change.
 - Each desk is coalesced (§2) into the **seven bounded reasoning units**
   (`inline_target`), each answering one narrow question over the desk's 72h slice

@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Hashable, Mapping, TypeVar
@@ -622,6 +623,167 @@ def _is_forward_looking(low: str) -> bool:
 # reconciles against checkable instead of over-counting.
 _ADVISORY_REASONS = frozenset({"double_counted", "hedge_laundering"})
 
+# ---------------------------------------------------------------------------
+# C-TIER (2026-07) — two-tier composition evidence: the PERIPHERY hedge rule.
+#
+# The composition synth (meta_findings_synthesizer, flag
+# LEGBA_COMPOSITION_TIERED_EVIDENCE) renders below-floor / unverified
+# sub-claims in an explicit PERIPHERY section and stamps ``tier='periphery'``
+# on each citation that resolves into it. The verify contract for that tier:
+# a fact-asserting clause whose resolved citations are ALL periphery-tier is
+# SUPPORTED only when the clause itself is hedged/attributed ("weakly-supported
+# reporting suggests ..."); asserted bald, it overclaims verification status
+# its evidence does not carry — the ``unhedged_periphery_citation`` reason
+# (soft, the overclaim/hedge-laundering family), COUNTED on the deterministic
+# floor (the composition's always-on verify layer). A clause with >=1 BASIS
+# citation is supported by that basis leg (periphery is corroborating color
+# there, not the load-bearing evidence). Citations with no ``tier`` key —
+# every pre-C-TIER composition — leave this rule inert, byte-for-byte.
+#
+# Scope note: this is a FLOOR-profile rule. On the optional LLM-judge path the
+# judge stays authoritative over the prose it graded (the C1 no-co-veto
+# decision) and grades GROUNDING, not tier-hedging — so a floor span whose
+# clause the judge also graded dedups by text there. Teaching the judge rubric
+# the tier is a declared follow-up, not smuggled in here.
+# ---------------------------------------------------------------------------
+
+_PERIPHERY_TIER = "periphery"
+_UNHEDGED_PERIPHERY = "unhedged_periphery_citation"
+
+# Hedge/attribution lexicon for the periphery rule — deliberately GENEROUS
+# (substring, lowercased): the periphery prompt section dictates the canonical
+# phrasing ("weakly-supported reporting suggests ..."), so the happy path is
+# guaranteed to match; the breadth here only makes false FLAGS rarer (a hedged
+# variant slipping through unflagged is the cheap error; flagging a genuinely
+# hedged clause is the expensive one). Trailing spaces on the modal forms keep
+# "may " from matching "mayor" etc.
+_HEDGE_ATTRIBUTION_MARKERS: tuple[str, ...] = (
+    "weakly-supported",
+    "weakly supported",
+    "unverified",
+    "unconfirmed",
+    "uncorroborated",
+    "not corroborated",
+    "below the verification floor",
+    "reportedly",
+    "reporting suggests",
+    "reports suggest",
+    "suggests",
+    "suggesting",
+    "suggest that",
+    "may ",
+    "might ",
+    "could ",
+    "appears to",
+    "appear to",
+    "apparently",
+    "possibly",
+    "potentially",
+    "alleged",
+    "purported",
+    "rumored",
+    "rumoured",
+    "claims that",
+    "claimed",
+    "according to",
+    "single-source",
+    "single source",
+    "if confirmed",
+    "tentative",
+)
+
+
+def _is_hedged_attributed(claim: str) -> bool:
+    """True iff the clause carries hedge/attribution language (the periphery
+    remedy). Lowercased substring match over the lexicon above — deterministic,
+    lenient by design (see the lexicon note)."""
+    low = claim.lower()
+    return any(m in low for m in _HEDGE_ATTRIBUTION_MARKERS)
+
+
+def _periphery_ordinals(citations: Any) -> set[int]:
+    """The set of cited sub-claim ORDINALS the composition stamped
+    ``tier='periphery'``. Empty for every pre-C-TIER citation list (no ``tier``
+    key) — the periphery rule is then inert."""
+    out: set[int] = set()
+    if not isinstance(citations, (list, tuple)):
+        return out
+    for entry in citations:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("tier") != _PERIPHERY_TIER:
+            continue
+        n = _citation_ordinal(entry)
+        if n is not None:
+            out.add(n)
+    return out
+
+# ---------------------------------------------------------------------------
+# P2-4 — hard/soft verdict labels (the Primer taxonomy). LABELS ONLY: nothing
+# below changes a score, a floor exemption, or pass/fail semantics — each span
+# reason is additively classified so the report (and the UI hover) can say HOW
+# BAD a flag is, and so a future gate can weigh hard vs soft without re-deriving
+# the taxonomy from reason strings.
+#
+#   hard_fail — the finding misstates its evidence: an entity scramble, a claim
+#     its own cited source contradicts, or a fabricated citation (a marker that
+#     resolves to NO real cited evidence).
+#   soft_fail — the finding outruns its evidence: an unsupported inference, a
+#     hedge laundered into confidence, an overclaim / uncited assertion.
+#
+# THE mapping table lives HERE and only here (drift-guard test:
+# tests/data_pkg/test_verify_fail_class.py scans this module for every emitted
+# ``reason`` and asserts it is mapped) — a new span reason MUST be added to this
+# table or the guard fails the suite.
+# ---------------------------------------------------------------------------
+
+FAIL_CLASS_HARD = "hard_fail"
+FAIL_CLASS_SOFT = "soft_fail"
+
+_FAIL_CLASS_BY_REASON: dict[str, str] = {
+    # -- hard: entity scramble / contradicted-by-source / fabricated citation --
+    # cites marker(s) that resolve to NO real cited evidence — fabricated citation
+    "unresolved_citation": FAIL_CLASS_HARD,
+    # the judge found the claim contradicted by its OWN cited source
+    "judge_contradicted": FAIL_CLASS_HARD,
+    # M13 — stale-cutoff current-officeholder reference (entity scramble)
+    "stale_leader": FAIL_CLASS_HARD,
+    # E-1 (2026-07-27) — officeholder claim reconciled against the CURRENT
+    # facts-table officeholder row and found mismatched. Same hard entity-
+    # scramble class as the M13 heuristic, but a DISTINCT reason so calibration
+    # can tell the facts-backed flag from the curated-regex one — and because
+    # the seed facts can THEMSELVES be stale (known: the DRC PM upstream), this
+    # only ever DEMOTES/flags, never auto-corrects.
+    "stale_leader_vs_facts": FAIL_CLASS_HARD,
+    # M15 — per-country finding naming only OTHER countries (entity scramble)
+    "cross_target_leak": FAIL_CLASS_HARD,
+    # -- soft: unsupported inference / hedge laundering / overclaim -----------
+    # a fact-asserting claim with no citation at all — overclaim/uncited
+    "no_citation": FAIL_CLASS_SOFT,
+    # the judge could not ground the claim in the cited evidence — unsupported
+    # inference (distinct from contradicted: the evidence is silent, not opposed)
+    "judge_unsupported": FAIL_CLASS_SOFT,
+    # a composed clause asserts more confidence than its cited sub-claim carries
+    "hedge_laundering": FAIL_CLASS_SOFT,
+    # C-TIER — a composed clause resting ONLY on periphery-tier (below-floor /
+    # unverified) sub-claims asserted WITHOUT hedged attribution — the same
+    # overclaim family: the clause claims verification status its evidence
+    # does not carry. COUNTED on the deterministic floor (not advisory).
+    _UNHEDGED_PERIPHERY: FAIL_CLASS_SOFT,
+    # two cited sub-claims share underlying lineage — evidence overclaim (advisory)
+    "double_counted": FAIL_CLASS_SOFT,
+    # S3-T1 — a 'triggered' structured indicator with no citation — uncited claim
+    "indicator_uncited_triggered": FAIL_CLASS_SOFT,
+}
+
+
+def fail_class_for_reason(reason: str) -> str:
+    """The hard/soft fail class for a span reason. UNKNOWN reasons classify
+    ``soft_fail`` (conservative: never escalate an unrecognized label to hard;
+    the drift-guard test keeps the table total so this fallback stays unused).
+    """
+    return _FAIL_CLASS_BY_REASON.get(reason, FAIL_CLASS_SOFT)
+
 # S3-T1 — a structured I&W indicator whose status is 'triggered' asserts an
 # OBSERVED development and so must name the signal(s) that fired it. An uncited
 # 'triggered' entry is a REAL unsupported span (NOT advisory — it counts against
@@ -641,6 +803,38 @@ def _llm_judge_enabled() -> bool:
     if raw is None:
         return False
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# P2-4 — judge PROMPT PROFILE (independence posture), STAGED NOT LIVE.
+#
+# ``current`` (the DEFAULT, and the only live behavior) keeps the calibrated
+# generic judge system prompt byte-for-byte. ``independent`` swaps in the
+# adversarial-reviewer variant (_INDEPENDENT_JUDGE_SYSTEM below): the judge is
+# instructed as an INDEPENDENT reviewer of ANOTHER analyst's claims — never
+# "check your own work" — for the day the second judge model lands (and for the
+# same-model A/B first: scripts/temp_ab_replay.py --judge-profile). The profile
+# swaps ONLY the generic system prompt; the specialized rubrics (M14 null-result
+# survey, V3 absence) are already tightly constrained and stay profile-invariant
+# so an A/B isolates the posture variable. Selection: explicit call-site arg →
+# ``LEGBA_JUDGE_PROMPT_PROFILE`` env → ``current``. Flipping the default is a
+# measured, operator-gated step — nothing here changes a live prompt.
+# ---------------------------------------------------------------------------
+
+JUDGE_PROFILE_CURRENT = "current"
+JUDGE_PROFILE_INDEPENDENT = "independent"
+_JUDGE_PROFILES_ALLOWED = (JUDGE_PROFILE_CURRENT, JUDGE_PROFILE_INDEPENDENT)
+_JUDGE_PROMPT_PROFILE_ENV = "LEGBA_JUDGE_PROMPT_PROFILE"
+
+
+def _judge_prompt_profile(explicit: str | None = None) -> str:
+    """Resolve the judge prompt profile: explicit arg → env → ``current``.
+
+    An unrecognized value degrades to ``current`` (never a crashed judge over a
+    typo'd profile name; the degradation is deterministic + visible in tests).
+    """
+    raw = (explicit or os.getenv(_JUDGE_PROMPT_PROFILE_ENV) or "").strip().lower()
+    return raw if raw in _JUDGE_PROFILES_ALLOWED else JUDGE_PROFILE_CURRENT
 
 
 @dataclass
@@ -673,7 +867,86 @@ class UnsupportedSpan:
     markers: list[int | str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"text": self.text, "reason": self.reason, "markers": list(self.markers)}
+        return {
+            "text": self.text,
+            "reason": self.reason,
+            "markers": list(self.markers),
+            # P2-4 — ADDITIVE hard/soft label (the Primer taxonomy). Derived from
+            # the ONE mapping table above; existing readers ignore the extra key.
+            "fail_class": fail_class_for_reason(self.reason),
+        }
+
+
+# P2-4 — per-claim ledger bounds. The ``claim_verdicts`` ledger persists EVERY
+# graded claim (supported included — previously recorded NOWHERE, the citation-
+# hover finding), so it is size-bounded at the persist boundary: at most
+# ``_CLAIM_VERDICTS_CAP`` entries, each text at most ``_CLAIM_VERDICT_TEXT_CHARS``
+# chars, with an HONEST ``claim_verdicts_truncated`` flag when the cap cut
+# anything (never a silently partial ledger presented as complete).
+_CLAIM_VERDICTS_CAP = 120
+_CLAIM_VERDICT_TEXT_CHARS = 300
+
+#: ClaimVerdict verdict labels: ``supported`` or a fail class from the table.
+VERDICT_SUPPORTED = "supported"
+
+
+@dataclass
+class ClaimVerdict:
+    """One row of the per-claim verdict LEDGER (P2-4 deliverable 2b).
+
+    The verify pass previously persisted per-claim data ONLY for failures
+    (``unsupported_spans``); a SUPPORTED claim's verdict was recorded nowhere —
+    the UI had to say "claim-level verdict not recorded". This ledger carries the
+    FULL per-claim record: every checkable/graded claim with its text, the
+    citation markers it carried, and its verdict (``supported`` | ``hard_fail`` |
+    ``soft_fail``, with the underlying ``reason`` for failures).
+
+    LABELS + PERSISTENCE ONLY: the ledger is derived alongside the existing
+    tallies and never feeds a score. ADVISORY spans (double_counted /
+    hedge_laundering) are NOT ledger rows — they annotate a claim that is itself
+    recorded (typically as supported); they stay in ``unsupported_spans``.
+    """
+
+    text: str
+    # 'supported' | 'hard_fail' | 'soft_fail' (fail class from the ONE table).
+    verdict: str
+    # None for supported; the span reason (no_citation / judge_contradicted / …)
+    # for failures — so the ledger row explains itself without a span join.
+    reason: str | None = None
+    markers: list[int | str] = field(default_factory=list)
+
+    @classmethod
+    def supported(
+        cls, text: str, markers: list[int | str] | None = None
+    ) -> "ClaimVerdict":
+        return cls(text=text, verdict=VERDICT_SUPPORTED, markers=list(markers or []))
+
+    @classmethod
+    def failed(
+        cls, text: str, reason: str, markers: list[int | str] | None = None
+    ) -> "ClaimVerdict":
+        return cls(
+            text=text,
+            verdict=fail_class_for_reason(reason),
+            reason=reason,
+            markers=list(markers or []),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text[:_CLAIM_VERDICT_TEXT_CHARS],
+            "markers": list(self.markers),
+            "verdict": self.verdict,
+            "reason": self.reason,
+        }
+
+
+def _bounded_claim_verdicts(
+    verdicts: list["ClaimVerdict"],
+) -> tuple[list[dict[str, Any]], bool]:
+    """``(bounded ledger dicts, truncated?)`` — the persist-boundary cap."""
+    bounded = [v.as_dict() for v in verdicts[:_CLAIM_VERDICTS_CAP]]
+    return bounded, len(verdicts) > _CLAIM_VERDICTS_CAP
 
 
 @dataclass
@@ -714,8 +987,18 @@ class FaithfulnessReport:
     # ``faithfulness_score`` stays the POOLED ratio across ALL kinds, so no
     # per-branch weighting can launder a bad kind behind a good one.
     branch_scores: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # P2-4 — the FULL per-claim verdict ledger (supported + hard_fail +
+    # soft_fail rows; see :class:`ClaimVerdict`). ADDITIVE: default empty so
+    # every existing constructor/reader is byte-identical; the ledger never
+    # feeds a score. On the floor path it reconciles exactly (one row per
+    # checkable claim); on the judge path it carries the judge-graded prose
+    # PLUS the non-prose floor rows the judge could not grade (structured
+    # indicators, world-knowledge guards) — the ledger is provenance, the
+    # tallies stay the score.
+    claim_verdicts: list[ClaimVerdict] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
+        bounded, truncated = _bounded_claim_verdicts(self.claim_verdicts)
         return {
             "faithfulness_score": round(self.faithfulness_score, 4),
             "checkable_claims": self.checkable_claims,
@@ -729,6 +1012,9 @@ class FaithfulnessReport:
                 else None
             ),
             "branch_scores": self.branch_scores,
+            # P2-4 additive: the size-bounded per-claim ledger + honest cut flag.
+            "claim_verdicts": bounded,
+            "claim_verdicts_truncated": truncated,
         }
 
 
@@ -1567,6 +1853,29 @@ def _segment_claims(body: str) -> list[str]:
     return merged
 
 
+def _markers_in_claim(claim: str, *, subclaim: bool) -> list[int]:
+    """The citation markers a claim span carries, per convention.
+
+    ``subclaim=False`` — unit ``[N]`` markers + M14 range markers, sorted +
+    deduped (byte-identical to the unit floor's inline computation it replaces).
+    ``subclaim=True`` — composition ``[[ref:N]]`` ordinals in first-seen order,
+    deduped (byte-identical to the composition floor's loop it replaces).
+    Shared by the floors and the P2-4 claim-verdict ledger so the recorded
+    markers can never drift from what the floor resolved.
+    """
+    if subclaim:
+        markers: list[int] = []
+        for m in _REF_MARKER_RE.finditer(claim):
+            n = int(m.group(1))
+            if n not in markers:
+                markers.append(n)
+        return markers
+    return sorted(
+        {int(m.group(1)) for m in _CLAIM_MARKER_RE.finditer(claim)}
+        | _range_markers(claim)
+    )
+
+
 def _deterministic_floor(
     body: str,
     citations: Any,
@@ -1595,25 +1904,28 @@ def _deterministic_floor(
     claims = [c for c in _segment_claims(body) if _is_fact_asserting(c)]
     supported = 0
     spans: list[UnsupportedSpan] = []
+    verdicts: list[ClaimVerdict] = []
     for claim in claims:
         # M14: fold RANGE markers ``[lo-hi]`` in alongside bare ``[N]`` markers so a
         # corpus-survey clause that cites the whole enumerated set resolves.
-        markers = sorted(
-            {int(m.group(1)) for m in _CLAIM_MARKER_RE.finditer(claim)}
-            | _range_markers(claim)
-        )
+        markers = _markers_in_claim(claim, subclaim=False)
         if not markers:
             spans.append(UnsupportedSpan(text=claim, reason="no_citation"))
+            verdicts.append(ClaimVerdict.failed(claim, "no_citation"))
             continue
         # Supported when ANY marker resolves to a real cited signal_id.
         ok = any(marker_map.get(n) in resolved_ids for n in markers if marker_map.get(n))
         if ok:
             supported += 1
+            verdicts.append(ClaimVerdict.supported(claim, list(markers)))
         else:
             spans.append(
                 UnsupportedSpan(
                     text=claim, reason="unresolved_citation", markers=markers
                 )
+            )
+            verdicts.append(
+                ClaimVerdict.failed(claim, "unresolved_citation", list(markers))
             )
 
     checkable = len(claims)
@@ -1625,6 +1937,7 @@ def _deterministic_floor(
         supported_claims=supported,
         unsupported_spans=spans,
         judge_status="deterministic",
+        claim_verdicts=verdicts,
     )
 
 
@@ -1656,6 +1969,13 @@ def _deterministic_floor_subclaim(
         enforced numerically via ``confidence_ceiling`` (the payload folds
         ``overall_score = min(faithfulness_score, confidence_ceiling)``).
 
+    C-TIER (two-tier composition evidence): a fact-asserting clause whose
+    resolved citations are ALL ``tier='periphery'`` (below-floor / unverified
+    sub-claims the synth quarantined) is SUPPORTED only when the clause itself
+    is hedged/attributed (:func:`_is_hedged_attributed`); asserted bald it is a
+    COUNTED ``unhedged_periphery_citation`` defect. Citation lists with no
+    ``tier`` keys (every pre-C-TIER composition) leave the rule inert.
+
     HONEST: a citation missing effective_confidence/derived_from is never
     fabricated into a correlation or a cap; a composition citing no resolvable
     sub-claim still floors low (every clause ``no_citation``/``unresolved``),
@@ -1667,18 +1987,18 @@ def _deterministic_floor_subclaim(
     eff_map = _ordinal_effconf_map(citations)
     derived_map = _ordinal_derived_map(citations)
     source_map = _ordinal_source_map(citations)
+    # C-TIER: the periphery-tier ordinals (empty ⇒ the rule below is inert).
+    periphery_ords = _periphery_ordinals(citations)
 
     claims = [c for c in _segment_claims(body) if _is_fact_asserting(c)]
     supported = 0
     spans: list[UnsupportedSpan] = []
+    verdicts: list[ClaimVerdict] = []
     for claim in claims:
-        markers: list[int] = []
-        for m in _REF_MARKER_RE.finditer(claim):
-            n = int(m.group(1))
-            if n not in markers:
-                markers.append(n)
+        markers = _markers_in_claim(claim, subclaim=True)
         if not markers:
             spans.append(UnsupportedSpan(text=claim, reason="no_citation"))
+            verdicts.append(ClaimVerdict.failed(claim, "no_citation"))
             continue
         resolved_markers = [n for n in markers if n in resolved_ords]
         if not resolved_markers:
@@ -1687,8 +2007,44 @@ def _deterministic_floor_subclaim(
                     text=claim, reason="unresolved_citation", markers=list(markers)
                 )
             )
+            verdicts.append(
+                ClaimVerdict.failed(claim, "unresolved_citation", list(markers))
+            )
+            continue
+        # C-TIER — a clause resting ONLY on periphery-tier citations (below-
+        # floor / unverified sub-claims) is SUPPORTED only when hedged/
+        # attributed; asserted bald it is a COUNTED ``unhedged_periphery_
+        # citation`` defect (overclaim family). Either way the numeric
+        # hedge-laundering comparison below is SKIPPED for such a clause:
+        # hedged text IS the tier's remedy (comparing the composition's
+        # confidence to a by-definition-below-floor eff would advisory-flag
+        # every legal hedged use), and the unhedged case already carries its
+        # dedicated, counted reason. A clause with >=1 BASIS citation takes
+        # the ordinary path — the basis leg supports it.
+        if periphery_ords and all(n in periphery_ords for n in resolved_markers):
+            if _is_hedged_attributed(claim):
+                supported += 1
+                verdicts.append(
+                    ClaimVerdict.supported(claim, list(resolved_markers))
+                )
+            else:
+                spans.append(
+                    UnsupportedSpan(
+                        text=claim,
+                        reason=_UNHEDGED_PERIPHERY,
+                        markers=list(resolved_markers),
+                    )
+                )
+                verdicts.append(
+                    ClaimVerdict.failed(
+                        claim, _UNHEDGED_PERIPHERY, list(resolved_markers)
+                    )
+                )
             continue
         supported += 1
+        # P2-4 ledger: the CLAIM is supported; a hedge-laundering hit below stays
+        # an ADVISORY span annotating it, never a second ledger row.
+        verdicts.append(ClaimVerdict.supported(claim, list(resolved_markers)))
         # HEDGE-LAUNDERING — the clause asserts more than its cited sub-claim(s).
         if finding_confidence is not None:
             cited_effs = [eff_map[n] for n in resolved_markers if n in eff_map]
@@ -1732,7 +2088,28 @@ def _deterministic_floor_subclaim(
         unsupported_spans=spans,
         judge_status="deterministic",
         confidence_ceiling=confidence_ceiling,
+        claim_verdicts=verdicts,
     )
+
+
+def _indicator_citation_markers(entry: Mapping[str, Any]) -> list[int]:
+    """The real signal-marker INDEXES a structured indicator entry cites.
+
+    A citation is an int index; bool is rejected (a stray ``True`` is not a
+    citation index) and non-list shapes contribute nothing — the SAME predicate
+    the S3-T1 tally uses, factored so the P2-4 ledger can never drift from it.
+    """
+    cites = entry.get("citations")
+    if not isinstance(cites, (list, tuple)):
+        return []
+    return [c for c in cites if isinstance(c, int) and not isinstance(c, bool)]
+
+
+def _indicator_label(entry: Mapping[str, Any]) -> str:
+    """The human-facing label for an indicator entry (statement → id → stub)."""
+    stmt = entry.get("statement")
+    ident = entry.get("id")
+    return stmt if isinstance(stmt, str) and stmt.strip() else str(ident or "indicator")
 
 
 def _indicator_spans(indicators: Any) -> tuple[int, int, list[UnsupportedSpan]]:
@@ -1756,20 +2133,10 @@ def _indicator_spans(indicators: Any) -> tuple[int, int, list[UnsupportedSpan]]:
         if entry.get("status") != "triggered":
             continue  # not_observed / expired are forward-looking → exempt
         checkable += 1
-        cites = entry.get("citations")
-        # A citation is a real signal-marker INDEX (int); reject bool (a stray
-        # True is not a citation index) and non-list shapes.
-        has_citation = isinstance(cites, (list, tuple)) and any(
-            isinstance(c, int) and not isinstance(c, bool) for c in cites
-        )
-        if has_citation:
+        if _indicator_citation_markers(entry):
             supported += 1
         else:
-            stmt = entry.get("statement")
-            ident = entry.get("id")
-            label = (
-                stmt if isinstance(stmt, str) and stmt.strip() else str(ident or "indicator")
-            )
+            label = _indicator_label(entry)
             spans.append(
                 UnsupportedSpan(
                     text=f"triggered indicator without citation: {label}"[:500],
@@ -1777,6 +2144,36 @@ def _indicator_spans(indicators: Any) -> tuple[int, int, list[UnsupportedSpan]]:
                 )
             )
     return checkable, supported, spans
+
+
+def _indicator_claim_verdicts(indicators: Any) -> list[ClaimVerdict]:
+    """P2-4 ledger rows for the structured indicator block — one per ``triggered``
+    entry, mirroring :func:`_indicator_spans` exactly (same predicate helpers): a
+    cited triggered indicator is a SUPPORTED ledger row (previously recorded
+    nowhere), an uncited one a soft_fail row whose text matches its span.
+    """
+    verdicts: list[ClaimVerdict] = []
+    if not isinstance(indicators, (list, tuple)):
+        return verdicts
+    for entry in indicators:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("status") != "triggered":
+            continue
+        markers = _indicator_citation_markers(entry)
+        label = _indicator_label(entry)
+        if markers:
+            verdicts.append(
+                ClaimVerdict.supported(f"triggered indicator: {label}"[:500], list(markers))
+            )
+        else:
+            verdicts.append(
+                ClaimVerdict.failed(
+                    f"triggered indicator without citation: {label}"[:500],
+                    _INDICATOR_UNCITED_TRIGGERED,
+                )
+            )
+    return verdicts
 
 
 def _fold_indicators(
@@ -1806,6 +2203,9 @@ def _fold_indicators(
         judge_status=floor.judge_status,
         judge_unavailable_reason=floor.judge_unavailable_reason,
         confidence_ceiling=floor.confidence_ceiling,
+        # P2-4: the indicator rows join the per-claim ledger (supported entries
+        # were previously recorded nowhere; failures mirror their spans).
+        claim_verdicts=floor.claim_verdicts + _indicator_claim_verdicts(indicators),
     )
 
 
@@ -1886,6 +2286,262 @@ def stale_leader_spans(text: str) -> list[UnsupportedSpan]:
                     reason=_STALE_LEADER_REASON,
                 )
             )
+    return spans
+
+
+# ---------------------------------------------------------------------------
+# E-1 (2026-07-27 sweep rec #2) — the FACTS-RECONCILED officeholder guard.
+#
+# The M13 heuristic above works off a curated regex pair (model-internal world
+# knowledge, US-only). This guard is its data-backed sibling: when a finding
+# names a person in an officeholder ROLE for a country ("DRC Prime Minister
+# <name>", "President <name> of Venezuela"), probe the CURRENT officeholder
+# facts (predicate in the head-of-state / head-of-government / leader-of
+# family, superseded_by IS NULL AND valid_until IS NULL) and FLAG a mismatch.
+#
+# HONESTY CONSTRAINTS (load-bearing):
+#   * the seed facts can THEMSELVES be stale (known live: the DRC PM row is
+#     wrong upstream) — a mismatch DEMOTES/flags via the existing unsupported-
+#     span path, NEVER auto-corrects either side;
+#   * the reason is ``stale_leader_vs_facts`` (distinct from the heuristic's
+#     ``stale_leader``) so calibration can score the two evidence bases apart;
+#   * fail-OPEN everywhere: no current fact row for the claimed office → no
+#     flag; a claimed person matching ANY current family officeholder (role
+#     confusion, co-office) → no flag; a facts read failure → degrade, no flag.
+# ---------------------------------------------------------------------------
+
+_STALE_LEADER_VS_FACTS_REASON = "stale_leader_vs_facts"
+
+# Country alias groups: every surface form the extractor recognizes AND every
+# candidate ``facts.subject`` spelling probed (lower()-compared). One tuple per
+# country so a match on any surface probes all its spellings. Conservative +
+# minimal by design (the seeded-world scope), like the M13/M15 maps above.
+_OFFICEHOLDER_COUNTRY_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("united states", "united states of america", "america", "usa"),
+    ("united kingdom", "great britain", "britain"),
+    ("russia", "russian federation"),
+    ("china", "people's republic of china"),
+    ("india",), ("france",), ("germany",), ("italy",), ("japan",),
+    ("canada",), ("mexico",), ("brazil",), ("argentina",), ("australia",),
+    ("turkey", "turkiye"), ("iran",), ("israel",), ("ukraine",),
+    ("saudi arabia",), ("south korea",), ("north korea",), ("south africa",),
+    ("indonesia",), ("pakistan",), ("venezuela",), ("slovenia",),
+    ("somalia",), ("sudan",), ("egypt",), ("nigeria",), ("poland",),
+    ("spain",), ("netherlands",),
+    ("democratic republic of the congo", "dr congo", "drc", "congo-kinshasa"),
+)
+# Uppercase-only acronym surfaces (NEVER matched case-insensitively — "us" /
+# "it" / "in" are ordinary English words) → their alias group.
+_OFFICEHOLDER_ACRONYMS: dict[str, tuple[str, ...]] = {
+    "US": _OFFICEHOLDER_COUNTRY_GROUPS[0],
+    "U.S.": _OFFICEHOLDER_COUNTRY_GROUPS[0],
+    "USA": _OFFICEHOLDER_COUNTRY_GROUPS[0],
+    "UK": _OFFICEHOLDER_COUNTRY_GROUPS[1],
+    "DRC": _OFFICEHOLDER_COUNTRY_GROUPS[-1],
+}
+
+# Role surface → the facts predicates whose CURRENT row is the reconciliation
+# BASIS (canonical lowercase-spaced forms — vocabulary.PREDICATE_CANONICAL).
+# "president" maps to BOTH office predicates: seeds store an executive
+# president under 'head of government' where a separate head of state exists
+# (e.g. Iran), and under 'head of state' elsewhere.
+_OFFICEHOLDER_ROLE_PREDICATES: dict[str, tuple[str, ...]] = {
+    "president": ("head of state", "head of government"),
+    "prime minister": ("head of government",),
+    "chancellor": ("head of government",),
+    "premier": ("head of government",),
+}
+_OFFICEHOLDER_FAMILY_PREDICATES: tuple[str, ...] = (
+    "head of state", "head of government",
+)
+_LEADER_OF_PREDICATE = "leader of"
+
+# A qualifier immediately before the match that makes the phrase NOT a
+# current-officeholder claim ("former President X" is correct prose about a
+# predecessor; "Vice President X" is a different office).
+_OFFICEHOLDER_SKIP_QUALIFIER_RE = re.compile(
+    r"(?:former|ex|past|previous|then|outgoing|incoming|late|deputy|vice|"
+    r"acting|interim)[-\s]+$",
+    re.IGNORECASE,
+)
+
+
+def _officeholder_country_alternation() -> str:
+    """The country alternation for the extractor regexes: case-insensitive full
+    names (longest-first so 'united states of america' beats 'united states')
+    plus the uppercase-only acronym branch."""
+    names = sorted(
+        {n for grp in _OFFICEHOLDER_COUNTRY_GROUPS for n in grp},
+        key=len, reverse=True,
+    )
+    ci = "|".join(re.escape(n) for n in names)
+    acro = "|".join(re.escape(a) for a in _OFFICEHOLDER_ACRONYMS)
+    return f"(?:(?i:{ci})|(?:{acro}))"
+
+
+_OFFICEHOLDER_NAME_RE = r"[A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3}"
+_OFFICEHOLDER_ROLE_RE = r"(?i:prime\s+minister|president|chancellor|premier)"
+_COUNTRY_ALT = _officeholder_country_alternation()
+
+# "<Country>['s] [current|sitting|incumbent|new] <Role> <Name>"
+_OFFICEHOLDER_COUNTRY_FIRST_RE = re.compile(
+    rf"\b(?P<country>{_COUNTRY_ALT})(?:['’]s)?\s+"
+    rf"(?:(?i:current|sitting|incumbent|new)\s+)?"
+    rf"(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
+    rf"(?P<name>{_OFFICEHOLDER_NAME_RE})"
+)
+# "<Role> <Name> of [the] <Country>"
+_OFFICEHOLDER_ROLE_FIRST_RE = re.compile(
+    rf"\b(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
+    rf"(?P<name>{_OFFICEHOLDER_NAME_RE})\s+of\s+(?:(?i:the)\s+)?"
+    rf"(?P<country>{_COUNTRY_ALT})(?![a-z0-9])"
+)
+
+
+@dataclass
+class OfficeholderClaim:
+    """One extracted "<person> holds <role> for <country>" claim."""
+
+    role: str                       # normalized role key (lowercase, spaced)
+    person: str                     # the claimed officeholder, as written
+    country_surface: str            # the country as written in the prose
+    country_aliases: tuple[str, ...]  # candidate facts.subject spellings (lower)
+
+
+def _country_aliases_for(surface: str) -> tuple[str, ...]:
+    if surface in _OFFICEHOLDER_ACRONYMS:
+        return _OFFICEHOLDER_ACRONYMS[surface]
+    s = surface.casefold()
+    for grp in _OFFICEHOLDER_COUNTRY_GROUPS:
+        if s in grp:
+            return grp
+    return (s,)
+
+
+def extract_officeholder_claims(text: str) -> list[OfficeholderClaim]:
+    """PURE lexical extraction of current-officeholder claims (no DB, no LLM).
+
+    Conservative: only the two explicit shapes; a preceding former/ex/vice/…
+    qualifier disqualifies the match (correct prose about a predecessor or a
+    different office must never enter the probe). De-duplicated on
+    (role, country, person). Never raises."""
+    if not text:
+        return []
+    out: list[OfficeholderClaim] = []
+    seen: set[tuple[str, str, str]] = set()
+    for regex in (_OFFICEHOLDER_COUNTRY_FIRST_RE, _OFFICEHOLDER_ROLE_FIRST_RE):
+        for m in regex.finditer(text):
+            window = text[max(0, m.start() - 24):m.start()]
+            if _OFFICEHOLDER_SKIP_QUALIFIER_RE.search(window):
+                continue
+            role = re.sub(r"\s+", " ", m.group("role")).strip().casefold()
+            if role not in _OFFICEHOLDER_ROLE_PREDICATES:
+                continue  # defensive — the alternation and the map must agree
+            surface = m.group("country").strip()
+            person = m.group("name").strip()
+            aliases = _country_aliases_for(surface)
+            key = (role, aliases[0], person.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(OfficeholderClaim(
+                role=role,
+                person=person,
+                country_surface=surface,
+                country_aliases=aliases,
+            ))
+    return out
+
+
+def _person_name_tokens(name: str) -> set[str]:
+    """Diacritic-folded, casefolded name tokens (len ≥ 3) for tolerant person
+    matching — 'Janša' matches 'Jansa', 'Donald J. Trump' matches 'Trump'."""
+    norm = unicodedata.normalize("NFKD", name or "")
+    norm = "".join(ch for ch in norm if not unicodedata.combining(ch))
+    return {t for t in re.split(r"[^\w'’\-]+", norm.casefold()) if len(t) >= 3}
+
+
+_CURRENT_OFFICEHOLDER_SQL = """
+    SELECT lower(predicate) AS predicate, subject, value
+      FROM facts
+     WHERE superseded_by IS NULL
+       AND valid_until IS NULL
+       AND (
+             (lower(subject) = ANY($1::text[])
+              AND lower(predicate) = ANY($2::text[]))
+          OR (lower(predicate) = $3 AND lower(value) = ANY($1::text[]))
+           )
+"""
+
+#: At most this many facts-reconciled spans per finding (bounded, skimmable).
+_STALE_VS_FACTS_MAX_SPANS = 4
+#: At most this many extracted claims probed per finding (bounds the queries).
+_STALE_VS_FACTS_MAX_CLAIMS = 8
+
+
+async def stale_leader_vs_facts_spans(
+    conn: Any, text: str,
+) -> list[UnsupportedSpan]:
+    """FLAG officeholder claims that contradict the CURRENT facts-table row.
+
+    For each extracted claim, reads the country's OPEN officeholder facts
+    (country-subject 'head of state'/'head of government' rows + person-subject
+    'leader of' rows; ``superseded_by IS NULL AND valid_until IS NULL``) and
+    emits a ``stale_leader_vs_facts`` span when the claimed office has a
+    current fact naming someone else AND the claimed person matches NO current
+    family officeholder. Fail-open + degrade-not-drop throughout; never raises.
+    """
+    try:
+        claims = extract_officeholder_claims(text)
+    except Exception as exc:  # pragma: no cover — pure path, defensive only
+        logger.warning("verify.stale_leader_vs_facts.extract_failed err=%s", exc)
+        return []
+    spans: list[UnsupportedSpan] = []
+    for claim in claims[:_STALE_VS_FACTS_MAX_CLAIMS]:
+        try:
+            rows = await conn.fetch(
+                _CURRENT_OFFICEHOLDER_SQL,
+                list(claim.country_aliases),
+                list(_OFFICEHOLDER_FAMILY_PREDICATES),
+                _LEADER_OF_PREDICATE,
+            )
+        except Exception as exc:  # degrade-not-drop — facts read must not block
+            logger.warning(
+                "verify.stale_leader_vs_facts.read_failed country=%s err=%s",
+                claim.country_surface, exc,
+            )
+            return spans
+        role_preds = set(_OFFICEHOLDER_ROLE_PREDICATES[claim.role])
+        basis = sorted({
+            str(r["value"]) for r in rows
+            if r["predicate"] in role_preds and r["value"]
+        })
+        if not basis:
+            continue  # no CURRENT fact for the claimed office — fail-open
+        holders = [
+            str(r["value"]) for r in rows
+            if r["predicate"] in _OFFICEHOLDER_FAMILY_PREDICATES and r["value"]
+        ] + [
+            str(r["subject"]) for r in rows
+            if r["predicate"] == _LEADER_OF_PREDICATE and r["subject"]
+        ]
+        claimed_tokens = _person_name_tokens(claim.person)
+        if not claimed_tokens:
+            continue
+        if any(claimed_tokens & _person_name_tokens(h) for h in holders):
+            continue  # matches a current family officeholder — consistent
+        spans.append(UnsupportedSpan(
+            text=(
+                f"officeholder mismatch vs facts — the finding names "
+                f"{claim.person!r} as {claim.role} of {claim.country_surface}, "
+                f"but the current open officeholder fact(s) name "
+                f"{', '.join(basis[:3])}. Flag-only: the seed facts can "
+                f"themselves be stale — never auto-corrected"
+            )[:400],
+            reason=_STALE_LEADER_VS_FACTS_REASON,
+        ))
+        if len(spans) >= _STALE_VS_FACTS_MAX_SPANS:
+            break
     return spans
 
 
@@ -1989,6 +2645,16 @@ def _fold_world_knowledge_guards(
     leak = cross_target_leak_span(title=title, body=body, target_id=target_id)
     if leak is not None:
         guard_spans = guard_spans + [leak]
+    return _fold_guard_spans(floor, guard_spans)
+
+
+def _fold_guard_spans(
+    floor: FaithfulnessReport, guard_spans: list[UnsupportedSpan],
+) -> FaithfulnessReport:
+    """Fold guard-emitted spans (M13/M15/E-1) into a floor report: each is an
+    extra CHECKABLE-but-UNSUPPORTED span (demotes faithfulness) plus a failed
+    ledger row. Empty spans → the floor is returned UNCHANGED (byte-identical).
+    """
     if not guard_spans:
         return floor
     checkable = floor.checkable_claims + len(guard_spans)
@@ -2002,6 +2668,10 @@ def _fold_world_knowledge_guards(
         judge_status=floor.judge_status,
         judge_unavailable_reason=floor.judge_unavailable_reason,
         confidence_ceiling=floor.confidence_ceiling,
+        # P2-4: each guard hit is a checkable-but-failed ledger row (hard_fail —
+        # entity scramble class), text mirroring its span.
+        claim_verdicts=floor.claim_verdicts
+        + [ClaimVerdict.failed(s.text, s.reason, list(s.markers)) for s in guard_spans],
     )
 
 
@@ -2076,6 +2746,7 @@ async def _maybe_llm_judge(
     body: str,
     citations: Any,
     judge_llm: Any | None,
+    judge_prompt_profile: str | None = None,
 ) -> FaithfulnessReport:
     """Optionally refine the floor with an LLM judge (flag-gated, soft-fail).
 
@@ -2084,7 +2755,9 @@ async def _maybe_llm_judge(
     evidence?" → supported / unsupported / contradicted.  ANY error, an absent
     handler, or the flag being off → return the deterministic floor LABELLED
     ``judge-unavailable`` (``judge_status`` stays ``'deterministic'``).  NEVER
-    fabricates a score.
+    fabricates a score. ``judge_prompt_profile`` (P2-4, default ``current`` via
+    env fallback) selects the generic judge system prompt's independence
+    posture; ``current`` is byte-identical to the pre-P2-4 prompt.
     """
     if not _llm_judge_enabled():
         floor.judge_unavailable_reason = "flag_off"
@@ -2097,11 +2770,14 @@ async def _maybe_llm_judge(
         # caller passes a resolved ``LLMHandlerLike`` — same shape the critic
         # uses).  We keep the prompt here but the score refinement is the
         # caller's contract surface; on any transport error we soft-fail to the
-        # floor.  (The live judge component points at the cross-family
-        # self-hosted Llama-3.1-8B at deploy; that is a REGISTERED component,
-        # not hardcoded here.)
+        # floor.  (The judge component is whatever the P2-4 judge ROUTE
+        # resolved at the call site — a REGISTERED component, not hardcoded
+        # here; today the core producer plane.)
         verdicts, branch_scores = await _run_judge(
-            judge_llm, body=body, citations=citations
+            judge_llm,
+            body=body,
+            citations=citations,
+            judge_prompt_profile=judge_prompt_profile,
         )
     except Exception as exc:  # noqa: BLE001 — soft-fail, never break the run
         logger.warning("verify.faithfulness.judge_failed err=%s", exc)
@@ -2167,6 +2843,29 @@ async def _maybe_llm_judge(
     refined_score = (
         1.0 if effective_checkable == 0 else supported / effective_checkable
     )
+    # P2-4 — the per-claim LEDGER on the judge path: the judge's verdicts are
+    # authoritative for every prose span it graded (supported rows included —
+    # previously recorded nowhere); floor ledger rows whose text the judge did
+    # NOT grade carry over unchanged (structured-indicator rows, world-knowledge
+    # guard hits — the same dedup-by-text rule the span reconciliation uses).
+    # NOTE: carried SUPPORTED non-prose rows are provenance, not arithmetic —
+    # the headline tallies above are untouched.
+    subclaim = _uses_subclaim_convention(citations)
+    judge_ledger: list[ClaimVerdict] = []
+    for claim_text, verdict in verdicts:
+        markers = _markers_in_claim(claim_text, subclaim=subclaim)
+        if verdict == "supported":
+            judge_ledger.append(ClaimVerdict.supported(claim_text, list(markers)))
+        else:
+            reason = (
+                "judge_contradicted" if verdict == "contradicted" else "judge_unsupported"
+            )
+            judge_ledger.append(
+                ClaimVerdict.failed(claim_text, reason, list(markers))
+            )
+    carried_ledger = [
+        cv for cv in floor.claim_verdicts if cv.text.strip() not in judged_texts
+    ]
     return FaithfulnessReport(
         faithfulness_score=refined_score,
         checkable_claims=max(floor.checkable_claims, effective_checkable),
@@ -2183,6 +2882,7 @@ async def _maybe_llm_judge(
         # branch_versions. Empty on the deterministic path (never reached here)
         # and on the M14 whole-finding survey path (one rubric, no partition).
         branch_scores=branch_scores,
+        claim_verdicts=judge_ledger + carried_ledger,
     )
 
 
@@ -2198,6 +2898,47 @@ _GENERIC_JUDGE_SYSTEM = (
     "penalize a claim merely for adding interpretation to a supported fact. "
     "Output only the JSON object."
 )
+
+# P2-4 — the INDEPENDENCE-POSTURE variant (profile ``independent``), STAGED NOT
+# LIVE (default profile is ``current``; flipping is a measured, operator-gated
+# step, first A/B'd via scripts/temp_ab_replay.py --judge-profile). Same
+# calibrated verdict rubric as _GENERIC_JUDGE_SYSTEM — supported/unsupported/
+# contradicted definitions are kept materially identical so an A/B isolates the
+# POSTURE variable — but the framing is an adversarial INDEPENDENT reviewer of
+# ANOTHER analyst's claims, never "check your own work": the judge is told it
+# did not write the claims, owes them no deference, and must ground every
+# verdict in the shown evidence rather than its own knowledge or charity.
+_INDEPENDENT_JUDGE_SYSTEM = (
+    "You are an INDEPENDENT faithfulness reviewer. The claims below were "
+    "written by ANOTHER analyst — you did not write them, you know nothing "
+    "about that analyst, and you owe their work no deference. You are the "
+    "adversarial second reader: your job is to find where the analyst's prose "
+    "outruns or misstates the cited evidence, and your ONLY ground truth is "
+    "the evidence shown to you — never your own background knowledge, and "
+    "never the assumption that the analyst 'must have had a reason'. "
+    "A claim is SUPPORTED when its factual content is consistent with and "
+    "grounded in the cited evidence — reasonable analytical interpretation, "
+    "framing, aggregation, severity/risk judgement, and negative reads (e.g. "
+    "'this is routine, not escalation') ARE permitted and count as supported. "
+    "Mark UNSUPPORTED only when the claim asserts a SPECIFIC fact the cited "
+    "evidence does not contain (an invented event, number, name, or place); "
+    "mark CONTRADICTED only when the evidence directly refutes it. Do NOT "
+    "penalize a claim merely for adding interpretation to a supported fact, "
+    "and do NOT rescue an unsupported claim with facts you happen to know. "
+    "Output only the JSON object."
+)
+
+
+def _generic_judge_system(profile: str | None = None) -> str:
+    """The generic judge system prompt for a resolved prompt profile.
+
+    ``current`` (default) → the calibrated live prompt, byte-identical;
+    ``independent`` → the staged adversarial-reviewer variant. The specialized
+    M14 survey / V3 absence rubrics are deliberately NOT profile-switched.
+    """
+    if _judge_prompt_profile(profile) == JUDGE_PROFILE_INDEPENDENT:
+        return _INDEPENDENT_JUDGE_SYSTEM
+    return _GENERIC_JUDGE_SYSTEM
 
 
 async def _judge_claim_partition(
@@ -2267,6 +3008,7 @@ async def _run_judge(
     *,
     body: str,
     citations: Any,
+    judge_prompt_profile: str | None = None,
 ) -> tuple[list[tuple[str, str]], dict[str, dict[str, int | float]]]:
     """Call the judge LLM; return ``([(claim_text, verdict), ...], branch_scores)``.
 
@@ -2296,8 +3038,15 @@ async def _run_judge(
     Kept deliberately thin — a malformed / empty response yields ``[]`` (the
     caller then soft-fails to the floor). This is the ONLY place that talks to
     the judge model; tests mock ``judge_llm.chat_complete``.
+
+    P2-4: ``judge_prompt_profile`` selects the GENERIC system prompt's
+    independence posture (``current`` default = byte-identical live prompt;
+    ``independent`` = the staged adversarial-reviewer variant). The M14 survey
+    and V3 absence rubrics are profile-invariant by design.
     """
     import json
+
+    generic_system = _generic_judge_system(judge_prompt_profile)
 
     # H1: the judge grades EVERY prose span — including the BLUF / synthesis /
     # absence claims the FLOOR exempts — so a fabricated uncited claim can't hide
@@ -2414,7 +3163,7 @@ async def _run_judge(
             judge_llm,
             claims=shared_claims,
             evidence_prompt=shared_prompt,
-            system=_GENERIC_JUDGE_SYSTEM,
+            system=generic_system,
         )
         if not shared_verdicts:
             return [], {}  # judge_empty on the load-bearing partition → soft-fail
@@ -2435,7 +3184,7 @@ async def _run_judge(
             judge_llm,
             claims=absence_claims,
             evidence_prompt=absence_prompt,
-            system=absence_profile.judge_system or _GENERIC_JUDGE_SYSTEM,
+            system=absence_profile.judge_system or generic_system,
         )
         if not absence_verdicts:
             return [], {}  # judge_empty on the absence partition → soft-fail
@@ -2470,6 +3219,8 @@ async def verify_finding_faithfulness(
     indicators: Any = None,
     title: str = "",
     target_id: str | None = None,
+    judge_prompt_profile: str | None = None,
+    facts_conn: Any | None = None,
 ) -> FaithfulnessReport:
     """MANDATORY faithfulness verify over ONE finding's cited prose.
 
@@ -2516,6 +3267,19 @@ async def verify_finding_faithfulness(
         ``None`` → the M15 cross-target guard is a no-op (byte-identical). When a
         ``country_*`` desk id is passed, a finding that names ONLY other countries
         is FLAGGED (demotes effective_confidence), never deleted.
+    judge_prompt_profile:
+        OPTIONAL (P2-4) — the judge PROMPT PROFILE: ``'current'`` (default; the
+        calibrated live prompt, byte-identical) or ``'independent'`` (the staged
+        adversarial-reviewer posture — dormant until an operator flips it).
+        ``None`` → the ``LEGBA_JUDGE_PROMPT_PROFILE`` env, then ``current``.
+    facts_conn:
+        OPTIONAL (E-1) — a live DB connection for the facts-reconciled
+        officeholder guard (``stale_leader_vs_facts``). Default ``None`` →
+        the guard is a no-op (byte-identical for every existing caller). When
+        present, a claim naming a person in an officeholder role for a country
+        is probed against the CURRENT facts-table officeholder and a mismatch
+        FLAGS (demotes, never auto-corrects — the seed facts can themselves be
+        stale); a facts read failure degrades to no flag.
     """
     floor = _deterministic_floor(body, citations, finding_confidence)
     floor = _fold_indicators(floor, indicators)
@@ -2523,8 +3287,19 @@ async def verify_finding_faithfulness(
     floor = _fold_world_knowledge_guards(
         floor, title=title, body=body, target_id=target_id
     )
+    if facts_conn is not None:
+        # E-1: the facts-reconciled officeholder guard (never raises — degrade-
+        # not-drop lives inside stale_leader_vs_facts_spans).
+        floor = _fold_guard_spans(
+            floor,
+            await stale_leader_vs_facts_spans(facts_conn, f"{title}\n{body}"),
+        )
     return await _maybe_llm_judge(
-        floor, body=body, citations=citations, judge_llm=judge_llm
+        floor,
+        body=body,
+        citations=citations,
+        judge_llm=judge_llm,
+        judge_prompt_profile=judge_prompt_profile,
     )
 
 
@@ -2536,6 +3311,7 @@ def build_faithfulness_critique_payload(
     analyzed_analyst_version: str = "",
     analyzed_model: str = "",
     judge_model: str = "",
+    judge_llm_ref: str = "",
 ) -> dict[str, Any]:
     """Build the ``CritiquePayload``-shaped dict for the faithfulness verdict.
 
@@ -2557,6 +3333,17 @@ def build_faithfulness_critique_payload(
     ``min(confidence, faithfulness, sub-claim ceiling)`` for a composition — a
     hedge-laundering clause over a weak sub-claim demotes to ≤ that sub-claim,
     and correlated sub-claims cannot inflate the ceiling.
+
+    P2-4 (additive, labels + persistence only — scores/floors/gates untouched):
+
+      * ``judge_llm_ref`` — the RESOLVED judge stack-ref (the P2-4 JudgeRoute
+        component id) stamped top-level (CritiquePayload field) AND into
+        ``data.verification`` so provenance records which model judged, forever.
+        ``""`` = floor-only (no judge wired).
+      * ``data.verification.claim_verdicts`` — the size-bounded per-claim
+        verdict LEDGER (supported + hard_fail + soft_fail rows) with an honest
+        ``claim_verdicts_truncated`` flag; each ``unsupported_spans`` entry
+        additionally carries its ``fail_class`` (via ``UnsupportedSpan.as_dict``).
     """
     score = report.faithfulness_score
     ceiling = report.confidence_ceiling
@@ -2602,6 +3389,10 @@ def build_faithfulness_critique_payload(
         for kind in branch_scores
         if kind in _JUDGE_PROFILES
     }
+    # P2-4: the size-bounded per-claim ledger + honest truncation flag.
+    claim_verdicts, claim_verdicts_truncated = _bounded_claim_verdicts(
+        report.claim_verdicts
+    )
     return {
         "title": f"Faithfulness verify (score {overall:.2f})",
         "body": "\n".join(body_lines)[:65536],
@@ -2615,6 +3406,9 @@ def build_faithfulness_critique_payload(
         "analyzed_analyst_version": analyzed_analyst_version[:64],
         "analyzed_model": analyzed_model[:128],
         "judge_model": judge_model[:128],
+        # P2-4: the RESOLVED judge stack-ref (JudgeRoute component id) —
+        # provenance for which model judged, stamped on the row forever.
+        "judge_llm_ref": judge_llm_ref[:256],
         "scores": {"faithfulness": score},
         # The gate reads data->>'overall_score' off the analyst_outputs row; the
         # whole CritiquePayload is model_dumped into the data JSONB, so this
@@ -2638,6 +3432,407 @@ def build_faithfulness_critique_payload(
                 # or the M14 whole-finding survey rubric graded the entire list).
                 "branch_scores": branch_scores,
                 "branch_versions": branch_versions,
+                # P2-4 additive fields: the judge-route provenance stamp, and the
+                # full per-claim verdict ledger (supported verdicts included —
+                # previously recorded nowhere), size-bounded with an honest flag.
+                "judge_llm_ref": judge_llm_ref[:256] or None,
+                "claim_verdicts": claim_verdicts,
+                "claim_verdicts_truncated": claim_verdicts_truncated,
+            }
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# C2b (P4-6) — the ``structural_claims`` verify PROFILE
+# ---------------------------------------------------------------------------
+#
+# The honesty architecture's ONE documented exception (S-1-era / C2) is the
+# deterministic STRUCTURAL analysts (graph_mining, geo_convergence_scan,
+# indicator_tracker, thematic_proposal, …): they emit findings OUTSIDE the
+# mandatory faithfulness verify pass at flat conf=1.0, shown with an
+# ``unverified — structural`` badge (``STRUCTURAL_VERIFY_EXEMPT_ANALYSTS`` in
+# provenance.kinds), because their product is a COUNT / AGGREGATE over substrate
+# rows, not cited LLM prose the faithfulness judge can grade.
+#
+# But a structural finding that ASSERTS A CHECKABLE QUANTITY ("3 distinct source
+# families converged in cell X", "currently_formed_bins = cell + country bins",
+# "these N sources co-carry claim Y") CAN be verified — not by an LLM
+# faithfulness judge (this is not cited prose), but by DETERMINISTIC
+# RE-DERIVATION: recompute the asserted quantity from the constituent set the
+# finding itself recorded (its ``derived_from`` rows / the per-bin breakdown
+# captured in ``data``) and check the finding's number MATCHES. A mismatch flags
+# a structural analyst that MISCOUNTS.
+#
+# CONTRACT — the finding declares its checkable claims in
+# ``data['structural_claims']`` as a list of self-describing claim objects, so
+# this module re-derives GENERICALLY (verify.py imports nothing analyst-specific
+# and stays slim-image-safe; the analyst owns WHAT to claim, this seam owns HOW
+# to check it):
+#
+#   {
+#     "id": "families_cell_35_51",                     # optional label
+#     "statement": "3 distinct source families in cell 35,51",  # human text
+#     "op": "distinct_count" | "count" | "sum" | "equals",
+#     "asserted": 3,                                   # the number the finding CLAIMS
+#     "basis": ["news", "gis", "health"],              # the recorded constituent set
+#     "field": "family",                               # optional dict-projection key
+#   }
+#
+#   * count          — asserted == len(basis)
+#   * distinct_count — asserted == len({project(b, field) for b in basis})
+#   * sum            — asserted == sum(basis)   (basis = a list of numbers)
+#   * equals         — asserted == basis        (a scalar identity; basis is the
+#                                                recomputed expected value)
+#   * basis == ``"@derived_from"`` (sentinel) — the re-derivation runs against
+#     the finding's ACTUAL ``derived_from`` id list (passed in by the caller),
+#     so a "N contributing rows" claim is checked against the real lineage,
+#     not a number the analyst also typed.
+#
+# HONESTY. A claim whose op/basis can't be re-derived (malformed, unknown op, a
+# non-list basis for a set op) is ``unverifiable_structural`` — NEVER a fake
+# pass. A finding with NO structural_claims block is a NO-OP (the caller writes
+# no critique; the row keeps its honest ``unverified — structural`` badge). The
+# finding is stamped ``structural_verified`` only when EVERY declared claim
+# re-derived AND matched (≥1 checkable, zero miscounts, zero unverifiable).
+# ---------------------------------------------------------------------------
+
+#: The finding-``data`` key carrying the declared structural claims.
+STRUCTURAL_CLAIMS_DATA_KEY = "structural_claims"
+#: A ``basis`` sentinel selecting the finding's actual ``derived_from`` id list.
+STRUCTURAL_DERIVED_FROM_SENTINEL = "@derived_from"
+
+#: The re-derivation ops this profile understands.
+_STRUCTURAL_OPS = frozenset({"count", "distinct_count", "sum", "equals"})
+
+#: Per-claim verdict labels.
+STRUCTURAL_SUPPORTED = "supported"
+STRUCTURAL_MISCOUNT = "structural_miscount"
+STRUCTURAL_UNVERIFIABLE = "unverifiable_structural"
+
+#: Bound on the persisted per-claim ledger (mirrors the faithfulness cap posture).
+_STRUCTURAL_VERDICTS_CAP = 120
+_STRUCTURAL_STATEMENT_CHARS = 300
+
+# OFF-SAFE gate (C2b point 4). The structural critique is ALWAYS written and its
+# verdict ALWAYS shown (the badge + the data.verification detail). Whether it
+# DEMOTES effective_confidence (via the finding↔critique ``overall_score`` gate)
+# is behind this flag, code DEFAULT OFF ("compute-and-show, do-not-gate"): when
+# off the critique's ``overall_score`` is pinned to 1.0 so a miscount never
+# lowers a structural finding's surfaced confidence; when on it carries the
+# honest re-derivation fraction so a miscount demotes like any critic score.
+_STRUCTURAL_VERIFY_GATE_ENV = "LEGBA_STRUCTURAL_VERIFY_GATE"
+
+
+def structural_verify_gate_enabled() -> bool:
+    """Whether a structural critique's score DEMOTES effective_confidence. Off
+    by default (compute-and-show, not-yet-gate — C2b OFF-safe posture)."""
+    raw = os.getenv(_STRUCTURAL_VERIFY_GATE_ENV)
+    if raw is None:
+        return False
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass
+class StructuralClaimVerdict:
+    """One re-derived structural claim's verdict.
+
+    ``verdict`` ∈ {``supported`` (re-derived == asserted), ``structural_miscount``
+    (re-derived != asserted — the finding misstates its own evidence),
+    ``unverifiable_structural`` (the claim's op/basis could not be re-derived —
+    NEVER a fake pass)}.
+    """
+
+    claim_id: str
+    statement: str
+    op: str
+    asserted: Any
+    rederived: Any
+    verdict: str
+    detail: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.claim_id[:120],
+            "statement": self.statement[:_STRUCTURAL_STATEMENT_CHARS],
+            "op": self.op,
+            "asserted": self.asserted,
+            "rederived": self.rederived,
+            "verdict": self.verdict,
+            "detail": self.detail[:200],
+        }
+
+
+@dataclass
+class StructuralVerifyReport:
+    """Result of the ``structural_claims`` re-derivation over ONE finding.
+
+    ``had_claims`` is False when the finding carried no (non-empty)
+    ``structural_claims`` block — the caller then writes NO critique (a no-op;
+    the row keeps its honest ``unverified — structural`` badge). Otherwise the
+    per-claim ``claim_verdicts`` carry each re-derivation outcome.
+    """
+
+    claim_verdicts: list[StructuralClaimVerdict] = field(default_factory=list)
+    had_claims: bool = False
+
+    @property
+    def supported(self) -> int:
+        return sum(1 for v in self.claim_verdicts if v.verdict == STRUCTURAL_SUPPORTED)
+
+    @property
+    def miscount(self) -> int:
+        return sum(1 for v in self.claim_verdicts if v.verdict == STRUCTURAL_MISCOUNT)
+
+    @property
+    def unverifiable(self) -> int:
+        return sum(
+            1 for v in self.claim_verdicts if v.verdict == STRUCTURAL_UNVERIFIABLE
+        )
+
+    @property
+    def checkable(self) -> int:
+        """Claims that WERE re-derivable (supported + miscount)."""
+        return self.supported + self.miscount
+
+    @property
+    def structural_verified(self) -> bool:
+        """True only when EVERY declared claim re-derived AND matched (≥1
+        checkable, zero miscounts, zero unverifiable) — the honest bar for the
+        ``structural-verified`` badge. Any mismatch or any non-re-derivable
+        claim keeps the finding UN-certified (honest ``unverified — structural``).
+        """
+        return (
+            self.had_claims
+            and self.checkable >= 1
+            and self.miscount == 0
+            and self.unverifiable == 0
+        )
+
+    @property
+    def score(self) -> float:
+        """Fraction of RE-DERIVABLE claims that matched; 1.0 when none is
+        re-derivable (we never fabricate a demotion for an unverifiable claim —
+        the badge stays honest via ``structural_verified``, not the score)."""
+        c = self.checkable
+        return 1.0 if c == 0 else self.supported / c
+
+
+def _structural_project_distinct(basis: Any, field_name: Any) -> tuple[int | None, bool]:
+    """``(distinct_count, ok)`` — the count of distinct projected members, or
+    ``ok=False`` when the basis/field can't be projected (→ unverifiable)."""
+    if not isinstance(basis, (list, tuple)):
+        return None, False
+    keys: list[Any] = []
+    for item in basis:
+        if field_name is not None:
+            if not isinstance(item, Mapping) or field_name not in item:
+                return None, False
+            keys.append(item[field_name])
+        else:
+            keys.append(item)
+    try:
+        return len(set(keys)), True
+    except TypeError:
+        return None, False  # unhashable members → not re-derivable, honest
+
+
+def _structural_sum(basis: Any) -> tuple[float | int | None, bool]:
+    """``(sum, ok)`` over a list of numbers (bools rejected — a stray ``True``
+    is not a number). Preserves int when every member is int."""
+    if not isinstance(basis, (list, tuple)):
+        return None, False
+    total: float = 0.0
+    all_int = True
+    for item in basis:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return None, False
+        total += item
+        if not isinstance(item, int):
+            all_int = False
+    return (int(total) if all_int else total), True
+
+
+def _structural_values_match(asserted: Any, rederived: Any) -> bool:
+    """Equality with float tolerance for numeric pairs (bools compared exactly)."""
+    if isinstance(asserted, bool) or isinstance(rederived, bool):
+        return asserted == rederived
+    if isinstance(asserted, (int, float)) and isinstance(rederived, (int, float)):
+        return abs(float(asserted) - float(rederived)) <= 1e-9
+    return asserted == rederived
+
+
+def _verify_one_structural_claim(
+    raw: Any, idx: int, derived_from_ids: list[str]
+) -> StructuralClaimVerdict:
+    """Re-derive ONE declared claim and classify it. Never raises — a malformed
+    claim is ``unverifiable_structural`` (honest), never a fabricated pass."""
+    if not isinstance(raw, Mapping):
+        return StructuralClaimVerdict(
+            claim_id=f"claim_{idx}", statement="", op="", asserted=None,
+            rederived=None, verdict=STRUCTURAL_UNVERIFIABLE,
+            detail="claim is not an object",
+        )
+    claim_id = str(raw.get("id") or f"claim_{idx}")
+    statement = str(raw.get("statement") or "")
+    op = str(raw.get("op") or "")
+    asserted = raw.get("asserted")
+    field_name = raw.get("field")
+    basis = raw.get("basis")
+    # The ``@derived_from`` sentinel re-derives against the finding's ACTUAL
+    # lineage ids (the substrate rows the finding derives from), not a number
+    # the analyst also typed into its own payload.
+    if basis == STRUCTURAL_DERIVED_FROM_SENTINEL:
+        basis = list(derived_from_ids)
+
+    def _unverifiable(detail: str) -> StructuralClaimVerdict:
+        return StructuralClaimVerdict(
+            claim_id=claim_id, statement=statement, op=op, asserted=asserted,
+            rederived=None, verdict=STRUCTURAL_UNVERIFIABLE, detail=detail,
+        )
+
+    if op not in _STRUCTURAL_OPS:
+        return _unverifiable(f"unknown op {op!r}")
+    if asserted is None:
+        return _unverifiable("no asserted value")
+
+    if op == "count":
+        if not isinstance(basis, (list, tuple)):
+            return _unverifiable("basis is not a list")
+        rederived: Any = len(basis)
+    elif op == "distinct_count":
+        rederived, ok = _structural_project_distinct(basis, field_name)
+        if not ok:
+            return _unverifiable("basis/field not projectable")
+    elif op == "sum":
+        rederived, ok = _structural_sum(basis)
+        if not ok:
+            return _unverifiable("basis is not a list of numbers")
+    else:  # equals — basis IS the recomputed expected scalar
+        if basis is None:
+            return _unverifiable("no expected value")
+        rederived = basis
+
+    matched = _structural_values_match(asserted, rederived)
+    return StructuralClaimVerdict(
+        claim_id=claim_id,
+        statement=statement,
+        op=op,
+        asserted=asserted,
+        rederived=rederived,
+        verdict=STRUCTURAL_SUPPORTED if matched else STRUCTURAL_MISCOUNT,
+        detail="" if matched else f"asserted {asserted!r} != re-derived {rederived!r}",
+    )
+
+
+def verify_structural_claims(
+    *,
+    data: Any,
+    derived_from: list[Any] | None = None,
+) -> StructuralVerifyReport:
+    """The ``structural_claims`` verify profile — DETERMINISTIC re-derivation of
+    a structural finding's asserted quantities (C2b / P4-6).
+
+    Reads ``data[STRUCTURAL_CLAIMS_DATA_KEY]`` (a list of self-describing claim
+    objects), re-derives each asserted quantity from the constituent set the
+    finding recorded, and returns a :class:`StructuralVerifyReport`. A claim that
+    can't be re-derived is ``unverifiable_structural`` (never a fake pass). A
+    finding carrying no claims block returns ``had_claims=False`` (the caller
+    writes no critique). ``derived_from`` supplies the finding's actual lineage
+    ids for the ``@derived_from`` basis sentinel; DB-free + pure so verify.py
+    stays slim-image-safe.
+    """
+    claims = data.get(STRUCTURAL_CLAIMS_DATA_KEY) if isinstance(data, Mapping) else None
+    if not isinstance(claims, (list, tuple)) or not claims:
+        return StructuralVerifyReport(claim_verdicts=[], had_claims=False)
+    df_ids = [str(x) for x in (derived_from or []) if x is not None and str(x)]
+    verdicts = [
+        _verify_one_structural_claim(raw, i, df_ids) for i, raw in enumerate(claims)
+    ]
+    return StructuralVerifyReport(claim_verdicts=verdicts, had_claims=True)
+
+
+def build_structural_critique_payload(
+    report: StructuralVerifyReport,
+    *,
+    analyzed_output_id: UUID,
+    analyzed_analyst_id: str = "",
+    analyzed_analyst_version: str = "",
+    gate: bool | None = None,
+) -> dict[str, Any]:
+    """Build the ``CritiquePayload``-shaped dict for a structural verdict.
+
+    Uses the EXISTING critique contract (``analyzed_output_id`` + top-level
+    ``overall_score`` + ``data.verification``) so every faithfulness reader — the
+    finding↔critique gate, the reads-API verification surface — works unchanged.
+
+    OFF-safe (C2b point 4): ``overall_score`` is pinned to **1.0** unless the
+    ``LEGBA_STRUCTURAL_VERIFY_GATE`` flag is on (``gate`` overrides the env for
+    tests). Off ⇒ the critique is written + the verdict shown (badge +
+    verification detail) but effective_confidence is NEVER demoted (min(conf,
+    1.0) == conf) — compute-and-show, do-not-gate. On ⇒ ``overall_score`` is the
+    honest re-derivation fraction, so a miscount demotes via the same
+    ``effective_confidence = min(confidence, overall_score)`` gate as any critic.
+
+    ``data.verification`` carries a ``structural_verify: true`` MARKER and the
+    ``structural_verified`` boolean the reads-API reads to flip the badge from
+    ``unverified — structural`` to ``structural-verified``, plus the per-claim
+    ledger so the operator sees WHAT was re-derived (and any miscount).
+    """
+    gated = structural_verify_gate_enabled() if gate is None else gate
+    honest_score = report.score
+    overall = honest_score if gated else 1.0
+    verified = report.structural_verified
+
+    if report.miscount:
+        headline = f"FLAGGED — {report.miscount} miscount(s)"
+    elif verified:
+        headline = "verified"
+    else:
+        headline = "unverifiable"
+
+    body_lines = [
+        f"Structural verify of finding {analyzed_output_id}",
+        f"  structural_verified={verified}",
+        f"  claims: checkable={report.checkable} supported={report.supported} "
+        f"miscount={report.miscount} unverifiable={report.unverifiable}",
+        f"  gate={'on' if gated else 'off (compute-and-show, not demoting)'}"
+        f" overall_score={overall:.2f}",
+    ]
+    for v in report.claim_verdicts[:20]:
+        body_lines.append(f"  - [{v.verdict}] {v.statement[:160] or v.claim_id}")
+
+    ledger = [v.as_dict() for v in report.claim_verdicts[:_STRUCTURAL_VERDICTS_CAP]]
+    ledger_truncated = len(report.claim_verdicts) > _STRUCTURAL_VERDICTS_CAP
+    return {
+        "title": f"Structural verify ({headline})",
+        "body": "\n".join(body_lines)[:65536],
+        "confidence": overall,
+        "tags": ["verify", "structural", "structural_verified" if verified else "structural_unverified"],
+        "analyzed_output_id": analyzed_output_id,
+        "analyzed_analyst_id": analyzed_analyst_id[:256],
+        "analyzed_analyst_version": analyzed_analyst_version[:64],
+        "scores": {"structural": honest_score},
+        # The gate JOIN key (data->>'overall_score'). Pinned to 1.0 when the gate
+        # flag is off so no consumer (reads-API is title-pinned to Faithfulness
+        # anyway; the query-port laterals are unpinned) can demote a structural
+        # finding — the OFF-safe default.
+        "overall_score": overall,
+        "data": {
+            "verification": {
+                # MARKER — this is a structural re-derivation verdict, not a
+                # faithfulness one. The reads-API badge derivation keys on it.
+                "structural_verify": True,
+                "structural_verified": verified,
+                "checkable_claims": report.checkable,
+                "supported_claims": report.supported,
+                "miscount_claims": report.miscount,
+                "unverifiable_claims": report.unverifiable,
+                "overall_score": round(overall, 4),
+                "structural_score": round(honest_score, 4),
+                "gate": gated,
+                "claim_verdicts": ledger,
+                "claim_verdicts_truncated": ledger_truncated,
             }
         },
     }

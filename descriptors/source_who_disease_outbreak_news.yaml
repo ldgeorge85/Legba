@@ -1,0 +1,89 @@
+# P3-6 Wave-A (A1) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# WHO Disease Outbreak News, structured OData JSON API (richer than any WHO RSS: per-outbreak Summary/Assessment fields, same-day items). Complements the existing source.who.news RSS (health/hazard desks) — a NEW json_api source, not a re-point.
+# Verified live 2026-07-02 (item same-day). Keyless.
+#
+# source_class: official. Credibility host who.int (seeded 0.90/gov, state_affiliation True by the registrar).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route live.
+
+identity:
+  id: source.who.disease_outbreak_news
+  name: WHO — Disease Outbreak News (JSON)
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: p3_6_wave_a
+  created: "2026-07-27T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [health, outbreak, hazard, gov, global, wave_a]
+  source_class: official
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "3 1-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  # OData response wraps items in `value`; field names follow WHO's OData shape. HTML lives inside the JSON string fields. VERIFY the exact field paths against a live probe before activating (draft gate).
+  url_template:
+    factory_kind: text
+    raw: "https://www.who.int/api/news/diseaseoutbreaknews?%24top=50&%24orderby=PublicationDateAndTime%20desc"
+  items_path:
+    factory_kind: text
+    raw: "value"
+  id_path:
+    factory_kind: text
+    raw: "Id"
+  title_path:
+    factory_kind: text
+    raw: "Title"
+  timestamp_path:
+    factory_kind: text
+    raw: "PublicationDateAndTime"
+  body_path:
+    factory_kind: text
+    raw: "Summary"
+  language:
+    factory_kind: text
+    raw: "en"
+  max_items_per_pull:
+    factory_kind: number
+    raw: 50
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

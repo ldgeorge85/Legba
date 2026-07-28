@@ -253,9 +253,9 @@ async def test_poll_source_pulls_writes_canonical_and_publishes(
     # Canonical rows: target-agnostic, source-owned, modality + tenant stamped.
     async with pool.acquire() as c:
         rows = await c.fetch(
-            "SELECT source_id, modality, produced_by_kind, produced_by_id, "
-            "owner_tenant, content_hash, payload FROM signals WHERE source_id=$1 "
-            "ORDER BY fetched_at",
+            "SELECT id, fetched_at, source_id, modality, produced_by_kind, "
+            "produced_by_id, owner_tenant, content_hash, payload FROM signals "
+            "WHERE source_id=$1 ORDER BY fetched_at",
             source_id,
         )
     assert len(rows) == 2
@@ -294,12 +294,30 @@ async def test_poll_source_pulls_writes_canonical_and_publishes(
     cur2 = await ctx2.state_store.get("cursor")
     assert cur2["last_pulled_at"] == cur["last_pulled_at"]
     result2 = await core2.pull_once()
-    # The feed re-serves the same 2 items; the handler+baseline write fresh
-    # rows (cross-source dedup is P-09, not here) but the cursor advances and
-    # state stays consistent — the seam survives the restart.
+    # The feed re-serves the same 2 items. S-4 intra-source exact-hash dedup
+    # now COLLAPSES those re-emissions (same source_id + content_hash within the
+    # lookback window): no fresh rows land, each existing row's recency is bumped
+    # instead, so the poll writes 0 (outcome 'noop') while the cursor advances
+    # and state stays consistent — the seam survives the restart.
     assert result2["outcome"] in {"success", "noop"}
     cur3 = await ctx2.state_store.get("cursor")
     assert cur3["rows_pulled"] >= cur2["rows_pulled"]
+
+    # S-4 assertion: the re-poll did NOT append duplicate rows — still exactly 2,
+    # and each one's fetched_at was advanced (recency preserved without row
+    # growth). This is the core of the intra-source dedup fix.
+    async with pool.acquire() as c:
+        after = await c.fetch(
+            "SELECT id, fetched_at, content_hash FROM signals WHERE source_id=$1 "
+            "ORDER BY fetched_at",
+            source_id,
+        )
+    assert len(after) == 2, [dict(r) for r in after]
+    before_by_id = {str(r["id"]): r["fetched_at"] for r in rows}
+    for r in after:
+        prior = before_by_id.get(str(r["id"]))
+        assert prior is not None                    # same rows, not new ones
+        assert r["fetched_at"] >= prior             # recency bumped (or held)
 
 
 # ---------------------------------------------------------------------------
@@ -314,16 +332,21 @@ async def test_ingest_dedupe_links_alias_canonical_at_ingest(pool):
     (alias/canonical, never destructive collapse) and honouring canonical_only.
 
     Drives ``SourceCore._process_one`` directly with two push signals that share
-    a content hash via two distinct sources, then asserts the second is aliased
-    to the first while both rows survive.
+    a content hash via TWO DISTINCT sources (the alias-linking path that S-4
+    intra-source collapse deliberately leaves alone — cross-source same-content
+    is real corroboration to keep + link, not a redundant re-emission to drop),
+    then asserts the second is aliased to the first while both rows survive. The
+    intra-source collapse case (same source, same hash → ONE row) is covered by
+    ``test_intrasource_exact_hash_collapses.py``.
     """
     from datetime import datetime
 
-    source_id = f"source.test.dedup_{uuid4().hex[:8]}"
+    source_a = f"source.test.dedup_a_{uuid4().hex[:8]}"
+    source_b = f"source.test.dedup_b_{uuid4().hex[:8]}"
     tenant = f"ingdedup_{uuid4().hex[:8]}"
     sd = SourceDescriptor(
         identity=SourceIdentity(
-            id=source_id, name="dedup", kind="generic_webhook",
+            id=source_a, name="dedup", kind="generic_webhook",
             schema_uri="legba/source/3.0.0", version="d" * 16, owner="test:p02",
             created=datetime.now(tz=timezone.utc), state=LifecycleState.ACTIVE,
         ),
@@ -336,7 +359,7 @@ async def test_ingest_dedupe_links_alias_canonical_at_ingest(pool):
             ],
         ),
     )
-    actor_id = f"source::{source_id}::dedup"
+    actor_id = f"source::{source_a}::dedup"
     deps = StandardDeps(pg_pool=pool)
     core = SourceCore(actor_id, SourceDeps(descriptor=sd, deps=deps))
     # The descriptor wired the ingest dedupe engine (tiers 1+2).
@@ -345,15 +368,16 @@ async def test_ingest_dedupe_links_alias_canonical_at_ingest(pool):
     assert core._ingest_dedupe.is_tier_active(2)
 
     ctx = core._make_context()
-    # Same content hash, distinct URLs/sources => tier-2 cross-source dup.
+    # Same content hash, distinct URLs + distinct source_ids => tier-2
+    # CROSS-source dup (S-4 collapse is intra-source only, so both land + link).
     shared_hash = f"ing_{uuid4().hex}"
     sig_a = Signal(
-        source_id=source_id, modality="text",
+        source_id=source_a, modality="text",
         payload={"title": "Quake hits region"},
         canonical_url="https://reuters.example/quake", content_hash=shared_hash,
     )
     sig_b = Signal(
-        source_id=source_id, modality="text",
+        source_id=source_b, modality="text",
         payload={"title": "Quake hits region"},
         canonical_url="https://ap.example/quake", content_hash=shared_hash,
     )
@@ -380,9 +404,9 @@ async def test_ingest_dedupe_links_alias_canonical_at_ingest(pool):
         assert out_b.canonical_signal_id == sig_a.signal_id
 
         async with pool.acquire() as conn:
-            # BOTH raw rows preserved.
+            # BOTH raw rows preserved (cross-source — never collapsed).
             raw = await conn.fetchval(
-                "SELECT count(*) FROM signals WHERE source_id=$1", source_id)
+                "SELECT count(*) FROM signals WHERE owner_tenant=$1", tenant)
             assert raw == 2
 
             # A's row is stamped self-canonical (the dup linked back to it).
@@ -401,17 +425,74 @@ async def test_ingest_dedupe_links_alias_canonical_at_ingest(pool):
 
             # canonical_only subscription sees exactly 1 row of the dup set.
             canon_only = await conn.fetchval(
-                "SELECT count(*) FROM signals WHERE source_id=$1 "
+                "SELECT count(*) FROM signals WHERE owner_tenant=$1 "
                 "AND (canonical_signal_id = id OR canonical_signal_id IS NULL)",
-                source_id)
+                tenant)
             assert canon_only == 1
     finally:
         async with pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM signal_aliases WHERE alias_signal_id IN "
-                "(SELECT id FROM signals WHERE source_id=$1)", source_id)
+                "(SELECT id FROM signals WHERE owner_tenant=$1)", tenant)
             await conn.execute(
-                "DELETE FROM signals WHERE source_id=$1", source_id)
+                "DELETE FROM signals WHERE owner_tenant=$1", tenant)
+
+
+@pytest.mark.asyncio
+async def test_lic2_license_class_stamped_scope_to_signal(pool):
+    """LIC-2 (P2-2): a descriptor's ``scope.license_class`` is copied onto every
+    written signal's ``payload.license_class`` at ingest — where the OpenSearch
+    corpus facet + the evidence-archiver retention gate read it. A payload that
+    already carries a class (manual-batch provenance / handler override) WINS —
+    the scope value is a source-level default, never a clobber."""
+    from datetime import datetime
+
+    source_id = f"source.test.lic2_{uuid4().hex[:8]}"
+    tenant = f"lic2_{uuid4().hex[:8]}"
+    sd = SourceDescriptor(
+        identity=SourceIdentity(
+            id=source_id, name="lic2", kind="generic_webhook",
+            schema_uri="legba/source/3.0.0", version="e" * 16, owner="test:lic2",
+            created=datetime.now(tz=timezone.utc), state=LifecycleState.ACTIVE,
+        ),
+        scope=SourceScope(owner_tenant=tenant, license_class="cc_by"),
+        acquisition="push",
+    )
+    core = SourceCore(
+        f"source::{source_id}::lic2",
+        SourceDeps(descriptor=sd, deps=StandardDeps(pg_pool=pool)),
+    )
+    ctx = core._make_context()
+    plain = Signal(
+        source_id=source_id, modality="text",
+        payload={"title": "Plain item"},
+        canonical_url="https://example.org/lic2-plain",
+        content_hash=f"lic2_{uuid4().hex}",
+    )
+    override = Signal(
+        source_id=source_id, modality="text",
+        payload={"title": "Override item", "license_class": "public_domain"},
+        canonical_url="https://example.org/lic2-override",
+        content_hash=f"lic2_{uuid4().hex}",
+    )
+    try:
+        async with pool.acquire() as conn:
+            out_plain = await core._process_one(conn, ctx, plain)
+            out_override = await core._process_one(conn, ctx, override)
+            assert out_plain is not None and out_override is not None
+            rows = {
+                _payload(r)["title"]: _payload(r)
+                for r in await conn.fetch(
+                    "SELECT payload FROM signals WHERE owner_tenant=$1", tenant,
+                )
+            }
+        # Scope default stamped onto the plain item…
+        assert rows["Plain item"]["license_class"] == "cc_by"
+        # …and the payload-carried class wins over the scope default.
+        assert rows["Override item"]["license_class"] == "public_domain"
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +611,17 @@ async def test_baseline_reference_vs_eager_seam_refusal(pool):
     e = await run_baseline(txt, ctx, media="reference")
     assert e.language == "pt"
     assert "energy" in e.tags and "g20" in e.tags
-    assert e.geo == ["BR"]  # carried from descriptor scope
+    # S-2: the descriptor scope (BR) is the PUBLISHER origin, not the story's
+    # subject. With no country named in the body it is parked, NOT stamped into
+    # geo — so a world story from a BR wire no longer floods Brazil's desk.
+    assert e.geo == []
+    assert e.payload["publisher_origin"] == ["BR"]
+
+    # A story whose body corroborates the origin still carries it.
+    txt2 = Signal(source_id=source_id, modality="text",
+                  payload={"title": "Brazil raises the Selic rate"})
+    e2 = await run_baseline(txt2, ctx, media="reference")
+    assert e2.geo == ["BR"]
 
 
 # ---------------------------------------------------------------------------

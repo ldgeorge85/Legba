@@ -920,9 +920,9 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     from ..data.provenance.verify import _llm_judge_enabled
     from .analyst_deps_builder import (
         AnalystDepsBuildError,
-        _verify_llm_component_id,
         build_analyst_run_method,
         build_llm_handler_from_stack_component,
+        resolve_judge_route,
     )
     from .audit_checkpointer_wiring import start_audit_checkpointer
     from .budget import BudgetEnforcer
@@ -1863,10 +1863,11 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
 
         # P0-T2 faithfulness verify — resolve the OPTIONAL judge LLM for the
         # MANDATORY post-finding verify pass. The deterministic citation-presence
-        # floor runs regardless; this wires the cross-family 8B judge (the live
-        # ``slm.internal`` Llama-3.1-8B, an OpenAI-compat endpoint → vllm subprovider
-        # via infer_llm_subprovider, NOT special-cased) ONLY when BOTH hold:
-        #   * the descriptor declares ``method.llm.verify`` (the judge ref); AND
+        # floor runs regardless; this wires the judge ONLY when BOTH hold:
+        #   * the descriptor opts into a JUDGE ROUTE (P2-4 ladder:
+        #     ``LEGBA_JUDGE_STACK_REF`` env override → ``method.llm.judge`` →
+        #     ``method.llm.verify`` → ``method.llm.primary``; the opt-in gate is
+        #     the judge/verify key — see resolve_judge_route); AND
         #   * the ``LEGBA_VERIFY_LLM_JUDGE`` flag gates the judge ON (the verify
         #     seam's OWN helper is reused so the flag semantics are IDENTICAL).
         # SOFT-FAIL: any resolution error → verify_judge=None + a warning; the
@@ -1874,19 +1875,31 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         # build. The handler is built through the SAME cached _llm_handler_factory
         # → build_llm_handler_from_stack_component path every other LLM uses, so
         # it is an LLMProviderHandler exposing chat_complete (verify.py's
-        # contract). Off/absent ref → None → the floor stands.
+        # contract). No route / flag off → None → the floor stands. The resolved
+        # ref rides along as ``verify_judge_ref`` so the critique row can stamp
+        # ``judge_llm_ref`` (which model judged — provenance, forever).
         verify_judge: Any = None
-        verify_component_id = _verify_llm_component_id(ad)
-        if verify_component_id and _llm_judge_enabled():
+        verify_judge_ref: str = ""
+        judge_route = resolve_judge_route(ad)
+        if judge_route is not None and _llm_judge_enabled():
             try:
-                verify_judge = await _llm_handler_factory(verify_component_id)
+                verify_judge = await _llm_handler_factory(judge_route.component_id)
+                verify_judge_ref = judge_route.component_id
+                logger.info(
+                    "analyst_deps_resolver.verify_judge_wired actor_id=%s "
+                    "analyst=%s judge_ref=%s source=%s",
+                    actor_id, ad.identity.id,
+                    judge_route.component_id, judge_route.source,
+                )
             except Exception as exc:  # noqa: BLE001 — soft-fail, floor still runs
                 verify_judge = None
+                verify_judge_ref = ""
                 logger.warning(
                     "analyst_deps_resolver.verify_judge_resolve_failed "
-                    "actor_id=%s analyst=%s component_id=%s err=%s — the "
-                    "faithfulness verify degrades to its deterministic floor",
-                    actor_id, ad.identity.id, verify_component_id, exc,
+                    "actor_id=%s analyst=%s component_id=%s source=%s err=%s — "
+                    "the faithfulness verify degrades to its deterministic floor",
+                    actor_id, ad.identity.id, judge_route.component_id,
+                    judge_route.source, exc,
                 )
 
         return _AnalystDeps(
@@ -1902,6 +1915,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             gather_binding=gather_binding,
             gather_write_bindings=gather_write_bindings,
             verify_judge=verify_judge,
+            verify_judge_ref=verify_judge_ref,
         )
 
     register_target_deps_resolver(_target_deps_resolver)

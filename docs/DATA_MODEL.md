@@ -19,6 +19,7 @@ New here? Start with the [README](../README.md) and the [Tour](TOUR.md).
 [The mandatory faithfulness verify](#the-mandatory-faithfulness-verify) ·
 [The scorecard](#the-scorecard--the-12th-outputkind) ·
 [The contested-claims fact model](#the-contested-claims-fact-model) ·
+[The 2026-07-28 wave (0091–0105)](#the-2026-07-28-wave--new-tables-migrations-00910105) ·
 [The journal](#the-journal--off-chain-by-design) ·
 [Old → new vocabulary](#old--new-vocabulary) ·
 [Mutate-vs-append cheat-sheet](#mutate-vs-append-cheat-sheet) ·
@@ -50,13 +51,26 @@ chain — see "The journal — off-chain by design"); the consult audit trail
 `consult_sessions` + `consult_turns` (0039); the control-plane `*_descriptors`
 (+ `descriptor_audit_log`); and the operational ledgers `budget_ledger`,
 `action_pack_invocations`, `governor_events`, `seed_batches`,
-`source_poll_outcomes` (0046), `output_dead_letter`.
+`source_poll_outcomes` (0046, + `newest_entry_ts` 0092), `output_dead_letter`.
+
+The 2026-07-28 wave (migrations 0091–0105, detailed in
+[its own section below](#the-2026-07-28-wave--new-tables-migrations-00910105))
+adds: the **alerting** stores `alert_trigger_watermarks` (0091) + `watchlist`
+(0105) beside the existing `alert_sink_deliveries` ledger; the **evaluation**
+stores `band_calibration_claims` (0093) + `correctness_labels` /
+`goldset_week_samples` (0096); the **source-assurance** stores `source_ratings`
+/ `source_dossiers` (0094) + `source_track_records` (0099); the **derived
+readout sidecars** `fact_decay_states` (0098), `narratives` +
+`narrative_echo_edges` (0102), `desk_baselines` (0103), and the contention
+tie-break cache `fact_contention_tiebreak` (0097); and the **evidence archive**
+sidecar `evidence_archive` (0104 — the bytes live content-addressed on the
+`legba_archive` filesystem volume, not in Postgres).
 
 ## Per-tier table
 
 | Tier | Table(s) | Produced by | Write semantics |
 |---|---|---|---|
-| **Signal (canonical pool)** | `signals` (0001) | `source_actor.write_canonical_signal` + `baseline.run_baseline` | **append-only** row (ON CONFLICT DO NOTHING); enriched in-memory pre-write |
+| **Signal (canonical pool)** | `signals` (0001) | `source_actor.write_canonical_signal` + `baseline.run_baseline` | **append-only** row (ON CONFLICT DO NOTHING); enriched in-memory pre-write. Since 2026-07 an **intra-source exact-hash re-serve** (same `(source_id, content_hash, tenant)` within 168h) **bumps the existing row's `fetched_at` and skips the insert** — `LEGBA_INTRASOURCE_DEDUP`, default ON, provably lossless for an exact hash; a later `evidence_archiver` pass may also stamp `object_ref = cas:sha256/<hex>` + `retention_class='evidence_hold'` on a verified-cited row |
 | Inline: language/geocode/ner/classify/source_credibility | `signals` columns + `payload` | the `data/filters/` stages | **mutate-in-place** (same row) |
 | Inline: slm_entity_resolve / slm_relationship_validate | `signals.payload` verdicts | the SLM filters | **mutate-in-place** (drops bad triples, never the signal) |
 | Inline: ingest_dedupe | `signal_aliases` + `signals.canonical_signal_id` | `ingest_dedupe` (after insert) | **append derived-row** + mutate canonical column; never deletes |
@@ -136,7 +150,15 @@ backstop, not a fixed "newest N" trim. A **composition** analyst
 (`meta_findings_synthesizer` — `country_composition` per g20/watch desk,
 `world_assessor` globally) reads **no raw signals**: it reads OTHER analysts'
 verified findings (only faithfulness-verify-passed sub-claims, INNER-JOINed on
-the critique). The deterministic `scorecard_producer` reads the already-verified
+the critique). Under `LEGBA_COMPOSITION_TIERED_EVIDENCE` (**default OFF in
+code**; enabled on this instance) the composition read splits **two tiers**: a
+verified **basis** (effective confidence ≥ the 0.50 floor) plus an
+explicitly-labeled, capped (≤ 8) **periphery** of below-floor / unverified
+findings admissible *only* as hedged context — unhedged use of a
+periphery-only citation is a **counted** soft verify failure, conflicts with
+the basis are surfaced as "tensions worth watching", and each composition
+records an additive `data.evidence_tiers` envelope ("built on N verified + M
+weak"; periphery ids join `derived_from`). See `ANALYSIS.md` §3.11. The deterministic `scorecard_producer` reads the already-verified
 claims for banding. **Writes** via two separate channels: (a) **`analyst_outputs`**
 (kind = finding / prediction / critique / prompt_module_candidate / **scorecard**),
 and/or (b) **substrate side-writes** (facts / nexuses / hypotheses / entities)
@@ -170,6 +192,21 @@ visible low-confidence tier and excludes it from composition/scorecard — it is
 **never hard-deleted**. A planted fabrication is flagged unsupported. This is a
 best-effort tail on the run: a verify failure leaves the finding durable and
 un-demoted (no regression), and TRACE_ONLY runs have no row to grade.
+
+**Judge provenance + the per-claim ledger (2026-07).** Every faithfulness
+critique now stamps **`judge_llm_ref`** — *which model judged this* — both
+top-level and inside `data.verification` (empty = the deterministic floor
+alone); classifies every failing span **hard vs. soft** (`fail_class`:
+`unresolved_citation` / `judge_contradicted` / `stale_leader` /
+`stale_leader_vs_facts` / `cross_target_leak` are **hard** — the
+entity-scramble class; `no_citation` / `judge_unsupported` /
+`hedge_laundering` / `double_counted` / `indicator_uncited_triggered` /
+`unhedged_periphery_citation` are **soft** — the unsupported-inference class);
+and persists a full per-claim **`claim_verdicts` ledger *including supported
+claims*** in `data.verification` (capped, with an honest truncation flag).
+These are labels-and-persistence only — none feeds the score. The judge LLM
+itself resolves through an opt-in route ladder with a dormant
+independence-prompt profile; see `ANALYSIS.md` §6.2 for the behaviour.
 
 Honest caveat: faithfulness is a per-unit number, not a platform-wide boast.
 Some units score genuinely low, and the read surfaces that rather than hiding it
@@ -208,10 +245,11 @@ a **first-class, derived, recomputable** state — without ever letting a machin
 overwrite the disputed facts. The substrate change is small and almost entirely
 *additive*; the behaviour is gated OFF by default.
 
-> **Migration head — now `0085` (signal-content-depth wave on top of the
-> 2026-07-06 audit-remediation wave).** On top of
+> **Migration head — now `0105` (the 2026-07-28 release wave; `0095`/`0100`
+> intentionally unused — the runner discovers by sorted glob, so gaps are
+> harmless).** On top of
 > the write-path gates documented below, successive migrations advanced the head
-> `0060 → 0085`. Five reversible data-hygiene migrations make up the
+> `0060 → 0105`. Five reversible data-hygiene migrations make up the
 > 2026-07-06 audit sub-range (`0076 → 0080`): `0076` entity re-fold + junk close
 > (`entity_profiles` 12,257 → 12,144), `0077` semantic / demonym / relative-temporal
 > junk facts closed (reversible `valid_until`), `0078` nexus junk & self-edge close
@@ -221,7 +259,12 @@ overwrite the disputed facts. The substrate change is small and almost entirely
 > are data-hygiene closes, not schema changes. Migrations `0081 → 0085` are the
 > signal-content-depth corpus/embedding markers (signal_summarized / indexed /
 > reindex / embedding / reenriched) recording the full-body corpus, OpenSearch
-> index, and Qdrant embedding backfill state.
+> index, and Qdrant embedding backfill state. `0086 → 0090` are the
+> entity-identity / salience / journal-data wave (entity-researcher +
+> entity-blocking infrastructure, a nexus-fragment close, the per-signal
+> salience schema, and the journal `data` column). `0091 → 0105` are the
+> 2026-07-28 release wave — see
+> [the wave section below](#the-2026-07-28-wave--new-tables-migrations-00910105).
 
 **Per-fact credibility — `facts.source_credibility real` (0054).** A 0..1 trust
 score of the most credible source backing this fact, propagated down from
@@ -261,7 +304,16 @@ than on the single-row `facts` table:
   → collapsed` (collapses when a group falls back to one value). Carries the
   arbiter's current winner (`surfaced_value` / `surfaced_fact_id`, both `NULL` on
   abstain), the distinct non-junk `value_count`, the operator-reportable
-  `junk_count`, and `arbiter_version` / `resolved_at`.
+  `junk_count`, and `arbiter_version` / `resolved_at`. The **arbiter tail**
+  (0097, 2026-07) adds the surfacing provenance — `surfaced_by`
+  (`deterministic` / `llm`), `surfaced_at`, `surface_rationale`, and
+  `surface_history jsonb` (newest-first, capped) — plus a separate cache table
+  **`fact_contention_tiebreak`** (one cached LLM near-tie verdict per
+  `(contention_id, evidence_fingerprint)`, `verdict ∈ pick|unsure`; only
+  genuine verdicts are cached — a transport failure degrades to abstain,
+  uncached). Still **no new column on `facts`**: the detect-only invariant
+  (B15) is intact, and `status` + `surfaced_fact_id` moving is exactly what
+  the `contention_flip` alert trigger fingerprints (`ANALYSIS.md` §7.11).
 - **`fact_contention_values`** — one row per distinct **non-junk value cluster**
   in a group (`UNIQUE (contention_id, value_key)`, FK `ON DELETE CASCADE`),
   carrying the aggregated support and the deterministic **Q·C·R·F** `arbiter_score`
@@ -308,7 +360,54 @@ except for which cluster (if any) is marked the winner.
 > the gitignored `.env`. The detect-only arbiter, Wave-4 coexistence, and the
 > read-side surfacing are proven live; the vLLM tie-break is proven **consulted**
 > live (it abstained on symmetric evidence — correct, provenance-first), but a
-> successful LLM *pick* is **unobserved live** so far.
+> successful LLM *pick* is **unobserved live** so far. The arbiter-tail flags
+> follow the same posture: the read-side **contention annotation**
+> (`LEGBA_CONTENTION_SURFACING`) defaults **ON**; the slice-reorder preference
+> (`LEGBA_CONTENTION_SURFACING_PREFER`) and the earned-track-record tie-break
+> weight (`LEGBA_CONTENTION_EARNED_WEIGHT`, a float defaulting `0.0`) default
+> **OFF** — at weight 0 the tie-break is byte-identical to the pre-earned path.
+
+## The 2026-07-28 wave — new tables (migrations 0091–0105)
+
+Migrations `0091`–`0105` (`0095`/`0100` intentionally unused — the migration
+runner discovers by sorted glob, so gaps are harmless) land the alerting loop,
+the calibration/correctness record, the source-assurance fabric, and the graph
+readouts. All are additive and idempotent (`CREATE … IF NOT EXISTS`), and the
+derived sidecars share one pattern: **fully recomputable, wholesale-refreshed,
+no supersession chain, no FK where keyed on descriptor/source ids** — like the
+contention sidecar above, they are views *over* the chain, not primary data.
+
+| Mig | Table(s) / change | Write semantics |
+|---|---|---|
+| **0091** | `alert_trigger_watermarks` — PK `(trigger_class, watermark_key)`, `state jsonb`, `fired_at` | **mutate-in-place upsert** — durable "this transition already fired" state for `alert_trigger_scan` (five trigger classes incl. `watchlist_hit`) and `geo_convergence_scan`'s formation/dissolution edges. First-ever scan per class **seeds silently**; a watermark advances **only after the alert row lands**, so a rejected write retries next scan and a transition never re-fires |
+| **0092** | `source_poll_outcomes` + `newest_entry_ts` column | recorded per parsed HTTP-200 **before** the since-filter (26h future-skew clamp; 304 carry-forward) — the quiet-vs-cursor-fault discriminator (`ACQUISITION.md` §1.1.1) |
+| **0093** | `band_calibration_claims` — one resolvable claim per scorecard band **transition**, UNIQUE `(desk, dimension, scorecard_row_id)`; per-horizon (14/28-day) outcome columns; **no probability column by design** (bands are not probabilities — no Brier exists or can). Plus `band_calibration_scan_state` | claims **append + never-overwrite** (`INSERT … DO NOTHING`); each horizon's outcome (`held` / `worsened` / `improved` / `reverted` / `insufficient` / `unresolvable`) is stamped once at resolution |
+| **0094** | `source_ratings` — multi-rater assurance ratings; `visibility_class ∈ public\|private` run as **concurrent currents** via the partial unique `(source_id, rater, visibility_class) WHERE superseded_by IS NULL`; nullable Admiralty `A–F` × `1–6`; typed `rubric jsonb`; deferrable self-FK supersession. Plus `source_dossiers` (one current cited dossier per source, same supersession pattern) | **supersession-versioned** (append the new current, stamp `superseded_by` on the prior). The schema headers state the standing rule: **grades never touch the faithfulness score** |
+| **0096** | `correctness_labels` — operator gold-set verdicts; **closed vocab** `correct \| partially_correct \| incorrect \| unresolvable`; **UNIQUE `finding_id`** upsert identity; `finding_snapshot jsonb` captured at label time (supersession can't orphan a verdict); `created_at` is the weekly-exclusion key. Plus `goldset_week_samples` — PK `(week, finding_id)`, the pinned weekly sample | labels **upsert** (one verdict per finding; re-label overwrites); samples **append-only** (`DO NOTHING` — first read pins the week) |
+| **0097** | `fact_contention` surfacing columns + the `fact_contention_tiebreak` cache (see the contested-claims section above) | arbiter-tail state; still **detect-only** — no `facts` column added |
+| **0098** | `fact_decay_states` — per-fact decay readout; PK `fact_id` (FK CASCADE); `decayed_confidence`, `decay_state ∈ fresh\|aging\|stale\|revoke_candidate`, `decay_class`, `last_sighting_at` + `sighting_source ∈ signal\|created_at` | **derived / recomputable** — `fact_decay_scan` upserts the sidecar and **never mutates a fact's confidence** (a DB test asserts byte-unchanged); consumption is flag-gated (`LEGBA_FACT_DECAY_WEIGHTING`, default OFF) |
+| **0099** | `source_track_records` — the **earned** per-source record over resolved contentions; PK `source_id` (no FK); `win_rate_smoothed` (Beta(2,2)), `win_rate_lower` (Wilson), `low_sample`, corroboration counts, `lag_hours` (default 72 — only contentions surfaced ≥72h ago count) | **derived / recomputable** wholesale refresh (daily draft analyst). The arbiter's tie-break recomputes weights live with a **self-exclusion** guard (the contention being decided is excluded — acyclicity); the stored aggregate is a readout |
+| **0101** | index `idx_analyst_traces_retention_run_started_at` on `analyst_traces` | serves the age-only purge scan of the `analyst_traces_retention` handler (ships **disabled**; opt-in via `LEGBA_ANALYST_TRACES_TTL_DAYS` — `RUNBOOK.md` §4.0.1) |
+| **0102** | `narratives` — a contested-claim family reified; PK `contention_id` (1:1, no FK); carriers, first/last-seen, `lead_source_id`, `max_echo_lag_hours`, `variants jsonb`. Plus `narrative_echo_edges` — **directed** PK `(leader_source_id, follower_source_id)`; co-carriage counts, echo ratio, lag stats, `systematic bool` | **derived / recomputable** — `narrative_mapper` (daily, detect-only) wholesale-refreshes both. The honesty header — *descriptive, not causal* — rides the migration, the analyst, and every route envelope; "0 systematic edges" is published as-is. NOTE: the **code** classes were renamed `Propagation*` (`PropagationEdge` / `PropagationEdgeOut`); the **tables keep the echo names** |
+| **0103** | `desk_baselines` — per-desk statistical baseline; PK `(desk_id, metric)`, `metric ∈ signal_volume_24h \| high_sev_findings_24h`; robust center/sigma (`robust_sigma = max(stddev, sqrt(mean))` — a Poisson floor), band low/high, `deviation ∈ within\|above\|below`, `features jsonb` (lags 1/7/28, rolling means 7/28, time-since-last-high-sev, land-neighbour spillover) | **derived / recomputable** (daily). The migration header states it plainly: **this table is NOT a forecast** — it is a falsifiable prior the alert trigger's deviation class consumes |
+| **0104** | `evidence_archive` — the archive sidecar; PK `signal_id` with **no FK on purpose** (archived evidence outlives any future signal purge); `status ∈ archived \| failed \| skipped_license \| skipped_size`; `object_ref = cas:sha256/<hex>` mirrored onto `signals.object_ref`; `sha256`, sizes, `license_class`, `text_extracted`, attempts | **upsert sidecar**. The bytes live on the filesystem CAS volume (`legba_archive`), not in Postgres; **nothing deletes archived objects** (`SEAMS.md` #42) |
+| **0105** | `watchlist` — operator standing watches; `kind ∈ entity\|text\|geo`, `pattern jsonb`, optional `min_severity`, `active` | **mutate-in-place** CRUD via `/api/v1/v3/watchlist` (the v3 family's first write surface; delete is **soft** — `active=false`). No-refire state rides the 0091 watermarks under `trigger_class='watchlist_hit'` |
+
+**Read-time projections added by the wave** (all additive; none fabricated):
+
+- **`below_floor`** on findings reads — `true` when a *graded* finding's
+  `effective_confidence` sits below the 0.50 faithfulness floor; an ungraded
+  row reads `null`, never a fabricated verdict (`substrate_reads_api.py`).
+- **`verify_exempt`** — the reads stamp `"structural"` for the deterministic
+  analysts in `STRUCTURAL_VERIFY_EXEMPT_ANALYSTS` (`provenance/kinds.py`); for
+  the `structural_claims` opt-in subset, a passing deterministic re-derivation
+  upgrades the badge to **`structural-verified`** (`ANALYSIS.md` §6.2).
+- **`archived` + `archive_sha256`** on signal, lineage, and export
+  projections — derived directly from `signals.object_ref`
+  (`cas:sha256/<hex>`), no sidecar join.
+- The per-claim **`claim_verdicts` ledger** (including SUPPORTED claims,
+  capped 120 × 300 chars with an honest `claim_verdicts_truncated` flag) rides
+  the existing critique `data` JSONB — **no migration** (`ANALYSIS.md` §6.2).
 
 ## The journal — off-chain by design
 
@@ -424,11 +523,15 @@ sequenced retirements/freezes and `ANALYSIS.md` for producer behaviour.
   verify verdicts), `journal_entries` `entry` rows, `signal_aliases`,
   `entity_profile_versions`, `unit_reference_labels`, `acute_forecasts` issue rows,
   the audit/governor/seed ledgers, every `*_descriptors` version,
-  `alert_sink_deliveries`.
+  `alert_sink_deliveries`, `band_calibration_claims` issue rows (horizon
+  outcomes stamped once at resolution, like `acute_forecasts`),
+  `goldset_week_samples` (first read pins the week).
 - **Supersession-versioned (temporal):** `facts` (value change), `nexuses`
   (polarity/label change), `journal_entries` `consolidation` rows
   (a newer consolidation supersedes the prior open one) — new open row, old row
-  closed; `facts`/`nexuses` also decay open rows.
+  closed; `facts`/`nexuses` also decay open rows; `source_ratings` /
+  `source_dossiers` (a new current rating/dossier stamps `superseded_by` on the
+  prior; public and private raters run as concurrent currents).
   - **Fact supersession is single-winner-by-recency *within a source tier*** (task
     #101 Holes-A): a machine-extracted `ingestion`/`agent` fact does **not** close an
     open human-curated `seed`/`curated` fact (`seed == curated > ingestion == agent`);
@@ -441,18 +544,27 @@ sequenced retirements/freezes and `ANALYSIS.md` for producer behaviour.
     `fact_contention` sidecar by the **detect-only** arbiter. See "The contested-
     claims fact model" below.
 - **Mutate-in-place:** `signals` enrichment + later merge re-update (the one
-  non-append substrate table), `entity_profiles`, `proposed_edges`,
+  non-append substrate table; the intra-source dedup `fetched_at` bump and the
+  archiver's `object_ref`/`retention_class` stamp are further in-place
+  updates), `entity_profiles`, `proposed_edges`,
   `hypotheses`/`situations` *status*, `journal_proposals` *status*
   (`pending`→`accepted`/`rejected`), `acute_forecasts` resolution (the exogenous
   grade stamped when the forward window closes), `budget_ledger`,
-  `action_pack_invocations`, `output_dead_letter` resolution.
+  `action_pack_invocations`, `output_dead_letter` resolution,
+  `alert_trigger_watermarks` (durable trigger state), `watchlist` (CRUD +
+  soft delete), `correctness_labels` (one-verdict-per-finding upsert),
+  `evidence_archive` (outcome upsert).
 - **Ephemeral (no durable row):** subscription wiring, per-target JetStream
   consumers, the predicate match, NATS-stream output.
-- **Derived / recomputable (rebuildable from open `facts`):** the contested-claims
+- **Derived / recomputable (rebuildable from the primary rows):** the
+  contested-claims
   sidecar `fact_contention` / `fact_contention_values` — the detect-only arbiter
   upserts them each pass and also sets the `contested` / `contention_id` /
   `surfaced_winner` markers on `facts` in place, but never mutates a fact value
-  (invariant B15).
+  (invariant B15) — plus the 2026-07 readout sidecars, all wholesale-refreshed
+  by their daily analysts: `fact_decay_states`, `source_track_records`,
+  `narratives` + `narrative_echo_edges`, `desk_baselines`, and the
+  `fact_contention_tiebreak` verdict cache.
 
 ## Known thin / inert legs (honest)
 
@@ -494,4 +606,7 @@ narrower now:
   answer, but the labeled set is very small today (n≈1), so per-unit correctness
   reports **insufficient-sample** rather than a headline accuracy — faithfulness
   (groundedness), not correctness-vs-reference, is the meaningful per-unit
-  number right now.
+  number right now. A separate **weekly operator gold-set loop** (0096:
+  `correctness_labels` + `goldset_week_samples`) now grows an *additive*
+  operator-correctness figure on the eval scoreboard — deliberately **never
+  pooled** with this deterministic reference leg (`ANALYSIS.md` §6).

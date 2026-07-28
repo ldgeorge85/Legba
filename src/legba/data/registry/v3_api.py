@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..schemas import AnalystDescriptor
+from . import source_freshness
 from .api import RegistryAPIDeps, require_bearer
 from .descriptor import Family
 from .errors import (
@@ -93,6 +94,37 @@ class ScorecardRow(BaseModel):
     produced_at: str
 
 
+class BandCalibrationSection(BaseModel):
+    """P2-3 — the band-calibration harness aggregate, in its OWN section.
+
+    The freshest ``band_calibration_tracker`` finding's ``data.data.
+    band_calibration`` block (scorecard band transitions logged as resolvable
+    claims, auto-resolved at T0+14d/28d against LATER scorecard rows only).
+    Read INLINE registry-side (the ``eval_calibration`` slim precedent).
+
+    HONESTY: bands are ordinal risk categories, not probabilities — this
+    section carries persistence/reversal RATES with their sample sizes and NO
+    Brier / Brier-skill key of any kind (``no_brier`` + ``honesty_note`` state
+    that explicitly). Rates are ``None`` inside ``horizons`` when the scored
+    denominator is zero — an honest empty state, never a fabricated number.
+    ``available`` is false before the tracker's first finding exists.
+    """
+    available: bool
+    produced_at: str | None = None
+    claims_total: int | None = None
+    resolution_spec: str | None = None
+    # Per-horizon overall aggregate: {"14d": {resolved, open, outcomes,
+    # confirmed, reverted, scored, persistence_rate, reversal_rate, ...}, "28d": …}
+    horizons: dict[str, Any] = Field(default_factory=dict)
+    # Same block shape split by direction (deterioration / improvement) and by
+    # scorecard dimension.
+    by_direction: dict[str, Any] = Field(default_factory=dict)
+    by_dimension: dict[str, Any] = Field(default_factory=dict)
+    no_brier: bool = True
+    honesty_note: str | None = None
+    refs: list[str] = Field(default_factory=list)
+
+
 class CalibrationScoreboard(BaseModel):
     """The platform's HONEST skill scoreboard — the freshest ``calibration_tracking``
     finding, reduced EXACTLY as :meth:`SubstrateQueryPort.get_calibration` (~2091).
@@ -108,6 +140,11 @@ class CalibrationScoreboard(BaseModel):
     reads as a first-class honest state (``INSUFFICIENT`` / ``withheld``), never a
     bare positive number. ``available`` is false before any calibration finding
     exists — a distinct "no pilot yet" state, NOT a failed pilot.
+
+    ``band_calibration`` (P2-3) is a purely ADDITIVE section (existing consumers
+    parse named keys only): the band-persistence harness aggregate from the
+    ``band_calibration_tracker`` finding — segregated like the acute pilot, and
+    carrying NO Brier by design (bands are not probabilities).
     """
     available: bool
     produced_at: str | None = None
@@ -129,6 +166,69 @@ class CalibrationScoreboard(BaseModel):
     forecast_unproven: bool = True
     calibration_thin: bool = True
     refs: list[str] = Field(default_factory=list)
+    # P2-3 — the band-calibration harness section (additive; None only when the
+    # section read itself failed, available=False when no finding exists yet).
+    band_calibration: BandCalibrationSection | None = None
+
+
+class DeskBaselineRow(BaseModel):
+    """P3-7 — one persisted per-desk statistical baseline (``desk_baselines``).
+
+    A projection of one ``desk_baselines`` sidecar row (migration 0103): the
+    trailing baseline EXPECTATION + uncertainty band + current-window deviation
+    for one desk × metric, computed daily by the ``desk_baseline`` deterministic
+    analyst over our own substrate.
+
+    HONESTY (the whole point of P3-7): this is a DESCRIPTIVE statistical
+    baseline, NOT a forecast. ``expected`` is a trailing mean rate; there is no
+    Brier, no skill score, no probability-of-event, and nothing here is a
+    prediction-as-claim. ``deviation`` (within / above / below) is the useful
+    anomaly signal — computed with the SAME absolute floors as the P1-3
+    baseline_deviation trigger, so a perennially-quiet desk's σ≈0 blip never
+    reads as a deviation. ``insufficient_history`` warns the band rests on thin
+    history WITHOUT suppressing an absolute-floor exceedance.
+    """
+    desk_id: str
+    metric: str
+    geo: list[str] = Field(default_factory=list)
+    baseline_days: int
+    n_sigma: float
+    expected: float
+    center_median: float
+    robust_sigma: float
+    band_low: float
+    band_high: float
+    current: float
+    deviation: str
+    deviation_sigma: float | None = None
+    min_current_floor: float
+    sample_days: int
+    active_days: int
+    insufficient_history: bool
+    spillover_current: float
+    features: dict[str, Any] = Field(default_factory=dict)
+    computed_at: str | None = None
+
+
+class DeskBaselineBoard(BaseModel):
+    """P3-7 — the per-desk baseline board (the divergence surfacing).
+
+    Projects the ``desk_baselines`` sidecar so the operator/UI can see "desk X
+    is running Kσ above its 28-day baseline" — the honest anomaly read. Reads
+    INLINE registry-side (the ``eval_calibration`` slim precedent), no
+    deterministic-handler import. An empty ``rows`` (no baseline computed yet) is
+    a first-class honest state, NOT a 404. ``note`` carries the explicit
+    no-forecast framing so no consumer can misread the board as a prediction.
+    """
+    available: bool = False
+    computed_at: str | None = None
+    note: str = (
+        "Descriptive statistical baseline over our own substrate — NOT a "
+        "forecast/prediction/skill claim. `deviation` is the current 24h window "
+        "vs the trailing band (absolute floors mirror the P1-3 trigger)."
+    )
+    counts: dict[str, int] = Field(default_factory=dict)
+    rows: list[DeskBaselineRow] = Field(default_factory=list)
 
 
 class CountryScorecard(BaseModel):
@@ -216,6 +316,19 @@ class SourceFiringRow(BaseModel):
         any recent ``empty``/``error`` poll rows)
       * ``error``   — no recent signal AND recent hard poll errors
       * ``silent``  — active head, no recent signal, no recent errors
+
+    ADDITIVE (A7 freshness taxonomy): ``freshness_grade`` grades the freshest
+    signal's age against a budget derived from the source's OWN declared
+    cadence (``body.cadence.schedule.raw`` cron × grace — see
+    :mod:`legba.data.registry.source_freshness`), reported alongside as
+    ``budget_minutes``:
+
+      * ``ok`` / ``stale`` / ``warn`` — within budget / over it / badly over
+        (>3× budget)
+      * ``empty``    — active + cadence-declared but NEVER produced a signal
+      * ``ungraded`` — no parsable cadence declaration (never a fake ``ok``),
+        or a non-active head (no live polling expectation to grade against);
+        ``budget_minutes`` is ``None`` exactly when no budget was derivable
     """
     source_id: str
     state: str | None = None
@@ -226,6 +339,10 @@ class SourceFiringRow(BaseModel):
     last_poll_outcome: str | None = None
     recent_error_count: int = 0
     status: Literal["firing", "silent", "error", "paused"] = "silent"
+    freshness_grade: Literal["ok", "stale", "warn", "empty", "ungraded"] = (
+        "ungraded"
+    )
+    budget_minutes: int | None = None
 
 
 class EscalationDeliveryRow(BaseModel):
@@ -502,6 +619,66 @@ class OptimizerReviewResult(BaseModel):
     analyst_id: str
     new_descriptor_version: str | None
     promotion_gate: Literal["promoted", "rejected"]
+
+
+def _reduce_band_calibration(row: Any) -> BandCalibrationSection:
+    """Reduce the freshest ``band_calibration_tracker`` finding row to the
+    additive P2-3 scoreboard section.
+
+    The writer emits ``kind='finding'`` with the aggregate one JSONB level down
+    at ``data.data.band_calibration`` (the calibration_tracking nesting
+    contract). Fully defensive: a missing row, an unreadable payload, or a
+    finding without the section reads ``available=False`` — never a fabricated
+    aggregate, never an exception out of the calibration read.
+    """
+    if row is None:
+        return BandCalibrationSection(available=False)
+    try:
+        raw = row["data"]
+        payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        data = payload.get("data") if isinstance(payload, dict) else None
+        bc = data.get("band_calibration") if isinstance(data, dict) else None
+        if not isinstance(bc, dict):
+            return BandCalibrationSection(available=False)
+        produced = row["produced_at"]
+        claims_total = bc.get("claims_total")
+        return BandCalibrationSection(
+            available=True,
+            produced_at=(
+                produced.isoformat()
+                if hasattr(produced, "isoformat")
+                else str(produced)
+            ),
+            claims_total=(
+                claims_total
+                if isinstance(claims_total, int) and not isinstance(claims_total, bool)
+                else None
+            ),
+            resolution_spec=(
+                str(bc["resolution_spec"])
+                if bc.get("resolution_spec") is not None
+                else None
+            ),
+            horizons=bc.get("horizons") if isinstance(bc.get("horizons"), dict) else {},
+            by_direction=(
+                bc.get("by_direction")
+                if isinstance(bc.get("by_direction"), dict)
+                else {}
+            ),
+            by_dimension=(
+                bc.get("by_dimension")
+                if isinstance(bc.get("by_dimension"), dict)
+                else {}
+            ),
+            no_brier=bool(bc.get("no_brier", True)),
+            honesty_note=(
+                str(bc["honesty_note"]) if bc.get("honesty_note") is not None else None
+            ),
+            refs=[str(row["id"])],
+        )
+    except Exception:  # noqa: BLE001 — additive section never breaks the read
+        logger.debug("v3_api.band_calibration_reduce_failed", exc_info=True)
+        return BandCalibrationSection(available=False)
 
 
 def _candidate_target_path(payload: dict[str, Any]) -> str:
@@ -887,7 +1064,11 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                 rows = await conn.fetch(
                     """
                     WITH heads AS (
-                        SELECT descriptor_id AS source_id, state
+                        SELECT descriptor_id AS source_id, state,
+                               -- A7 freshness taxonomy: the declared poll
+                               -- cadence the per-source budget derives from
+                               body->'cadence'->'schedule'->>'raw'
+                                   AS cadence_raw
                           FROM public.source_descriptors
                          WHERE is_head
                            -- exclude retired template / autowire junk so it
@@ -943,6 +1124,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                     )
                     SELECT i.source_id,
                            h.state,
+                           h.cadence_raw,
                            COALESCE(s.signals_24h, 0) AS signals_24h,
                            COALESCE(s.signals_7d, 0) AS signals_7d,
                            s.last_seen_at,
@@ -997,6 +1179,17 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             else:
                 # active head, no recent signal, no recent errors → silent
                 status = "silent"
+            # A7 freshness taxonomy — graded against the source's OWN
+            # cadence-derived budget (memoized per cron expression); an
+            # undeclared/unparsable cadence grades ungraded, never a fake ok.
+            budget_minutes = source_freshness.derive_budget_minutes(
+                r["cadence_raw"]
+            )
+            grade = source_freshness.grade_freshness(
+                state=state,
+                age_seconds=age_int,
+                budget_minutes=budget_minutes,
+            )
             out.append(
                 SourceFiringRow(
                     source_id=str(r["source_id"]),
@@ -1008,6 +1201,8 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                     last_poll_outcome=r["last_poll_outcome"],
                     recent_error_count=recent_errors,
                     status=status,  # type: ignore[arg-type]
+                    freshness_grade=grade,
+                    budget_minutes=budget_minutes,
                 )
             )
         return out
@@ -1434,7 +1629,14 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         keys every displayed string off the flags this returns, so a thin exogenous
         sample OR a degenerate acute pilot reads as an honest withheld state, never
         a bare positive number.
+
+        P2-3 (additive): the response also carries a ``band_calibration``
+        section — the freshest ``band_calibration_tracker`` finding's
+        persistence/reversal aggregate (its OWN keys, NO Brier by design:
+        bands are not probabilities). Fully defensive: a failed band read
+        degrades to ``available=False`` and never breaks the main scoreboard.
         """
+        band_row: Any = None
         async with deps.descriptor_registry.pg.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT id, produced_at, data FROM public.analyst_outputs "
@@ -1442,10 +1644,25 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                 "AND superseded_by IS NULL "
                 "ORDER BY produced_at DESC, id DESC LIMIT 1"
             )
+            try:
+                band_row = await conn.fetchrow(
+                    "SELECT id, produced_at, data FROM public.analyst_outputs "
+                    "WHERE kind = 'finding' "
+                    "AND analyst_id = 'band_calibration_tracker' "
+                    "AND superseded_by IS NULL "
+                    "ORDER BY produced_at DESC, id DESC LIMIT 1"
+                )
+            except Exception:  # noqa: BLE001 — additive, never breaks the read
+                band_row = None
+        band_calibration = _reduce_band_calibration(band_row)
         if row is None:
             # No calibration finding computed yet — a DISTINCT honest state
             # ("no pilot yet"), not a failed pilot. Both legs read unproven.
-            return CalibrationScoreboard(available=False)
+            # The band section still reports independently (its tracker may
+            # have run first).
+            return CalibrationScoreboard(
+                available=False, band_calibration=band_calibration
+            )
         raw = row["data"]
         payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
         data = payload.get("data") if isinstance(payload, dict) else None
@@ -1489,6 +1706,129 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             forecast_unproven=not forecast_proven,
             calibration_thin=calibration_thin,
             refs=[str(row["id"])],
+            band_calibration=band_calibration,
+        )
+
+    @router.get("/eval/desk_baselines", response_model=DeskBaselineBoard)
+    async def eval_desk_baselines(
+        desk: str | None = Query(default=None),
+        deviating_only: bool = Query(default=False),
+        principal: str = Depends(require_bearer),
+    ) -> DeskBaselineBoard:
+        """P3-7 — the per-desk statistical baseline board (divergence surfacing).
+
+        PROJECTS the ``desk_baselines`` sidecar (migration 0103; the
+        ``desk_baseline`` deterministic analyst recomputes it daily) so the
+        operator/UI can see, per desk × metric, the trailing baseline
+        expectation + uncertainty band + whether the CURRENT 24h window
+        deviates — "desk X is running Kσ above its 28-day baseline", the honest
+        anomaly read. Read INLINE registry-side (the ``eval_calibration`` slim
+        precedent), no deterministic-handler import.
+
+        HONESTY: this is a DESCRIPTIVE statistical baseline, NEVER a forecast —
+        no Brier, no skill, no prediction. The response ``note`` states that
+        plainly and the deviation carries the SAME absolute floors as the P1-3
+        trigger, so a perennially-quiet desk cannot false-fire. Rows are ordered
+        most-deviating first (above/below before within, then by |σ|). ``?desk=``
+        filters to one desk; ``?deviating_only=true`` drops the within-band
+        rows. Empty rows (nothing computed yet, or the table is absent) is a
+        first-class honest state — ``available=False``, NOT a 404.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if desk:
+            params.append(desk)
+            clauses.append(f"desk_id = ${len(params)}")
+        if deviating_only:
+            clauses.append("deviation <> 'within'")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        # Most-deviating first: non-within rows ahead of within, then by the
+        # magnitude of the running sigma (NULLs last), then a stable desk/metric.
+        sql = (
+            "SELECT desk_id, metric, geo, baseline_days, n_sigma, expected, "
+            "       center_median, robust_sigma, band_low, band_high, current, "
+            "       deviation, deviation_sigma, min_current_floor, sample_days, "
+            "       active_days, insufficient_history, spillover_current, "
+            "       features, computed_at "
+            "  FROM public.desk_baselines "
+            f"  {where} "
+            "ORDER BY (deviation <> 'within') DESC, "
+            "         abs(deviation_sigma) DESC NULLS LAST, desk_id, metric"
+        )
+        try:
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                rows = await conn.fetch(sql, *params)
+        except Exception:  # noqa: BLE001 — a missing/thin table is an honest empty
+            logger.debug("v3_api.desk_baselines_read_failed", exc_info=True)
+            return DeskBaselineBoard(available=False)
+
+        if not rows:
+            return DeskBaselineBoard(available=False)
+
+        def _jsonish(raw: Any) -> Any:
+            if isinstance(raw, str):
+                try:
+                    return json.loads(raw)
+                except (ValueError, TypeError):
+                    return None
+            return raw
+
+        out: list[DeskBaselineRow] = []
+        counts = {"total": 0, "above": 0, "below": 0, "insufficient_history": 0}
+        latest: Any = None
+        for r in rows:
+            geo = _jsonish(r["geo"])
+            feats = _jsonish(r["features"])
+            dev = str(r["deviation"])
+            counts["total"] += 1
+            if dev in ("above", "below"):
+                counts[dev] += 1
+            if r["insufficient_history"]:
+                counts["insufficient_history"] += 1
+            ca = r["computed_at"]
+            if ca is not None and (latest is None or ca > latest):
+                latest = ca
+            out.append(
+                DeskBaselineRow(
+                    desk_id=str(r["desk_id"]),
+                    metric=str(r["metric"]),
+                    geo=[str(g) for g in geo] if isinstance(geo, list) else [],
+                    baseline_days=int(r["baseline_days"]),
+                    n_sigma=float(r["n_sigma"]),
+                    expected=float(r["expected"]),
+                    center_median=float(r["center_median"]),
+                    robust_sigma=float(r["robust_sigma"]),
+                    band_low=float(r["band_low"]),
+                    band_high=float(r["band_high"]),
+                    current=float(r["current"]),
+                    deviation=dev,
+                    deviation_sigma=(
+                        float(r["deviation_sigma"])
+                        if r["deviation_sigma"] is not None
+                        else None
+                    ),
+                    min_current_floor=float(r["min_current_floor"]),
+                    sample_days=int(r["sample_days"]),
+                    active_days=int(r["active_days"]),
+                    insufficient_history=bool(r["insufficient_history"]),
+                    spillover_current=float(r["spillover_current"]),
+                    features=feats if isinstance(feats, dict) else {},
+                    computed_at=(
+                        ca.isoformat() if hasattr(ca, "isoformat") else (
+                            str(ca) if ca is not None else None
+                        )
+                    ),
+                )
+            )
+        return DeskBaselineBoard(
+            available=True,
+            computed_at=(
+                latest.isoformat() if hasattr(latest, "isoformat") else (
+                    str(latest) if latest is not None else None
+                )
+            ),
+            counts=counts,
+            rows=out,
         )
 
     @router.get("/eval/country_scorecard", response_model=list[CountryScorecard])

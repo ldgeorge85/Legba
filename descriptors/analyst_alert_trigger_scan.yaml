@@ -1,0 +1,89 @@
+# Alert Trigger Scan analyst descriptor (P1-3 — verification-gated alerting,
+# trigger set v1).
+#
+# A first-class `deterministic`-kind META analyst that, on a ~10-minute
+# cadence, scans VERIFIED substrate state for TRANSITIONS and side-writes one
+# `kind='alert'` analyst_outputs row per fired trigger, fanning each outward
+# through the shared P1-1 alert-sink dispatcher (ledger row per sink outcome +
+# webhook when configured). Trigger classes:
+#
+#   1. band_crossing      — a desk×dimension scorecard band changed vs the
+#                           previous scorecard row (deterioration=high,
+#                           improvement / evidence transitions=medium).
+#   2. verified_finding   — a NEW high-severity finding that met the verified
+#                           bar (faithfulness verdict present AND
+#                           effective_confidence >= 0.50; structural
+#                           verify-exempt analysts excluded). high.
+#   3. contention_flip    — a fact_contention group changed state / newly
+#                           appeared, tied to a verified finding through its
+#                           supporting facts. medium.
+#   4. baseline_deviation — last-24h desk signal volume / high-sev finding
+#                           count exceeded the trailing 28-day same-desk
+#                           mean+2σ baseline (rising edge only). medium.
+#
+# Statefulness: durable per-transition watermarks in alert_trigger_watermarks
+# (migration 0091) — the same transition NEVER refires, and each class's
+# first-ever scan seeds silently (no history paging). Anti-noise at this tier:
+# per desk max `per_desk_cap` (3) alerts per scan, worst-first, remainder
+# folded into ONE honest per-desk rollup; the dispatcher's per-sink cooldown +
+# idempotency stay the downstream floor.
+#
+# Target-agnostic + META: the triggers read the WHOLE substrate (all desks'
+# scorecards / findings / contentions) per scan. No `targets` selector → a
+# SINGLE global run per cadence tick; the handler reads directly via
+# deps.pg_pool and ignores the materialized input slice.
+#
+# Method:
+#   * kind = deterministic — pure SQL, NO LLM, token usage always zero.
+#   * impl = the deterministic kind dispatcher module:run_method, which routes
+#     by `options.sub_handler`. Set explicitly AND id == sub-handler name so
+#     either resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "3-59/10 * * * *" — every 10 minutes at :03 offset
+#     (clear of the :41 integrity sweep and the on-the-hour sweeps).
+#   * cooldown_seconds = 480 — an 8-min floor below the 10-min tick, so an
+#     organic tick is never swallowed by its own cooldown.
+#
+# State: draft in-tree — registration (scripts/bringup_register_
+# alert_trigger_scan.py) and the operator's activate flip are DEPLOY steps.
+
+identity:
+  id: alert_trigger_scan
+  name: Alert Trigger Scan
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: p1_3_triggers
+
+subscription:
+  # No `targets` block → META analyst: one global scan per cadence tick over
+  # the whole substrate. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: alert_trigger_scan
+  # Deterministic kinds carry no LLM block and no per-day token budget — the
+  # whole run is pure SQL over the live substrate.
+
+cadence:
+  fallback_schedule: "3-59/10 * * * *"
+  cooldown_seconds: 480
+
+# No output bindings: the run summary is TRACE_ONLY (audited in
+# analyst_traces); the REAL product — the kind='alert' rows — is side-written
+# by the handler and fanned outward through the shared P1-1 dispatcher.
+outputs: []

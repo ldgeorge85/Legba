@@ -26,6 +26,17 @@ The watchdog is intentionally tolerant of a *cold* rig: it does not fire until
 it has seen at least one message OR ``stall_after`` has elapsed since start, so
 a freshly-booted, not-yet-seeded stack doesn't immediately self-alert. (Boot
 grace = ``stall_after`` from construction time.)
+
+B0-12 (durable per-entity alerts + precision): the per-analyst / per-source
+cadence checks and the per-source empty-streak check alert on the
+STATE-TRANSITION EDGE — one durable ``alert_sink_deliveries`` row
+(``sink_kind='liveness_watchdog'``, ``payload_summary.state``
+'entered'/'recovered') plus a P1-1 outward fan-out per transition, silence
+while a condition persists, restart-safe via a ledger-seeded state map. The
+empty-streak check additionally discriminates honest-quiet feeds (newest
+observed upstream entry <= our last ingest → NO alert) from cursor/filter
+faults (upstream carries newer entries yet polls yield 0 → escalate) using
+the ``newest_entry_ts`` evidence the source handlers record per poll.
 """
 
 from __future__ import annotations
@@ -97,18 +108,30 @@ _SOURCE_CADENCE_MIN_THRESHOLD_S = 3.0 * 3600.0
 # cadence window expires.
 _EMPTY_STREAK_ENV = "LEGBA_SOURCE_EMPTY_STREAK_THRESHOLD"
 _DEFAULT_EMPTY_STREAK = 5
-# Re-alert cadence for a CONTINUING empty-streak degradation. This is
-# deliberately much longer than the global-stall realert: a degraded source is
-# a slow-moving fact, and re-escalating it on every 30-min check drowned the
-# log (~1.2k ERROR lines/day across a dozen degraded sources, 2026-07-21
-# review). A NEW episode (source recovered, then degraded again) alerts
-# immediately — the rate-limit stamp is cleared on recovery.
-_EMPTY_STREAK_REALERT_ENV = "LEGBA_SOURCE_EMPTY_STREAK_REALERT_MINUTES"
-_DEFAULT_EMPTY_STREAK_REALERT_MIN = 360.0  # 6h
 # How many recent poll-outcome rows per source the streak read pulls back. The
 # streak only counts leading 'empty' rows, so a window comfortably above the
 # threshold is enough to confirm the run and see the breaking row (if any).
 _EMPTY_STREAK_WINDOW = 20
+
+# B0-12 — durable per-entity alert channels (``alert_sink_deliveries.
+# channel_name``; ``sink_target`` carries the entity id). The per-analyst /
+# per-source checks used to only publish to the streamless NATS subject —
+# alerts EVAPORATED (no durable consumer) and a persistently-bad entity was
+# re-escalated on a heartbeat (~1.2k ERROR lines/day across a dozen degraded
+# sources, 2026-07-21 review). Now each check alerts on the STATE-TRANSITION
+# EDGE, not the level: one durable ``state='entered'`` row (+ P1-1 outward
+# fan-out) when an entity enters the bad state, one ``state='recovered'`` row
+# when it leaves it, silence in between. The last-alerted state is re-seeded
+# from the ledger on boot so a restart cannot re-fire an ongoing condition.
+ALERT_CHANNEL_GLOBAL = "liveness_stall"
+ALERT_CHANNEL_ANALYST = "analyst_cadence_stall"
+ALERT_CHANNEL_SOURCE = "source_cadence_stall"
+ALERT_CHANNEL_SOURCE_DEGRADED = "source_degraded"
+_TRANSITION_CHANNELS = (
+    ALERT_CHANNEL_ANALYST,
+    ALERT_CHANNEL_SOURCE,
+    ALERT_CHANNEL_SOURCE_DEGRADED,
+)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -146,11 +169,10 @@ class WatchdogConfig:
     # interval (floored at _CADENCE_MIN_THRESHOLD_S).
     cadence_stall_factor: float = _DEFAULT_CADENCE_FACTOR
     # OBS (D19): a source is escalated to 'degraded' once its most-recent
-    # consecutive 'empty' poll-outcome run reaches this length.
+    # consecutive 'empty' poll-outcome run reaches this length. (B0-12: the
+    # former per-episode re-alert heartbeat is gone — a continuing episode is
+    # silent; alerts fire only on the entered/recovered transition edges.)
     empty_streak_threshold: int = _DEFAULT_EMPTY_STREAK
-    # Re-alert cadence for a CONTINUING degradation episode (a new episode
-    # alerts immediately; see check_source_empty_streak_once).
-    empty_streak_realert_every_s: float = _DEFAULT_EMPTY_STREAK_REALERT_MIN * 60.0
 
     @classmethod
     def from_env(cls) -> "WatchdogConfig":
@@ -160,9 +182,6 @@ class WatchdogConfig:
             check_interval_s=_env_float(_INTERVAL_ENV, _DEFAULT_CHECK_SECONDS),
             cadence_stall_factor=_env_float(_CADENCE_FACTOR_ENV, _DEFAULT_CADENCE_FACTOR),
             empty_streak_threshold=_env_int(_EMPTY_STREAK_ENV, _DEFAULT_EMPTY_STREAK),
-            empty_streak_realert_every_s=_env_float(
-                _EMPTY_STREAK_REALERT_ENV, _DEFAULT_EMPTY_STREAK_REALERT_MIN
-            ) * 60.0,
         )
 
 
@@ -182,6 +201,7 @@ class LivenessWatchdog:
         *,
         pg_store: Any = None,
         is_leader: Any = None,
+        alert_sinks: Any = None,
     ) -> None:
         self._nats = nats_store
         self._cfg = config or WatchdogConfig.from_env()
@@ -200,12 +220,19 @@ class LivenessWatchdog:
         # is itself not leader-gated.
         self._pg = pg_store
         self._is_leader = is_leader
-        # Per-analyst alert rate-limit, keyed by analyst id → monotonic ts.
-        self._last_cadence_alert_at: dict[str, float] = {}
-        # Per-source alert rate-limit (DQ-H5), keyed by source id → monotonic ts.
-        self._last_source_alert_at: dict[str, float] = {}
-        # Per-source empty-streak alert rate-limit (D19), keyed by source id.
-        self._last_empty_streak_alert_at: dict[str, float] = {}
+        # P1-1 — optional outward alert-sink dispatcher
+        # (:class:`legba.data.alerts.AlertSinkDispatcher`). When wired, a
+        # global-stall alert ALSO fans out through the registered sinks
+        # (webhook first) so a full-pipeline stall can page an operator
+        # endpoint, not just land a ledger row. Best-effort by the
+        # dispatcher's never-raise contract.
+        self._alert_sinks = alert_sinks
+        # B0-12 — per-entity last-alerted state, channel → entity → state
+        # ('entered' | 'recovered'). None until lazily seeded from the durable
+        # ``alert_sink_deliveries`` ledger (so a restart cannot re-fire an
+        # ongoing condition); maintained in memory afterwards — this watchdog
+        # is the only writer of its channels and is leader-gated.
+        self._alert_states: dict[str, dict[str, str]] | None = None
 
     # -- activity recording (subscription callbacks) --------------------
 
@@ -341,15 +368,56 @@ class LivenessWatchdog:
         # operator-visible escalations panel (D1) + the W1-T3 non-delivery canary
         # both read that table — so a full-pipeline stall is LOUD, not silent.
         await self._record_stall_delivery(title, body, idle_min)
+        # P1-1: outward fan-out (webhook etc.) — a stall alert that only ever
+        # landed internal rows still needed a human to be LOOKING; when a sink
+        # is configured this pages the operator endpoint directly.
+        await self._fan_out_alert_sinks(title, body)
 
-    async def _record_stall_delivery(
-        self, title: str, body: str, idle_min: float
+    async def _fan_out_alert_sinks(
+        self,
+        title: str,
+        body: str,
+        *,
+        channel_name: str = ALERT_CHANNEL_GLOBAL,
+        severity: str = "high",
     ) -> None:
-        """Persist a global-stall alert as a durable ``alert_sink_deliveries`` row
-        (status ``logged_only`` — recorded, not externally delivered) so it
-        surfaces where the operator already looks, instead of evaporating on the
-        streamless NATS subject (B0-12). Fail-safe: a write error must NEVER crash
-        the watchdog loop (the whole point is to observe stalls, not add one)."""
+        """Push an alert through the P1-1 alert-sink dispatcher.
+
+        Guarded — the watchdog loop must never die on the outward edge (the
+        dispatcher itself never raises; this wraps the payload shaping too).
+        """
+        if self._alert_sinks is None:
+            return
+        try:
+            from ..data.alerts.sinks import runtime_alert_payload
+
+            payload = runtime_alert_payload(
+                channel_name=channel_name,
+                summary=title,
+                detail=body,
+                severity=severity,
+            )
+            await self._alert_sinks.fan_out(payload)
+        except Exception as exc:  # pragma: no cover — never crash the loop
+            logger.warning(
+                "liveness_watchdog.alert_sink_fanout_failed err=%s", exc
+            )
+
+    async def _insert_delivery_row(
+        self,
+        *,
+        channel_name: str,
+        sink_target: str,
+        severity: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Persist one durable ``alert_sink_deliveries`` row (status
+        ``logged_only`` — recorded, not externally delivered) so the alert
+        surfaces where the operator already looks (the escalations panel +
+        the W1-T3 non-delivery canary), instead of evaporating on the
+        streamless NATS subject (B0-12). Fail-safe: a write error must NEVER
+        crash the watchdog loop (the whole point is to observe stalls, not
+        add one)."""
         if self._pg is None:
             return
         try:
@@ -361,24 +429,169 @@ class LivenessWatchdog:
                         attempt_number, status, payload_summary
                     ) VALUES ($1, $2, $3, $4, 1, $5, $6::jsonb)
                     """,
-                    "liveness_stall",       # channel_name
+                    channel_name,
                     "liveness_watchdog",    # sink_kind
-                    "operator",             # sink_target
-                    "high",                 # severity
+                    sink_target,
+                    severity,
                     "logged_only",          # status: durable, not externally delivered
-                    json.dumps(
-                        {
-                            "kind": "pipeline_stall",
-                            "title": title[:200],
-                            "body": body[:2000],
-                            "idle_minutes": round(idle_min, 1),
-                        },
-                        separators=(",", ":"),
-                    ),
+                    json.dumps(payload, separators=(",", ":"), default=str),
                 )
         except Exception as exc:  # pragma: no cover — never crash the loop
             logger.warning(
-                "liveness_watchdog.stall_delivery_write_failed err=%s", exc
+                "liveness_watchdog.delivery_row_write_failed channel=%s "
+                "target=%s err=%s", channel_name, sink_target, exc,
+            )
+
+    async def _record_stall_delivery(
+        self, title: str, body: str, idle_min: float
+    ) -> None:
+        """The GLOBAL pipeline-stall durable row (B0-12, 2026-07-14)."""
+        await self._insert_delivery_row(
+            channel_name=ALERT_CHANNEL_GLOBAL,
+            sink_target="operator",
+            severity="high",
+            payload={
+                "kind": "pipeline_stall",
+                "title": title[:200],
+                "body": body[:2000],
+                "idle_minutes": round(idle_min, 1),
+            },
+        )
+
+    # -- B0-12: durable transition-edge alert state ---------------------
+
+    async def _get_alert_states(self, channel: str) -> dict[str, str]:
+        """The mutable entity → last-alerted-state map for ``channel``.
+
+        Lazily seeded ONCE per process from the durable ledger (see
+        :meth:`_seed_alert_states`); in-memory afterwards.
+        """
+        if self._alert_states is None:
+            self._alert_states = await self._seed_alert_states()
+        return self._alert_states.setdefault(channel, {})
+
+    async def _seed_alert_states(self) -> dict[str, dict[str, str]]:
+        """Rebuild the per-entity last-alerted state from the durable ledger.
+
+        The newest ``liveness_watchdog`` row per (channel, entity) carries
+        ``payload_summary.state`` ('entered' | 'recovered') — that IS the
+        restart-safe alert state, so no separate state table is needed. A
+        seed failure degrades to an EMPTY state (an ongoing condition may
+        then re-fire its entry alert once — the right failure direction for
+        an alerting path) and is cached so a broken DB isn't re-queried
+        every check.
+        """
+        states: dict[str, dict[str, str]] = {ch: {} for ch in _TRANSITION_CHANNELS}
+        if self._pg is None:
+            return states
+        try:
+            async with self._pg.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT ON (channel_name, sink_target)
+                           channel_name, sink_target,
+                           payload_summary->>'state' AS state
+                    FROM alert_sink_deliveries
+                    WHERE sink_kind = 'liveness_watchdog'
+                      AND channel_name = ANY($1::text[])
+                      AND sink_target IS NOT NULL
+                    ORDER BY channel_name, sink_target, attempted_at DESC
+                    """,
+                    list(_TRANSITION_CHANNELS),
+                )
+        except Exception as exc:
+            logger.warning(
+                "liveness_watchdog.alert_state_seed_failed err=%s — starting "
+                "from empty state (an ongoing condition may re-alert once)",
+                exc,
+            )
+            return states
+        for r in rows:
+            row = dict(r)
+            channel = row.get("channel_name")
+            entity = row.get("sink_target")
+            state = row.get("state")
+            if channel in states and entity and state in ("entered", "recovered"):
+                states[channel][str(entity)] = str(state)
+        return states
+
+    async def _record_transition(
+        self,
+        *,
+        channel: str,
+        entity_id: str,
+        state: str,
+        severity: str,
+        kind: str,
+        title: str,
+        body: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Mark an entity's alert-state transition (entry or recovery).
+
+        In-memory FIRST (the edge gate must hold this process even when the
+        durable write fails — else a broken DB turns the edge back into a
+        60s-level firehose), then the durable ``alert_sink_deliveries`` row,
+        then the P1-1 outward fan-out. Every leg is fail-safe.
+        """
+        states = await self._get_alert_states(channel)
+        states[entity_id] = state
+        payload: dict[str, Any] = {
+            "kind": kind,
+            "state": state,
+            "title": title[:200],
+            "body": body[:2000],
+        }
+        if extra:
+            payload.update(extra)
+        await self._insert_delivery_row(
+            channel_name=channel,
+            sink_target=entity_id,
+            severity=severity,
+            payload=payload,
+        )
+        await self._fan_out_alert_sinks(
+            title, body, channel_name=channel, severity=severity,
+        )
+
+    async def _emit_recoveries(
+        self,
+        *,
+        channel: str,
+        kind: str,
+        noun: str,
+        still_bad: set[str],
+    ) -> None:
+        """Fire the recovery edge for every entity durably 'entered' on
+        ``channel`` that is no longer in the bad set — once per episode.
+
+        Severity 'info' (a closed episode is information, not a page); no
+        streamless NATS publish — the durable row + P1-1 fan-out are the
+        operator-visible surfaces.
+        """
+        states = await self._get_alert_states(channel)
+        for entity_id, state in list(states.items()):
+            if state != "entered" or entity_id in still_bad:
+                continue
+            title = f"{noun} recovered: {entity_id}"
+            body = (
+                f"{noun} '{entity_id}' has cleared the condition behind its "
+                f"'{channel}' alert — the episode is closed. A future "
+                "recurrence will alert anew (transition-edge alerting: one "
+                "alert on entry, one on recovery, silence in between)."
+            )
+            logger.info(
+                "liveness_watchdog.recovered channel=%s entity=%s",
+                channel, entity_id,
+            )
+            await self._record_transition(
+                channel=channel,
+                entity_id=entity_id,
+                state="recovered",
+                severity="info",
+                kind=kind,
+                title=title,
+                body=body,
             )
 
     async def _publish_alert(self, envelope: dict[str, Any]) -> None:
@@ -404,8 +617,14 @@ class LivenessWatchdog:
 
         The global stall check can't see one analyst going dark while the
         aggregate pipeline still flows; this closes that gap. Leader-gated (so
-        only one replica alerts), boot-graced (no alert until analysts have had
-        a chance to run after a cold start), and rate-limited per analyst.
+        only one replica alerts) and boot-graced (no alert until analysts have
+        had a chance to run after a cold start).
+
+        B0-12 transition-edge alerting: an analyst entering the stale state
+        fires ONCE (streamless NATS + durable ``entered`` row + P1-1 outward
+        fan-out, severity high); the CONTINUING condition is silent; leaving
+        the stale state fires ONE ``recovered`` row (severity info). The
+        last-alerted state survives restarts via the durable ledger.
         """
         if self._pg is None:
             return []
@@ -422,14 +641,19 @@ class LivenessWatchdog:
             factor=self._cfg.cadence_stall_factor,
             min_threshold_s=_CADENCE_MIN_THRESHOLD_S,
         )
+        states = await self._get_alert_states(ALERT_CHANNEL_ANALYST)
         alerted: list[str] = []
         for analyst_id, age_s, threshold_s in stale:
-            last = self._last_cadence_alert_at.get(analyst_id)
-            if last is not None and (now_monotonic - last) < self._cfg.realert_every_s:
-                continue
+            if states.get(analyst_id) == "entered":
+                continue  # ongoing condition — the entry edge already fired
             await self._emit_cadence_alert(analyst_id, age_s, threshold_s)
-            self._last_cadence_alert_at[analyst_id] = now_monotonic
             alerted.append(analyst_id)
+        await self._emit_recoveries(
+            channel=ALERT_CHANNEL_ANALYST,
+            kind="analyst_cadence_recovered",
+            noun="Analyst",
+            still_bad={aid for aid, _, _ in stale},
+        )
         return alerted
 
     async def _fetch_cadence_rows(self) -> list[dict[str, Any]]:
@@ -483,6 +707,17 @@ class LivenessWatchdog:
             thr_h,
         )
         await self._publish_alert(envelope)
+        # B0-12: durable entry edge + outward fan-out.
+        await self._record_transition(
+            channel=ALERT_CHANNEL_ANALYST,
+            entity_id=analyst_id,
+            state="entered",
+            severity="high",
+            kind="analyst_cadence_stall",
+            title=title,
+            body=body,
+            extra={"age_hours": round(age_h, 1)},
+        )
 
     # -- OBS: per-source cadence-liveness (DQ-H5) -----------------------
 
@@ -493,7 +728,15 @@ class LivenessWatchdog:
         The sweep found 10 active sources silent >7d while the aggregate signal
         wildcard never went quiet (other sources kept publishing) — the poll
         fired HTTP-200, wrote 0 signals + 0 error rows, and nothing noticed.
-        Mirrors the per-analyst check: leader-gated, boot-graced, rate-limited.
+        Mirrors the per-analyst check: leader-gated, boot-graced,
+        transition-edge alerted (entry + recovery only — B0-12).
+
+        B0-12 precision: a cadence-stale source whose freshest poll evidence
+        shows the FEED ITSELF is quiet (clean empty poll, newest observed
+        upstream entry <= our newest ingested signal) is a slow news day —
+        weekly/monthly feeds were 7/8 of the B0-11 false-positive cluster —
+        and stays SILENT (it also counts as recovered for a previously-fired
+        stall alert).
         """
         if self._pg is None:
             return []
@@ -512,16 +755,27 @@ class LivenessWatchdog:
             id_key="source_id",
             ts_key="last_signal",
         )
+        # Honest-quiet discriminator gate (no alert; see docstring).
+        stale = [
+            (source_id, age_s, threshold_s)
+            for source_id, age_s, threshold_s in stale
+            if not _source_stall_is_honest_quiet(rows_by_id.get(source_id) or {})
+        ]
+        states = await self._get_alert_states(ALERT_CHANNEL_SOURCE)
         alerted: list[str] = []
         for source_id, age_s, threshold_s in stale:
-            last = self._last_source_alert_at.get(source_id)
-            if last is not None and (now_monotonic - last) < self._cfg.realert_every_s:
-                continue
+            if states.get(source_id) == "entered":
+                continue  # ongoing condition — the entry edge already fired
             await self._emit_source_cadence_alert(
                 source_id, age_s, threshold_s, rows_by_id.get(source_id) or {},
             )
-            self._last_source_alert_at[source_id] = now_monotonic
             alerted.append(source_id)
+        await self._emit_recoveries(
+            channel=ALERT_CHANNEL_SOURCE,
+            kind="source_cadence_recovered",
+            noun="Source",
+            still_bad={sid for sid, _, _ in stale},
+        )
         return alerted
 
     async def _fetch_source_cadence_rows(self) -> list[dict[str, Any]]:
@@ -552,18 +806,21 @@ class LivenessWatchdog:
                        po.outcome                                       AS last_poll_outcome,
                        po.health_state                                  AS last_poll_health,
                        po.error                                         AS last_poll_error,
-                       po.occurred_at                                   AS last_poll_at
+                       po.occurred_at                                   AS last_poll_at,
+                       po.newest_entry_ts                               AS last_poll_newest_entry_ts
                 FROM source_descriptors d
                 LEFT JOIN signals s ON s.source_id = d.descriptor_id
                 LEFT JOIN LATERAL (
-                    SELECT outcome, health_state, error, occurred_at
+                    SELECT outcome, health_state, error, occurred_at,
+                           newest_entry_ts
                     FROM source_poll_outcomes
                     WHERE source_id = d.descriptor_id
                     ORDER BY occurred_at DESC
                     LIMIT 1
                 ) po ON TRUE
                 WHERE d.is_head AND d.state = 'active'
-                GROUP BY 1, 2, po.outcome, po.health_state, po.error, po.occurred_at
+                GROUP BY 1, 2, po.outcome, po.health_state, po.error,
+                         po.occurred_at, po.newest_entry_ts
                 """
             )
         return [dict(r) for r in rows]
@@ -598,20 +855,41 @@ class LivenessWatchdog:
             source_id, age_h, thr_h,
         )
         await self._publish_alert(envelope)
+        # B0-12: durable entry edge + outward fan-out.
+        await self._record_transition(
+            channel=ALERT_CHANNEL_SOURCE,
+            entity_id=source_id,
+            state="entered",
+            severity="high",
+            kind="source_cadence_stall",
+            title=title,
+            body=body,
+            extra={"age_hours": round(age_h, 1)},
+        )
 
     # -- OBS: per-source empty-200 streak escalation (D19) ---------------
 
     async def check_source_empty_streak_once(self, now_monotonic: float) -> list[str]:
         """Escalate any source whose most-recent CONSECUTIVE 'empty' poll-outcome
-        run has reached ``empty_streak_threshold`` to a 'degraded' alert.
+        run has reached ``empty_streak_threshold`` — unless the run is
+        classified honest-quiet.
 
         This catches the xinhua/aljazeera dead-15d class: a feed that keeps
         firing HTTP-200-with-0-items, logs every poll health='healthy', and so
         never registers as an error — yet is functionally dead. The cadence
         check eventually trips on signal staleness, but for a 6-hourly source
         that is many hours later; the empty-streak run reaches the threshold
-        much sooner. Leader-gated, boot-graced, rate-limited per source. Reuses
-        the analyst_outputs kind='alert' path — NO new table.
+        much sooner.
+
+        B0-12 precision: each empty poll-outcome row may carry the handler's
+        ``newest_entry_ts`` observation, which splits the qualifying streaks
+        (see :func:`_evaluate_empty_streaks`) into honest-quiet (feed simply
+        has nothing newer than our last ingest → NO alert — this was the
+        B0-11 false-quiet class), cursor_fault (feed CARRIES newer entries
+        yet the polls yield 0 — the cursor/filter is eating live content →
+        escalate high), and unknown (no evidence → the pre-existing degraded
+        escalation). Leader-gated, boot-graced, transition-edge alerted
+        (entry + recovery only; a continuing episode is silent).
         """
         if self._pg is None:
             return []
@@ -623,23 +901,24 @@ class LivenessWatchdog:
         degraded = _evaluate_empty_streaks(
             rows, threshold=self._cfg.empty_streak_threshold
         )
-        # Episode reset: a source no longer degraded drops its rate-limit
-        # stamp, so a RE-degradation alerts immediately instead of waiting out
-        # the (long) continuing-episode realert interval.
-        degraded_ids = {source_id for source_id, _, _ in degraded}
-        for sid in list(self._last_empty_streak_alert_at):
-            if sid not in degraded_ids:
-                del self._last_empty_streak_alert_at[sid]
+        states = await self._get_alert_states(ALERT_CHANNEL_SOURCE_DEGRADED)
         alerted: list[str] = []
-        for source_id, streak, latest_at in degraded:
-            last = self._last_empty_streak_alert_at.get(source_id)
-            if last is not None and (
-                (now_monotonic - last) < self._cfg.empty_streak_realert_every_s
-            ):
-                continue
-            await self._emit_empty_streak_alert(source_id, streak, latest_at)
-            self._last_empty_streak_alert_at[source_id] = now_monotonic
+        for source_id, streak, latest_at, fault_class in degraded:
+            if states.get(source_id) == "entered":
+                continue  # ongoing episode — the entry edge already fired
+            await self._emit_empty_streak_alert(
+                source_id, streak, latest_at, fault_class,
+            )
             alerted.append(source_id)
+        # Recovery edge: a previously-alerted source that is no longer in the
+        # degraded set (producing again, streak broken, or reclassified
+        # honest-quiet) closes its episode — a re-degradation alerts anew.
+        await self._emit_recoveries(
+            channel=ALERT_CHANNEL_SOURCE_DEGRADED,
+            kind="source_degraded_recovered",
+            noun="Source",
+            still_bad={sid for sid, _, _, _ in degraded},
+        )
         return alerted
 
     async def _fetch_source_empty_streak_rows(self) -> list[dict[str, Any]]:
@@ -654,7 +933,10 @@ class LivenessWatchdog:
         empty poll is OLDER than a produced signal (the source is alive again).
         Without it, an actively-producing source whose last recorded outcome rows
         happen to be empty stays pinned DEGRADED forever. Each output row is one
-        outcome: ``{source_id, outcome, occurred_at, health_state, last_signal}``.
+        outcome: ``{source_id, outcome, occurred_at, health_state,
+        newest_entry_ts, last_signal}`` — ``newest_entry_ts`` (B0-12) is the
+        handler's newest-observed-upstream-entry evidence the discriminator
+        keys on (NULL for handlers that don't record it).
         """
         # _EMPTY_STREAK_WINDOW is a trusted module-level int constant (not user
         # input); inlined into the LATERAL LIMIT.
@@ -662,16 +944,18 @@ class LivenessWatchdog:
         async with self._pg.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                SELECT po.source_id    AS source_id,
-                       po.outcome      AS outcome,
-                       po.occurred_at  AS occurred_at,
-                       po.health_state AS health_state,
+                SELECT po.source_id        AS source_id,
+                       po.outcome          AS outcome,
+                       po.occurred_at      AS occurred_at,
+                       po.health_state     AS health_state,
+                       po.newest_entry_ts  AS newest_entry_ts,
                        (SELECT max(s.fetched_at)
                           FROM signals s
                          WHERE s.source_id = d.descriptor_id) AS last_signal
                 FROM source_descriptors d
                 JOIN LATERAL (
-                    SELECT source_id, outcome, occurred_at, health_state
+                    SELECT source_id, outcome, occurred_at, health_state,
+                           newest_entry_ts
                     FROM source_poll_outcomes
                     WHERE source_id = d.descriptor_id
                     ORDER BY occurred_at DESC
@@ -684,7 +968,11 @@ class LivenessWatchdog:
         return [dict(r) for r in rows]
 
     async def _emit_empty_streak_alert(
-        self, source_id: str, streak: int, latest_at: Any
+        self,
+        source_id: str,
+        streak: int,
+        latest_at: Any,
+        fault_class: str = "unknown",
     ) -> None:
         when_s = ""
         if isinstance(latest_at, datetime):
@@ -692,55 +980,152 @@ class LivenessWatchdog:
                 " (most recent empty poll "
                 f"{latest_at.astimezone(timezone.utc).isoformat(timespec='seconds')})"
             )
-        title = f"Source degraded: {source_id} — {streak} consecutive empty polls"
-        body = (
-            f"Source '{source_id}' has returned {streak} consecutive empty polls "
-            f"(HTTP-200 but 0 new signals){when_s}, at/above the degraded "
-            f"threshold of {self._cfg.empty_streak_threshold}. Each poll logged "
-            "health='healthy', so it never registered as an error, but a feed "
-            "that keeps fetching cleanly and producing nothing is functionally "
-            "DEAD (the xinhua/aljazeera dead-15d class). Health state is "
-            "escalated to DEGRADED: re-probe the feed URL/cursor/filter — the "
-            "endpoint may have moved, the cursor may be over-trimming, or the "
-            "feed may genuinely be retired. Pause or repoint the source."
-        )
+        if fault_class == "cursor_fault":
+            # B0-12: the discriminator PROVED the feed carries entries newer
+            # than our newest ingested signal while every poll yields 0 — the
+            # cursor / since-filter / ingestion filter is eating live content
+            # (the B0-11 stategov cursor-poison class). This is the escalation
+            # the old check could not distinguish from a slow news day.
+            title = (
+                f"Source cursor/filter fault: {source_id} — upstream has newer "
+                f"entries but {streak} consecutive polls yielded 0"
+            )
+            body = (
+                f"Source '{source_id}' has returned {streak} consecutive empty "
+                f"polls (HTTP-200 but 0 new signals){when_s}, and the handler "
+                "OBSERVED entries in the feed NEWER than this source's newest "
+                "ingested signal — upstream is publishing, but the pipeline is "
+                "discarding it. This is a cursor/filter fault, not a quiet "
+                "feed (the B0-11 stategov cursor-poison class): check the "
+                "stored cursor timestamp (future-skew poison), the since-"
+                "filter, and the ingestion/dedupe filters for this source."
+            )
+            tag = "cursor_fault"
+            kind = "source_cursor_fault"
+        else:
+            title = f"Source degraded: {source_id} — {streak} consecutive empty polls"
+            body = (
+                f"Source '{source_id}' has returned {streak} consecutive empty polls "
+                f"(HTTP-200 but 0 new signals){when_s}, at/above the degraded "
+                f"threshold of {self._cfg.empty_streak_threshold}. Each poll logged "
+                "health='healthy', so it never registered as an error, but a feed "
+                "that keeps fetching cleanly and producing nothing is functionally "
+                "DEAD (the xinhua/aljazeera dead-15d class). Health state is "
+                "escalated to DEGRADED: re-probe the feed URL/cursor/filter — the "
+                "endpoint may have moved, the cursor may be over-trimming, or the "
+                "feed may genuinely be retired. Pause or repoint the source."
+            )
+            tag = "source_degraded"
+            kind = "source_empty_degraded"
         envelope = _cadence_envelope(
             analyst_id=source_id, title=title, body=body, age_seconds=0.0
         )
         # Re-tag + carry the escalated health so subscribers can distinguish an
         # empty-streak degradation from a hard cadence/source stall.
         envelope["tags"] = [
-            "watchdog", "liveness", "source_degraded", "empty_streak", source_id,
+            "watchdog", "liveness", tag, "empty_streak", source_id,
         ]
         envelope["stale_source_id"] = source_id
         envelope["health_state"] = "degraded"
         envelope["empty_streak"] = int(streak)
+        envelope["fault_class"] = fault_class
         # age_seconds isn't meaningful for a streak escalation — drop the field
         # so it isn't misread as a 0-second-old signal.
         envelope.pop("age_seconds", None)
         logger.error(
             "liveness_watchdog.source_degraded source=%s empty_streak=%d "
-            "threshold=%d — escalating to degraded",
-            source_id, streak, self._cfg.empty_streak_threshold,
+            "threshold=%d fault_class=%s — escalating",
+            source_id, streak, self._cfg.empty_streak_threshold, fault_class,
         )
         await self._publish_alert(envelope)
+        # B0-12: durable entry edge + outward fan-out.
+        await self._record_transition(
+            channel=ALERT_CHANNEL_SOURCE_DEGRADED,
+            entity_id=source_id,
+            state="entered",
+            severity="high",
+            kind=kind,
+            title=title,
+            body=body,
+            extra={"empty_streak": int(streak), "fault_class": fault_class},
+        )
+
+
+def _as_aware_utc(dt: datetime) -> datetime:
+    """Normalize a possibly-naive datetime to aware UTC for comparison."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _classify_streak(
+    newest_entry_ts: datetime | None, last_signal: datetime | None
+) -> str:
+    """B0-12 empty-streak precision discriminator — the truth table.
+
+    ``newest_entry_ts``: the newest upstream-entry timestamp the handler
+    OBSERVED across the streak's polls (pre-since-filter, future-skew-clamped
+    at the handler). ``last_signal``: the source's newest INGESTED signal.
+
+      * no observation             → 'unknown'      (keep the old degraded path)
+      * never ingested + observed  → 'cursor_fault' (feed has entries, we
+                                                     yielded none — ever)
+      * observed >  last ingest    → 'cursor_fault' (upstream published, the
+                                                     cursor/filter ate it)
+      * observed <= last ingest    → 'honest_quiet' (feed is simply quiet —
+                                                     NO alert)
+    """
+    if newest_entry_ts is None:
+        return "unknown"
+    if last_signal is None:
+        return "cursor_fault"
+    if _as_aware_utc(newest_entry_ts) > _as_aware_utc(last_signal):
+        return "cursor_fault"
+    return "honest_quiet"
+
+
+def _source_stall_is_honest_quiet(row: dict[str, Any]) -> bool:
+    """B0-12 cadence-precision gate: is this cadence-stale source just QUIET?
+
+    True when the source's freshest poll evidence shows a clean empty poll
+    whose newest OBSERVED upstream entry is <= the source's newest ingested
+    signal — the feed itself has produced nothing new since we last ingested
+    (weekly/monthly feeds, slow news day), so a staleness alert would be the
+    B0-11 false-positive class. Any error outcome, missing evidence, or a
+    never-ingested source keeps the alert.
+    """
+    if (row.get("last_poll_outcome") or "") != "empty":
+        return False
+    newest = row.get("last_poll_newest_entry_ts")
+    last_signal = row.get("last_signal")
+    if not isinstance(newest, datetime) or not isinstance(last_signal, datetime):
+        return False
+    return _as_aware_utc(newest) <= _as_aware_utc(last_signal)
 
 
 def _evaluate_empty_streaks(
     rows: Any,
     *,
     threshold: int,
-) -> list[tuple[str, int, Any]]:
+) -> list[tuple[str, int, Any, str]]:
     """Pure empty-streak decision over poll-outcome rows — no DB, unit-testable.
 
     ``rows``: iterable of mappings with ``source_id``, ``outcome``
     ('empty'|'error'), ``occurred_at`` (tz-aware datetime), and (optionally)
-    ``last_signal`` (tz-aware datetime — the source's newest produced signal),
-    already grouped per source and ordered NEWEST-FIRST (the SQL guarantees
-    this). For each source, count the leading run of consecutive 'empty' rows;
-    the run breaks on the first 'error' row. Returns
-    ``(source_id, streak_len, newest_empty_at)`` for every source whose leading
-    empty run is >= ``threshold`` AND that is NOT producing again.
+    ``last_signal`` (tz-aware datetime — the source's newest produced signal)
+    and ``newest_entry_ts`` (the handler's newest-observed-upstream-entry
+    evidence for that poll — B0-12), already grouped per source and ordered
+    NEWEST-FIRST (the SQL guarantees this). For each source, count the leading
+    run of consecutive 'empty' rows; the run breaks on the first 'error' row.
+    Returns ``(source_id, streak_len, newest_empty_at, fault_class)`` for
+    every source whose leading empty run is >= ``threshold``, is NOT producing
+    again, and is NOT classified honest-quiet.
+
+    B0-12 discriminator: the run's newest non-null ``newest_entry_ts`` is
+    compared against ``last_signal`` by :func:`_classify_streak` —
+    'honest_quiet' runs (upstream's newest observed entry <= our last ingest:
+    the feed is simply quiet) are EXCLUDED (no alert; 7/8 of the B0-11
+    "stalled cluster" were this class); 'cursor_fault' runs (upstream carries
+    NEWER entries yet 0 yielded) and 'unknown' runs (no evidence — handlers
+    that don't record the observation, pre-B0-12 rows) are returned.
 
     Signal BOUND (supersedes the older newest-empty-only reset): a PRODUCTIVE
     poll writes NO outcome row (it is self-evidencing via its signals), so this
@@ -751,13 +1136,13 @@ def _evaluate_empty_streaks(
     it publishes accumulates an unbounded interleaved 'empty' run and is
     false-flagged (the foreignaffairs 2026-07-21 case: 2 signals ingested that
     morning, "empty_streak=20" alarm the same day). When ``last_signal`` is
-    absent (older callers / a source that has never produced), behavior is
-    unchanged: the contiguous 'empty' run alone decides, which is exactly the
+    absent (older callers / a source that has never produced), the contiguous
+    'empty' run alone decides the streak, which is exactly the
     xinhua/aljazeera dead case.
     """
     if threshold <= 0:
         return []
-    degraded: list[tuple[str, int, Any]] = []
+    degraded: list[tuple[str, int, Any, str]] = []
     by_source: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
     for r in rows:
@@ -777,6 +1162,7 @@ def _evaluate_empty_streaks(
         # poll at/before the signal is stale evidence, not part of the run).
         streak = 0
         newest_empty_at: Any = None
+        newest_observed: datetime | None = None
         for r in outcomes:
             if (r.get("outcome") or "") != "empty":
                 break
@@ -789,9 +1175,18 @@ def _evaluate_empty_streaks(
                 break
             if newest_empty_at is None:
                 newest_empty_at = occurred
+            # B0-12: aggregate the run's upstream-observation evidence.
+            observed = r.get("newest_entry_ts")
+            if isinstance(observed, datetime):
+                observed = _as_aware_utc(observed)
+                if newest_observed is None or observed > newest_observed:
+                    newest_observed = observed
             streak += 1
         if streak >= threshold:
-            degraded.append((sid, streak, newest_empty_at))
+            fault_class = _classify_streak(newest_observed, last_signal)
+            if fault_class == "honest_quiet":
+                continue  # the feed is simply quiet — stay silent (B0-12)
+            degraded.append((sid, streak, newest_empty_at, fault_class))
     return degraded
 
 

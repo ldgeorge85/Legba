@@ -1,0 +1,107 @@
+# Analyst-Traces Retention analyst descriptor (S-6 — TTL purge of aged
+# analyst_traces, LLM-free maintenance).
+#
+# A first-class `deterministic`-kind META analyst that, on a DAILY cadence,
+# deletes `analyst_traces` rows older than a configurable `ttl_days`. The
+# table is the per-run debug/telemetry receipt (prompt, llm_calls, tool_calls,
+# output_payload, receipt chain); it had NO retention and grew forever
+# (~470MB / 164k rows, +5.4k/day), feeding the disk pressure that breached
+# OpenSearch's watermark. This mirrors the `signals_retention` precedent
+# (migration 0036): a scheduled TTL PURGE, NOT a range-partition.
+#
+# DISABLED BY DEFAULT (mirrors signals_retention): `ttl_days` defaults to 0,
+# which makes the job a no-op. It ships inert and is turned on deliberately by
+# an operator setting LEGBA_ANALYST_TRACES_TTL_DAYS in the env (cadence fires carry no options; method.options is schema-forbidden — review fix 07-28).
+#
+# CADENCE-HEALTH SAFETY: the System Status / telemetry read
+# (runtime_telemetry_api) aggregates a 7-DAY window over `analyst_traces`, and
+# the liveness watchdog reads `max(run_started_at)` per analyst. A TTL that
+# purges INSIDE that window would blind the health surfaces — so `ttl_days`
+# MUST stay well above 7 (30+ recommended). The default-disabled posture means
+# nothing purges until an operator opts in with a generous value.
+#
+# FK CHILDREN are DB-handled, so the purge never orphans a row:
+#   * analyst_critiques.trace_id → ON DELETE CASCADE  (linked critique dropped
+#                                  with its aged trace, same transaction; the
+#                                  summary counts this)
+#   * output_dead_letter.run_id  → ON DELETE SET NULL (DLQ row preserved)
+# The receipt-chain `prev_receipt_hash` of the oldest surviving row dangles
+# (log-rotation semantics) — the audit checkpointer signs only the current
+# chain HEAD, so no full-history walk hard-fails.
+#
+# The per-run summary FINDING is the honest measurement product (traces_purged
+# + critiques_cascaded + ttl_days; zero-state honest — a disabled or no-match
+# sweep reports so explicitly), which keeps this handler in the FINDING-emitters
+# set the STRUCTURAL_VERIFY_EXEMPT drift guard asserts (renders with the
+# `unverified — structural` badge).
+#
+# Target-agnostic + META: sweeps the WHOLE analyst_traces table per scan. No
+# `targets` selector → a SINGLE global run per cadence tick; the handler reads
+# directly via deps.pg_pool and ignores the materialized input slice.
+#
+# Method:
+#   * kind = deterministic — pure SQL, NO LLM, token usage zero.
+#   * impl = the deterministic kind dispatcher module:run_method, which routes
+#     by `options.sub_handler`. Set explicitly AND id == sub-handler name so
+#     either resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "37 5 * * *" — daily at 05:37 UTC, OFFSET from the
+#     other maintenance sweeps (fact_decay_scan "52 4", legacy fact_decay
+#     "23 */8", integrity_sweep "41 */1", situation_clustering "5-59/20") so
+#     they never share a tick.
+#   * cooldown_seconds = 3600 — a batched daily purge; an hour re-fire floor is
+#     plenty (batch_limit bounds each run's lock time).
+#
+# State: draft in-tree — registration + the operator's activate flip (and the
+# opt-in `ttl_days`) are DEPLOY steps (migration 0101 must be applied first).
+
+identity:
+  id: analyst_traces_retention
+  name: Analyst-Traces Retention
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: s6_disk_creep
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over
+  # the whole analyst_traces table. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: analyst_traces_retention
+  # Deterministic kind: no LLM block and no per-day token budget — the whole
+  # run is one substrate read + a bounded batch DELETE.
+  #
+  # OPT-IN (ttl_days) is a FIRE-TIME run option, NOT a descriptor field — the
+  # AnalystDescriptor schema carries no default-run-options block (mirrors
+  # signals_retention, which is likewise disabled unless a run supplies it).
+  # The handler defaults ttl_days=0 (disabled), so every plain cadence fire is
+  # a no-op. To enable, an operator forces a run with a payload carrying a
+  # GENEROUS ttl_days (well above the 7-day cadence-health window):
+  #     {"options": {"ttl_days": 45, "batch_limit": 5000}}
+  # threaded verbatim into the run options (dapr_actors payload options
+  # pass-through).
+
+cadence:
+  fallback_schedule: "37 5 * * *"
+  cooldown_seconds: 3600
+
+# No output bindings: the summary finding rides the deterministic kind's
+# FINDING dispatch; the REAL product — the reclaimed disk from purged trace
+# rows — is the DELETE side-effect (fully audited in the run's own trace).
+outputs: []

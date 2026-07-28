@@ -25,9 +25,11 @@ from legba.data.analysts.inline_target import InlineTargetDeps
 from legba.data.analysts.journal_assessor import (
     NarrateToolCallLeakError,
     _apparatus_lead_flag,
+    _extract_source_health_claims,
     _is_tool_call_leak,
     _reflect_claims,
     _rewrite_gathered_citations,
+    _source_health_number_check,
     run_method,
 )
 
@@ -696,3 +698,289 @@ async def test_narrate_leak_fatal_never_writes_a_finding():
         assert False, "expected NarrateToolCallLeakError"
     except NarrateToolCallLeakError:
         pass  # exactly the expected failure mode — nothing else escaped
+
+
+# ---------------------------------------------------------------------------
+# S-1 — the source-health NUMBER guard (SWEEP_SYNTHESIS §T1-#1). A faculty lens
+# fabricated "0 active feeds / the window is dark" while get_source_health
+# returned 68/49; the entry shipped unflagged because the only guard re-called the
+# tool instead of reading the prose, and the lens path skipped even that. The new
+# guard extracts the whole-fleet counts the narrator WROTE and cross-checks them
+# against the live tool, forcing `source_health_fabricated` on divergence (flag,
+# never rewrite) — on EVERY tier.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_source_health_claims_pulls_key_and_nl_forms():
+    # the live "window is dark" fabrication — explicit key forms
+    dark = _extract_source_health_claims(
+        "The window is dark: active_total = 0, active_fresh = 0, "
+        "active_stalled = 0, total_wired = 0."
+    )
+    assert dark["active_total"] == {0}
+    assert dark["total_wired"] == {0}
+    # the correct entry — natural language "N active feeds" + "total wired = N"
+    ok = _extract_source_health_claims(
+        "49 active feeds, of which 32 are fresh, 17 stalled (total wired = 68)."
+    )
+    assert ok["active_total"] == {49}
+    assert ok["total_wired"] == {68}
+    # the "3" fabrication — key forms again
+    three = _extract_source_health_claims(
+        "active_total = 3, active_fresh = 2, active_stalled = 1, total_wired = 3."
+    )
+    assert three["active_total"] == {3}
+    assert three["total_wired"] == {3}
+    # the "N total wired" leading form
+    lead = _extract_source_health_claims("58 total wired this week.")
+    assert lead["total_wired"] == {58}
+
+
+def test_extract_source_health_claims_exempts_declared_subset():
+    # a NAMED subset count carries its own scope (persona contract) — not a
+    # whole-fleet claim, so it is NOT extracted as active_total.
+    subset = _extract_source_health_claims(
+        "Of the press-class subset, 3 active feeds carried the week."
+    )
+    assert "active_total" not in subset
+    # the volatile fields (fresh/stalled/erroring) are intentionally NOT validated:
+    # the natural-language "fresh"/"stalled" words never become claims.
+    volatile = _extract_source_health_claims("32 are fresh, 17 stalled, 2 erroring.")
+    assert volatile == {}
+
+
+def test_extract_source_health_claims_empty_on_no_numbers():
+    assert _extract_source_health_claims("A quiet week; nothing new to weigh.") == {}
+    assert _extract_source_health_claims("") == {}
+
+
+_SOURCE_HEALTH_68 = {
+    "summary": {
+        "total_wired": 68, "active_total": 49, "active_fresh": 37,
+        "active_stalled": 12, "active_erroring": 2,
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_number_check_flags_fabricated_dark_window():
+    binding = _FakeBinding(outputs={"get_source_health": _SOURCE_HEALTH_68})
+    steps: list[dict[str, Any]] = []
+    flags = await _source_health_number_check(
+        binding,
+        "The window is dark: 0 active feeds (active_total = 0, total_wired = 0).",
+        steps=steps,
+    )
+    assert flags == ["source_health_fabricated"]
+    assert any(name == "get_source_health" for name, _ in binding.calls)
+    step = next(s for s in steps if s.get("kind") == "source_health_fabricated")
+    assert {m["field"] for m in step["mismatches"]} == {"active_total", "total_wired"}
+
+
+@pytest.mark.asyncio
+async def test_number_check_passes_correct_numbers():
+    binding = _FakeBinding(outputs={"get_source_health": _SOURCE_HEALTH_68})
+    flags = await _source_health_number_check(
+        binding, "49 active feeds (total wired = 68); the intake is broad.", steps=[],
+    )
+    assert flags == []
+
+
+@pytest.mark.asyncio
+async def test_number_check_no_claim_makes_no_tool_call():
+    binding = _FakeBinding(outputs={"get_source_health": _SOURCE_HEALTH_68})
+    flags = await _source_health_number_check(
+        binding, "A quiet week under this prior; nothing to weigh.", steps=[],
+    )
+    assert flags == []
+    assert binding.calls == []  # no numeric claim → never even consults the tool
+
+
+@pytest.mark.asyncio
+async def test_number_check_degrades_without_binding():
+    assert await _source_health_number_check(
+        None, "active_total = 0, total_wired = 0.", steps=[],
+    ) == []
+
+
+# --- full arc on the LENS tier (the path the sibling guard skips) -----------
+
+
+def _lens_options(binding: Any) -> dict[str, Any]:
+    return {
+        "analyst_id": "lens_trend",
+        "agency_binding": binding,
+        "gather_tool_bindings": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_full_arc_lens_flags_fabricated_source_health():
+    """A LENS run whose prose declares "the window is dark" (0 feeds) while
+    get_source_health returns 68/49 must ship `source_health_fabricated` — proving
+    the guard runs on the lens entry_kind, exactly where _source_health_cross_check
+    (gather-slice-keyed) no-ops."""
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+        "get_source_health": _SOURCE_HEALTH_68,
+    })
+    scripted = [
+        '{"done": true}',                              # GATHER
+        "field notes",                                 # seam
+        "# Collection posture\n\nThe window is dark: 0 active feeds "
+        "(active_total = 0, active_fresh = 0, active_stalled = 0, "
+        "total_wired = 0). With no live intake I can weigh nothing this week.",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="LENS", max_rounds=1,
+        agency_binding=binding,
+    )
+    # inputs carry NO real signal rows (no source_id/id) → the sibling cross_check's
+    # distinct == 0 short-circuit fires; only the number guard runs on this tier.
+    result = await run_method([{"title": "seed"}], _lens_options(binding), deps)
+    payload = result.finding
+    assert payload.entry_kind == "lens"
+    assert "source_health_fabricated" in payload.honesty_flags
+    # the prose was preserved verbatim — annotate, never strip.
+    assert "the window is dark" in payload.body.lower()
+
+
+# ---------------------------------------------------------------------------
+# E-1 (2026-07-27 sweep) — the lens EMPTY-READ fallback. The Monday cycle's
+# lens_capability shipped "(empty lens read)" with 0 claims while the
+# chronicle/consolidation stayed substantive by reasoning over the verified
+# tower corpus. An empty lens NARRATE now gets ONE fallback narrate carrying
+# the tower-corpus redirect; a read STILL empty after it stays honestly empty.
+# ---------------------------------------------------------------------------
+
+
+def _capability_options(binding: Any) -> dict[str, Any]:
+    return {
+        "analyst_id": "lens_capability",
+        "agency_binding": binding,
+        "gather_tool_bindings": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_empty_lens_narrate_falls_back_to_tower_corpus():
+    """Empty slice + empty NARRATE → the fallback narrate runs (with the
+    tower-corpus redirect in its prompt) and its cited prose becomes the read."""
+    ref = uuid4()
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = [
+        '{"done": true}',                       # GATHER
+        "field notes over the tower top",       # seam
+        "",                                     # NARRATE → EMPTY (the live kill)
+        f"The tower's verified week: escalation held [[ref:{ref}]]. "
+        "Under my prior the materiel picture did not move.",   # fallback narrate
+    ]
+    llm = _ScriptedLLM(scripted)
+    deps = InlineTargetDeps(
+        llm=llm, system_prompt="LENS", max_rounds=1, agency_binding=binding,
+    )
+    # inputs: NO renderable signal rows — the empty-slice priming shape.
+    result = await run_method([], _capability_options(binding), deps)
+    payload = result.finding
+    assert payload.entry_kind == "lens"
+    assert "escalation held" in payload.body
+    assert payload.body != "(empty lens read)"
+    assert ref in payload.cited_substrate_refs
+    # The fallback prompt carried the tower-corpus redirect.
+    fallback_prompt = llm.calls[3]["messages"][0]["content"]
+    assert "VERIFIED TOWER CORPUS" in fallback_prompt
+    # Trace: the fallback fired and recovered.
+    kinds = [s.get("kind") for s in result.intermediate_steps
+             if s.get("phase") == "narrate"]
+    assert "empty_lens_fallback" in kinds
+    assert "empty_lens_fallback_recovered" in kinds
+
+
+@pytest.mark.asyncio
+async def test_empty_lens_still_empty_after_fallback_stays_honest():
+    """Fallback narrate ALSO empty → the read stays honestly '(empty lens
+    read)' with 0 claims — never fabricated."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = [
+        '{"done": true}',   # GATHER
+        "field notes",      # seam
+        "",                 # NARRATE → empty
+        "",                 # fallback narrate → STILL empty
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="LENS", max_rounds=1,
+        agency_binding=binding,
+    )
+    result = await run_method([], _capability_options(binding), deps)
+    payload = result.finding
+    assert payload.entry_kind == "lens"
+    assert payload.body == "(empty lens read)"
+    assert payload.claims == []
+    kinds = [s.get("kind") for s in result.intermediate_steps
+             if s.get("phase") == "narrate"]
+    assert "empty_lens_fallback_still_empty" in kinds
+
+
+@pytest.mark.asyncio
+async def test_empty_narrate_fallback_is_lens_only():
+    """A non-lens tier with an empty NARRATE keeps its pre-existing honest
+    empty body — the fallback never fires off the lens path."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = ['{"done": true}', "notes", ""]  # NARRATE empty, no 4th turn
+    llm = _ScriptedLLM(scripted)
+    deps = InlineTargetDeps(
+        llm=llm, system_prompt="P", max_rounds=1, agency_binding=binding,
+    )
+    result = await run_method([{"title": "s"}], _options(binding), deps)
+    assert result.finding.body == "(empty entry)"
+    kinds = [s.get("kind") for s in result.intermediate_steps]
+    assert "empty_lens_fallback" not in kinds
+    assert len(llm.calls) == 3  # no extra narrate was spent
+
+
+@pytest.mark.asyncio
+async def test_nonempty_lens_narrate_never_triggers_fallback():
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = ['{"done": true}', "notes", "A substantive read under my prior."]
+    llm = _ScriptedLLM(scripted)
+    deps = InlineTargetDeps(
+        llm=llm, system_prompt="LENS", max_rounds=1, agency_binding=binding,
+    )
+    result = await run_method([{"title": "s"}], _capability_options(binding), deps)
+    assert result.finding.body == "A substantive read under my prior."
+    kinds = [s.get("kind") for s in result.intermediate_steps]
+    assert "empty_lens_fallback" not in kinds
+    assert len(llm.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_full_arc_lens_clean_source_health_passes():
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+        "get_source_health": _SOURCE_HEALTH_68,
+    })
+    scripted = [
+        '{"done": true}',
+        "field notes",
+        "# Collection posture\n\nThe fleet is healthy: 49 active feeds "
+        "(total wired = 68). The intake is broad enough to weigh the week.",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="LENS", max_rounds=1,
+        agency_binding=binding,
+    )
+    result = await run_method([{"title": "seed"}], _lens_options(binding), deps)
+    assert result.finding.entry_kind == "lens"
+    assert "source_health_fabricated" not in result.finding.honesty_flags

@@ -1,0 +1,101 @@
+# evidence_archiver — P2-1 NATIVE cited-evidence archival (program §A3).
+#
+# A `deterministic`-kind META analyst over the SHARED substrate. Every time it
+# fires it archives the next budgeted batch of signals CITED by VERIFIED
+# findings (derived_from of findings whose latest faithfulness critique passes
+# the verify floor) whose object_ref IS NULL and canonical_url is fetchable:
+# original bytes fetched over the SSRF egress guard + the P2-2 license gate,
+# stored CONTENT-ADDRESSED at {LEGBA_ARCHIVE_ROOT}/{sha256[:2]}/{sha256}, the
+# evidence_archive sidecar (migration 0104) upserted, and the signal stamped —
+# object_ref = cas:sha256/<hex> (the receipt chain now terminates in OUR
+# verifiable copy, not a rotting URL), retention_class upgraded to
+# evidence_hold, and Trafilatura-extracted full text re-queued for the
+# OpenSearch corpus via the corpus_indexer dirty-marker contract (the S-10
+# depth fix). Media (media_ref) bytes are stored the same way, unprocessed —
+# the process_media plane backfills extraction later. The handler is fully
+# built at legba.data.analysts.deterministic_handlers.evidence_archiver (the
+# license-gate posture is documented in ITS module docstring).
+#
+# Target-agnostic + META: archival is an observation-level property of the
+# shared pool, not a per-target interpretation. No `targets` selector → the
+# cadence heartbeat is a SINGLE global sweep per tick (not a per-target
+# fan-out); the handler pulls candidates directly via deps.pg_pool.
+#
+# Method:
+#   * kind = deterministic — NO LLM block, no token budget: fetch + hash +
+#     store + SQL only. Trafilatura extraction is local CPU work.
+#   * sub_handler = evidence_archiver — injected into the run options at fire
+#     time. Idempotent + forward-progressing: a successful archive stamps
+#     signals.object_ref (the selection gate), failures are attempt-capped in
+#     the sidecar, license/size skips are recorded once (never silent, never
+#     re-burning budget). Marked TRACE_ONLY in deterministic.py — the real
+#     product is the archive + the sidecar rows; the per-run counters land in
+#     the trace.
+#
+# Options (all optional; handler defaults in parentheses):
+#   fetch_budget (200) · window_hours (720) · verify_floor (0.50) ·
+#   max_object_bytes (20971520) · per_host_delay_seconds (2.0) ·
+#   max_attempts (3) · max_text_chars (200000) · timeout_seconds (30) ·
+#   run_deadline_seconds (1200) · forbid_license_classes
+#   (anti_ai_walled / tos_restrictive / personal_use_only)
+#
+# Registered via scripts/bringup_register_evidence_archiver.py or the registry
+# REST API. Ships DRAFT — the operator activates after migration 0104 is
+# applied and the legba_archive volume is mounted (see the bringup script).
+
+identity:
+  id: evidence_archiver
+  name: Evidence Archiver
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: evidence_archiver
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over
+  # the whole shared pool, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: evidence_archiver
+  # Deterministic kind, NO LLM block: fetch/hash/store + SQL. The OpenSearch
+  # corpus is NOT touched here — extracted text reaches it through the
+  # corpus_indexer dirty-marker re-index on the indexer's own cadence.
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # META analyst: no subscription.targets, so the cadence heartbeat is a
+  # SINGLE global sweep per tick, NOT a fan-out. Archival is network-bound
+  # (budgeted fetches with per-host politeness), so a ~30 min tick with a
+  # 200-fetch budget drains the ~2.9k cited backlog in about a day and then
+  # idles on the verified-finding arrival rate.
+  #
+  # fallback_schedule = "19-59/30 * * * *" — every 30 min (fires :19/:49),
+  # OFFSET from the other maintenance crons so they never fire the same tick:
+  #   entity_resolution "*/10"        · situation_clustering "5-59/20"
+  #   hypothesis_lifecycle "10-59/20" · corpus_indexer "7-59/15"
+  #   signal_summarizer "13-59/15"    · integrity_sweep "41 */1"
+  #   fact_contention_arbiter "37 */1"· evidence_archiver (this) "19-59/30"
+  fallback_schedule: "19-59/30 * * * *"
+  # Idempotent forward-progressing sweep; the soft run deadline (20 min) keeps
+  # a slow-host run inside the tick, so a short re-fire floor is plenty.
+  cooldown_seconds: 900
+
+# No extra output sinks: TRACE_ONLY (deterministic.py OUTPUT_KIND_BY_SUB_HANDLER)
+# — the run receipt lands in analyst_traces; the real product is the archived
+# bytes + the evidence_archive sidecar + the stamped signal rows.
+outputs: []

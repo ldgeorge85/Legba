@@ -512,6 +512,30 @@ services:
       # (also needs the arbiter descriptor's method.llm.primary, already wired).
       LEGBA_FACT_CONTENTION: "${LEGBA_FACT_CONTENTION:-0}"
       LEGBA_FACT_CONTENTION_LLM_TIEBREAK: "${LEGBA_FACT_CONTENTION_LLM_TIEBREAK:-0}"
+      # C4 fact confidence-decay CONSUMPTION seam — ships OFF (flipping is a
+      # measured operator step). When ON, the grounding fact read joins the
+      # fact_decay_states sidecar (migration 0098, stamped daily by the
+      # fact_decay_scan analyst): revoke_candidate facts (decayed confidence
+      # <= the revoke threshold) are EXCLUDED from the ground-truth preamble
+      # and aging/stale facts carry an explicit decay annotation. OFF = the
+      # fact read is byte-identical to the pre-C4 behavior (no join, no
+      # exclusion, no annotation). The scan is readout-only either way
+      # (facts.confidence is NEVER mutated). Curve table overridable via a
+      # JSON file at LEGBA_FACT_DECAY_CONFIG (legba/data/facts/decay.py).
+      LEGBA_FACT_DECAY_WEIGHTING: "${LEGBA_FACT_DECAY_WEIGHTING:-0}"
+      # RSSHub lane (--profile sources-extra): the RSS handler's SSRF egress
+      # guard blocks private/internal hosts, so the co-located `rsshub` sidecar
+      # must be explicitly allowlisted for a draft rsshub source to fetch once
+      # activated. Defaults to the single hostname `rsshub` — an exact-name
+      # permit that is inert until the sidecar is up AND a draft is activated.
+      # Comma-separate to add more trusted internal service names.
+      LEGBA_EGRESS_ALLOW_HOSTS: "${LEGBA_EGRESS_ALLOW_HOSTS:-rsshub}"
+      # P2-1 cited-evidence archive (evidence_archiver deterministic analyst):
+      # where the content-addressed original bytes land in-container
+      # ({root}/{sha256[:2]}/{sha256}; signals.object_ref = cas:sha256/<hex>).
+      # Backed by the legba_archive named volume mounted below — archived
+      # objects are EVIDENCE and survive container recreation.
+      LEGBA_ARCHIVE_ROOT: "${LEGBA_ARCHIVE_ROOT:-/var/lib/legba/archive}"
       # Hosted media-extraction endpoint (process_media loop; SEAMS #1). Leave
       # `.env`'s LEGBA_MEDIA_API_URL UNSET to keep the declared seam (the
       # runtime refuses process_media loudly). To deploy + TEST the loop in the
@@ -522,6 +546,11 @@ services:
       # backend is wired — D2 PREP-not-PROVISION). `env_file: .env` above is the
       # single source for this value; not re-declared here so an unset shell var
       # can't shadow the `.env` setting with empty.
+    volumes:
+      # P2-1: the cited-evidence archive (content-addressed original bytes).
+      # Named volume so archived evidence survives container recreation; path
+      # matches the LEGBA_ARCHIVE_ROOT default above.
+      - archive_data:/var/lib/legba/archive
     depends_on:
       legba-registry:
         condition: service_started
@@ -605,6 +634,91 @@ services:
         condition: service_started
       dapr-scheduler:
         condition: service_started
+    restart: unless-stopped
+
+  # ============================================================
+  # SOURCES-EXTRA — gated by `--profile sources-extra` (ships INERT)
+  # ============================================================
+  #
+  # rsshub — self-hosted RSSHub, the "RSSHub lane": a route-to-RSS bridge that
+  # exposes credible regional/gov/major-media outlets (which publish no native
+  # RSS) as standard RSS feeds the existing `rss` source kind can poll. NOTHING
+  # starts it by default — it lives behind the dedicated `sources-extra` profile
+  # so the canonical `up -d` / `--profile runtime` never pull it. The curated
+  # draft descriptors (descriptors/source_rsshub_*.yaml) point the `rss` handler
+  # at `http://rsshub:1200/<route>` over the compose network; those ship `draft`,
+  # so even with this sidecar up, no live actor exists until the operator
+  # activates each one. Registrar: scripts/bringup_register_rsshub_sources.py.
+  #
+  # Reaching it from the runtime: the RSS handler's SSRF egress guard blocks
+  # private/internal hosts, so `rsshub` must be on the runtime's
+  # LEGBA_EGRESS_ALLOW_HOSTS allowlist (defaulted to `rsshub` on
+  # legba-runtime-dapr below — a single exact-hostname permit, inert until a
+  # draft is activated).
+  rsshub:
+    logging: *default-logging
+    # Non-chromium image = puppeteer-less: no bundled headless browser, so no
+    # route that needs one will run (the curated routes don't). Pinned-by-tag
+    # `latest` matches the project convention for the optional lanes.
+    image: diygod/rsshub:latest
+    profiles: ["sources-extra"]
+    # Infra tuning: container backstop (Node service; a route fan-out spikes RAM).
+    mem_limit: 512m
+    environment:
+      NODE_ENV: production
+      # In-container listen port; reached as `rsshub:1200` on the compose net.
+      PORT: "1200"
+      # Cache: default in-memory (NO external dependency — the "optional internal
+      # redis" is off). To share the substrate redis instead, set
+      # LEGBA_RSSHUB_CACHE_TYPE=redis + LEGBA_RSSHUB_REDIS_URL in .env
+      # (e.g. redis://:$${LEGBA_REDIS_PASSWORD}@redis:6379/1 — its own db index).
+      CACHE_TYPE: "${LEGBA_RSSHUB_CACHE_TYPE:-memory}"
+      CACHE_EXPIRE: "${LEGBA_RSSHUB_CACHE_EXPIRE:-3600}"
+      REDIS_URL: "${LEGBA_RSSHUB_REDIS_URL:-}"
+      # Optional access key on the RSSHub endpoints; unset = open on the
+      # loopback-only host port (the compose-network peer is the only client).
+      ACCESS_KEY: "${LEGBA_RSSHUB_ACCESS_KEY:-}"
+    ports:
+      # B-1: loopback-only — the runtime reaches it over the compose network
+      # (rsshub:1200); host tooling uses 127.0.0.1 for probing routes.
+      - "127.0.0.1:1200:1200"
+    healthcheck:
+      # Node is always present in the image; avoids assuming wget/curl exist.
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:1200/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # ntfy — the local push-notification server for the P1 alert loop (E-4,
+  # operator directive 2026-07-27: local-first; subdomain/Caddy exposure and
+  # the phone app come later). Profile-gated: `--profile alerts up -d ntfy`.
+  # The runtime's alert sinks reach it over the compose network as
+  # `http://ntfy/<topic>`; the loopback host port serves the operator's
+  # browser/UI test. Message cache is in-container ephemeral (a restart drops
+  # history; deliveries stay durably audited in alert_sink_deliveries — the
+  # ledger is the record, ntfy is the pipe).
+  ntfy:
+    logging: *default-logging
+    image: binwiederhier/ntfy:latest
+    profiles: ["alerts"]
+    command: serve
+    mem_limit: 128m
+    environment:
+      NTFY_BASE_URL: "${LEGBA_NTFY_BASE_URL:-http://127.0.0.1:8093}"
+      # Behind the Caddy alerts.<domain> vhost (basic_auth perimeter) — proxy
+      # mode keys rate limits on X-Forwarded-For instead of Caddy's IP.
+      NTFY_BEHIND_PROXY: "true"
+      # Persist the topic message cache across recreates so the web/phone UI
+      # shows recent history (the DURABLE record stays alert_sink_deliveries;
+      # this is presentation). 12h retention matches ntfy's default.
+      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+    volumes:
+      - ntfy_cache:/var/cache/ntfy
+    ports:
+      # B-1: loopback-only on the host; compose-network peers use ntfy:80.
+      - "127.0.0.1:8093:80"
     restart: unless-stopped
 
   # legba-mcp — MCP stdio server (Claude Code integration). Profile
@@ -721,6 +835,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  ntfy_cache:
+    name: legba_ntfy_cache
   redis_data:
     name: legba_redis_data
   postgres_data:
@@ -741,3 +857,8 @@ volumes:
   # re-downloads weights — same split as the legba-models /data volume).
   media_data:
     name: legba_media_data
+  # P2-1 cited-evidence archive — content-addressed original bytes behind
+  # CITED signals ({sha256[:2]}/{sha256} under LEGBA_ARCHIVE_ROOT). Evidence:
+  # never auto-deleted; plain-FS first, MinIO/SeaweedFS is the later seam.
+  archive_data:
+    name: legba_archive

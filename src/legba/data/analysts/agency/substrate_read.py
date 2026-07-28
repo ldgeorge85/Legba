@@ -96,7 +96,6 @@ async def _call_port(
         if name == "search_signals":
             out = await port.search_signals(
                 query=str(args.get("query", "")),
-                category=args.get("category"),
                 limit=int(args.get("limit", 20)),
                 scope_predicate=args.get("scope_predicate"),
             )

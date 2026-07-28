@@ -294,7 +294,11 @@ shared `output_http_client`); payload models in
 **Status:** bundle producer **built**; TAXII **push built** (only the
 destination server is unprovisioned — seam 10,
 `TaxiiServerNotConfiguredError`); TAXII serve + MISP sync **designed, NOT
-built**.
+built**. The nearer product direction named above has since shipped: the
+**markdown/JSON report export is now first-class** (`POST /v3/export` —
+findings + journal entries with live-resolved citations, verify states,
+evidence hashes, and receipt links); the STIX machinery is kept but stays out
+of the daily flow until an emitter is re-bound.
 
 ---
 
@@ -331,41 +335,73 @@ the daily-driver surfaces exist as HTTP, not MCP: consult
 **Chosen approach.** Make `legba-mcp` a thin **HTTP client of the registry**,
 not an in-process peer of the runtime: a built-in tool set — `consult`,
 `substrate_findings` / `substrate_situations` / `substrate_signals`,
-`lineage_walk` — each wrapping the corresponding registry endpoint with the
-registry bearer (page 1: a `read`-scoped token; `consult` needs `operator`).
-Descriptor-declared tools remain the second catalog source, fetched from the
-registry over HTTP (catalog endpoint or the existing WebSocket event stream)
-instead of relying on in-process population — which fixes the standalone-empty
-problem at the same time. Transport: stdio first; HTTP/SSE transport later if
-a remote client materializes.
+`lineage_walk`, `since`, `export` — each wrapping the corresponding registry
+endpoint with the registry bearer (page 1: a `read`-scoped token; `consult`
+needs `operator`). Because these are constructed from code, a standalone
+process serves them regardless of runtime population — which fixes the
+standalone-empty problem. Descriptor-declared tools remain the SECOND catalog
+source (merged + deduped by tool name; the built-in wins a name collision);
+that source still only populates in a process that shares the runtime.
+Transport: stdio first; HTTP/SSE transport later if a remote client
+materializes.
 
 **Integration points.** `create_server` (`src/legba/ui/mcp_server.py`);
+the built-in tool set (`src/legba/ui/mcp_builtin_tools.py`);
 `MCPToolRegistry.register_from_descriptor` / `.handle`
-(`src/legba/data/outputs/mcp_tool.py`); the three HTTP routers named above;
-`RegistryHTTPClient` (`src/legba/runtime/registry_client.py`) as the existing
-HTTP-client pattern to reuse.
+(`src/legba/data/outputs/mcp_tool.py`); the HTTP routers named above plus
+`since_api.py` + `export_api.py`; `RegistryHTTPClient.request_json`
+(`src/legba/runtime/registry_client.py`) as the reused HTTP-client wire.
 
-**Status:** descriptor-tool plumbing + stdio server **built**; the
-consult / substrate-reads / lineage MCP tool surface **designed, NOT built**.
+**Status:** the seven built-in tools (`substrate_findings` /
+`substrate_situations` / `substrate_signals`, `lineage_walk`, `since`,
+`export`, `consult`) **BUILT** — `mcp_builtin_tools.py` + `create_server`
+merge + `RegistryHTTPClient.request_json`, with unit tests
+(`tests/data_pkg/test_mcp_builtin_tools.py`: request-build, response-shape,
+standalone-non-empty, the reads+consult-only no-mutation assertion, error
+passthrough, dedupe precedence). No registry mutations ride MCP — reads + the
+sanctioned consult-run only (`export` is a read-only document composer).
+Descriptor-tool plumbing + stdio server were already built. **Residual
+caveats (honest):** transport is stdio only (HTTP/SSE not built); the built-in
+tools are a thin HTTP client, so a standalone `legba-mcp` needs the registry
+reachable at `LEGBA_REGISTRY_URL` (e.g. `--network legba_default`); and the
+SECOND source (descriptor-declared tools) still lists empty in a standalone
+process — only the built-ins survive without a shared-runtime process.
 
 ### Current setup
 
-How to run the stdio server that exists today (with the catalog caveat above:
-a separately-launched `legba-mcp` process lists an empty tool catalog until the
-runtime-population gap is closed — it fails loud, answering an unknown tool
-call with the available-tool list, never fabricated output).
+How to run the stdio server. A standalone `legba-mcp` process now lists the
+seven **built-in** tools (`substrate_findings` / `substrate_situations` /
+`substrate_signals`, `lineage_walk`, `since`, `export`, `consult`) with no
+runtime present — they are code-constructed HTTP wrappers, not
+runtime-populated state. Descriptor-declared tools (the SECOND source) still
+list empty in a standalone process. Every tool fails loud: a registry 4xx/5xx
+returns a *described* error object (status + detail), a transport failure
+returns `registry_unreachable`, and an unknown tool call returns the
+available-tool list — never fabricated output.
 
-An analyst descriptor surfaces a tool by declaring an `outputs.mcp_tool`
-binding (`tool_name`, `description`, `input_schema`, and a `mode` —
-`latest_output` returns the analyst's most recent output for the bound scope;
-`consult_on_demand` triggers an on-demand analyst run with the call's args).
-On descriptor activation the runtime calls
-`MCPToolRegistry.register_from_descriptor`; on retire it unregisters. All
-registered tools are read-only or run-triggering — no registry mutations ride
-MCP.
+The built-in tools reach the registry over HTTP, configured from env (the same
+names the bringup scripts use): `LEGBA_REGISTRY_URL` (the origin is taken from
+it; the `/api/v1/registry` suffix is stripped since the tools address
+`/api/v1/...` paths directly) and `LEGBA_REGISTRY_TOKEN` /
+`LEGBA_REGISTRY_API_TOKEN` (bearer). A `read`-scoped token serves the six read
+tools; `consult` needs an `operator`-scoped token. The `consult` tool is
+long-running (it blocks up to 300s for the ReAct loop) and threads that timeout
+to the registry.
+
+An analyst descriptor surfaces an additional tool by declaring an
+`outputs.mcp_tool` binding (`tool_name`, `description`, `input_schema`, and a
+`mode` — `latest_output` returns the analyst's most recent output for the bound
+scope; `consult_on_demand` triggers an on-demand analyst run with the call's
+args). On descriptor activation the runtime calls
+`MCPToolRegistry.register_from_descriptor`; on retire it unregisters. The
+built-in + descriptor catalogs are merged and deduped by tool name (the
+built-in wins). All tools are read-only or run-triggering — no registry
+mutations ride MCP (asserted by
+`mcp_builtin_tools.assert_reads_and_consult_only`).
 
 Build the image and point the MCP client (e.g. Claude Code) at it, launched
-per conversation:
+per conversation. `--network=legba_default` is required so the container can
+reach the registry host named in `LEGBA_REGISTRY_URL`:
 
 ```
 docker compose --profile mcp build     # docker/Dockerfile.mcp → legba/legba-mcp:latest
@@ -520,6 +556,17 @@ documented here so nobody discovers them in an incident:
 **Status: designed, NOT built.** R1, unpartitioned, single-replica coalescer
 assumption — all stated in code comments and here.
 
+**Adjacent (also designed, NOT built): Docker Swarm conversion assessment
+(2026-07-25).** A separate, smaller scale-out step — moving the data layer
+(PG/Qdrant/OpenSearch/NATS/redis) to a second node via `docker stack deploy`
+— was assessed on paper; it does not touch the three truths above (a data-node
+*move* changes where R1 NATS lives, not that it is R1). Draft stack files live
+under `deploy/swarm/` (explicitly non-deployable until phase-1 validation);
+the per-service inventory, Dapr-on-swarm risk analysis, k3s fallback triggers
+and the phase 1/2/3 runbook are in
+`planning/SWARM_CONVERSION_ASSESSMENT_2026-07-25.md`. Nothing is deployed;
+the compose file + deploy.sh remain the only live path.
+
 ---
 
 ## 7. Fallback-model budget demotion (decision F-2)
@@ -578,7 +625,11 @@ to mirror in `src/legba/runtime/analyst_deps_builder.py`.
 
 **Status:** actor-side demotion machinery **built**; fallback wiring
 **designed, NOT built** — `demote_and_continue` currently equals an audited
-`pause_until_next_window`.
+`pause_until_next_window`. Note (2026-07): the faithfulness judge now resolves
+through its own opt-in route (`LEGBA_JUDGE_STACK_REF` env >
+`method.llm.judge` > `.verify` > `.primary` — the judge-route separation), so
+the same future second model can serve both the judge route and this fallback
+slot; F-2 itself still waits on that absent second model.
 
 ---
 
@@ -759,3 +810,15 @@ block (`descriptors/analyst_leadership_transition.yaml`, `analyst_energy_securit
 (vector `world_context`) is now **BUILT / LIVE** — the embedder-through-port wiring
 (L-114) landed and RAG is staggered on for `leadership_transition` + `internal_stability`
 (SEAM #11 resolved). See `ANALYSIS.md` §7.9 and `DESIGN.md` §3.4.
+
+**Adjacent confidence dynamics (2026-07, cross-refs).** Two built readouts now
+sit beside the grounding store's confidence story, both consumption-flag-gated
+**OFF in code**: (1) **fact decay** — `fact_decay_scan` (draft) computes
+per-class confidence-decay curves with corroborations as clock-resetting
+sightings into a `fact_decay_states` sidecar, and the grounding read can carry
+that decay annotation on injected facts behind `LEGBA_FACT_DECAY_WEIGHTING`
+(default OFF; stored confidence is never mutated); (2) the **earned track
+record** — `source_track_record` (draft) scores each source's win/loss over
+resolved contentions, consumable in arbiter tie-breaks behind
+`LEGBA_CONTENTION_EARNED_WEIGHT` (default OFF; never touches faithfulness).
+Both are honest-state rows in `STATUS.md`.

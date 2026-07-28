@@ -142,10 +142,13 @@ export default function RegistryStackPanel({ registration }: PanelProps) {
         {filtered.length === 0 && !isLoading && (
           <div className="text-slate-500 text-center py-4">no stack components match</div>
         )}
+        {/* `/registry/stack` returns EVERY version of a component (`is_head`
+            marks the head), so component_id alone collides as soon as a
+            component has history — key on the (component_id, version) pair. */}
         {filtered.map((row) => {
           const expanded = expandedId === row.component_id
           return (
-            <div key={row.component_id} className="bg-surface-100 border border-slate-800 rounded p-2">
+            <div key={`${row.component_id}@${row.version}`} className="bg-surface-100 border border-slate-800 rounded p-2">
               <button
                 onClick={() => setExpandedId(expanded ? null : row.component_id)}
                 className="w-full text-left"

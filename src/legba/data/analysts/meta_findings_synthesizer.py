@@ -192,6 +192,127 @@ per-country composition slice. Env-overridable via ``LEGBA_COMPOSITION_VERIFY_FL
 VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 
 
+# C-TIER (2026-07) — TWO-TIER composition evidence: BASIS + PERIPHERY.
+#
+# The operator's direction verbatim: "can we not include but properly weight or
+# separate it from others. Like even, conflicting points. Don't want to lose
+# real signal but want to distill it." Neither of the two prior behaviors does
+# that: a HARD floor silently DROPS below-floor findings (signal lost), while
+# the default floor-0 gate lets them BLEND indistinguishably into the basis
+# evidence (signal laundered). The two-tier split keeps both honest:
+#
+#   * BASIS     — verify-passed sub-claims with ``effective_confidence =
+#                 min(confidence, faithfulness) >= the floor``. Rendered exactly
+#                 as today: the load-bearing evidence the composition may cite
+#                 as established.
+#   * PERIPHERY — sub-claims the basis bar EXCLUDED: verify-scored BELOW the
+#                 floor, or never verified at all (claim-bearing but ungraded).
+#                 Coerce-fallback garbage stays excluded outright (not
+#                 claim-bearing). Capped (worst-first: severity, then recency)
+#                 and rendered under an explicit delimited section that requires
+#                 hedged attribution and asks for conflicts with the basis to be
+#                 SURFACED ("tensions worth watching"), never blended or dropped.
+#
+# FLAG / FLOOR INTERACTION (the least-surprising wiring, chosen deliberately):
+#
+#   * ``LEGBA_COMPOSITION_TIERED_EVIDENCE`` unset/off (code DEFAULT OFF) — the
+#     legacy behavior byte-for-byte: the basis bar is ``_resolve_verify_floor``
+#     (env floor, default 0.0) and NO periphery is gathered or rendered.
+#   * flag ON — the split engages on the PER-COUNTRY and REGION composition
+#     reads: the basis bar becomes the SPLIT floor = the env floor when the
+#     operator pinned ``LEGBA_COMPOSITION_VERIFY_FLOOR``, else
+#     :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50 — the scorecard's system-wide
+#     verification floor, lockstep-tested against
+#     ``scorecard_banding.FAITH_FLOOR``). Rationale: at the legacy 0.0 default
+#     the "split" would be vacuous (nothing verified is ever below 0.0), so
+#     turning the flag on without a meaningful bar would silently keep the
+#     blend it exists to fix. ``DEFAULT_VERIFY_FLOOR`` itself is UNCHANGED —
+#     the OFF path never moves.
+#   * The WORLD and THEMATIC branches keep ``_resolve_verify_floor`` even when
+#     the flag is ON — a raised bar WITHOUT the periphery machinery would
+#     hard-DROP their 0<eff<0.5 heads (exactly the signal-loss the operator
+#     rejected). Their slices already carry degrade/gap coverage honesty; their
+#     periphery is a declared follow-up seam, and ``_run`` is already
+#     data-driven (any branch that later marks periphery rows gets the full
+#     rendering/citation/envelope treatment with no further ``_run`` change).
+#
+# DEFAULT OFF (flip note): because flag-ON meaningfully moves the basis bar
+# (0.0 → 0.50 at the default env), the byte-path is NOT identical to today even
+# when the periphery set is empty — so per the shipping rule this defaults OFF.
+# Flip: ``LEGBA_COMPOSITION_TIERED_EVIDENCE=1`` (optionally pin the bar via
+# ``LEGBA_COMPOSITION_VERIFY_FLOOR``). With the flag ON and an EMPTY periphery
+# the rendered PROMPT is byte-identical to the same-floor legacy render (the
+# section only exists when periphery does); the envelope additionally carries
+# the additive ``data.evidence_tiers`` stamp.
+TIERED_EVIDENCE_ENV: str = "LEGBA_COMPOSITION_TIERED_EVIDENCE"
+
+TIERED_BASIS_FLOOR_DEFAULT: float = 0.50
+"""The BASIS bar when tiered evidence is ON and no env floor is pinned. A
+test-enforced MIRROR of ``deterministic_handlers.scorecard_banding.FAITH_FLOOR``
+(the system-wide 0.50 verification-floor decision) — a local copy per the house
+registry-slim idiom (importing the handler package would drag ~20 sub-handler
+modules into this kind module); lockstep is asserted by
+``tests/data_pkg/test_composition_tiered_evidence.py``."""
+
+PERIPHERY_CAP: int = 8
+"""Max periphery items rendered per composition — worst-first (severity rank,
+then recency), so the cap keeps the items most worth surfacing."""
+
+PERIPHERY_BODY_CHARS: int = 400
+"""Periphery body excerpt cap — tighter than ``MAX_BODY_CHARS`` (periphery is
+hedged context, never the load-bearing narrative)."""
+
+PERIPHERY_TIER: str = "periphery"
+"""The tier token: the ``_evidence_tier`` row marker READ_SLICE stamps on
+periphery rows AND the ``tier`` value the cite phase stamps on a citation that
+resolves into the periphery section (the verify pass keys its hedge-required
+rule on it)."""
+
+_EVIDENCE_TIER_KEY: str = "_evidence_tier"
+_EVIDENCE_FLOOR_KEY: str = "_evidence_floor"
+
+#: ``severity:<level>`` → worst-first rank for the periphery cap sort. Missing /
+#: unknown level ranks -1 (sorts last — an unscored item never displaces a
+#: scored one). Mirrors ``scorecard_banding.SEVERITY_TO_BAND``'s level set.
+_SEVERITY_RANK: dict[str, int] = {
+    "critical": 4,
+    "high": 3,
+    "elevated": 2,
+    "moderate": 1,
+    "low": 0,
+}
+
+
+def _tiered_evidence_enabled() -> bool:
+    """Whether the C-TIER two-tier evidence split is flag-enabled. Code default
+    OFF (see the flip note above)."""
+    raw = os.getenv(TIERED_EVIDENCE_ENV)
+    if raw is None:
+        return False
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_split_floor(descriptor: Any) -> float:
+    """The BASIS bar for a tiered (flag-ON) composition read.
+
+    The env floor keeps working as the basis bar when the operator pinned it
+    (clamped to ``[0.0, 1.0]``, same parse as :func:`_resolve_verify_floor`);
+    unset ⇒ :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50, the scorecard lockstep) —
+    NOT ``DEFAULT_VERIFY_FLOOR`` (0.0), at which the split would be vacuous.
+    ``descriptor`` is accepted for parity with :func:`_resolve_verify_floor`.
+    """
+    raw = os.getenv(VERIFY_FLOOR_ENV)
+    if raw is not None:
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except (ValueError, TypeError):
+            logger.warning(
+                "meta_findings_synthesizer.split_floor.bad_env value=%r — using default",
+                raw,
+            )
+    return TIERED_BASIS_FLOOR_DEFAULT
+
+
 # S2-T2 REGION composition — the region-frame target-id prefix.
 #
 # A region composition run (analyst_region_composition.yaml) fans out one worker
@@ -996,6 +1117,163 @@ def _render_user_prompt(
 
 
 # ---------------------------------------------------------------------------
+# C-TIER — periphery selection + rendering (two-tier composition evidence)
+# ---------------------------------------------------------------------------
+
+
+def _row_severity_level(row: Mapping[str, Any]) -> str | None:
+    """The ``severity:<level>`` level from a finding row's stamped tags.
+
+    A finding's ``data`` column is the FindingPayload envelope, so its tags land
+    at ``data -> 'tags'`` (see the meta-filter note on
+    :func:`read_other_analyst_findings`). Tolerates a JSON-encoded ``data``
+    string (asyncpg without a JSONB codec). The LAST valid tag wins (the analyst
+    contract emits exactly one); absent/unknown → ``None``.
+    """
+    env = row.get("data")
+    if isinstance(env, str):
+        try:
+            env = json.loads(env)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(env, Mapping):
+        return None
+    tags = env.get("tags")
+    if not isinstance(tags, (list, tuple)):
+        return None
+    level: str | None = None
+    for tag in tags:
+        if not isinstance(tag, str) or not tag.startswith("severity:"):
+            continue
+        candidate = tag.split(":", 1)[1].strip().lower()
+        if candidate in _SEVERITY_RANK:
+            level = candidate
+    return level
+
+
+def _row_severity_rank(row: Mapping[str, Any]) -> int:
+    """Worst-first sort rank for :func:`_select_periphery` (missing → -1)."""
+    level = _row_severity_level(row)
+    return _SEVERITY_RANK.get(level, -1) if level is not None else -1
+
+
+def _row_body_excerpt(row: Mapping[str, Any], cap: int) -> str:
+    """The row's body excerpt — column first, then ``data.body`` (the same
+    fallback chain :func:`_render_user_prompt` uses)."""
+    body = row.get("body")
+    if not isinstance(body, str):
+        data = row.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (ValueError, TypeError):
+                data = None
+        inner = data.get("body") if isinstance(data, Mapping) else None
+        body = inner if isinstance(inner, str) else ""
+    return body[:cap]
+
+
+def _select_periphery(
+    rows: Sequence[Mapping[str, Any]], *, cap: int = PERIPHERY_CAP
+) -> list[Mapping[str, Any]]:
+    """Deterministic worst-first periphery selection: severity rank DESC, then
+    recency DESC, then row id (pure tiebreak) — so the cap keeps the items most
+    worth surfacing and the same input set always yields the same list. Pure;
+    unit-tested for cap + order determinism."""
+
+    def _key(row: Mapping[str, Any]) -> tuple[int, str, str]:
+        v = row.get("produced_at")
+        if v is None:
+            rec = ""
+        elif isinstance(v, str):
+            rec = v
+        else:
+            iso = getattr(v, "isoformat", None)
+            rec = iso() if callable(iso) else str(v)
+        return (_row_severity_rank(row), rec, str(row.get("id") or ""))
+
+    ordered = sorted(rows, key=_key, reverse=True)
+    return list(ordered[:cap])
+
+
+def _periphery_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The kept periphery rows' finding ids (envelope honesty; malformed ids
+    are skipped, mirroring ``_orient``)."""
+    out: list[str] = []
+    for row in rows:
+        uid = _coerce_uuid(row.get("id"))
+        if uid is not None:
+            out.append(str(uid))
+    return out
+
+
+def _render_periphery_block(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    start_ordinal: int,
+    floor: float | None,
+) -> str:
+    """Render the PERIPHERY tier as an explicit delimited prompt section.
+
+    Ordinals CONTINUE the basis numbering (``start_ordinal = len(basis)+1``) so
+    ``[[ref:N]]`` stays one flat resolution space — the cite phase maps ordinal
+    ``N`` to the Nth rendered block across BOTH sections, and the verify pass
+    tells the tiers apart by the ``tier`` stamp on the resolved citation, never
+    by re-parsing the prompt. Each item carries its honest status
+    (``below_floor`` with its score, or ``unverified``) so the model sees WHY
+    the item is quarantined. Returns ``""`` for an empty set — the empty-
+    periphery prompt is byte-identical to the untiered render.
+    """
+    if not rows:
+        return ""
+    floor_txt = (
+        f"{float(floor):.2f}" if isinstance(floor, (int, float)) else "(unset)"
+    )
+    header = (
+        "=== WEAKLY-SUPPORTED / UNVERIFIED SIGNALS "
+        f"(below the verification floor {floor_txt}) ===\n"
+        f"The {len(rows)} item(s) below did NOT clear the verification floor: "
+        "each either scored below it on its faithfulness verify "
+        "(status=below_floor) or never passed one (status=unverified). They are "
+        "NOT established facts and MUST NOT be cited as established fact. Rules "
+        "for this section:\n"
+        "  - These items may inform HEDGED context only. Any claim resting "
+        "solely on an item below MUST be attributed and hedged (e.g. "
+        '"weakly-supported reporting suggests ..." / "an unverified read '
+        'indicates ..."). The verify pass flags unhedged use.\n'
+        "  - Where an item below CONFLICTS with a verified finding above, "
+        "SURFACE the tension explicitly — a brief, hedged 'Tensions worth "
+        "watching' note naming both sides — never drop it and never blend it "
+        "in silently.\n"
+        "  - Do NOT let these items set the BLUF or the severity; the verified "
+        "findings above are the load-bearing evidence.\n"
+        "  - Cite these by their [[ref:N]] handle exactly like the findings "
+        "above.\n\n"
+    )
+    body_lines: list[str] = []
+    for i, row in enumerate(rows, start=start_ordinal):
+        title = str(row.get("title") or "(untitled)")[:MAX_TITLE_CHARS]
+        analyst_id = str(row.get("analyst_id") or "(unknown)")
+        produced_at = row.get("produced_at")
+        status = "unverified" if row.get("faithfulness_score") is None else "below_floor"
+        eff = row.get("effective_confidence")
+        try:
+            score_part = f" effective_confidence={float(eff):.2f}" if eff is not None else ""
+        except (TypeError, ValueError):
+            score_part = ""
+        level = _row_severity_level(row)
+        sev_part = f" severity={level}" if level else ""
+        body = _row_body_excerpt(row, PERIPHERY_BODY_CHARS)
+        body_lines.append(
+            f"[[ref:{i}]] {title}\n"
+            f"      analyst_id={analyst_id} status={status}{score_part}{sev_part}"
+            f" produced_at={produced_at}\n"
+            f"      body: {body}"
+        )
+    return header + "\n".join(body_lines)
+
+
+# ---------------------------------------------------------------------------
 # Helpers — output coercion
 # ---------------------------------------------------------------------------
 
@@ -1332,6 +1610,107 @@ async def read_other_analyst_findings(
         """
     rows = await conn.fetch(sql, *params)
     return [dict(r) for r in rows]
+
+
+async def read_periphery_findings(
+    conn,  # type: ignore[no-untyped-def]
+    *,
+    analyst_ids: Sequence[str],
+    time_window_hours: int,
+    floor: float,
+    limit: int = 32,
+    target_id: str | None = None,
+    target_ids: Sequence[str] | None = None,
+    include_meta: bool = False,
+) -> list[dict[str, Any]]:
+    """C-TIER — gather the PERIPHERY tier: what the basis bar EXCLUDED.
+
+    The exact COMPLEMENT of the :func:`read_other_analyst_findings`
+    ``verify_floor`` admissibility over the same scope (same analyst set,
+    window, target scope, meta filter, head-fold dedupe, coerce-tag drop),
+    inverted on the verify leg:
+
+      * LEFT (not INNER) join to the latest ``Faithfulness verify%`` critique —
+        an UNVERIFIED head is periphery (claim-bearing but ungraded), not
+        invisible;
+      * admitted iff ``v.faithfulness_score IS NULL`` (unverified) OR
+        ``LEAST(confidence, faithfulness) < floor`` (verify-scored below the
+        bar) — i.e. exactly the rows the basis gather refuses;
+      * coerce-fallback (``unstructured``/``coerce_failed``) rows stay excluded
+        OUTRIGHT — a garbage body is not claim-bearing signal, it is noise;
+      * ``effective_confidence`` is NULL for an unverified row (an explicit
+        CASE — SQL ``LEAST`` ignores NULLs, which would otherwise launder a raw
+        confidence into a verified-looking score), so an ungraded head can
+        never raise a ceiling or masquerade as verified.
+
+    Every returned row is stamped ``_evidence_tier='periphery'`` +
+    ``_evidence_floor=<floor>`` so the DB-less ``_run`` partitions on data, not
+    env. The DB fetch is head-folded + capped at ``limit``; the worst-first
+    PERIPHERY_CAP selection happens in the pure :func:`_select_periphery` so
+    the ordering rule is unit-testable without a database.
+    """
+    if not analyst_ids:
+        return []
+
+    params: list[Any] = [list(analyst_ids), int(time_window_hours)]
+    where: list[str] = [
+        "f.kind = 'finding'",
+        "f.analyst_id = ANY($1::TEXT[])",
+        "f.produced_at > NOW() - make_interval(hours => $2)",
+        "f.superseded_by IS NULL",
+    ]
+    if not include_meta:
+        where.append("(f.data -> 'data' ->> 'meta') IS DISTINCT FROM 'true'")
+    if target_id is not None:
+        params.append(str(target_id))
+        where.append(f"f.target_id = ${len(params)}")
+    elif target_ids is not None:
+        params.append([str(t) for t in target_ids])
+        where.append(f"f.target_id = ANY(${len(params)}::TEXT[])")
+    params.append(float(floor))
+    where.append(
+        "(v.faithfulness_score IS NULL"
+        f" OR LEAST(f.confidence, v.faithfulness_score) < ${len(params)})"
+    )
+    where.append(
+        "(f.data -> 'tags' ?| array['unstructured','coerce_failed']) IS NOT TRUE"
+    )
+
+    sql = f"""
+    SELECT * FROM (
+        SELECT DISTINCT ON (f.analyst_id, f.target_id)
+               f.id, f.kind, f.title, f.body, f.confidence, f.severity, f.data,
+               f.target_id, f.target_version, f.analyst_id, f.analyst_version,
+               f.produced_at, f.derived_from, f.schema_uri, f.run_id,
+               CASE WHEN v.faithfulness_score IS NULL THEN NULL
+                    ELSE LEAST(f.confidence, v.faithfulness_score)
+               END AS effective_confidence,
+               v.faithfulness_score AS faithfulness_score
+        FROM analyst_outputs f
+        LEFT JOIN LATERAL (
+            SELECT (cr.data->>'overall_score')::real AS faithfulness_score
+              FROM analyst_outputs cr
+             WHERE cr.kind = 'critique'
+               AND cr.data->>'analyzed_output_id' = f.id::text
+               AND cr.data->>'overall_score' IS NOT NULL
+               AND cr.title LIKE 'Faithfulness verify%'
+             ORDER BY cr.produced_at DESC, cr.id DESC
+             LIMIT 1
+        ) v ON TRUE
+        WHERE {' AND '.join(where)}
+        ORDER BY f.analyst_id, f.target_id, f.produced_at DESC, f.id DESC
+    ) dedup
+    ORDER BY dedup.produced_at DESC
+    LIMIT {int(limit)}
+    """
+    rows = await conn.fetch(sql, *params)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        row = dict(r)
+        row[_EVIDENCE_TIER_KEY] = PERIPHERY_TIER
+        row[_EVIDENCE_FLOOR_KEY] = float(floor)
+        out.append(row)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2050,6 +2429,34 @@ async def _run(
     is_composition = target_scoped or world_composition or thematic_composition
 
     # --- ORIENT --------------------------------------------------------
+    # C-TIER: partition the input rows into BASIS and PERIPHERY BEFORE the
+    # orient sort — periphery rows (READ_SLICE-marked ``_evidence_tier``) are
+    # NEVER blended into the load-bearing slice: they neither consume the input
+    # cap, nor drive salience/contributing-analysts, nor render as ordinary
+    # sub-claim blocks. Data-driven (row markers, not env): the flag gate lives
+    # entirely in READ_SLICE, so an unmarked slice — every legacy caller — is
+    # byte-for-byte the untiered path. ``_tier_floor`` (stamped on every tiered
+    # row) doubles as the tiered-mode signal so an ON-but-empty-periphery run
+    # still records the honest envelope stamp.
+    periphery_rows = [
+        r for r in inputs if r.get(_EVIDENCE_TIER_KEY) == PERIPHERY_TIER
+    ]
+    basis_inputs = (
+        [r for r in inputs if r.get(_EVIDENCE_TIER_KEY) != PERIPHERY_TIER]
+        if periphery_rows
+        else inputs
+    )
+    _tier_floor: float | None = None
+    for _row in inputs:
+        _tf = _row.get(_EVIDENCE_FLOOR_KEY)
+        if isinstance(_tf, (int, float)) and not isinstance(_tf, bool):
+            _tier_floor = float(_tf)
+            break
+    tiered_evidence = _tier_floor is not None
+    periphery_sel = (
+        _select_periphery(periphery_rows) if periphery_rows else []
+    )
+
     # A per-COUNTRY read fuses only its own ~7 unit heads, so the narrow default
     # cap never bites there. The WORLD read AND a REGION read each fuse one head
     # PER COUNTRY, so their input count is a desk roster (region = its member
@@ -2062,7 +2469,7 @@ async def _run(
         if (target_scoped and not region_scoped)
         else MAX_WORLD_INPUT_FINDINGS
     )
-    sliced, derived_from, derived_analysts = _orient(inputs, cap=_cap)
+    sliced, derived_from, derived_analysts = _orient(basis_inputs, cap=_cap)
 
     # The runtime can supply ``source_analyst_ids`` directly via options.
     # If so, use that ordering as the authoritative ``contributing_analysts``
@@ -2126,9 +2533,30 @@ async def _run(
             # Cluster even the honest-empty composition head (append-only
             # supersession folds prior-cycle empties to the newest).
             empty_data["situation_signature"] = composition_signature
+        # C-TIER: an empty BASIS with a non-empty PERIPHERY is still an
+        # empty-slice run — a composition is never synthesized from weak
+        # signals alone (nothing verified exists to hedge them against). But
+        # the weak signal is RECORDED, never lost: the envelope names the
+        # periphery ids + the floor, and the body says why nothing composed.
+        empty_body = "The other-analyst output slice for this run was empty."
+        if tiered_evidence:
+            empty_data["evidence_tiers"] = {
+                "basis_count": 0,
+                "periphery_count": len(periphery_sel),
+                "periphery_ids": _periphery_ids(periphery_sel),
+                "floor": _tier_floor,
+            }
+            if periphery_sel:
+                empty_body = (
+                    "The verified (basis) other-analyst slice for this run was "
+                    f"empty. {len(periphery_sel)} below-floor/unverified "
+                    "signal(s) were present (recorded in data.evidence_tiers) "
+                    "but a composition is never synthesized from weak signals "
+                    "alone."
+                )
         finding = FindingPayload(
             title="No source findings to synthesize",
-            body="The other-analyst output slice for this run was empty.",
+            body=empty_body,
             confidence=0.0,
             tags=["empty_slice", "meta"],
             data=empty_data,
@@ -2243,6 +2671,16 @@ async def _run(
     user_prompt = _render_user_prompt(
         sliced, contributing_analysts, include_source_ids=is_composition
     )
+    # C-TIER: the PERIPHERY section renders APPENDED to (never interleaved
+    # with) the basis blocks, under its explicit delimiter + hedge/conflict
+    # rules, with ordinals continuing the basis numbering. Empty periphery ⇒
+    # no section ⇒ the prompt is byte-identical to the untiered render.
+    if is_composition and periphery_sel:
+        _peri_block = _render_periphery_block(
+            periphery_sel, start_ordinal=len(sliced) + 1, floor=_tier_floor
+        )
+        if _peri_block:
+            user_prompt = user_prompt + "\n\n" + _peri_block
     if contention_groups:
         user_prompt = user_prompt + "\n" + _render_contested_block(contention_groups)
     if region_coverage:
@@ -2398,9 +2836,12 @@ async def _run(
     # + ``ordinal`` (the deterministic resolution key) so a LATER stage can run a
     # faithfulness verify over the composition itself.
     if is_composition:
-        num_subclaims = len(sliced)
+        # C-TIER: the ordinal space spans basis THEN periphery (the same order
+        # the render stamped), so a periphery citation resolves like any other
+        # — the ``tier`` stamp below is what tells the verify pass apart.
+        num_subclaims = len(sliced) + len(periphery_sel)
         index_by_ordinal: dict[int, Mapping[str, Any]] = {
-            n: row for n, row in enumerate(sliced, start=1)
+            n: row for n, row in enumerate((*sliced, *periphery_sel), start=1)
         }
         resolved_ords, dropped_refs = _extract_ref_markers(
             finding.body, num_subclaims
@@ -2420,6 +2861,12 @@ async def _run(
                 "ref_id": str(uid),
                 "ref_kind": "finding",
             }
+            # C-TIER: a citation resolving into the PERIPHERY section carries
+            # its tier so the verify pass can require hedged attribution on any
+            # clause resting only on it. Basis citations are byte-identical
+            # (no key) — a pre-C-TIER reader never sees a change.
+            if src_row.get(_EVIDENCE_TIER_KEY) == PERIPHERY_TIER:
+                citation["tier"] = PERIPHERY_TIER
             src = src_row.get("analyst_id")
             if src:
                 citation["source"] = str(src)
@@ -2588,6 +3035,33 @@ async def _run(
             "gaps": len(desk_gaps),
         })
 
+    # --- EVIDENCE TIERS (C-TIER, tiered compositions only) -------------
+    # Envelope honesty: record what the composition was BUILT ON — N verified
+    # basis + M weak periphery signals and the floor that split them — so the
+    # UI/scorecard can say so without re-deriving the gather. The kept
+    # periphery ids are ALSO appended to ``derived_from`` (after the basis
+    # ids, matching the ordinal order) — a hedged claim resting on a weak
+    # signal is real lineage, not a secret. Additive: absent on every
+    # untiered run.
+    if tiered_evidence:
+        finding.data["evidence_tiers"] = {
+            "basis_count": len(sliced),
+            "periphery_count": len(periphery_sel),
+            "periphery_ids": _periphery_ids(periphery_sel),
+            "floor": _tier_floor,
+        }
+        for _peri_row in periphery_sel:
+            _peri_uid = _coerce_uuid(_peri_row.get("id"))
+            if _peri_uid is not None:
+                derived_from.append(_peri_uid)
+        steps.append({
+            "phase": "evidence_tiers",
+            "kind": "gather_split",
+            "basis": len(sliced),
+            "periphery": len(periphery_sel),
+            "floor": _tier_floor,
+        })
+
     # --- NARRATE + PERSIST envelope ------------------------------------
     # The runtime stamps the substrate-row ``derived_from`` column from
     # the UUID list we return; we already stuck ``meta=True`` and
@@ -2689,21 +3163,23 @@ def _resolve_verify_floor(descriptor: Any, default: float = DEFAULT_VERIFY_FLOOR
 
 
 def _declares_verify(descriptor: Any) -> bool:
-    """True iff the descriptor declares ``method.llm.verify`` (the composition
-    verify OPT-IN).
+    """True iff the descriptor declares ``method.llm.verify`` OR the P2-4
+    ``method.llm.judge`` key (the composition verify OPT-IN).
 
-    Mirrors ``analyst_deps_builder._verify_llm_component_id`` WITHOUT importing it
-    — this kind module stays standalone (no runtime-package load cycle) and the
-    check is a simple presence test over the open ``method.llm`` dict (schemas/
-    analyst.py: ``dict[str, Any]``, so no schema change). Both compositions
-    (country + world) carry ``verify``; the old global meta does NOT → the world
-    branch below (verify-floor + include_meta) engages ONLY for a composition.
+    Mirrors the ``analyst_deps_builder.resolve_judge_route`` OPT-IN GATE WITHOUT
+    importing it — this kind module stays standalone (no runtime-package load
+    cycle) and the check is a simple presence test over the open ``method.llm``
+    dict (schemas/analyst.py: ``dict[str, Any]``, so no schema change). Both
+    compositions (country + world) carry ``verify``; the old global meta does NOT
+    → the world branch below (verify-floor + include_meta) engages ONLY for a
+    composition. A future descriptor carrying only the new ``judge`` key opts in
+    the same way (no live descriptor does today — byte-identical).
     """
     method = getattr(descriptor, "method", None)
     llm = getattr(method, "llm", None) if method is not None else None
     if not isinstance(llm, Mapping):
         return False
-    return llm.get("verify") is not None
+    return llm.get("verify") is not None or llm.get("judge") is not None
 
 
 def thematic_dimension(descriptor: Any) -> str | None:
@@ -3191,7 +3667,17 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # country_composition heads as a target-id SET (multi-country, world-shaped).
     if _is_region_target(target_filter):
         member_ids = await _resolve_region_member_target_ids(conn, str(target_filter))
-        return await _attach_freshness(
+        # C-TIER: flag ON ⇒ the basis bar is the SPLIT floor (env floor when
+        # pinned, else the 0.50 scorecard lockstep) and the member heads the
+        # bar excluded come back as marked PERIPHERY rows. Flag OFF (default)
+        # ⇒ byte-for-byte the legacy region read.
+        _tiered = _tiered_evidence_enabled()
+        _floor = (
+            _resolve_split_floor(descriptor)
+            if _tiered
+            else _resolve_verify_floor(descriptor)
+        )
+        rows = await _attach_freshness(
             conn,
             await read_other_analyst_findings(
                 conn,
@@ -3199,10 +3685,23 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
                 time_window_hours=time_window_hours,
                 limit=limit,
                 target_ids=member_ids,
-                verify_floor=_resolve_verify_floor(descriptor),
+                verify_floor=_floor,
                 include_meta=True,
             ),
         )
+        if _tiered:
+            periphery = await read_periphery_findings(
+                conn,
+                analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                floor=_floor,
+                target_ids=member_ids,
+                include_meta=True,
+            )
+            for row in rows:
+                row[_EVIDENCE_FLOOR_KEY] = _floor
+            rows = rows + periphery
+        return rows
 
     # THEMATIC branch (S2-T4) — a target-LESS run whose descriptor carries a
     # ``subscription.substrate.thematic_dimension`` marker. Fuses ONE verified head
@@ -3229,6 +3728,14 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # headless region to its country reads, naming a fully-absent region as a
     # gap), NOT the ~24 country heads directly. An early return, so the
     # per-country + legacy switch below is byte-for-byte the P3-T2 code.
+    # C-TIER seam: the WORLD (and THEMATIC above) branch deliberately keeps
+    # ``_resolve_verify_floor`` even when LEGBA_COMPOSITION_TIERED_EVIDENCE is
+    # ON — raising its bar WITHOUT the periphery machinery would hard-DROP
+    # 0<eff<floor heads (the signal-loss the split exists to fix), and its
+    # slice already carries degrade/gap coverage honesty. Extending the
+    # periphery gather into ``_assemble_world_region_slice`` /
+    # ``_assemble_thematic_unit_slice`` is the declared follow-up; ``_run`` is
+    # already data-driven (marked rows get the full treatment unchanged).
     if not target_filter and _declares_verify(descriptor):
         return await _attach_freshness(
             conn,
@@ -3241,18 +3748,26 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             ),
         )
 
-    # Two branches (BYTE-FOR-BYTE the P3-T2 per-country + legacy read):
+    # Two branches (BYTE-FOR-BYTE the P3-T2 per-country + legacy read when the
+    # C-TIER flag is OFF, its code default):
     #   * TARGET-SCOPED (per-country composition) ⇒ scope to the country
     #     (``target_id``) + verify-floor; meta findings stay EXCLUDED (the units
-    #     are first-order).
+    #     are first-order). C-TIER flag ON ⇒ the basis bar is the SPLIT floor
+    #     and the unit heads it excluded come back as marked PERIPHERY rows.
     #   * LEGACY GLOBAL meta (target_filter None, no verify) ⇒ the cross-target,
-    #     unfiltered read, byte-for-byte unchanged.
+    #     unfiltered read, byte-for-byte unchanged (never tiered).
     if target_filter:
         target_id: str | None = str(target_filter)
-        verify_floor: float | None = _resolve_verify_floor(descriptor)
+        _tiered = _tiered_evidence_enabled()
+        verify_floor: float | None = (
+            _resolve_split_floor(descriptor)
+            if _tiered
+            else _resolve_verify_floor(descriptor)
+        )
         include_meta = False
     else:
         target_id = None
+        _tiered = False
         verify_floor = None
         include_meta = False
 
@@ -3271,6 +3786,18 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # "legacy read unchanged" discipline every branch above honors.
     if target_filter:
         rows = await _attach_freshness(conn, rows)
+        if _tiered and verify_floor is not None:
+            periphery = await read_periphery_findings(
+                conn,
+                analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                floor=verify_floor,
+                target_id=target_id,
+                include_meta=False,
+            )
+            for row in rows:
+                row[_EVIDENCE_FLOOR_KEY] = verify_floor
+            rows = rows + periphery
     return rows
 
 
@@ -3293,6 +3820,9 @@ __all__ = [
     "MetaFindingsDeps",
     "MetaFindingsSynthesizerRunner",
     "OUTPUT_KIND",
+    "PERIPHERY_BODY_CHARS",
+    "PERIPHERY_CAP",
+    "PERIPHERY_TIER",
     "PROMPT_MODULE_PATH",
     "READ_SLICE",
     "REGION_COMPOSITION_ANALYST_ID",
@@ -3307,6 +3837,8 @@ __all__ = [
     "THEMATIC_DIMENSION_KEY",
     "THEMATIC_MODE_GAP",
     "THEMATIC_MODE_PRESENT",
+    "TIERED_BASIS_FLOOR_DEFAULT",
+    "TIERED_EVIDENCE_ENV",
     "VERIFY_FLOOR_ENV",
     "WORLD_TARGET_TOKEN",
     "CONTENTION_GROUP_LIMIT",
@@ -3330,16 +3862,21 @@ __all__ = [
     "_render_contested_block",
     "_render_freshness_advisory_block",
     "_render_desk_coverage_block",
+    "_render_periphery_block",
     "_render_region_coverage_block",
     "_resolve_desk_roster",
     "_resolve_other_analyst_ids",
     "_resolve_region_member_target_ids",
     "_resolve_region_roster",
+    "_resolve_split_floor",
     "_resolve_verify_floor",
     "_resolve_window_hours",
+    "_select_periphery",
+    "_tiered_evidence_enabled",
     "build_prompt_module",
     "read_open_contention",
     "read_other_analyst_findings",
+    "read_periphery_findings",
     "run_method",
     "thematic_dimension",
     "thematic_desks",

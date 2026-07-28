@@ -381,6 +381,120 @@ async def test_since_filter_strict_after_only():
 
 
 # ---------------------------------------------------------------------------
+# B0-12: newest_entry_ts observation in the health record — the watchdog's
+# quiet-vs-cursor-fault discriminator evidence
+# ---------------------------------------------------------------------------
+
+
+# Fixture max pubDate: "Tue, 20 May 2025 09:30:00 +0000" (h2-bahia).
+_FIXTURE_NEWEST = "2025-05-20T09:30:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_pull_200_records_newest_entry_ts():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=SAMPLE_RSS_2, request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+    await _collect(rss.pull(ctx, since=None))
+    await rss.aclose()
+
+    health = state.snapshot()[_RSS_HEALTH_KEY]
+    assert health["detail"]["newest_entry_ts"] == _FIXTURE_NEWEST
+
+
+@pytest.mark.asyncio
+async def test_since_filtered_empty_pull_still_records_newest_entry_ts():
+    # THE cursor-poison evidence case: a ``since`` past every entry (the
+    # B0-11 stategov future-cursor class) yields 0 signals, but the handler
+    # still OBSERVED the feed's entries — the observation must be recorded so
+    # the watchdog can tell "cursor ate live content" from "quiet feed".
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=SAMPLE_RSS_2, request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+    since = datetime(2025, 6, 1, tzinfo=timezone.utc)  # after ALL entries
+    signals = await _collect(rss.pull(ctx, since=since))
+    await rss.aclose()
+
+    assert signals == []
+    health = state.snapshot()[_RSS_HEALTH_KEY]
+    assert health["detail"]["entries_yielded"] == 0
+    assert health["detail"]["newest_entry_ts"] == _FIXTURE_NEWEST
+
+
+@pytest.mark.asyncio
+async def test_304_carries_forward_newest_entry_ts():
+    # A 304 means the feed document is unchanged — the previous observation
+    # still holds and must be carried forward, so a quiet 304-heavy feed
+    # stays classifiable as honest-quiet (not "no evidence").
+    calls: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        if len(calls) == 1:
+            return httpx.Response(
+                200, text=SAMPLE_RSS_2, headers={"ETag": '"v1"'}, request=req,
+            )
+        return httpx.Response(304, request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+    await _collect(rss.pull(ctx))
+    await _collect(rss.pull(ctx))
+    await rss.aclose()
+
+    health = state.snapshot()[_RSS_HEALTH_KEY]
+    assert health["detail"]["status"] == 304
+    assert health["detail"]["newest_entry_ts"] == _FIXTURE_NEWEST
+
+
+FUTURE_SKEW_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Skewed</title>
+  <link>https://example.invalid/skew</link>
+  <description>year-typo fixture</description>
+  <item>
+    <title>Sane entry</title>
+    <link>https://example.invalid/skew/sane</link>
+    <pubDate>Mon, 19 May 2025 14:00:00 +0000</pubDate>
+    <guid>tag:example.invalid:sane-1</guid>
+  </item>
+  <item>
+    <title>Year-typo entry from the far future</title>
+    <link>https://example.invalid/skew/future</link>
+    <pubDate>Mon, 19 May 2098 14:00:00 +0000</pubDate>
+    <guid>tag:example.invalid:future-1</guid>
+  </item>
+</channel>
+</rss>
+"""
+
+
+@pytest.mark.asyncio
+async def test_future_skewed_dates_excluded_from_newest_entry_ts():
+    # The B0-11 year-typo class: one junk future-dated entry must not poison
+    # the observation — the newest SANE date wins.
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=FUTURE_SKEW_FEED, request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+    await _collect(rss.pull(ctx))
+    await rss.aclose()
+
+    health = state.snapshot()[_RSS_HEALTH_KEY]
+    assert health["detail"]["newest_entry_ts"] == "2025-05-19T14:00:00+00:00"
+
+
+# ---------------------------------------------------------------------------
 # Malformed feed → degraded
 # ---------------------------------------------------------------------------
 

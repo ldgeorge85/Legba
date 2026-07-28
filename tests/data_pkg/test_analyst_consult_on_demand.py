@@ -171,13 +171,12 @@ class _SubstrateStub:
         self,
         *,
         query: str,
-        category: str | None = None,
         limit: int = 20,
         scope_predicate: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append((
             "search_signals",
-            {"query": query, "category": category, "limit": limit,
+            {"query": query, "limit": limit,
              "scope_predicate": scope_predicate},
         ))
         if self.raise_on == "search_signals":
@@ -241,9 +240,14 @@ class _SubstrateStub:
         ))
         if self.raise_on == "search_context":
             raise RuntimeError("substrate down")
+        # W2-T4 ref honesty (mirrors the real port): chunk refs come back
+        # ctx:-prefixed — non-substrate, excluded from lineage coercion — with
+        # the parallel context_refs list.
+        refs = [f"ctx:{r}" for r in self.context_refs]
         return {
             "rows": self.context_rows,
-            "refs": [str(r) for r in self.context_refs],
+            "refs": refs,
+            "context_refs": list(refs),
             "count": len(self.context_rows),
         }
 
@@ -1833,7 +1837,7 @@ async def test_search_context_is_known_and_dispatchable():
     cid = uuid4()
     substrate = _SubstrateStub(
         context_rows=[{
-            "chunk_id": str(cid),
+            "chunk_id": f"ctx:{cid}",
             "corpus": "world_context",
             "doc_id": "iran-brief",
             "title": "Iran leadership brief",
@@ -1853,7 +1857,8 @@ async def test_search_context_is_known_and_dispatchable():
               "country": "ir", "k": "4"},
         scope_predicate=None,
     )
-    assert out["count"] == 1 and out["refs"] == [str(cid)]
+    assert out["count"] == 1 and out["refs"] == [f"ctx:{cid}"]
+    assert out["context_refs"] == [f"ctx:{cid}"]
     assert out["rows"][0]["corpus"] == "world_context"
     # Args are coerced (k -> int) and the non-substrate scope_predicate is NOT
     # forwarded (search_context takes no scope_predicate).
@@ -1862,6 +1867,16 @@ async def test_search_context_is_known_and_dispatchable():
         {"query": "iran succession", "corpus": "world_context",
          "country": "ir", "k": 4},
     )
+
+    # W2-T4 ref honesty: the ctx:-prefixed chunk refs are EXCLUDED from
+    # substrate lineage by the loop's UUID coercion — a search_context read
+    # can never masquerade as a citable substrate row.
+    from legba.data.analysts.consult_on_demand import _refs_from_tool_result
+
+    assert _refs_from_tool_result(out) == []
+    substrate_uuid = uuid4()
+    mixed = {"refs": [f"ctx:{cid}", str(substrate_uuid)]}
+    assert _refs_from_tool_result(mixed) == [substrate_uuid]
 
 
 @pytest.mark.asyncio

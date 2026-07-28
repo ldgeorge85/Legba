@@ -78,13 +78,30 @@ _HEAD_OF_STATE_PREDICATE = "head of state"
 _HEAD_OF_GOVERNMENT_PREDICATE = "head of government"
 _ALLIANCE_REL = "MemberOf"
 _ALLIANCE_POLARITY = 1
-_DEFAULT_CONFIDENCE = 0.92  # slightly below curated (0.95): live extraction
+# Uniform live-extraction confidence, slightly below curated (0.95). NOTE: this
+# is an "as-of the seed date" reliability, NOT a promise the holder is STILL
+# current — a leader can change the day after a pull. ``map`` stamps the seed
+# instant into each leader fact's ``data['as_of']`` so a downstream
+# decay/freshness pass can age this 0.92 by how stale the pull is (S-3: a stale
+# holder at a flat 0.92 overstates reliability). The structural current-holder
+# selection (below) is what keeps a FORMER holder out of `facts` in the first
+# place; ``as_of`` handles the residual "current-when-seeded, stale-now" drift.
+_DEFAULT_CONFIDENCE = 0.92
 
 
-# SPARQL — current heads of state/government per country, with the term start
-# qualifier (P580) of the CURRENT (no end / open) tenure. ``P35`` = head of
+# SPARQL — CURRENT heads of state/government per country, with the term start
+# qualifier (P580) of the current (no end / open) tenure. ``P35`` = head of
 # state, ``P6`` = head of government; we take both and let the country fact
-# carry whichever holds. ``wikibase:label`` via the label service.
+# carry whichever holds. Two-layer current-holder guarantee (S-3):
+#   (1) HERE: ``a wikibase:BestRank`` + ``FILTER NOT EXISTS pq:P582`` excludes
+#       statements carrying an end-date (former holders) and prefers a
+#       preferred-rank incumbent when Wikidata sets one.
+#   (2) In ``map``: a latest-``P580``-start tie-break, because BestRank is NOT a
+#       sufficient guarantee — when Wikidata has DATA LAG (a former holder whose
+#       statement is missing its end-date, and NO preferred rank is set) several
+#       "no end date" rows survive for one (country, office). map keeps only the
+#       most-recent-term-start holder and drops the rest.
+# ``wikibase:label`` via the label service.
 _LEADERS_SPARQL = """
 SELECT ?country ?countryLabel ?leader ?leaderLabel ?role ?start WHERE {
   ?country wdt:P31 wd:Q3624078 .            # sovereign state
@@ -391,6 +408,57 @@ class WikidataLeadersSeedSource:
     # map
     # ------------------------------------------------------------------
 
+    def _emit_office(
+        self,
+        country: str,
+        office: dict[str, Any],
+        office_predicate: str,
+        relation: str,
+        as_of: str,
+    ) -> Iterable[SeedPayload]:
+        """Emit the entities + facts for ONE current (country, office) holder.
+
+        Yields the person + country :class:`SeedEntity`, the subject=leader
+        ``LeaderOf`` fact, and the subject=country office fact (on
+        ``office_predicate`` — head of state / head of government kept on SEPARATE
+        supersession keys). Every fact carries ``data['as_of']`` (the seed
+        instant) so a freshness pass can age the confidence.
+        """
+        leader = office["leader"]
+        valid_from = office["valid_from"]
+        yield SeedEntity(canonical_name=leader, entity_class="person")
+        yield SeedEntity(canonical_name=country, entity_class="country")
+        yield SeedFact(
+            subject=leader,
+            predicate=_LEADER_PREDICATE,
+            value=country,
+            valid_from=valid_from,
+            confidence=self._confidence,
+            data={
+                "seed_adapter": self.name,
+                "relation": "leader_of",
+                "role": relation,
+                "as_of": as_of,
+                "wikidata": {
+                    "country_uri": office.get("country_uri"),
+                    "leader_uri": office.get("leader_uri"),
+                },
+            },
+        )
+        yield SeedFact(
+            subject=country,
+            predicate=office_predicate,
+            value=leader,
+            valid_from=valid_from,
+            confidence=self._confidence,
+            data={
+                "seed_adapter": self.name,
+                "relation": relation,
+                "role": relation,
+                "as_of": as_of,
+            },
+        )
+
     def map(self, raw: dict[str, Any]) -> Iterable[SeedPayload]:
         """Map raw SPARQL bindings → typed seed payloads.
 
@@ -405,17 +473,36 @@ class WikidataLeadersSeedSource:
         leaders = raw.get("leaders") or []
         alliances = raw.get("alliances") or []
         now = datetime.now(tz=timezone.utc)
+        # Seed observation instant. Stamped into every leader fact's ``data`` as
+        # ``as_of`` (see the ``_DEFAULT_CONFIDENCE`` note): the 0.92 confidence is
+        # reliable "as of" this instant, so a freshness pass can age it by how
+        # long ago the pull ran — a defence against a holder going stale AFTER a
+        # correct seed (distinct from the structural former-holder drop below).
+        as_of = now.isoformat()
         countries: set[str] = set()
         skipped = 0
+        superseded = 0
 
-        # 1) Leaders → LeaderOf facts (subject=leader) + country-subject office
-        #    facts (the supersession-correct shape, keyed on the country). The
-        #    SPARQL returns BOTH head-of-government (P6) and head-of-state (P35)
-        #    rows; DQ-#85.3 keeps them on SEPARATE predicates — `head of state`
-        #    (P35) vs `head of government` (P6) — so a parliamentary state's PM
-        #    (head of government) is NOT written as its head of state (the
-        #    monarch / ceremonial president), and each office supersedes only its
-        #    own key on a leader change. One holder per (country, office).
+        # 1) Resolve the SINGLE CURRENT holder per (country, office) BEFORE
+        #    emitting any fact. The SPARQL already drops end-dated statements and
+        #    takes wikibase:BestRank, but that is not a sufficient current-holder
+        #    guarantee: under Wikidata DATA LAG (a former holder whose statement
+        #    is missing its P582 end-date, and no preferred rank set) several "no
+        #    end date" rows survive for ONE (country, office). The old code kept
+        #    the FIRST-SEEN of those AND emitted a subject=leader `LeaderOf` fact
+        #    per surviving row, so a stale ex-leader entered `facts` at conf 0.92
+        #    (S-3). We now keep exactly ONE holder per (country, office) — the
+        #    most-recent term-start (P580) — and emit facts ONLY for that current
+        #    holder. DQ-#85.3 keeps head of state (P35) and head of government
+        #    (P6) on SEPARATE keys so a monarch's ceremonial role and its PM never
+        #    collide / supersede each other.
+        #    LIMIT: this cannot rescue a case where Wikidata ITSELF omits the
+        #    incumbent and records only a stale holder with no end-date at
+        #    preferred rank (live-observed for DR Congo head of government:
+        #    Wikidata still lists the 2019 PM at preferred rank, no end-date, and
+        #    has no statement for the real incumbent). No filter can surface a
+        #    holder the source lacks — the `as_of` stamp + scripts/
+        #    diagnose_stale_leaders.py are the backstop for that upstream gap.
         state_by_country: dict[str, dict[str, Any]] = {}
         gov_by_country: dict[str, dict[str, Any]] = {}
         for row in leaders:
@@ -442,70 +529,62 @@ class WikidataLeadersSeedSource:
                 continue
             valid_from = _parse_wikidata_time(_binding(row, "start"))
             if valid_from is None:
-                # No real term-start → would be a fabricated date; skip.
+                # No real term-start → would be a fabricated date, and leaves us
+                # no basis to rank against another holder; skip.
                 skipped += 1
+                continue
+            # Defensive belt-and-suspenders: the SPARQL ``FILTER NOT EXISTS
+            # pq:P582`` already excludes end-dated (former) holders and the query
+            # does not even SELECT the end-date, so this is a no-op against the
+            # live endpoint. But if an end-date qualifier ever reaches ``map`` (a
+            # future SELECT that projects ?end, or a test fixture), honour it — a
+            # current-holder seed must NEVER carry a holder whose term has ended,
+            # even if that ex-holder's start-date happens to be the most recent.
+            if _parse_wikidata_time(_binding(row, "end")) is not None:
+                superseded += 1
                 continue
             role = _binding(row, "role") or "head_of_state"
             country = country.strip()
             leader = leader.strip()
-            countries.add(country)
 
-            yield SeedEntity(canonical_name=leader, entity_class="person")
-            yield SeedEntity(canonical_name=country, entity_class="country")
-            yield SeedFact(
-                subject=leader,
-                predicate=_LEADER_PREDICATE,
-                value=country,
-                valid_from=valid_from,
-                confidence=self._confidence,
-                data={
-                    "seed_adapter": self.name,
-                    "relation": "leader_of",
-                    "role": role,
-                    "wikidata": {
-                        "country_uri": _binding(row, "country"),
-                        "leader_uri": _binding(row, "leader"),
-                    },
-                },
-            )
-            # Bucket the office-holder by its REAL office (P35 head of state vs
-            # P6 head of government), keeping the first seen per (country,
-            # office). Each is emitted on its own predicate below so the two
-            # never collide / supersede each other.
+            # Bucket by REAL office (P35 head of state vs P6 head of government),
+            # keeping the MOST-RECENT-term-start holder per (country, office).
+            # When >1 no-end-date row survives (Wikidata data-lag), the latest
+            # P580 start wins and the older (stale) ones are dropped — order
+            # independent (a later-start row displaces an earlier-start winner; an
+            # earlier-or-equal-start row is itself dropped).
             bucket = gov_by_country if role == "head_of_government" else state_by_country
-            if country not in bucket:
-                bucket[country] = {"leader": leader, "valid_from": valid_from}
+            prev = bucket.get(country)
+            if prev is not None and valid_from <= prev["valid_from"]:
+                superseded += 1
+                continue
+            if prev is not None:
+                superseded += 1  # this row's later start supersedes the earlier winner
+            bucket[country] = {
+                "leader": leader,
+                "valid_from": valid_from,
+                "role": role,
+                "country_uri": _binding(row, "country"),
+                "leader_uri": _binding(row, "leader"),
+            }
 
-        # 1b) Country-subject office facts — head of state (P35) and head of
-        #     government (P6) on SEPARATE supersession keys (DQ-#85.3 typing fix).
+        # 2) Emit — ONLY for the single current holder per (country, office) —
+        #    the person/country entities, the subject=leader `LeaderOf` fact, and
+        #    the subject=country office fact (head of state / head of government
+        #    on SEPARATE supersession keys, DQ-#85.3). Emitting only the winners
+        #    is what keeps a stale ex-leader out of `facts`.
         for country, office in state_by_country.items():
-            yield SeedFact(
-                subject=country,
-                predicate=_HEAD_OF_STATE_PREDICATE,
-                value=office["leader"],
-                valid_from=office["valid_from"],
-                confidence=self._confidence,
-                data={
-                    "seed_adapter": self.name,
-                    "relation": "head_of_state",
-                    "role": "head_of_state",
-                },
+            countries.add(country)
+            yield from self._emit_office(
+                country, office, _HEAD_OF_STATE_PREDICATE, "head_of_state", as_of
             )
         for country, office in gov_by_country.items():
-            yield SeedFact(
-                subject=country,
-                predicate=_HEAD_OF_GOVERNMENT_PREDICATE,
-                value=office["leader"],
-                valid_from=office["valid_from"],
-                confidence=self._confidence,
-                data={
-                    "seed_adapter": self.name,
-                    "relation": "head_of_government",
-                    "role": "head_of_government",
-                },
+            countries.add(country)
+            yield from self._emit_office(
+                country, office, _HEAD_OF_GOVERNMENT_PREDICATE, "head_of_government", as_of
             )
 
-        # 2) Alliances → signed MemberOf nexuses.
+        # 3) Alliances → signed MemberOf nexuses.
         for row in alliances:
             country = _binding(row, "countryLabel") or _binding(row, "country")
             bloc = _binding(row, "blocLabel") or _binding(row, "bloc")
@@ -543,6 +622,12 @@ class WikidataLeadersSeedSource:
                 },
             )
 
+        if superseded:
+            logger.info(
+                "seed.%s dropped %d former/duplicate holder(s); kept the "
+                "latest-term-start current officeholder per (country, office)",
+                self.name, superseded,
+            )
         if skipped:
             logger.info("seed.%s skipped %d malformed/undated bindings", self.name, skipped)
 

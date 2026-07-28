@@ -104,6 +104,17 @@ def _pin_composition_floor_default(monkeypatch):
     monkeypatch.delenv("LEGBA_COMPOSITION_VERIFY_FLOOR", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _pin_structural_verify_gate_default(monkeypatch):
+    """Same class as ``_pin_composition_floor_default`` (P2-1 wave, 2026-07):
+    the LIVE .env sets ``LEGBA_STRUCTURAL_VERIFY_GATE=1`` and
+    ``legba.data.config._load_env`` auto-loads the live .env as a fallback, so
+    the suite inherits the gate ON — flipping the C2b OFF-safe assertions
+    written against the code default (compute-and-show, no demotion). Strip it;
+    a test that wants the gate sets it explicitly via monkeypatch.setenv."""
+    monkeypatch.delenv("LEGBA_STRUCTURAL_VERIFY_GATE", raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Persistent pivot-test database (legba_pivot_test)
 # ---------------------------------------------------------------------------

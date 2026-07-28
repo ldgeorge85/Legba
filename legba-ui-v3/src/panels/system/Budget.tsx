@@ -380,8 +380,12 @@ export default function BudgetPanel({ registration }: PanelProps) {
               </tr>
             </thead>
             <tbody>
+              {/* Ledger identity is the PK triplet (analyst_id, analyst_version,
+                  bucket) — the same analyst re-versioned within one bucket is a
+                  distinct row, so the version MUST be in the key (dropping it
+                  produced the duplicate-key warning storm at live scale). */}
               {(ledgerQ.data ?? []).map((r) => (
-                <tr key={`${r.analyst_id}-${r.bucket}`} className="border-b border-slate-800/40 hover:bg-surface-100">
+                <tr key={`${r.analyst_id}@${r.analyst_version}·${r.bucket}`} className="border-b border-slate-800/40 hover:bg-surface-100">
                   <td className="py-1 px-1 truncate max-w-[200px]">{r.analyst_id}</td>
                   <td className="py-1 px-1 text-slate-500 font-mono">{r.bucket}</td>
                   <td className="py-1 px-1 text-right font-mono">{r.tokens_used.toLocaleString()}</td>

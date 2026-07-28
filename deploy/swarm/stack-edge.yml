@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# deploy/swarm/stack-edge.yml — DRAFT swarm stack: UI build + Caddy TLS edge.
+#
+# ############################################################################
+# ##  DRAFT — NOT DEPLOYABLE YET. Phase-1 validation pending.               ##
+# ##  See deploy/swarm/README.md + planning/SWARM_CONVERSION_ASSESSMENT_    ##
+# ##  2026-07-25.md before touching this with `docker stack deploy`.        ##
+# ############################################################################
+#
+# Translation of legba-ui-build (one-shot SPA publisher) + legba-caddy from
+# docker-compose.yml. Both PIN to the runtime node: they share the ui_dist
+# named volume, and local volumes are node-local — co-location is what makes
+# the shared-volume pattern survive the move to swarm.
+#
+# ONE-SHOT SEMANTICS: compose modeled ui-build as restart:"no" + caddy
+# depends_on service_completed_successfully. Swarm has NEITHER. Here:
+#   * legba-ui-build runs with restart_policy condition:none — executes once
+#     per deploy, republishes dist/, exits. (deploy.mode replicated-job passes
+#     the Docker 29 validator too; behavior parity is a phase-1 verify item.)
+#   * legba-caddy CANNOT gate on its completion. First-ever deploy: caddy may
+#     serve 404s for the seconds until dist/ lands (file_server on an empty
+#     /srv/legba-ui). Fix options (assessment §3): (a) tolerate the transient,
+#     (b) caddy entrypoint wait-for /srv/legba-ui/index.html (wait TO ADD —
+#     not modified in the draft phase), (c) LONG-TERM: bake dist/ into a
+#     derived caddy image and delete the shared-volume pattern entirely —
+#     the recommended end state, it also removes the co-location pin.
+#
+# PORTS: caddy is the ONLY published surface in all three stacks. `mode: host`
+# (NOT ingress): binds 80/443 on the runtime node only — the routing mesh
+# would open 80/443 on EVERY node and hide client IPs behind the mesh SNAT.
+# This preserves the single public entrypoint the B-1 perimeter assumes.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+services:
+  legba-ui-build:
+    image: localhost:5000/legba/legba-ui-build:latest   # build: ignored → local registry
+    logging: *default-logging
+    volumes:
+      - ui_dist:/out
+    networks:
+      - legba-swarm
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: none   # one-shot: publish dist/ then exit 0
+
+  legba-caddy:
+    image: caddy:2-alpine
+    logging: *default-logging
+    # OP-1 parity: caddy expands {$LEGBA_REGISTRY_API_TOKEN} +
+    # {$LEGBA_BASIC_AUTH_HASH} from its env. env_file is read client-side at
+    # deploy and baked into the spec (see stack-runtime.yml header caveat).
+    env_file: ../../.env
+    volumes:
+      - ui_dist:/srv/legba-ui:ro
+      # PMTiles basemap: ABSOLUTE bind, pre-provisioned on the runtime node by
+      # the phase runbook (was ${LEGBA_BASEMAP_DIR:-./deploy/tiles} — relative
+      # binds don't survive stack deploy; absent file → SPA demotiles fallback,
+      # same degrade as today).
+      - /var/lib/legba/tiles:/srv/tiles:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    configs:
+      # was: ./docker/Caddyfile bind (ro)
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    ports:
+      # host-mode publishing on the runtime node only — see header.
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: udp   # HTTP/3
+        mode: host
+    networks:
+      - legba-swarm   # reaches legba-registry:8090 by alias for /api + /ws
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: any
+
+configs:
+  caddyfile:
+    file: ../../docker/Caddyfile
+
+networks:
+  legba-swarm:
+    external: true   # created once in phase 1 (see stack-data.yml)
+
+volumes:
+  # Stack-scoped (legba-edge_*), node-local to the runtime node.
+  # caddy_data holds the ACME account + certs — semi-stateful: losing it only
+  # costs a re-issue, but Let's Encrypt rate limits make gratuitous volume
+  # churn a real (if small) operational risk.
+  ui_dist:
+  caddy_data:
+  caddy_config:

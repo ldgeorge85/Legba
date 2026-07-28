@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
@@ -94,6 +95,53 @@ RETIRED = "retired"
 _MAX_ENTRIES_PER_POLL = 100      # hard count cap per pull
 _POLL_BUDGET_S = 30.0            # wall-time budget per pull
 _ENRICH_TIMEOUT_S = 12.0         # per-entry baseline/enrichment timeout
+
+# S-4 intra-source exact-hash dedup. A source that re-lists an unchanged item
+# every poll (hazard feeds re-serve active events; NWS/NASA/USGS re-publish)
+# used to spawn a fresh signals row per poll — 41% of a 7-day window's rows were
+# exact content-hash duplicates, ALL intra-source (the "M 5.5 Chupaca, Peru"
+# quake was stored 194x). content_hash is a DETERMINISTIC hash of content
+# (source-set, or the baseline backstop over canonical_url + title — never the
+# fetch time), so an exact (source_id, content_hash) match is byte-identical
+# content: safe to collapse. Before inserting we look for an existing
+# same-(source_id, content_hash) row within a lookback window and, on a hit,
+# BUMP that row's fetched_at (recency stays fresh — "we still see this") and SKIP
+# the insert instead of appending a redundant row. This is INTRA-source only
+# (the lookup pins source_id); a cross-source same-hash dup is still KEPT and
+# alias-linked by ingest_dedupe / the periodic cross_source_dedup analyst.
+# Default ON — the collapse is provably lossless for an exact hash; set
+# LEGBA_INTRASOURCE_DEDUP=0 to disable (fall back to keep-all + alias-link).
+_INTRASOURCE_DEDUP_ENV = "LEGBA_INTRASOURCE_DEDUP"
+_INTRASOURCE_DEDUP_WINDOW_ENV = "LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS"
+_DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS = 168  # 7 days
+
+
+def _intrasource_dedup_enabled() -> bool:
+    """Whether S-4 intra-source exact-hash collapse is active (default ON)."""
+    return os.getenv(_INTRASOURCE_DEDUP_ENV, "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _intrasource_dedup_window_hours() -> int:
+    """Lookback window (hours) for the (source_id, content_hash) existence check.
+
+    A re-emission WITHIN this window collapses onto (bumps) the existing row; a
+    re-appearance after a longer silence lands a fresh row (treated as a new
+    occurrence). Because every collapse bumps the surviving row's fetched_at to
+    ~now, an item that keeps re-emitting never falls out of its own window — the
+    bound only governs re-appearance after a real gap. Defaults to 168h (7d);
+    override via LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS (a non-positive/garbage
+    value degrades to the default).
+    """
+    raw = os.getenv(_INTRASOURCE_DEDUP_WINDOW_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS
+    try:
+        value = int(raw)
+    except ValueError:  # pragma: no cover — defensive
+        return _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS
+    return value if value > 0 else _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS
 
 # Bulk-dataset traversal (high-water mark). A "bulk" source streams ONE large
 # snapshot whose entries all carry the same coarse logical timestamp (e.g.
@@ -366,6 +414,61 @@ RETURNING id
 """
 
 
+# S-4: atomic find-and-bump for an intra-source exact-hash duplicate. Picks the
+# MOST-RECENT existing row sharing this (source_id, content_hash, owner_tenant)
+# within the lookback window and advances its fetched_at (never backwards — via
+# GREATEST) + updated_at. Bumping the MOST-RECENT — deliberately NOT the earliest
+# — keeps the "earliest fetched_at = canonical" ordering that ingest_dedupe and
+# the cross_source_dedup analyst pick deterministically stable. content_hash <>
+# '' skips the schema-default "no hash" rows (empty string is never a dedup key).
+# The window bound is inlined (int-validated, no user input) mirroring the
+# coalescer's INTERVAL pattern. The equality on (source_id, content_hash) rides
+# the existing signals_content_hash_idx + signals_source_idx (content_hash is a
+# sha256 → the per-hash candidate set is tiny), so no new index is needed.
+def _bump_intrasource_sql(window_hours: int) -> str:
+    return f"""
+    UPDATE signals
+       SET fetched_at = GREATEST(fetched_at, $4),
+           updated_at = NOW()
+     WHERE id = (
+         SELECT id FROM signals
+          WHERE source_id = $1
+            AND content_hash = $2
+            AND content_hash <> ''
+            AND owner_tenant = $3
+            AND fetched_at > NOW() - INTERVAL '{int(window_hours)} hours'
+          ORDER BY fetched_at DESC, id DESC
+          LIMIT 1
+     )
+    RETURNING id
+    """
+
+
+async def _bump_intrasource_duplicate(
+    conn: asyncpg.Connection,
+    signal: Signal,
+    *,
+    owner_tenant: str,
+    window_hours: int,
+) -> Any | None:
+    """Bump the freshest existing same-(source_id, content_hash) row's recency.
+
+    Returns the bumped row id on a hit (the caller then SKIPS the insert), or
+    None when no in-window duplicate exists (the caller inserts normally). The
+    read+write is a SINGLE atomic UPDATE ... RETURNING, so there is no
+    check-then-insert race within the connection (and a source is a single Dapr
+    actor — its polls are turn-serialized, so no cross-poll race either). The
+    caller guards ``content_hash`` non-empty before calling.
+    """
+    return await conn.fetchval(
+        _bump_intrasource_sql(window_hours),
+        signal.source_id,
+        signal.content_hash,
+        owner_tenant,
+        signal.fetched_at,
+    )
+
+
 async def lookup_source_credibility(
     conn: asyncpg.Connection, signal: Signal,
 ) -> float | None:
@@ -419,14 +522,24 @@ async def write_canonical_signal(
     *,
     source_version: str,
     owner_tenant: str,
+    dedup_stats: dict[str, int] | None = None,
 ) -> Any | None:
     """Insert ONE canonical, target-agnostic signal into the new ``signals``
     table. Stamps provenance (source-origin) + tenant from the descriptor.
 
-    Returns the inserted row id, or ``None`` if a row with that id already
-    existed (idempotent — a re-fired reminder that re-pulls the same payload
-    won't double-insert when the handler reuses a deterministic id; the
-    default uuid4 ids are unique so this is a backstop, real dedup is P-09).
+    Returns the inserted row id, or ``None`` if the write was a no-op — either a
+    row with that id already existed (the uuid4-id ON CONFLICT backstop) OR (S-4)
+    an intra-source exact-hash duplicate already landed within the lookback
+    window, in which case the existing row's recency (``fetched_at``) is bumped
+    and NO new row is inserted. The caller treats ``None`` as "nothing written,
+    nothing to fan out".
+
+    ``dedup_stats``: when supplied, its ``"deduped"`` counter is incremented on
+    each S-4 collapse. The poll path passes this so it can tell "wrote nothing
+    because every item was an already-seen duplicate" (a productive, source-alive
+    poll — recency was bumped) apart from "wrote nothing because the feed was
+    empty" (the liveness watchdog's stall signal). See
+    :data:`_INTRASOURCE_DEDUP_ENV`.
     """
     # FIX P2-3: backfill source_credibility from the registry-scored host table
     # when the in-flight signal doesn't already carry a score (i.e. the
@@ -435,6 +548,35 @@ async def write_canonical_signal(
     source_credibility = signal.source_credibility
     if source_credibility is None:
         source_credibility = await lookup_source_credibility(conn, signal)
+
+    # S-4: intra-source exact-hash collapse (pre-insert). An empty content_hash
+    # is the schema default ("no hash") and is never a dedup key. Best-effort —
+    # any error here must NOT lose the write, so we log and fall through to the
+    # normal insert (a duplicate row is a lesser evil than a dropped signal).
+    if signal.content_hash and _intrasource_dedup_enabled():
+        resolved_tenant = owner_tenant or signal.owner_tenant
+        try:
+            bumped = await _bump_intrasource_duplicate(
+                conn, signal,
+                owner_tenant=resolved_tenant,
+                window_hours=_intrasource_dedup_window_hours(),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "source_actor.intrasource_dedup.failed source=%s hash=%s "
+                "err=%s (falling through to insert)",
+                signal.source_id, (signal.content_hash or "")[:16], exc,
+            )
+            bumped = None
+        if bumped is not None:
+            if dedup_stats is not None:
+                dedup_stats["deduped"] = dedup_stats.get("deduped", 0) + 1
+            logger.debug(
+                "source_actor.intrasource_dedup.collapsed source=%s hash=%s "
+                "bumped_row=%s (recency advanced; insert skipped)",
+                signal.source_id, signal.content_hash[:16], bumped,
+            )
+            return None
 
     row = await conn.fetchrow(
         _INSERT_SIGNAL,
@@ -476,9 +618,9 @@ async def write_canonical_signal(
 _INSERT_POLL_OUTCOME = """
 INSERT INTO public.source_poll_outcomes (
     source_id, source_version, owner_tenant,
-    outcome, health_state, capped, signals_written, error
+    outcome, health_state, capped, signals_written, error, newest_entry_ts
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 """
 
 # Cap the stored error string so a verbose traceback can't bloat the row.
@@ -496,6 +638,7 @@ async def write_poll_outcome(
     capped: bool,
     signals_written: int,
     error: str | None,
+    newest_entry_ts: datetime | None = None,
 ) -> None:
     """Append a provenance row for a NON-productive poll (DQ-H5b).
 
@@ -504,6 +647,13 @@ async def write_poll_outcome(
     the cadence watchdog keys on ('error' when the poll failed — an escaped
     exception OR a handler-swallowed 4xx/parse-fail/timeout surfaced via
     ``health_state`` — else 'empty' for a genuine HTTP-200-but-0-items feed).
+
+    ``newest_entry_ts`` (B0-12): the newest entry timestamp the handler
+    OBSERVED upstream this poll (pre-since-filter, future-skew-clamped —
+    recorded in the handler's health detail). The watchdog's empty-streak
+    check compares it against the source's newest ingested signal to
+    discriminate honest-quiet (no alert) from a cursor/filter fault
+    (escalate). NULL when the handler records no such observation.
     """
     await conn.execute(
         _INSERT_POLL_OUTCOME,
@@ -515,6 +665,7 @@ async def write_poll_outcome(
         capped,
         int(signals_written),
         error[:_POLL_OUTCOME_ERROR_MAX] if error else None,
+        newest_entry_ts,
     )
 
 
@@ -618,10 +769,13 @@ class SourceCore:
 
     async def _process_one(
         self, conn: asyncpg.Connection, ctx: SourceContext, raw: Signal,
+        *, dedup_stats: dict[str, int] | None = None,
     ) -> "Signal | None":
         """Baseline → write ONE canonical signal. Returns the written signal
         (so the caller can publish it per-signal), or None if the baseline
-        dropped it or the write was a dedup/conflict no-op."""
+        dropped it or the write was a dedup/conflict no-op. ``dedup_stats``, when
+        supplied, is threaded to :func:`write_canonical_signal` so the poll path
+        can count S-4 intra-source collapses (a collapse is a productive poll)."""
         try:
             enriched = await asyncio.wait_for(
                 run_baseline(
@@ -654,15 +808,27 @@ class SourceCore:
         # write_canonical_signal's `owner_tenant or signal.owner_tenant` fallback.
         if self.descriptor.scope.owner_tenant:
             enriched.owner_tenant = self.descriptor.scope.owner_tenant
+        # LIC-2 stamp (SourceScope → signal): copy the descriptor's declared
+        # license_class onto the payload so the OpenSearch corpus facet + the
+        # P2-2 evidence-archiver retention gate read a per-signal value. A
+        # payload that already carries one (manual-batch provenance, a
+        # source-handler override) WINS — the scope value is the source-level
+        # default, not a clobber. Unset scope → no key (honest absence).
+        scope_license = getattr(self.descriptor.scope, "license_class", None)
+        if scope_license and "license_class" not in enriched.payload:
+            enriched.payload["license_class"] = scope_license
         written_id = await write_canonical_signal(
             conn,
             enriched,
             source_version=self.descriptor.identity.version,
             owner_tenant=self.descriptor.scope.owner_tenant,
+            dedup_stats=dedup_stats,
         )
         if written_id is None:
-            # ON CONFLICT DO NOTHING (id collision) — nothing written, nothing
-            # to fan out.
+            # No row written — either the uuid4-id ON CONFLICT backstop or (S-4)
+            # an intra-source exact-hash duplicate whose recency was bumped in
+            # place. Nothing to fan out either way (a re-emission of identical
+            # content must not re-fire triggers / inflate firing counts).
             return None
 
         # Source-side ingest dedupe (P-02, tiers 1+2). Run AFTER the insert so
@@ -782,6 +948,12 @@ class SourceCore:
             await ctx.state_store.set(BULK_TRAVERSED_KEY, None)
 
         written: list[Signal] = []
+        # S-4: count intra-source exact-hash collapses this poll. A poll that
+        # wrote 0 rows but collapsed >=1 duplicate DID see productive content
+        # (the source is alive + current — recency was bumped), so it must NOT be
+        # recorded as a non-productive 'empty' poll (which the liveness watchdog
+        # counts toward an empty-streak degradation).
+        dedup_stats: dict[str, int] = {}
         errored: str | None = None
         capped = False
         # Logical position of the LAST entry we actually consumed this pull —
@@ -807,7 +979,9 @@ class SourceCore:
                     ts = _entry_logical_ts(raw)
                     if last_processed_ts is None or ts > last_processed_ts:
                         last_processed_ts = ts
-                    sig = await self._process_one(conn, ctx, raw)
+                    sig = await self._process_one(
+                        conn, ctx, raw, dedup_stats=dedup_stats,
+                    )
                     if sig is not None:
                         written.append(sig)
                         # Publish immediately — fan-out then survives a later
@@ -884,7 +1058,12 @@ class SourceCore:
             # (empty / error) so the cadence watchdog + UI can surface WHY this
             # source is silent. A poll that wrote >=1 signal is self-evidencing
             # via its signals rows, so it is intentionally NOT logged here.
-            if not written:
+            # S-4: a poll that wrote 0 rows but COLLAPSED >=1 intra-source
+            # duplicate is ALSO productive (it saw current content + bumped
+            # recency), so it too is skipped here — otherwise a hazard feed
+            # healthily re-serving active events would log consecutive 'empty'
+            # rows and trip the watchdog's empty-streak degradation.
+            if not written and not dedup_stats.get("deduped"):
                 await self._record_poll_outcome(
                     ctx, handler, errored=errored, capped=capped,
                 )
@@ -923,6 +1102,7 @@ class SourceCore:
         """
         health_state: str | None = None
         health_error: str | None = None
+        newest_entry_ts: datetime | None = None
         # Only trust the handler health record when the pull ran to a NATURAL
         # conclusion. A capped pull can leave a STALE prior-pull health record
         # (we broke the async-for before the handler wrote this pull's health),
@@ -942,6 +1122,28 @@ class SourceCore:
                     last_err = rec.get("last_error")
                     if isinstance(last_err, str) and last_err:
                         health_error = last_err
+                    # B0-12: the handler's newest-observed-entry timestamp
+                    # (rss records it in detail on every parsed 200 / carries
+                    # it across 304s) — the watchdog's quiet-vs-cursor-fault
+                    # discriminator evidence. Defensive parse: bad/absent
+                    # values degrade to NULL (→ the watchdog's pre-existing
+                    # no-evidence behavior).
+                    detail = rec.get("detail")
+                    raw_ts = (
+                        detail.get("newest_entry_ts")
+                        if isinstance(detail, dict)
+                        else None
+                    )
+                    if isinstance(raw_ts, str) and raw_ts:
+                        try:
+                            parsed = datetime.fromisoformat(raw_ts)
+                            newest_entry_ts = (
+                                parsed
+                                if parsed.tzinfo
+                                else parsed.replace(tzinfo=timezone.utc)
+                            )
+                        except ValueError:
+                            newest_entry_ts = None
 
         if errored is not None or health_state in ("degraded", "unhealthy"):
             outcome = "error"
@@ -960,6 +1162,7 @@ class SourceCore:
                     capped=capped,
                     signals_written=0,
                     error=errored or health_error,
+                    newest_entry_ts=newest_entry_ts,
                 )
         except Exception:  # provenance write must never mask the pull result
             logger.warning(

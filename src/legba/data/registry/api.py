@@ -48,6 +48,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal
 from uuid import UUID
 
+import asyncpg
 from fastapi import (
     APIRouter,
     Depends,
@@ -395,6 +396,19 @@ class SourceDescriptorOut(BaseModel):
     has_discovery: bool = False
     has_provision: bool = False
     output_subject: str | None = None
+    # P3-1 (assurance ledger) — the current PUBLIC Admiralty display grade
+    # (reliability×credibility, e.g. "B2") from `source_ratings` (migration
+    # 0094); null when the source is ungraded. Stamped post-`from_row` by the
+    # list/detail routes via `load_assurance_grades` (additive: the field is
+    # display-only and NEVER feeds the faithfulness score — A6 hard rule).
+    assurance_grade: str | None = None
+    # P3-3 (A6 layer 3) — the EARNED smoothed win-rate from `source_track_records`
+    # (migration 0099): the MEASURED counterpart of the asserted grade above.
+    # Beta-smoothed (prior-damped) rate over resolved contentions; null when the
+    # source has no resolved-contest sample. Stamped post-`from_row` via
+    # `load_earned_win_rates` (additive, display-only; feeds weighting/tie-break/
+    # display ONLY — NEVER the faithfulness score, A6 hard rule).
+    earned_win_rate: float | None = None
     # full descriptor body, verbatim (the detail view + editor reads this)
     body: dict[str, Any] = Field(default_factory=dict)
 
@@ -429,6 +443,88 @@ class SourceDescriptorOut(BaseModel):
             output_subject=subject,
             body=body,
         )
+
+
+async def load_assurance_grades(
+    pg: Any, source_ids: list[str],
+) -> dict[str, str]:
+    """Current PUBLIC Admiralty grade per source id (P3-1 assurance ledger).
+
+    One query over ``source_ratings`` (migration 0094): per source, the most
+    recent CURRENT (``superseded_by IS NULL``) ``visibility_class='public'``
+    row carrying BOTH Admiralty halves wins; sources with no such row are
+    absent from the map. Private-annex rows are NEVER consulted here — this
+    feeds public projections (the ``/sources`` list + the assurance route's
+    ``assurance_grade``).
+
+    Degrades to ``{}`` (all-null grades) when the table does not exist yet —
+    a registry rolled forward ahead of migration 0094 must not 500 the
+    source list over an additive display column.
+    """
+    if not source_ids:
+        return {}
+    try:
+        async with pg.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (source_id)
+                       source_id,
+                       admiralty_reliability || admiralty_credibility AS grade
+                  FROM source_ratings
+                 WHERE source_id = ANY($1::text[])
+                   AND visibility_class = 'public'
+                   AND superseded_by IS NULL
+                   AND admiralty_reliability IS NOT NULL
+                   AND admiralty_credibility IS NOT NULL
+                 ORDER BY source_id, rated_at DESC
+                """,
+                list(source_ids),
+            )
+    except asyncpg.UndefinedTableError:
+        logger.warning(
+            "assurance grades unavailable: source_ratings table missing "
+            "(migration 0094 not applied) — serving null grades",
+        )
+        return {}
+    return {r["source_id"]: r["grade"] for r in rows}
+
+
+async def load_earned_win_rates(
+    pg: Any, source_ids: list[str],
+) -> dict[str, float]:
+    """Current EARNED smoothed win-rate per source id (P3-3 assurance layer 3).
+
+    One query over ``source_track_records`` (migration 0099): the Beta-smoothed
+    (prior-damped) win-rate for each source that HAS a resolved-contest sample
+    (``contested_total > 0``); sources with no sample are absent from the map
+    (their raw rate is undefined and the smoothed 0.5 would read as a real
+    measurement it is not). Feeds the additive ``/sources`` ``earned_win_rate``
+    projection — display-only, NEVER the faithfulness score (A6 hard rule).
+
+    Degrades to ``{}`` when the table does not exist yet — a registry rolled
+    forward ahead of migration 0099 must not 500 the source list over an
+    additive display column.
+    """
+    if not source_ids:
+        return {}
+    try:
+        async with pg.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT source_id, win_rate_smoothed
+                  FROM source_track_records
+                 WHERE source_id = ANY($1::text[])
+                   AND contested_total > 0
+                """,
+                list(source_ids),
+            )
+    except asyncpg.UndefinedTableError:
+        logger.warning(
+            "earned win-rates unavailable: source_track_records table missing "
+            "(migration 0099 not applied) — serving null rates",
+        )
+        return {}
+    return {r["source_id"]: float(r["win_rate_smoothed"]) for r in rows}
 
 
 class ActionPackOut(BaseModel):
@@ -1061,7 +1157,18 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
             limit=limit,
         )
         rows = await deps_.descriptor_registry.list(pred)
-        return [SourceDescriptorOut.from_row(r) for r in rows]
+        out = [SourceDescriptorOut.from_row(r) for r in rows]
+        # P3-1 — stamp the current public Admiralty grade (additive column;
+        # one batched query, null for ungraded sources). P3-3 — the EARNED
+        # smoothed win-rate beside it (additive, one batched query, null when
+        # the source has no resolved-contest sample).
+        ids = [o.descriptor_id for o in out]
+        grades = await load_assurance_grades(deps_.descriptor_registry.pg, ids)
+        earned = await load_earned_win_rates(deps_.descriptor_registry.pg, ids)
+        for o in out:
+            o.assurance_grade = grades.get(o.descriptor_id)
+            o.earned_win_rate = earned.get(o.descriptor_id)
+        return out
 
     @router.get("/sources/{descriptor_id}", response_model=SourceDescriptorOut)
     async def get_source(
@@ -1076,7 +1183,16 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
             )
         except DescriptorNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return SourceDescriptorOut.from_row(row)
+        out = SourceDescriptorOut.from_row(row)
+        grades = await load_assurance_grades(
+            deps_.descriptor_registry.pg, [out.descriptor_id],
+        )
+        earned = await load_earned_win_rates(
+            deps_.descriptor_registry.pg, [out.descriptor_id],
+        )
+        out.assurance_grade = grades.get(out.descriptor_id)
+        out.earned_win_rate = earned.get(out.descriptor_id)
+        return out
 
     # ------------------------------------------------------------------
     # P-05 — `action_pack` read view the UI needs (same mirror).

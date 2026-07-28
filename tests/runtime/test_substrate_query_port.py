@@ -434,25 +434,34 @@ async def test_search_signals_happy_path(port, pg_pool):
 
 
 @pytest.mark.asyncio
-async def test_search_signals_category_filter(port, pg_pool):
+async def test_search_signals_category_param_removed(port, pg_pool):
+    # W2-T5 residual (2026-07): the dead ``category`` FILTER param is GONE —
+    # 0 live signals carry the payload key, so any value turned every query
+    # into an honest-looking empty result. Passing it must fail loudly, and
+    # rows matching on text must come back regardless of their payload
+    # category value (no hidden narrowing).
     sid_energy = await _insert_signal(
         pg_pool,
         title="Hydroelectric expansion plan filed",
         summary="Brazil hydropower",
         category="energy",
     )
-    await _insert_signal(
+    sid_env = await _insert_signal(
         pg_pool,
         title="Hydroelectric concerns flagged by NGO",
         summary="Brazil hydropower",
         category="environment",
     )
 
-    energy = await port.search_signals(
-        query="hydroelectric", category="energy", limit=10,
-    )
-    assert str(sid_energy) in energy["refs"]
-    assert all(r["category"] == "energy" for r in energy["rows"])
+    with pytest.raises(TypeError):
+        await port.search_signals(
+            query="hydroelectric", category="energy", limit=10,
+        )
+
+    both = await port.search_signals(query="hydroelectric", limit=10)
+    assert str(sid_energy) in both["refs"]
+    assert str(sid_env) in both["refs"]
+    assert "category" not in both  # no dead filter echo in the envelope
 
 
 @pytest.mark.asyncio
@@ -1259,25 +1268,27 @@ async def test_query_predictions_sql_executes(port):
 
 @pytest.mark.asyncio
 async def test_query_predictions_maps_writer_extras(port, pg_pool):
-    # The predictor stashes the numerics as PredictionPayload EXTRAS under
-    # data->'prediction' with keys ci_lower / ci_upper / method (NOT
-    # ci_low/ci_high/forecast_method). Insert a row exactly as the predictor
-    # writes it and assert the reader surfaces those onto its ci_low/ci_high/
-    # forecast_method fields — regression guard for the key-mismatch fix.
+    # STORED SHAPE (W2-T6 / M3): the emit path
+    # (actor_payload._PAYLOAD_SELECTORS[OutputKind.PREDICTION]) UNWRAPS the
+    # analyst-side finding.data["prediction"] blob, so the analyst_outputs
+    # row's ``data`` IS the PredictionPayload dump at the TOP LEVEL — with
+    # the writer's extras keys ci_lower / ci_upper / method (NOT
+    # ci_low/ci_high/forecast_method). Insert a row exactly as it is STORED
+    # and assert the reader surfaces those onto its ci_low/ci_high/
+    # forecast_method fields. (The old nested data->'prediction' read path
+    # matched zero live rows and was deleted.)
     oid = uuid4()
     blob = {
-        "prediction": {
-            "hypothesis": "event volume rises",
-            "status": "open",
-            "confidence": 0.6,
-            "point_estimate": 12.5,
-            "ci_lower": 8.0,
-            "ci_upper": 17.0,
-            "ci_level": 0.9,
-            "horizon_days": 30,
-            "method": "AutoARIMA",
-            "narrative": "Trend up.",
-        }
+        "hypothesis": "event volume rises",
+        "status": "open",
+        "confidence": 0.6,
+        "point_estimate": 12.5,
+        "ci_lower": 8.0,
+        "ci_upper": 17.0,
+        "ci_level": 0.9,
+        "horizon_days": 30,
+        "method": "AutoARIMA",
+        "narrative": "Trend up.",
     }
     async with pg_pool.acquire() as conn:
         await conn.execute(
@@ -1295,14 +1306,15 @@ async def test_query_predictions_maps_writer_extras(port, pg_pool):
         )
 
     # A RESOLVED prediction, written the way the resolver actually does it
-    # (calibration_tracking): lifecycle status + outcome merged at the TOP
-    # LEVEL of data via jsonb ``||`` — the nested data->'prediction'->>'status'
-    # copy stays the stale initial 'open'.
+    # (calibration_tracking): lifecycle status + outcome merged over the
+    # stored top-level dump via jsonb ``||`` — status flips 'open' →
+    # 'resolved' in place.
     oid_resolved = uuid4()
     resolved_blob = {
-        "prediction": {"hypothesis": "h2", "status": "open", "point_estimate": 3.0},
-        "status": "resolved",          # top-level — the resolver's write
-        "resolved_outcome": "hit",     # top-level — the resolver's write
+        "hypothesis": "h2",
+        "point_estimate": 3.0,
+        "status": "resolved",          # the resolver's merge overwrote 'open'
+        "resolved_outcome": "hit",     # the resolver's merge
     }
     async with pg_pool.acquire() as conn:
         await conn.execute(
@@ -1332,21 +1344,74 @@ async def test_query_predictions_maps_writer_extras(port, pg_pool):
     assert row["status"] == "open"
     assert row["resolved_outcome"] is None
 
-    # The graded row reports its TRUE top-level lifecycle status + outcome,
-    # not the stale nested 'open'.
+    # The graded row reports its TRUE lifecycle status + outcome.
     rrow = next(r for r in out["rows"] if r["id"] == str(oid_resolved))
     assert rrow["status"] == "resolved"
     assert rrow["resolved_outcome"] == "hit"
 
-    # status filter matches the resolver's top-level convention (COALESCE
-    # top-level over nested): 'open' hits only the never-resolved row,
-    # 'resolved' hits only the graded row.
+    # status filter reads the ONE canonical path (data->>'status'): 'open'
+    # hits only the never-resolved row, 'resolved' only the graded row.
     open_refs = (await port.query_predictions(status="open", limit=5))["refs"]
     assert str(oid) in open_refs
     assert str(oid_resolved) not in open_refs
     resolved_refs = (await port.query_predictions(status="resolved", limit=5))["refs"]
     assert str(oid_resolved) in resolved_refs
     assert str(oid) not in resolved_refs
+
+    # FEED HONESTY (W2-T6): the response states the feed is frozen and
+    # carries the newest produced_at so a reader can refuse to present a
+    # historical row as a current forecast.
+    assert "FROZEN" in out["feed_note"]
+    assert out["latest_produced_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# query_paths — polarity filter in SQL (W2-T6 / M5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_query_paths_polarity_filter_in_sql(port, pg_pool):
+    """W2-T6 / M5: the ``polarity_product`` filter is a SQL predicate BEFORE
+    the LIMIT — a tight limit can no longer starve matching paths behind
+    non-matching ones (the old Python post-filter only saw what survived the
+    fetch cutoff). Graph: wt6m5_a -> wt6m5_b direct (+1, 1 hop — ranks
+    first) and wt6m5_a -> wt6m5_c -> wt6m5_b (net -1, 2 hops)."""
+    await _insert_nexus(
+        pg_pool, subject="wt6m5_a", object_="wt6m5_b",
+        rel_type="supports", polarity=1,
+    )
+    await _insert_nexus(
+        pg_pool, subject="wt6m5_a", object_="wt6m5_c",
+        rel_type="opposes", polarity=-1,
+    )
+    await _insert_nexus(
+        pg_pool, subject="wt6m5_c", object_="wt6m5_b",
+        rel_type="supports", polarity=1,
+    )
+
+    unfiltered = await port.query_paths(subject="wt6m5_a", obj="wt6m5_b")
+    assert len(unfiltered["paths"]) == 2
+
+    # limit=1 + net -1: shortest-first ranking puts the +1 direct hop first,
+    # so the LIMIT would eat it unless the polarity predicate runs in SQL
+    # BEFORE the cutoff (the old Python post-filter only stayed correct via
+    # a +100-row over-provision that a large path set could exhaust); the
+    # matching 2-hop chain must surface.
+    neg = await port.query_paths(
+        subject="wt6m5_a", obj="wt6m5_b", polarity_product=-1, limit=1,
+    )
+    assert len(neg["paths"]) == 1
+    assert neg["paths"][0]["polarity_product"] == -1
+    assert neg["paths"][0]["hops"] == 2
+    assert neg["polarity_product_filter"] == -1
+
+    pos = await port.query_paths(
+        subject="wt6m5_a", obj="wt6m5_b", polarity_product=1, limit=1,
+    )
+    assert len(pos["paths"]) == 1
+    assert pos["paths"][0]["polarity_product"] == 1
+    assert pos["paths"][0]["hops"] == 1
 
 
 @pytest.mark.asyncio

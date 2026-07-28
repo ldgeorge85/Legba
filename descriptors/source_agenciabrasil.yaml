@@ -1,0 +1,66 @@
+# P3-6 Wave-A (A2) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Brazilian state public-broadcaster wire (EBC) — Brazil desk. State-funded (labeled via credibility state_affiliation); editorially a conventional wire → source_class reporting. Verified live 2026-07-02.
+#
+# source_class: reporting. Credibility host agenciabrasil.ebc.com.br (seeded 0.65/wire, state_affiliation True by the registrar).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route live.
+
+identity:
+  id: source.agenciabrasil.english
+  name: Agencia Brasil — English (state agency)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: p3_6_wave_a
+  created: "2026-07-27T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [BR]
+  languages: [en]
+  tags: [news, latin_america, brazil, wave_a]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "53 0-23/2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://agenciabrasil.ebc.com.br/en/rss/ultimasnoticias/feed.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

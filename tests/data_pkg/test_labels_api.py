@@ -244,9 +244,19 @@ def test_badge_real_zero_correctness_is_shown_not_hidden():
 
 async def test_eval_scores_empty_when_scorer_never_ran(client):
     """With no unit_correctness_scorer output present, /eval/scores returns an
-    empty scoreboard honestly — no scored_at, no invented unit rows."""
+    honest scoreboard — no scored_at, no invented unit rows. P2-5: a unit row
+    MAY still appear without a scorer run, but only when it carries REAL
+    operator gold-set verdicts (the live correctness_labels overlay; the
+    session-shared test DB may hold some from the goldset-loop tests) — never
+    a fabricated scorer-side number."""
     resp = await client.get("/api/v1/eval/scores")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["scored_at"] is None
-    assert body["units"] == []
+    for u in body["units"]:
+        # Every row present is operator-label-backed, and the scorer-side keys
+        # stay honestly unmeasured.
+        assert u["n_operator_labels"] > 0
+        assert u["correctness_vs_reference"] is None
+        assert u["faithfulness"] is None
+        assert u["n_labeled"] == 0

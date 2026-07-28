@@ -110,3 +110,33 @@ def test_row_defaults_are_panel_safe() -> None:
     assert src.recent_error_count == 0
     assert src.state is None and src.last_seen_at is None
     assert src.status == "silent"
+
+
+def test_source_firing_row_freshness_fields_are_additive() -> None:
+    """A7 freshness taxonomy — the two new fields extend the row ADDITIVELY:
+    every pre-existing construction (see the tests above, which pass no
+    freshness fields) still validates, defaults are the honest ``ungraded`` /
+    ``None`` (never a fake ok), and the closed grade vocabulary round-trips."""
+    # Additive defaults on a legacy-shaped construction.
+    legacy = SourceFiringRow(source_id="source.old", status="firing")
+    assert legacy.freshness_grade == "ungraded"
+    assert legacy.budget_minutes is None
+
+    # The closed vocabulary constructs; the serialized shape keeps every
+    # pre-existing key (the panel's current reads are untouched).
+    for grade in ("ok", "stale", "warn", "empty", "ungraded"):
+        row = SourceFiringRow(
+            source_id="source.g",
+            state="active",
+            status="firing",
+            freshness_grade=grade,  # type: ignore[arg-type]
+            budget_minutes=60,
+        )
+        assert row.freshness_grade == grade
+    dumped = row.model_dump()
+    for key in (
+        "source_id", "state", "signals_24h", "signals_7d", "last_seen_at",
+        "age_seconds", "last_poll_outcome", "recent_error_count", "status",
+        "freshness_grade", "budget_minutes",
+    ):
+        assert key in dumped

@@ -40,14 +40,14 @@ Implementation notes
 * ``search_signals`` runs a Postgres-native full-text search via
   ``to_tsvector('simple', payload->>'title' || ' ' || payload->>'summary')``
   against ``plainto_tsquery``.  The L-178 design brief mentions BM25 over
-  a dedicated full-text engine as the preferred backing, but no such
-  engine is built (declared seam — see ``docs/SEAMS.md``), so the
-  Postgres FTS path is the honest in-tree implementation and the
-  ``category`` argument narrows by ``payload->>'category'`` (the
-  source-first re-cut in migration 0024 dropped the scalar
-  ``signals.category`` column).  If a dedicated full-text index is ever
-  added, this method can switch backings without changing the Protocol
-  shape.
+  a dedicated full-text engine as the preferred backing; the OpenSearch
+  corpus readers (``search_corpus`` / ``read_document``) now cover that
+  lexical-recall lane, so this stays the cheap title+summary FTS.  The
+  old ``category`` filter argument was REMOVED (W2-T5 residual, 2026-07):
+  0 of ~100k live signals carry a ``payload->>'category'`` key, so any
+  value filtered every query to zero rows while looking like honest
+  empties — worse than no filter.  Rows still surface the per-row
+  ``category`` payload value when a signal carries one.
 
 * ``vector_search`` queries Qdrant's ``legba_signals`` collection.  The
   caller passes a free-form ``query`` string (per the Protocol).  L-114
@@ -294,17 +294,19 @@ class PostgresQdrantSubstrateQueryPort:
         self,
         *,
         query: str,
-        category: str | None = None,
         limit: int = 20,
         scope_predicate: str | None = None,
     ) -> dict[str, Any]:
         """Full-text search over ``signals`` via Postgres ``to_tsvector``.
 
         Returns rows ranked by ``ts_rank`` against
-        ``plainto_tsquery('simple', $1)``.  When ``category`` is provided,
-        rows are pre-filtered by ``signals.category``.  When ``query`` is
+        ``plainto_tsquery('simple', $1)``.  When ``query`` is
         empty / whitespace we return an empty result (rather than
         running an unbounded scan ranked at zero).
+
+        The old ``category`` filter parameter was removed (W2-T5
+        residual): no live signal carries the payload key, so the filter
+        could only turn every query into an honest-looking empty result.
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         q = (query or "").strip()
@@ -313,7 +315,6 @@ class PostgresQdrantSubstrateQueryPort:
                 "rows": [],
                 "refs": [],
                 "query": query,
-                "category": category,
                 "scope_predicate_applied": False,
                 "backing": "postgres_fts",
                 "note": "empty_query",
@@ -334,9 +335,6 @@ class PostgresQdrantSubstrateQueryPort:
             "      @@ plainto_tsquery('simple', $1)",
         ]
         params: list[Any] = [q]
-        if category:
-            sql_parts.append(f"AND payload->>'category' = ${len(params) + 1}")
-            params.append(category)
         sql_parts.append("ORDER BY rank DESC, fetched_at DESC")
         sql_parts.append(f"LIMIT ${len(params) + 1}")
         params.append(clamped_limit)
@@ -367,7 +365,6 @@ class PostgresQdrantSubstrateQueryPort:
             "rows": rows,
             "refs": refs,
             "query": query,
-            "category": category,
             "backing": "postgres_fts",
             "scope_predicate_applied": False,
         }
@@ -806,6 +803,16 @@ class PostgresQdrantSubstrateQueryPort:
         ``unavailable``; a per-collection Qdrant error is logged and that
         collection is skipped (the other corpus still contributes) rather than
         failing the whole call.
+
+        REF HONESTY (W2-T4 residual): chunk ids are ``ctx:``-prefixed —
+        they are Qdrant uuid5 point ids over the BACKGROUND corpora, not
+        substrate rows, and nothing downstream can dereference them as
+        substrate.  The prefix means the consult loop's lineage coercion
+        (``_coerce_uuid_list``) EXCLUDES them from
+        ``cited_substrate_refs``/``derived_from`` BY DESIGN, so a chunk id
+        can never masquerade as a citable substrate UUID.  The parallel
+        ``context_refs`` list carries the same ``ctx:`` refs so the loop /
+        trace can still state honestly what background material was read.
         """
         clamped_k = max(1, min(int(k), _SEARCH_CONTEXT_MAX_K))
         corpus_norm = (corpus or "").strip().lower() or None
@@ -817,6 +824,7 @@ class PostgresQdrantSubstrateQueryPort:
             return {
                 "rows": [],
                 "refs": [],
+                "context_refs": [],
                 "count": 0,
                 "query": query,
                 "corpus": corpus,
@@ -837,6 +845,7 @@ class PostgresQdrantSubstrateQueryPort:
             return {
                 "rows": [],
                 "refs": [],
+                "context_refs": [],
                 "count": 0,
                 "query": query,
                 "corpus": corpus,
@@ -855,6 +864,7 @@ class PostgresQdrantSubstrateQueryPort:
             return {
                 "rows": [],
                 "refs": [],
+                "context_refs": [],
                 "count": 0,
                 "query": query,
                 "corpus": corpus,
@@ -873,6 +883,7 @@ class PostgresQdrantSubstrateQueryPort:
             return {
                 "rows": [],
                 "refs": [],
+                "context_refs": [],
                 "count": 0,
                 "query": query,
                 "corpus": corpus,
@@ -921,10 +932,22 @@ class PostgresQdrantSubstrateQueryPort:
             reverse=True,
         )
         merged = merged[:clamped_k]
-        refs = [r["chunk_id"] for r in merged]
+        # W2-T4 REF HONESTY: chunk_ids are already ``ctx:``-prefixed by
+        # ``_map_context_hit``. ``refs`` carries them so the trace shows the
+        # reads, but the loop's ``_coerce_uuid_list`` drops non-UUID strings —
+        # so they are EXCLUDED from substrate lineage by design, never
+        # masquerading as citable substrate UUIDs. ``context_refs`` is the
+        # explicit parallel list for surfaces that want the background reads.
+        context_refs = [r["chunk_id"] for r in merged]
         return {
             "rows": merged,
-            "refs": refs,
+            "refs": list(context_refs),
+            "context_refs": context_refs,
+            "refs_note": (
+                "ctx:-prefixed refs are background-corpus chunks, NOT "
+                "substrate rows — non-citable; excluded from substrate "
+                "lineage by design"
+            ),
             "count": len(merged),
             "query": query,
             "corpus": corpus,
@@ -976,7 +999,10 @@ class PostgresQdrantSubstrateQueryPort:
         :func:`legba.data.rag.lane4_loader._build_payload`). A hit with no
         readable ``text`` is dropped (an empty chunk answers nothing); the
         Qdrant point id (a deterministic ``uuid5``) becomes the auditable
-        ``chunk_id``. ``corpus`` prefers the payload's own value, falling back
+        ``chunk_id`` — ``ctx:``-prefixed (W2-T4 ref honesty) so a chunk id
+        is visibly NOT a substrate UUID and can never enter substrate
+        lineage (``_coerce_uuid_list`` drops non-UUID strings by design).
+        ``corpus`` prefers the payload's own value, falling back
         to the collection the hit came from.
         """
         hid = getattr(hit, "id", None)
@@ -991,7 +1017,7 @@ class PostgresQdrantSubstrateQueryPort:
         score = getattr(hit, "score", None)
         countries = payload.get("countries")
         return {
-            "chunk_id": str(hid),
+            "chunk_id": f"ctx:{hid}",
             "corpus": payload.get("corpus") or corpus_name,
             "doc_id": payload.get("doc_id"),
             "title": payload.get("title"),
@@ -1490,12 +1516,25 @@ class PostgresQdrantSubstrateQueryPort:
     ) -> dict[str, Any]:
         """The platform's event-volume forecasts (analyst_outputs kind='prediction').
 
-        The forecast fields ride in ``data->'prediction'`` (PredictionPayload,
-        extra='allow' so the predictor's point_estimate / ci_* / horizon_days /
-        method / narrative are carried there). ``forecast_method`` (the writer's
-        ``method`` extra) of ``naive_mean`` ⇒ no trend could be fit (weak prior);
-        ``auto_arima`` ⇒ a model was fitted.
+        STORED SHAPE (W2-T6 / M3): the emit path
+        (``actor_payload._PAYLOAD_SELECTORS[OutputKind.PREDICTION]``) UNWRAPS
+        the analyst-side ``finding.data["prediction"]`` blob, so the stored
+        row's ``data`` IS the PredictionPayload dump at the TOP level
+        (point_estimate / ci_lower / ci_upper / horizon_days / method /
+        narrative / status). The old nested ``data->'prediction'`` read path
+        matched ZERO live rows and was deleted — top-level is canonical.
+        ``forecast_method`` (the writer's ``method`` extra) of ``naive_mean``
+        ⇒ no trend could be fit (weak prior); ``auto_arima`` ⇒ a model was
+        fitted.  The resolver (calibration_tracking) later merges the
+        lifecycle ``status`` / ``resolved_outcome`` at the same top level via
+        jsonb ``||``.
         Title/body columns are empty on prediction rows by design — read the blob.
+
+        FEED HONESTY: the prediction feed FROZE on 2026-07-01 when
+        country_predictor was retired — rows are HISTORICAL forecasts, not a
+        live product. The response carries ``latest_produced_at`` +
+        ``feed_note`` so readers can state that instead of serving frozen
+        rows as fresh.
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         clauses: list[str] = ["kind = 'prediction'"]
@@ -1505,15 +1544,10 @@ class PostgresQdrantSubstrateQueryPort:
             clauses.append(f"target_id = ${len(params)}")
         if status is not None:
             params.append(status)
-            # The resolver (calibration_tracking) writes the lifecycle status to
-            # the TOP LEVEL of data (data->>'status' via jsonb ``||``); the
-            # predictor's initial 'open' lives nested under data->'prediction'.
-            # Match the resolver's convention first, fall back to the nested
-            # initial value so a never-resolved 'open' row still filters.
-            clauses.append(
-                f"COALESCE(data->>'status', data->'prediction'->>'status') "
-                f"= ${len(params)}"
-            )
+            # Both the predictor's initial 'open' (top-level after the emit
+            # unwrap) and the resolver's later resolved/refuted merge live at
+            # data->>'status' — one canonical path.
+            clauses.append(f"data->>'status' = ${len(params)}")
         params.append(clamped_limit)
         sql = (
             "SELECT id, target_id, analyst_id, produced_at, data "
@@ -1527,19 +1561,26 @@ class PostgresQdrantSubstrateQueryPort:
 
         rows: list[dict[str, Any]] = []
         refs: list[str] = []
+        latest_produced_at: datetime | None = None
         for r in records:
             refs.append(str(r["id"]))
             raw = r["data"]
             data = json.loads(raw) if isinstance(raw, str) else (raw or {})
-            pred = data.get("prediction") if isinstance(data, dict) else None
-            if not isinstance(pred, dict):
-                pred = data if isinstance(data, dict) else {}
+            # Canonical stored shape: the PredictionPayload dump at the TOP
+            # level of ``data`` (the emit path unwraps the nested blob — see
+            # the docstring). The dead ``data['prediction']`` branch is gone.
+            pred = data if isinstance(data, dict) else {}
+            produced = r["produced_at"]
+            if isinstance(produced, datetime) and (
+                latest_produced_at is None or produced > latest_produced_at
+            ):
+                latest_produced_at = produced
             rows.append({
                 "id": str(r["id"]),
                 "target_id": r["target_id"],
                 "analyst_id": r["analyst_id"],
-                "produced_at": r["produced_at"].isoformat()
-                    if isinstance(r["produced_at"], datetime) else None,
+                "produced_at": produced.isoformat()
+                    if isinstance(produced, datetime) else None,
                 # The predictor stashes the numerics as PredictionPayload
                 # extras (predictor.py): ``ci_lower`` / ``ci_upper`` / ``method``
                 # (NOT ci_low/ci_high/forecast_method). Read the writer's keys
@@ -1552,18 +1593,25 @@ class PostgresQdrantSubstrateQueryPort:
                 "horizon_days": pred.get("horizon_days"),
                 "forecast_method": pred.get("method") or pred.get("forecast_method"),
                 "narrative": pred.get("narrative") or pred.get("hypothesis"),
-                # Lifecycle status + outcome are written to the TOP LEVEL of
-                # data by the resolver; the nested copy is the stale initial
-                # 'open'. Read top-level first so a graded prediction reports
-                # its true resolved/refuted state, not 'open'.
-                "status": (
-                    data.get("status") if isinstance(data, dict) else None
-                ) or pred.get("status"),
-                "resolved_outcome": (
-                    data.get("resolved_outcome") if isinstance(data, dict) else None
-                ),
+                # Lifecycle status + outcome: initial 'open' from the writer
+                # and the resolver's later merge both live at the top level.
+                "status": pred.get("status"),
+                "resolved_outcome": pred.get("resolved_outcome"),
             })
-        return {"rows": rows, "refs": refs, "count": len(rows)}
+        return {
+            "rows": rows,
+            "refs": refs,
+            "count": len(rows),
+            # Feed honesty (W2-T6): the writer retired 2026-07-01 — say so
+            # instead of letting frozen rows read as a live forecast product.
+            "latest_produced_at": latest_produced_at.isoformat()
+                if latest_produced_at is not None else None,
+            "feed_note": (
+                "prediction feed FROZEN since 2026-07-01 (country_predictor "
+                "retired) — rows are historical forecasts, not live output; "
+                "check latest_produced_at before treating any row as current"
+            ),
+        }
 
     # ------------------------------------------------------------------
     # NAVIGATION readers (resolve scope — targets / source coverage).
@@ -1993,9 +2041,14 @@ class PostgresQdrantSubstrateQueryPort:
 
         When ``polarity_product`` (∈ {-1, 0, 1}) is supplied, only paths
         whose net sign matches are returned — e.g. ``-1`` surfaces net-
-        antagonistic chains, ``+1`` net-supportive ones.  Paths are ranked
-        shortest-first (fewest hops), then by descending min-confidence
-        (the weakest link), so the tightest, best-evidenced chains lead.
+        antagonistic chains, ``+1`` net-supportive ones.  The filter is
+        applied IN SQL, before the ``LIMIT`` cutoff (W2-T6 / M5): the old
+        Python-side post-filter could silently drop matching paths whenever
+        more terminal paths existed than the over-provisioned fetch, because
+        matches ranking past the cutoff never reached Python.  Paths are
+        ranked shortest-first (fewest hops), then by descending
+        min-confidence (the weakest link), so the tightest, best-evidenced
+        chains lead.
         """
         s = (subject or "").strip()
         o = (obj or "").strip()
@@ -2020,7 +2073,18 @@ class PostgresQdrantSubstrateQueryPort:
         # edge whose subject = the path's current head, pruning any hop whose
         # object is already on the path (VISITED-SET guard) and any path that
         # has reached ``obj`` (a terminal path is not extended further).
-        sql = """
+        # The optional polarity filter is a terminal-SELECT predicate — in SQL
+        # BEFORE the LIMIT, so the cutoff can never hide matching paths
+        # (COALESCE: a NULL-polarity edge chain nets to 0, matching the
+        # Python-side treatment it replaces).
+        pol_clause = ""
+        params: list[Any] = [s, o, hops]
+        if pol_filter is not None:
+            params.append(pol_filter)
+            pol_clause = f"AND COALESCE(pol_product, 0) = ${len(params)}"
+        params.append(clamped_limit)
+        limit_param = f"${len(params)}"
+        sql = f"""
         WITH RECURSIVE walk AS (
             SELECT
                 n.id                              AS edge_id,
@@ -2059,22 +2123,20 @@ class PostgresQdrantSubstrateQueryPort:
         SELECT edge_ids, node_path, polarities, pol_product, min_conf, hops
         FROM walk
         WHERE lower(node_path[array_upper(node_path, 1)]) = lower($2)
+        {pol_clause}
         ORDER BY hops ASC, min_conf DESC
-        LIMIT $4
+        LIMIT {limit_param}
         """
         # The recursive frontier itself is bounded by the visited-set guard +
-        # the hop cap; the LIMIT caps the materialized terminal set.
+        # the hop cap; the LIMIT caps the materialized terminal set (already
+        # polarity-filtered, so no over-provisioning is needed).
         async with self._pool.acquire() as conn:
-            records = await conn.fetch(
-                sql, s, o, hops, clamped_limit + _GRAPH_MAX_PATHS
-            )
+            records = await conn.fetch(sql, *params)
 
         paths: list[dict[str, Any]] = []
         refs: list[str] = []
         for r in records:
             net = int(r["pol_product"]) if r["pol_product"] is not None else 0
-            if pol_filter is not None and net != pol_filter:
-                continue
             edge_ids = [str(e) for e in (r["edge_ids"] or [])]
             for e in edge_ids:
                 if e not in refs:
@@ -2088,8 +2150,6 @@ class PostgresQdrantSubstrateQueryPort:
                     if r["min_conf"] is not None else None,
                 "hops": int(r["hops"]),
             })
-            if len(paths) >= clamped_limit:
-                break
 
         return {
             "subject": subject,
@@ -2834,7 +2894,7 @@ class PostgresQdrantSubstrateQueryPort:
         *,
         analyst_id: str | None = None,
         quiet_hours: int = 24,
-        limit: int = 40,
+        limit: int = _MAX_ROW_LIMIT,
     ) -> dict[str, Any]:
         """What FIRED vs went QUIET — the dead-analyst self-diagnosis (plan §5).
 
@@ -2846,9 +2906,20 @@ class PostgresQdrantSubstrateQueryPort:
         real receipts. ``analyst_id`` narrows to one analyst's recent run history.
         ``refs`` is empty (a trace is keyed by run_id, not a citeable substrate
         row the chip walk resolves).
+
+        HEAD COVERAGE (W2-T6 / M4): the old ``LIMIT 40`` on an
+        analyst-ordered DISTINCT ON silently dropped every analyst past the
+        40th ALPHABETICALLY — including ``world_assessor``, the
+        registry-breakage canary. Now: the default limit covers the whole
+        fleet (clamped at ``_MAX_ROW_LIMIT``), the per-analyst heads are
+        ordered STALEST-FIRST (a subquery wrap — DISTINCT ON pins its own
+        leading ORDER key to analyst_id) so any future clip can only shed
+        the freshest/healthiest analysts, and the response states
+        ``analysts_scanned`` / ``analysts_total`` / ``truncated`` explicitly.
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         now = datetime.now(timezone.utc)
+        analysts_total: int | None = None
         if analyst_id is not None:
             # One analyst's recent run history.
             sql = (
@@ -2861,17 +2932,28 @@ class PostgresQdrantSubstrateQueryPort:
             async with self._pool.acquire() as conn:
                 records = await conn.fetch(sql, analyst_id, clamped_limit)
         else:
-            # The LAST run per analyst (DISTINCT ON the freshest start).
+            # The LAST run per analyst (DISTINCT ON the freshest start),
+            # subquery-wrapped so the OUTER order is staleness (oldest last
+            # run first) — the quiet/dead analysts always surface before any
+            # LIMIT can bite.
             sql = (
-                "SELECT DISTINCT ON (analyst_id) "
-                "       run_id, analyst_id, status, cadence_trigger, "
-                "       run_started_at, run_ended_at, "
-                "       (error_payload IS NOT NULL) AS had_error "
-                "FROM analyst_traces "
-                "ORDER BY analyst_id, run_started_at DESC LIMIT $1"
+                "SELECT run_id, analyst_id, status, cadence_trigger, "
+                "       run_started_at, run_ended_at, had_error "
+                "FROM ( "
+                "  SELECT DISTINCT ON (analyst_id) "
+                "         run_id, analyst_id, status, cadence_trigger, "
+                "         run_started_at, run_ended_at, "
+                "         (error_payload IS NOT NULL) AS had_error "
+                "  FROM analyst_traces "
+                "  ORDER BY analyst_id, run_started_at DESC "
+                ") heads "
+                "ORDER BY run_started_at ASC NULLS FIRST LIMIT $1"
             )
             async with self._pool.acquire() as conn:
                 records = await conn.fetch(sql, clamped_limit)
+                analysts_total = await conn.fetchval(
+                    "SELECT count(DISTINCT analyst_id) FROM analyst_traces"
+                )
         rows: list[dict[str, Any]] = []
         quiet: list[str] = []
         for r in records:
@@ -2893,20 +2975,29 @@ class PostgresQdrantSubstrateQueryPort:
                 "hours_ago": hours_ago,
                 "quiet": is_quiet,
             })
-        return {
+        result: dict[str, Any] = {
             "rows": rows,
             "refs": [],
             "count": len(rows),
             "quiet_analysts": sorted(set(quiet)),
             "quiet_threshold_hours": quiet_hours,
         }
+        if analyst_id is None:
+            # Coverage honesty (W2-T6): say exactly how much of the fleet the
+            # rows cover; rows are stalest-first, so a truncated read only
+            # ever sheds the freshest analysts.
+            total = int(analysts_total or 0)
+            result["analysts_scanned"] = len(rows)
+            result["analysts_total"] = total
+            result["truncated"] = len(rows) < total
+        return result
 
     async def get_source_health(
         self,
         *,
         silent_only: bool = False,
         silent_hours: int = 48,
-        limit: int = 40,
+        limit: int = _MAX_ROW_LIMIT,
     ) -> dict[str, Any]:
         """Source-poll HEALTH — which feeds are quiet or erroring (plan §5).
 
@@ -2916,6 +3007,15 @@ class PostgresQdrantSubstrateQueryPort:
         Lets the journal tell "no coverage on X" apart from "a quiet feed" and
         narrate the platform's intake honestly. ``refs`` is empty (source rows are
         descriptors, not chip-linked substrate rows).
+
+        HEAD COVERAGE (W2-T6 / M4): the old ``LIMIT 40`` default scanned 40
+        of ~48 active heads, so the row list (and its silent/error tallies)
+        silently undercounted. The default now covers the whole fleet
+        (clamped at ``_MAX_ROW_LIMIT``); rows were already staleness-ordered
+        (silent-first), so any explicit smaller limit only sheds the
+        freshest feeds — and the response states ``scanned`` /
+        ``truncated`` explicitly. The H-1 ``summary`` block remains the
+        denominator-honest whole-fleet aggregate.
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         sql = (
@@ -3023,6 +3123,11 @@ class PostgresQdrantSubstrateQueryPort:
             "silent_count": silent_count,
             "error_count": error_count,
             "silent_threshold_hours": silent_hours,
+            # Coverage honesty (W2-T6): how many ACTIVE heads the row scan
+            # actually covered vs the fleet; rows are staleness-ordered so a
+            # truncated scan only sheds the freshest feeds.
+            "scanned": len(records),
+            "truncated": len(records) < summary["active_total"],
             # H-1 denominator-honest aggregates (whole-fleet, not row-capped).
             "summary": summary,
             "non_active": non_active,

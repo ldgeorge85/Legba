@@ -163,3 +163,39 @@ body {
   --dv-inactivegroup-visiblepanel-tab-color: #475569;
   --dv-separator-border: #cbd5e1;
 }
+
+/* ---------------------------------------------------------------------------
+   MapLibre popup (the World map's hover cards — gallery-2 audit fix 3).
+   MapLibre ships a WHITE card; the popup HTML uses light ink and the basemap
+   is ALWAYS dark (the map never follows the app theme), so the header was
+   near-invisible. The card is pinned to the DARK panel palette — the dark
+   values of --surf-2 / --ink-1 / --line-2 — in BOTH themes: driving it off
+   the theme vars would regress light mode right back to light-on-white.
+   Scoped by the `className: 'legba-map-popup'` the map passes to
+   maplibregl.Popup. The tip is MapLibre's border-triangle, so each anchor
+   direction's border color is overridden to match the card.
+   --------------------------------------------------------------------------- */
+.legba-map-popup .maplibregl-popup-content {
+  background: #15171c; /* --surf-2 (dark) */
+  color: #e2e8f0; /* --ink-1 (dark) */
+  border: 1px solid rgba(148, 163, 184, 0.3); /* --line-2 (dark) */
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  padding: 8px 10px;
+}
+.legba-map-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip,
+.legba-map-popup.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+.legba-map-popup.maplibregl-popup-anchor-top-right .maplibregl-popup-tip {
+  border-bottom-color: #15171c;
+}
+.legba-map-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip,
+.legba-map-popup.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+.legba-map-popup.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip {
+  border-top-color: #15171c;
+}
+.legba-map-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: #15171c;
+}
+.legba-map-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: #15171c;
+}

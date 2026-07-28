@@ -369,8 +369,217 @@ async def test_findings_single_row_shape(substrate_app, client: AsyncClient):
     assert row["target_id"] == tid
     assert row["analyst_id"] == "trend_synth"
     assert row["confidence"] == pytest.approx(0.81, abs=1e-4)
+    # P0-4 — a verify-covered analyst carries NO structural exemption stamp.
+    assert row["verify_exempt"] is None
     # produced_at is ISO-8601.
     datetime.fromisoformat(row["produced_at"])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_structural_analyst_stamped_verify_exempt(
+    substrate_app, client: AsyncClient,
+):
+    """P0-4 — a finding from a verify-exempt deterministic structural analyst
+    (graph_mining et al.) is stamped ``verify_exempt: "structural"`` by the
+    projection, so every client can badge it `unverified — structural`."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("findings-structural")
+    row_id = await _insert_finding(
+        pg_store,
+        title="Graph mining: 3 communities, 1 proxy chain",
+        confidence=1.0,
+        severity=None,
+        target_id=tid,
+        analyst_id="graph_mining",
+    )
+
+    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r.status_code == 200, r.text
+    rows = {row["id"]: row for row in r.json()["data"]}
+    assert rows[str(row_id)]["verify_exempt"] == "structural"
+    # The stamp never invents a verify block or a score.
+    assert rows[str(row_id)]["verification"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_structural_verified_badge_and_off_safe(
+    substrate_app, client: AsyncClient,
+):
+    """C2b — through the real /findings laterals: a structural finding WITH a
+    passing structural critique reads ``structural-verified`` and surfaces the
+    structural verification detail; a FLAGGED one stays ``structural`` and does
+    NOT demote effective_confidence (OFF-safe: overall_score pinned to 1.0)."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("findings-structural-verified")
+
+    verified_fid = await _insert_finding(
+        pg_store, title="Geo convergence scan: 1 formation",
+        confidence=1.0, severity=None, target_id=tid,
+        analyst_id="geo_convergence_scan",
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=verified_fid, overall_score=1.0,
+        title="Structural verify (verified)",
+        data_extra={"verification": {
+            "structural_verify": True, "structural_verified": True,
+            "checkable_claims": 1, "supported_claims": 1,
+        }},
+    )
+
+    flagged_fid = await _insert_finding(
+        pg_store, title="Geo convergence scan: miscounted",
+        confidence=1.0, severity=None, target_id=tid,
+        analyst_id="geo_convergence_scan",
+    )
+    # OFF-safe: even a FLAGGED verdict is written with overall_score=1.0 by
+    # default, so it never demotes; structural_verified=false keeps the honest
+    # badge.
+    await _insert_critique(
+        pg_store, analyzed_output_id=flagged_fid, overall_score=1.0,
+        title="Structural verify (FLAGGED — 1 miscount(s))",
+        data_extra={"verification": {
+            "structural_verify": True, "structural_verified": False,
+            "checkable_claims": 1, "supported_claims": 0, "miscount_claims": 1,
+        }},
+    )
+
+    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r.status_code == 200, r.text
+    rows = {row["id"]: row for row in r.json()["data"]}
+
+    v = rows[str(verified_fid)]
+    assert v["verify_exempt"] == "structural-verified"
+    # The structural verification detail is surfaced (no faithfulness block).
+    assert v["verification"]["structural_verify"] is True
+    assert v["effective_confidence"] == pytest.approx(1.0)
+
+    f = rows[str(flagged_fid)]
+    assert f["verify_exempt"] == "structural"          # not verified — honest
+    assert f["verification"]["miscount_claims"] == 1   # the flag is still shown
+    assert f["effective_confidence"] == pytest.approx(1.0)  # OFF-safe: no demotion
+
+
+def test_hydrate_finding_stamps_structural_exemption():
+    """Pure-logic P0-4 coverage of the projection stamp (no DB): analyst_id in
+    the structural registry → ``verify_exempt="structural"``; anything else
+    (verified analysts, NULL analyst_id) → honest ``None``."""
+    from legba.data.registry.substrate_reads_api import _hydrate_finding
+
+    def _row(analyst_id: str | None) -> dict:
+        now = datetime.now(timezone.utc)
+        return {
+            "id": uuid4(),
+            "kind": "finding",
+            "title": "t",
+            "body": "",
+            "confidence": 1.0,
+            "severity": None,
+            "data": "{}",
+            "target_id": None,
+            "target_version": None,
+            "analyst_id": analyst_id,
+            "analyst_version": None,
+            "produced_at": now,
+            "derived_from": [],
+            "schema_uri": "iglu:legba/finding/jsonschema/1-0-0",
+            "run_id": None,
+            "created_at": now,
+            "critic_score": None,
+            "verification": None,
+        }
+
+    assert _hydrate_finding(_row("graph_mining")).verify_exempt == "structural"
+    assert _hydrate_finding(_row("thematic_proposal")).verify_exempt == "structural"
+    assert _hydrate_finding(_row("indicator_tracker")).verify_exempt == "structural"
+    assert _hydrate_finding(_row("country_assessor")).verify_exempt is None
+    assert _hydrate_finding(_row(None)).verify_exempt is None
+
+
+def test_hydrate_finding_below_floor_mark():
+    """E-1 (2026-07-27 sweep item 3) — the EXPLICIT below-floor annotation:
+    ``True`` iff a GRADED finding's effective_confidence sits under the
+    system-wide 0.50 floor; ``False`` when graded and clearing; honest ``None``
+    when never graded (no fabricated verdict). ANNOTATE-not-exclude: the row
+    itself still serves — the mark makes it distinguishable."""
+    from legba.data.analysts.deterministic_handlers.scorecard_banding import (
+        FAITH_FLOOR,
+    )
+    from legba.data.registry.substrate_reads_api import (
+        _FAITH_FLOOR,
+        _hydrate_finding,
+    )
+
+    # The registry-slim mirror stays in lockstep with the ONE source constant.
+    assert _FAITH_FLOOR == FAITH_FLOOR
+
+    def _row(confidence: float, critic_score: float | None) -> dict:
+        now = datetime.now(timezone.utc)
+        return {
+            "id": uuid4(), "kind": "finding", "title": "t", "body": "",
+            "confidence": confidence, "severity": None, "data": "{}",
+            "target_id": None, "target_version": None,
+            "analyst_id": "country_assessor", "analyst_version": None,
+            "produced_at": now, "derived_from": [],
+            "schema_uri": "iglu:legba/finding/jsonschema/1-0-0", "run_id": None,
+            "created_at": now, "critic_score": critic_score,
+            "verification": None,
+        }
+
+    # Graded below the floor (min(0.9, 0.30) = 0.30 < 0.50) → True.
+    low = _hydrate_finding(_row(0.9, 0.30))
+    assert low.below_floor is True
+    assert low.effective_confidence == pytest.approx(0.30)
+    # Graded and clearing (min(0.9, 0.85) = 0.85) → False.
+    ok = _hydrate_finding(_row(0.9, 0.85))
+    assert ok.below_floor is False
+    # Low OWN confidence but graded fine (min(0.3, 0.9) = 0.3) → True (the
+    # floor is on the FOLD, min(confidence, faithfulness) — the 0.50 decision).
+    assert _hydrate_finding(_row(0.3, 0.9)).below_floor is True
+    # Never graded → honest None, even at low confidence (no fabricated verdict).
+    ungraded = _hydrate_finding(_row(0.2, None))
+    assert ungraded.below_floor is None
+    # The boundary: exactly at the floor clears (>= FAITH_FLOOR is not below).
+    assert _hydrate_finding(_row(1.0, FAITH_FLOOR)).below_floor is False
+
+
+def test_hydrate_finding_structural_verified_badge_flip():
+    """C2b — a structural finding WITH a passing structural critique reads
+    ``structural-verified``; a FLAGGED / absent one stays honest ``structural``;
+    a non-structural analyst is never badged. OFF-safe: no effective_confidence
+    demotion by default (the structural score never gates unless the flag is on)."""
+    from legba.data.registry.substrate_reads_api import _hydrate_finding
+
+    def _row(analyst_id, *, structural_verified=None, structural_score=None):
+        now = datetime.now(timezone.utc)
+        return {
+            "id": uuid4(), "kind": "finding", "title": "t", "body": "",
+            "confidence": 1.0, "severity": None, "data": "{}",
+            "target_id": None, "target_version": None, "analyst_id": analyst_id,
+            "analyst_version": None, "produced_at": now, "derived_from": [],
+            "schema_uri": "iglu:legba/finding/jsonschema/1-0-0", "run_id": None,
+            "created_at": now, "critic_score": None, "verification": None,
+            "structural_verified": structural_verified,
+            "structural_score": structural_score,
+            "structural_verification": None,
+        }
+
+    # Passing structural critique (server stamps 'true' text off the jsonb ->>).
+    verified = _hydrate_finding(_row("geo_convergence_scan", structural_verified="true"))
+    assert verified.verify_exempt == "structural-verified"
+    # Flagged / not-verified structural critique → honest 'structural'.
+    flagged = _hydrate_finding(_row("geo_convergence_scan", structural_verified="false"))
+    assert flagged.verify_exempt == "structural"
+    # No structural critique at all → 'structural'.
+    assert _hydrate_finding(_row("geo_convergence_scan")).verify_exempt == "structural"
+    # Non-structural analyst is never badged, verdict or not.
+    assert _hydrate_finding(_row("country_assessor", structural_verified="true")).verify_exempt is None
+    # OFF-safe: a flagged structural score does NOT demote effective_confidence.
+    off = _hydrate_finding(
+        _row("geo_convergence_scan", structural_verified="false", structural_score=0.0)
+    )
+    assert off.effective_confidence == 1.0
 
 
 @pytest.mark.integration

@@ -196,12 +196,21 @@ async def test_eval_calibration_reads_writer_shape_nested() -> None:
     assert sb.calibration_thin is False
     assert sb.forecast_unproven is True
     assert len(sb.refs) == 1
-    # The SQL is re-pointed at the real writer output, live head only.
-    (sql,) = conn.queries
-    assert "kind = 'finding'" in sql
-    assert "analyst_id = 'calibration_tracking'" in sql
-    assert "superseded_by IS NULL" in sql
-    assert "kind = 'calibration'" not in sql
+    # The SQL is re-pointed at the real writer output, live head only. P2-3
+    # adds a SECOND (additive) read for the band_calibration_tracker finding.
+    cal_sql, band_sql = conn.queries
+    assert "kind = 'finding'" in cal_sql
+    assert "analyst_id = 'calibration_tracking'" in cal_sql
+    assert "superseded_by IS NULL" in cal_sql
+    assert "kind = 'calibration'" not in cal_sql
+    assert "analyst_id = 'band_calibration_tracker'" in band_sql
+    assert "superseded_by IS NULL" in band_sql
+    # The fake answered the band read with a calibration_tracking-shaped row
+    # (no data.data.band_calibration) — the section reads honestly unavailable,
+    # never a fabricated aggregate.
+    assert sb.band_calibration is not None
+    assert sb.band_calibration.available is False
+    assert sb.band_calibration.no_brier is True
 
 
 async def test_eval_calibration_available_false_when_absent() -> None:
@@ -210,6 +219,124 @@ async def test_eval_calibration_available_false_when_absent() -> None:
     assert sb.available is False
     assert sb.forecast_unproven is True
     assert sb.calibration_thin is True
+    # P2-3: the band section is still carried (honest absent state).
+    assert sb.band_calibration is not None
+    assert sb.band_calibration.available is False
+
+
+# ---------------------------------------------------------------------------
+# P2-3 — the ADDITIVE band_calibration section (band-persistence harness).
+# ---------------------------------------------------------------------------
+
+
+class _RoutedFakeConn(_FakeConn):
+    """Dispatches the band_calibration_tracker read to its own canned row so
+    the two eval_calibration fetchrows can be answered independently."""
+
+    def __init__(self, cal_row=None, band_row=None):
+        super().__init__(cal_row=cal_row)
+        self.band_row = band_row
+
+    async def fetchrow(self, sql: str, *args):
+        if "band_calibration_tracker" in sql:
+            self.queries.append(sql)
+            return self.band_row
+        return await super().fetchrow(sql, *args)
+
+
+def _band_writer_shaped_row():
+    """An analyst_outputs row EXACTLY as band_calibration_tracker writes it:
+    the aggregate one JSONB level down at data.data.band_calibration."""
+    return {
+        "id": uuid4(),
+        "produced_at": datetime(2026, 7, 23, tzinfo=timezone.utc),
+        "data": json.dumps({
+            "title": "Band calibration: logged=1 resolved=4 this run (claims=9)",
+            "body": "…",
+            "confidence": 1.0,
+            "data": {
+                "sub_handler": "band_calibration_tracker",
+                "band_calibration": {
+                    "claims_total": 9,
+                    "lookback_days": 365,
+                    "resolution_spec": "hard_band_at_horizon_v1",
+                    "horizons": {
+                        "14d": {
+                            "resolved": 4,
+                            "open": 5,
+                            "confirmed": 3,
+                            "reverted": 1,
+                            "scored": 4,
+                            "persistence_rate": 0.75,
+                            "reversal_rate": 0.25,
+                        },
+                        "28d": {
+                            "resolved": 0,
+                            "open": 9,
+                            "confirmed": 0,
+                            "reverted": 0,
+                            "scored": 0,
+                            "persistence_rate": None,
+                            "reversal_rate": None,
+                        },
+                    },
+                    "by_direction": {"deterioration": {"claims": 9}},
+                    "by_dimension": {"escalation": {"claims": 9}},
+                    "no_brier": True,
+                    "honesty_note": "bands are not probabilities",
+                },
+            },
+        }),
+    }
+
+
+def test_band_calibration_section_defaults_are_honest() -> None:
+    from legba.data.registry.v3_api import BandCalibrationSection
+
+    sec = BandCalibrationSection(available=False)
+    assert sec.available is False
+    assert sec.claims_total is None
+    assert sec.horizons == {}
+    assert sec.no_brier is True
+    assert sec.refs == []
+
+
+async def test_eval_calibration_band_section_populated() -> None:
+    """The additive band_calibration section projects the tracker finding's
+    aggregate — its OWN keys, no Brier — while the main scoreboard fields are
+    byte-identical to the pre-P2-3 reduction."""
+    conn = _RoutedFakeConn(
+        cal_row=_writer_shaped_row(), band_row=_band_writer_shaped_row()
+    )
+    sb = await _eval_calibration_endpoint(_fake_deps(conn))(principal="t")
+    # Main scoreboard untouched.
+    assert sb.available is True and sb.brier == 0.3976
+    # Band section: populated from the writer-shaped nested block.
+    bc = sb.band_calibration
+    assert bc is not None and bc.available is True
+    assert bc.claims_total == 9
+    assert bc.resolution_spec == "hard_band_at_horizon_v1"
+    assert bc.horizons["14d"]["persistence_rate"] == 0.75
+    assert bc.horizons["28d"]["persistence_rate"] is None
+    assert bc.no_brier is True
+    assert bc.honesty_note == "bands are not probabilities"
+    assert len(bc.refs) == 1
+    # The serialized response stays additive: every pre-P2-3 key survives.
+    dumped = sb.model_dump()
+    for key in (
+        "brier", "brier_exogenous", "brier_skill_score", "forecast_unproven",
+        "calibration_thin", "refs",
+    ):
+        assert key in dumped
+    assert "band_calibration" in dumped
+
+
+async def test_eval_calibration_band_section_absent_when_no_finding() -> None:
+    conn = _RoutedFakeConn(cal_row=_writer_shaped_row(), band_row=None)
+    sb = await _eval_calibration_endpoint(_fake_deps(conn))(principal="t")
+    assert sb.available is True
+    assert sb.band_calibration is not None
+    assert sb.band_calibration.available is False
 
 
 async def test_journal_api_read_calibration_nested_and_repointed() -> None:

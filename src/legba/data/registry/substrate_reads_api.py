@@ -45,7 +45,18 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from ..archive import sha256_from_object_ref
+from ..provenance.kinds import structural_badge
+from ..provenance.verify import structural_verify_gate_enabled
 from .api import RegistryAPIDeps, require_bearer
+
+# E-1 — the system-wide verification floor (the 0.50 decision), MIRRORED from
+# ``analysts.deterministic_handlers.scorecard_banding.FAITH_FLOOR``. A local
+# copy on purpose (the registry-slim rule — importing the handler package
+# would drag ~20 runtime sub-handler modules into this route module; same
+# rationale as verify.py's slim-safe local maps). Lockstep is test-enforced:
+# tests/data_pkg/test_substrate_reads_api.py asserts equality with the source.
+_FAITH_FLOOR = 0.50
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +144,13 @@ class FindingRow(BaseModel):
         operator sees WHY confidence was demoted. NULL for a legacy / unverified
         finding — and then ``effective_confidence == confidence`` (no
         regression, no fabricated block).
+      * ``verify_exempt`` — P0-4: ``"structural"`` when the emitting analyst is
+        a deterministic structural/mining analyst whose findings NEVER route
+        through the faithfulness verify pass (the
+        ``STRUCTURAL_VERIFY_EXEMPT_ANALYSTS`` registry in provenance.kinds).
+        Server-derived so every client renders the honest
+        ``unverified — structural`` badge instead of an unmarked row. NULL for
+        every verify-covered analyst.
     """
     id: str
     kind: str
@@ -156,6 +174,21 @@ class FindingRow(BaseModel):
     # P0-T3 faithfulness-verify detail (additive, nullable). Names the
     # unsupported spans so the demotion is explained, never opaque.
     verification: dict[str, Any] | None = None
+    # P0-4 (additive, nullable): "structural" for verify-exempt deterministic
+    # structural/mining analysts — the honest badge stamp, never fabricated.
+    verify_exempt: str | None = None
+    # E-1 (2026-07-27 sweep item 3, additive, nullable): the EXPLICIT
+    # below-floor mark. ``True`` = a graded finding whose surfaced
+    # ``effective_confidence`` sits under the system-wide 0.50 floor
+    # (``_FAITH_FLOOR`` — a test-enforced mirror of
+    # scorecard_banding.FAITH_FLOOR, the one source of the decision);
+    # ``False`` = graded and clears the floor; ``None`` = never graded (no
+    # critic/faithfulness score — no fabricated verdict, matching the
+    # ``verification`` block's honesty rule). Server-derived so every client
+    # renders the below-floor badge instead of re-deriving 0.50 client-side.
+    # ANNOTATE-not-exclude: the row still serves (the alert/scorecard gates
+    # are where the floor EXCLUDES); this makes it distinguishable everywhere.
+    below_floor: bool | None = None
 
 
 class SituationRow(BaseModel):
@@ -209,6 +242,13 @@ class SignalRow(BaseModel):
     geo: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     entity_classes: list[str] = Field(default_factory=list)
+    # P2-1 evidence archival (additive) — derived from the EXISTING
+    # signals.object_ref column (`cas:sha256/<hex>`, stamped by the
+    # evidence_archiver when our copy of the original bytes exists). Lets the
+    # UI/exports show "evidence preserved" + the verifiable hash without a
+    # sidecar join. False/None for un-archived rows — never fabricated.
+    archived: bool = False
+    archive_sha256: str | None = None
 
 
 class ContentionValueRow(BaseModel):
@@ -259,6 +299,12 @@ class ContentionRow(BaseModel):
     opened_at: datetime
     resolved_at: datetime | None
     updated_at: datetime
+    # P3-2 coexistence record (migration 0097) — HOW/WHEN the current winner was
+    # surfaced. Read-only annotation (never mutates a fact); NULL when nothing is
+    # surfaced (abstained / collapsed).
+    surfaced_by: str | None = None          # 'deterministic' | 'llm'
+    surfaced_at: datetime | None = None
+    surface_rationale: str | None = None
     values: list[ContentionValueRow] = Field(default_factory=list)
 
 
@@ -327,6 +373,30 @@ def _hydrate_finding(row: Any) -> FindingRow:
     # P0-T3 — the faithfulness-verify detail (names the unsupported spans), only
     # present when a faithfulness critique exists; NULL → no fabricated block.
     verification = _load_jsonb_opt(row.get("verification"))
+    # C2b (P4-6) — the structural_claims verdict for a verify-EXEMPT structural
+    # finding (its own lateral; a structural critique is NEVER a faithfulness
+    # one). ``structural_verified`` flips the honest badge to
+    # ``structural-verified``; the structural verification detail is surfaced when
+    # no faithfulness block exists (a structural finding has none). OFF-safe: the
+    # structural score demotes effective_confidence ONLY when the gate flag is on
+    # (default off — compute-and-show, do-not-gate).
+    sv_raw = row.get("structural_verified")
+    structural_verified = sv_raw if isinstance(sv_raw, bool) else (
+        str(sv_raw).lower() == "true" if sv_raw is not None else None
+    )
+    if verification is None:
+        verification = _load_jsonb_opt(row.get("structural_verification"))
+    if structural_verify_gate_enabled():
+        sv_score_raw = row.get("structural_score")
+        sv_score = float(sv_score_raw) if sv_score_raw is not None else None
+        if sv_score is not None:
+            effective_confidence = min(effective_confidence, sv_score)
+    verify_exempt = structural_badge(row["analyst_id"], structural_verified)
+    # E-1 — the explicit below-floor mark: a verdict ONLY for a GRADED finding
+    # (critic_score present); an ungraded row stays None (never fabricated).
+    below_floor = (
+        (effective_confidence < _FAITH_FLOOR) if critic_score is not None else None
+    )
     return FindingRow(
         id=str(row["id"]),
         kind=row["kind"],
@@ -347,6 +417,11 @@ def _hydrate_finding(row: Any) -> FindingRow:
         critic_score=critic_score,
         effective_confidence=effective_confidence,
         verification=verification,
+        # P0-4 / C2b — the structural verify-exemption stamp, derived server-side
+        # from the ONE registry: ``structural`` (unverified) or, when a passing
+        # structural critique exists for this finding, ``structural-verified``.
+        verify_exempt=verify_exempt,
+        below_floor=below_floor,
     )
 
 
@@ -419,6 +494,10 @@ def _hydrate_signal(row: Any, *, target_id: str | None = None) -> SignalRow:
         geo=geo,
         tags=tags,
         entity_classes=list(row.get("entity_classes") or []),
+        # P2-1: archived-evidence surface, derived from signals.object_ref
+        # alone (cas:sha256/<hex>); never fabricated for foreign ref shapes.
+        archived=row.get("object_ref") is not None,
+        archive_sha256=sha256_from_object_ref(row.get("object_ref")),
     )
 
 
@@ -450,6 +529,14 @@ def _hydrate_contention(group_row: Any, value_rows: list[Any]) -> ContentionRow:
     highest score first; the SQL orders them), so the UI's support panel reads
     top-down strongest-first without re-sorting.
     """
+    # Backward-compatible reads: a pre-0097 group row (fetched before the
+    # coexistence columns existed) simply lacks these keys → None.
+    def _opt(row: Any, key: str) -> Any:
+        try:
+            return row[key]
+        except (KeyError, IndexError):
+            return None
+
     return ContentionRow(
         id=str(group_row["id"]),
         subject_key=group_row["subject_key"],
@@ -461,6 +548,9 @@ def _hydrate_contention(group_row: Any, value_rows: list[Any]) -> ContentionRow:
         opened_at=group_row["opened_at"],
         resolved_at=group_row["resolved_at"],
         updated_at=group_row["updated_at"],
+        surfaced_by=_opt(group_row, "surfaced_by"),
+        surfaced_at=_opt(group_row, "surfaced_at"),
+        surface_rationale=_opt(group_row, "surface_rationale"),
         values=[_hydrate_contention_value(v) for v in value_rows],
     )
 
@@ -567,13 +657,25 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # un-demoting a finding the verify pass floored. Mirrors the composition
         # GATHER lateral (meta_findings_synthesizer) + gepa parent SQL, which
         # already pin.
+        # C2b (P4-6) — a SECOND lateral picks the latest STRUCTURAL verify
+        # critique (``title LIKE 'Structural verify%'``, DISTINCT from the
+        # faithfulness lateral above — a structural finding never has a
+        # faithfulness critique). It surfaces the ``structural_verified`` marker
+        # (flips the badge to ``structural-verified``), the structural
+        # verification detail (shown when no faithfulness block exists), and the
+        # structural score (folded into effective_confidence ONLY when the gate
+        # flag is on — see _hydrate_finding). Pinned by title so it can never
+        # shadow the faithfulness demotion.
         sql = f"""
             SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
                    f.data, f.target_id, f.target_version, f.analyst_id,
                    f.analyst_version, f.produced_at, f.derived_from,
                    f.schema_uri, f.run_id, f.created_at,
                    c.critic_score AS critic_score,
-                   c.verification AS verification
+                   c.verification AS verification,
+                   s.structural_verified AS structural_verified,
+                   s.structural_score AS structural_score,
+                   s.structural_verification AS structural_verification
               FROM analyst_outputs f
               LEFT JOIN LATERAL (
                   SELECT (cr.data->>'overall_score')::real AS critic_score,
@@ -586,6 +688,18 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                    ORDER BY cr.produced_at DESC, cr.id DESC
                    LIMIT 1
               ) c ON TRUE
+              LEFT JOIN LATERAL (
+                  SELECT (sr.data->'data'->'verification'->>'structural_verified')
+                             AS structural_verified,
+                         (sr.data->>'overall_score')::real AS structural_score,
+                         (sr.data->'data'->'verification') AS structural_verification
+                    FROM analyst_outputs sr
+                   WHERE sr.kind = 'critique'
+                     AND sr.data->>'analyzed_output_id' = f.id::text
+                     AND sr.title LIKE 'Structural verify%'
+                   ORDER BY sr.produced_at DESC, sr.id DESC
+                   LIMIT 1
+              ) s ON TRUE
              WHERE {' AND '.join(where)}
              ORDER BY f.produced_at DESC, f.id DESC
              LIMIT ${len(args)}
@@ -726,7 +840,8 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             sql = f"""
                 SELECT id, source_id, source_version, fetched_at, payload,
                        canonical_url, language, geo, tags, entity_classes,
-                       source_credibility, content_hash, derived_from, schema_uri
+                       source_credibility, content_hash, derived_from, schema_uri,
+                       object_ref
                   FROM signals
                  {where_clause}
                  ORDER BY fetched_at DESC, id DESC
@@ -825,7 +940,8 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             group_sql = f"""
                 SELECT fc.id, fc.subject_key, fc.predicate_key, fc.status,
                        fc.surfaced_value, fc.value_count, fc.junk_count,
-                       fc.opened_at, fc.resolved_at, fc.updated_at
+                       fc.opened_at, fc.resolved_at, fc.updated_at,
+                       fc.surfaced_by, fc.surfaced_at, fc.surface_rationale
                   FROM fact_contention fc
                  {where_clause}
                  ORDER BY fc.updated_at DESC, fc.id DESC

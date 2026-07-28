@@ -281,11 +281,16 @@ async def _maybe_escalate_finding(
     # critique payload's ``overall_score = min(faithfulness_score,
     # confidence_ceiling)`` and the read-path ``effective_confidence`` — both
     # keys live on ``verification_block`` (FaithfulnessReport.as_dict).
+    faithfulness_score: float | None = None
     if confidence is not None and verification_block is not None:
         for _cap_key in ("faithfulness_score", "confidence_ceiling"):
             _cap = verification_block.get(_cap_key)
             if isinstance(_cap, (int, float)) and not isinstance(_cap, bool):
                 confidence = min(confidence, float(_cap))
+    if verification_block is not None:
+        _fs = verification_block.get("faithfulness_score")
+        if isinstance(_fs, (int, float)) and not isinstance(_fs, bool):
+            faithfulness_score = float(_fs)
     if not (
         escalation_gate_decision(
             severity=severity,
@@ -337,6 +342,10 @@ async def _maybe_escalate_finding(
             "output_id": str(output_row_id) if output_row_id is not None else None,
             "target_id": target_id,
             "effective_confidence": confidence,
+            # P1-1: raw faithfulness verdict (pre-fold) — the outward alert
+            # sink payload states "faithfulness=<score>" when the verify pass
+            # ran, "unverified — <reason>" when it did not (None here).
+            "faithfulness_score": faithfulness_score,
         },
     )
     if outcome.admitted and outcome.tool_result is not None:

@@ -141,6 +141,114 @@ class _TraceOnly:
 # The single shared sentinel instance. Compare with ``is TRACE_ONLY``.
 TRACE_ONLY = _TraceOnly()
 
+# ---------------------------------------------------------------------------
+# P0-4 — verify-EXEMPT structural analysts (the honest badge registry)
+# ---------------------------------------------------------------------------
+# The mandatory faithfulness verify pass (actor_critic.verify_inline_target_
+# finding) fires ONLY for inline_target findings, the verify-declaring
+# meta_findings_synthesizer / cross_analyst_correlator compositions, and the
+# journal profile. The DETERMINISTIC sub-handlers that emit a genuine FINDING
+# (deterministic.OUTPUT_KIND_BY_SUB_HANDLER → OutputKind.FINDING) never enter
+# that pass — they are pure structural/mining reads (no LLM prose to grade)
+# carrying flat confidence, and in feed contexts their rows were visually
+# indistinguishable from verified ones. This registry NAMES that exception so
+# every read surface can render an explicit ``unverified — structural`` badge
+# instead of a quiet nothing.
+#
+# By convention each deterministic descriptor's identity.id == its
+# options.sub_handler, so these double as analyst_ids. The set MUST stay equal
+# to the FINDING-emitting sub-handlers — the drift guard in
+# tests/data_pkg/test_trace_only_output_split.py asserts equality. Mirror:
+# legba-ui-v3/src/lib/verdictModel.ts STRUCTURAL_VERIFY_EXEMPT_ANALYSTS (the
+# live-tail rows never pass through the reads-API stamp).
+STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: frozenset[str] = frozenset({
+    "graph_mining",
+    "anomaly_detection",
+    "band_calibration_tracker",
+    "calibration_tracking",
+    "unit_correctness_scorer",
+    "composition_lineage_sweep",
+    "adversarial_signals",
+    "situation_clustering",
+    "thematic_proposal",
+    "indicator_tracker",
+    "collection_gap",
+    "hypothesis_lifecycle",
+    "signals_retention",
+    "analyst_traces_retention",
+    "geo_convergence_scan",
+    "fact_decay_scan",
+    "source_track_record",
+    "narrative_mapper",
+    "desk_baseline",
+})
+
+
+def verify_exempt_reason(analyst_id: str | None) -> str | None:
+    """The verify-exemption tag for an analyst's findings, or ``None``.
+
+    ``"structural"`` when ``analyst_id`` is a deterministic structural/mining
+    analyst whose findings never route through the faithfulness verify pass —
+    the reads API stamps this onto every projected finding row so no client
+    has to guess. ``None`` for every verified (or unknown) analyst: the badge
+    is never fabricated for a row we cannot classify.
+    """
+    if analyst_id is not None and analyst_id in STRUCTURAL_VERIFY_EXEMPT_ANALYSTS:
+        return "structural"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# C2b (P4-6) — structural_claims verify OPT-IN registry (the honest badge, made
+# real for CLAIM-BEARING structural findings)
+# ---------------------------------------------------------------------------
+# A SUBSET of STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: the structural analysts whose
+# findings assert a CHECKABLE QUANTITY (a distinct-count over a converged cell,
+# an echo count over a carrier set, an arithmetic rollup identity) and therefore
+# get a REAL deterministic re-derivation verify (verify.verify_structural_claims)
+# instead of only the ``unverified — structural`` badge. Pure-telemetry members
+# of the exempt set (retention scans, honest-summary-only handlers) stay OUT —
+# their findings are non-verifiable aggregates and keep the plain badge.
+#
+# ONE declared place (mirrors the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS precedent),
+# NOT scattered per call-site. A drift guard
+# (tests/data_pkg/test_structural_claims_verify.py) asserts this stays a SUBSET
+# of the exempt set — you cannot structurally-verify a non-structural analyst.
+# An opted-in analyst whose finding carries no ``data['structural_claims']``
+# block is a NO-OP (no critique written; the row keeps its honest structural
+# badge), so listing an analyst here before it emits the block is harmless.
+STRUCTURAL_CLAIMS_VERIFY_ANALYSTS: frozenset[str] = frozenset({
+    "geo_convergence_scan",
+    "indicator_tracker",
+    "thematic_proposal",
+    # narrative_mapper landed in STRUCTURAL_VERIFY_EXEMPT_ANALYSTS (P4-1 wave)
+    # and emits a re-derivable rollup identity (narratives_total = contested +
+    # surfaced, always true by REIFIED_STATUSES construction) — so it joins the
+    # claims-verified set per the C2b merge note. Subset drift guard holds.
+    "narrative_mapper",
+})
+
+
+def structural_claims_verify_opt_in(analyst_id: str | None) -> bool:
+    """Whether ``analyst_id`` opts into the deterministic structural_claims
+    verify profile (C2b). False for every non-opted-in analyst."""
+    return analyst_id is not None and analyst_id in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS
+
+
+def structural_badge(analyst_id: str | None, structural_verified: bool | None) -> str | None:
+    """The ``verify_exempt`` badge stamp, folding a structural verdict (C2b).
+
+    Extends :func:`verify_exempt_reason`: a structural finding that now carries a
+    PASSING structural critique (``structural_verified is True``) reads
+    ``"structural-verified"``; one without (or a failed / unverifiable verdict)
+    keeps the honest ``"structural"`` (rendered ``unverified — structural``).
+    ``None`` for every non-structural analyst — never fabricated.
+    """
+    base = verify_exempt_reason(analyst_id)
+    if base == "structural" and structural_verified is True:
+        return "structural-verified"
+    return base
+
 # An "effective output kind" is either a real OutputKind (writes a row) or the
 # TRACE_ONLY sentinel (skip the row, keep the trace + side-writes).
 EffectiveOutputKind = "OutputKind | _TraceOnly"

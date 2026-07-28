@@ -1195,7 +1195,7 @@ class _StubSubstrate:
         self._signal_id = signal_id
 
     async def search_signals(
-        self, *, query: str, category=None, limit: int = 20,
+        self, *, query: str, limit: int = 20,
         scope_predicate=None,
     ) -> dict[str, Any]:
         return {

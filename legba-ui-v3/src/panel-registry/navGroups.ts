@@ -66,8 +66,10 @@ const GROUP_ORDER: Record<NavGroupId, number> = NAV_GROUP_DEFS.reduce(
  */
 const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   // --- Awareness: the live surfaces + the detail rail ---
+  'system.wall': 'awareness',
   'system.findings': 'awareness',
   'system.alert_center': 'awareness',
+  'system.watchlist': 'awareness',
   'system.escalations': 'awareness',
   'system.inspector': 'awareness',
   'v4.map': 'awareness',
@@ -80,6 +82,9 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   'system.lineage': 'investigation',
   'system.search': 'investigation',
   'system.notable_structure': 'investigation',
+  // The validity-window Timeline (P4-4) — a temporal investigate surface, pinned
+  // here rather than left to the system.* → operations prefix fallback.
+  'system.timeline': 'investigation',
   'v4.why': 'investigation',
   'v4.flow': 'investigation',
 
@@ -94,6 +99,12 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   'v4.assessment': 'products',
   'system.journal': 'products',
   'system.report_export': 'products',
+
+  // --- Operations: the weekly operator chores ---
+  // The gold-set labeling worksheet is an OPERATE surface (a weekly operator
+  // duty, not an analysis read) — pinned explicitly rather than left to the
+  // prefix fallback so the intent survives a fallback change.
+  'system.goldset': 'operations',
 
   // Everything else system.* (settings, status, actor_health, dead_letter,
   // governor, audit, budget, stream_lag) → Operations via PREFIX_GROUP.

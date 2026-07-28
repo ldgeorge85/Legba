@@ -219,6 +219,35 @@ def create_app(
     from .v3_api import build_v3_router
     app.include_router(build_v3_router(deps), prefix="/api/v1/v3")
 
+    # P1-6 — "since last visit" diff + band trajectory (console / wall tile).
+    # Mounted under the SAME /api/v1/v3 prefix beside the telemetry router;
+    # registry-slim (no runtime/deterministic import — mirrored constants with
+    # drift guards instead). See since_api.py for the envelope contracts.
+    from .since_api import build_since_router
+    app.include_router(build_since_router(deps), prefix="/api/v1/v3")
+
+    # P4-4 — validity-window timeline read surface (the `system.timeline`
+    # panel): facts/situations/findings as RANGED items ([start, end|open) +
+    # supersession-chain edges). Same /api/v1/v3 prefix beside the since router;
+    # registry-slim (no runtime import). See timeline_api.py for the envelope.
+    from .timeline_api import build_timeline_router
+    app.include_router(build_timeline_router(deps), prefix="/api/v1/v3")
+
+    # P3-1 — source assurance ledger read surface (A6 layers 1+2): current
+    # per-rater ratings + dossier, visibility-filtered (private annex rows
+    # only on explicit opt-in). Same /api/v1/v3 prefix; see
+    # source_assurance_api.py for the visibility seam contract.
+    from .source_assurance_api import build_source_assurance_router
+    app.include_router(build_source_assurance_router(deps), prefix="/api/v1/v3")
+
+    # P4-1/P4-2 — reified narratives + source-echo propagation graph (A11).
+    # Read-only surface over the migration-0102 derived tables the
+    # narrative_mapper analyst refreshes; the data surface for a future UI
+    # narratives panel. Degrades to empty when 0102 is unapplied. Same
+    # /api/v1/v3 prefix; see narratives_api.py for the honesty contract.
+    from .narratives_api import build_narratives_router
+    app.include_router(build_narratives_router(deps), prefix="/api/v1/v3")
+
     # Substrate-read endpoints (E-1) — cross-target intelligence feeds
     # the redesigned UI's daily-driver panels consume.
     from .substrate_reads_api import build_substrate_reads_router
@@ -250,6 +279,26 @@ def create_app(
     # them back filtered by unit/target. Backs unit_reference_labels (mig 0057).
     from .labels_api import build_labels_router
     app.include_router(build_labels_router(deps), prefix="/api/v1")
+
+    # Correctness gold-set labeling loop (P2-5) — the weekly worksheet the
+    # operator labels a handful of findings on (deterministic ISO-week sample,
+    # pinned in goldset_week_samples) + the per-finding verdict upsert. Backs
+    # correctness_labels (mig 0096); the per-unit operator aggregate overlays
+    # onto /eval/scores (labels_api).
+    from .goldset_api import build_goldset_router
+    app.include_router(build_goldset_router(deps), prefix="/api/v1/v3")
+
+    # Collection export (A10) — basket of findings + journal entries → one
+    # markdown/JSON document, composed server-side at full fidelity.
+    from .export_api import build_export_router
+    app.include_router(build_export_router(deps), prefix="/api/v1/v3")
+
+    # Watchlist v2 (P5-6) — operator-defined standing watches (entity / text /
+    # geo), the server-side personal layer the alert_trigger_scan's
+    # watchlist_hit class evaluates. First WRITE surface in the v3 family;
+    # deletes are soft (active=false). See watchlist_api.py.
+    from .watchlist_api import build_watchlist_router
+    app.include_router(build_watchlist_router(deps), prefix="/api/v1/v3")
 
     # Entity knowledge-graph read API — entity_profiles + signal_entity_links
     # + proposed_edges for the Entities / Entity-Graph / Entity-Detail panels.

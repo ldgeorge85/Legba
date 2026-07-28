@@ -43,6 +43,10 @@ export interface ContentionRow {
   opened_at: string
   resolved_at: string | null
   updated_at: string
+  /** P3-2 coexistence record (mig 0097) — how/when the winner was surfaced. */
+  surfaced_by?: 'deterministic' | 'llm' | null
+  surfaced_at?: string | null
+  surface_rationale?: string | null
   values: ContentionValueRow[]
 }
 
@@ -84,6 +88,13 @@ export interface ContentionView {
   junkCount: number
   /** True when the arbiter surfaced no winner — an honest "disputed, unresolved". */
   abstained: boolean
+  /** Who decided the surfaced winner: 'deterministic' (Q·C·R·F or weighted
+   *  tie-break) | 'llm' (near-tie adjudication) | null when abstained. */
+  surfacedBy: 'deterministic' | 'llm' | null
+  /** When the current winner was first surfaced (stable while it stands). */
+  surfacedAt: string | null
+  /** One operator-readable line: the deterministic receipt or LLM justification. */
+  surfaceRationale: string | null
   values: ContentionValueView[]
   openedAt: string
   updatedAt: string
@@ -141,6 +152,9 @@ export function toContention(row: ContentionRow): ContentionView {
     junkCount: num(row.junk_count),
     // ABSTAINED iff the dispute is live but the arbiter surfaced no winner.
     abstained: live && !row.surfaced_value && !hasWinner,
+    surfacedBy: row.surfaced_by ?? null,
+    surfacedAt: row.surfaced_at ?? null,
+    surfaceRationale: row.surface_rationale ?? null,
     values,
     openedAt: row.opened_at,
     updatedAt: row.updated_at,

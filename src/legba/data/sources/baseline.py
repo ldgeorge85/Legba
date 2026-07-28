@@ -303,20 +303,60 @@ async def run_baseline(
             return None
         signal = out
 
-    # geo fallback (C2): the publisher-origin scope hint applies to the indexed
-    # ``geo`` column ONLY when nothing in-body resolved — i.e. AFTER the
-    # enrichment chain (geocode/ner) + its promote step have had their chance and
-    # left ``geo`` empty. This keeps a state wire's genuinely-domestic story
-    # tagged with its home country while a world story it published is not
-    # mis-tagged. The origin was parked in payload by :func:`_enrich_structured`.
+    # geo fallback (C2 / S-2): the publisher-origin scope hint may reach the
+    # indexed ``geo`` column ONLY when the STORY CONTENT independently
+    # corroborates that country — never as a blanket default. The old rule
+    # stamped the outlet's home country onto EVERY signal whose body left
+    # ``geo`` empty after the enrichment chain (geocode/ner) + promote, so a
+    # Singapore wire's LeBron / OpenAI / F1 stories all landed geo=SG and
+    # flooded Singapore's country desk (S-2). Corroboration = the origin
+    # country named in the body (title/text/raw_body offline sweep) or a
+    # country-class NER entity. Where the content names no country we emit NO
+    # geo rather than a wrong one — a missing tag only under-includes; a wrong
+    # one actively misroutes. The origin was parked in payload by
+    # :func:`_enrich_structured`.
     if not signal.geo:
         origin = signal.payload.get("publisher_origin")
         if isinstance(origin, list):
             hinted = [g for g in origin if isinstance(g, str) and g]
-            if hinted:
-                signal.geo = hinted
+            corroborated = _origin_corroborated_by_content(signal, hinted)
+            if corroborated:
+                signal.geo = corroborated
 
     return signal
+
+
+def _origin_corroborated_by_content(
+    signal: Signal, origin_iso2: list[str]
+) -> list[str]:
+    """Subset of ``origin_iso2`` that the story CONTENT independently attests.
+
+    S-2 precision guard for the publisher-origin geo fallback. A publisher's
+    home country is an OUTLET-level fact, not the story's subject; it may only
+    reach the indexed ``geo`` column when the body corroborates it — the
+    country is named in the title/text/raw_body (offline country-name sweep) or
+    carried as a ``country``-class NER entity. Cheap + offline (no geocoder
+    call), matching the tier-1 baseline contract. Returns ``[]`` when nothing
+    corroborates, so the signal stays geo-unattributed rather than mis-tagged
+    with the outlet origin.
+    """
+    if not origin_iso2:
+        return []
+    # Local import: keep the filters layer out of this module's import graph
+    # (baseline is imported during source bring-up before filters are wired).
+    from ..filters.geocode import (
+        country_iso2s_from_country_entities,
+        country_iso2s_in_text,
+    )
+
+    payload = signal.payload or {}
+    attested: set[str] = set()
+    for field in ("title", "text", "raw_body"):
+        value = payload.get(field)
+        if isinstance(value, str) and value:
+            attested |= country_iso2s_in_text(value)
+    attested |= country_iso2s_from_country_entities(payload.get("entities"))
+    return [iso for iso in origin_iso2 if iso.upper() in attested]
 
 
 __all__ = [

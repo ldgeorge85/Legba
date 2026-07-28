@@ -197,6 +197,11 @@ export function deriveRowVerdict(row: UnifiedRow, citationCount: number): Verdic
     effectiveConfidence: row.effective_confidence,
     verification: (row.verification as VerificationBlock | null) ?? null,
     citationCount,
+    // P0-4 — classify verify-exempt structural rows (server stamp when the
+    // row came over REST; analyst_id registry mirror for live-tail rows) so
+    // the feed badge renders `unverified — structural`, never a quiet blank.
+    analystId: row.analyst_id,
+    verifyExempt: row.verify_exempt ?? null,
   }
   return buildVerdict(input)
 }

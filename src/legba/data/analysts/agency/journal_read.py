@@ -150,16 +150,19 @@ async def _call_instrument(call: ToolCall, ctx: ToolContext, name: str) -> ToolR
         elif name == "get_calibration":
             out = await port.get_calibration()
         elif name == "get_run_health":
+            # W2-T6 head coverage: default to the whole fleet (the port clamps
+            # at _MAX_ROW_LIMIT=200) — a 40-row dispatcher default silently
+            # re-clipped the roster even after the port default was widened.
             out = await port.get_run_health(
                 analyst_id=args.get("analyst_id"),
                 quiet_hours=int(args.get("quiet_hours", 24)),
-                limit=int(args.get("limit", 40)),
+                limit=int(args.get("limit", 200)),
             )
         elif name == "get_source_health":
             out = await port.get_source_health(
                 silent_only=bool(args.get("silent_only", False)),
                 silent_hours=int(args.get("silent_hours", 48)),
-                limit=int(args.get("limit", 40)),
+                limit=int(args.get("limit", 200)),
             )
         elif name == "get_budget_status":
             out = await port.get_budget_status(

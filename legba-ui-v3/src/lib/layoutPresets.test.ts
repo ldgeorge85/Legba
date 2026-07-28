@@ -46,8 +46,9 @@ function fakeApi(initial?: SerializedDockview) {
 }
 
 describe('layout presets', () => {
-  it('ships the v2 named presets + the Zen focus preset (Move 6)', () => {
+  it('ships the Wall (P1-7) + the v2 named presets + the Zen focus preset (Move 6)', () => {
     expect(LAYOUT_PRESETS.map((p) => p.id)).toEqual([
+      'wall',
       'monitoring',
       'workspace',
       'investigation',

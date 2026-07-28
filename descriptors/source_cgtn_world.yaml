@@ -1,0 +1,66 @@
+# P3-6 Wave-A (A1) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# CGTN World (English) — Chinese state broadcaster. Knowingly ingested for the CN desk as labeled state_media FRAMING (fills retired Xinhua + quiet Global Times), consistent with the existing source.xinhua.world / source.globaltimes.all knowing-ingest pattern. The house rule permits Chinese state media ONLY for the CN desk — this is that desk.
+# Verified live 2026-07-03. Keyless. No fact_extractor (framing, not a fact source).
+#
+# source_class: state_media. Credibility host cgtn.com (seeded 0.30/wire, state_affiliation True by the registrar).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route live.
+
+identity:
+  id: source.cgtn.world
+  name: CGTN — World (English, state media)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: p3_6_wave_a
+  created: "2026-07-27T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [CN]
+  languages: [en]
+  tags: [news, state_media, china, asia, wave_a]
+  source_class: state_media
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "17 1-23/2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.cgtn.com/subscribe/rss/section/world.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor: state media is FRAMING evidence, not a fact source.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

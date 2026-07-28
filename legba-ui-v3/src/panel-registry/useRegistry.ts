@@ -7,6 +7,14 @@
  * `(panel_kind, scope_value)` so other parts of the shell read from it
  * without re-fetching.
  *
+ * Bound-panel reachability (P0-2f): the live `ui_panel_registrations` surface
+ * is empty (no descriptor declares `outputs.ui_panel`), so alongside the real
+ * rows the hook fetches the target/analyst descriptor heads and SYNTHESIZES
+ * the per-record bound-panel registrations (see synthesize.ts). Real rows stay
+ * authoritative — a synthetic row is dropped when a live registration already
+ * covers the same panel instance. Descriptor fetch failures degrade softly to
+ * the real rows alone.
+ *
  * Subjects subscribed to:
  *   - `registry.bindings.activated.*` → add/refresh
  *   - `registry.bindings.retired.*`   → mark retired
@@ -15,13 +23,32 @@
  *
  * On any registry-shaping event the hook does a focused refetch rather
  * than splicing — the SQL surface is the source of truth, the WS feed
- * is just a "something changed" nudge.
+ * is just a "something changed" nudge. Target/analyst lifecycle events
+ * re-run the descriptor fetch too, so the synthesized groups track the
+ * registry.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Mode, PanelRegistration } from '@/types'
-import { fetchUiPanels } from '@/lib/api'
+import { apiGet, fetchUiPanels } from '@/lib/api'
 import { subscribeRegistryEvents } from '@/lib/ws'
+import {
+  mergeRegistrations,
+  synthesizeBoundRegistrations,
+  type RecordDescriptor,
+} from './synthesize'
+
+/** Soft descriptor-head fetch — empty on any failure so the sidebar always
+ *  degrades to the real registration rows rather than erroring out. */
+async function softDescriptorHeads(family: 'target' | 'analyst'): Promise<RecordDescriptor[]> {
+  try {
+    return await apiGet<RecordDescriptor[]>(
+      `/registry/descriptors?family=${family}&head_only=true&limit=500`,
+    )
+  } catch {
+    return []
+  }
+}
 
 export interface RegistryState {
   registrations: PanelRegistration[]
@@ -39,20 +66,25 @@ export function useRegistry(mode: Mode): RegistryState {
 
   const refresh = useCallback(() => setTick((t) => t + 1), [])
 
-  // Fetch on mount + on every refresh tick.
+  // Fetch on mount + on every refresh tick. The real ui_panels rows and the
+  // descriptor heads load in parallel; a ui_panels failure still surfaces as
+  // the hook error while the synthesized rows keep bound panels reachable.
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetchUiPanels(mode)
-      .then((rows) => {
+    Promise.all([
+      fetchUiPanels(mode).then(
+        (rows) => ({ rows, err: null as Error | null }),
+        (err) => ({ rows: [] as PanelRegistration[], err: err as Error }),
+      ),
+      softDescriptorHeads('target'),
+      softDescriptorHeads('analyst'),
+    ])
+      .then(([real, targets, analysts]) => {
         if (cancelled) return
-        setRegistrations(rows)
-        setError(null)
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setError(err as Error)
-        setRegistrations([])
+        const synthetic = synthesizeBoundRegistrations(targets, analysts, mode)
+        setRegistrations(mergeRegistrations(real.rows, synthetic))
+        setError(real.err)
       })
       .finally(() => {
         if (!cancelled) setLoading(false)

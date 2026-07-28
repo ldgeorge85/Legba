@@ -53,8 +53,8 @@ shipment, we restrict to four read-only primitives that cover the bulk
 of Lewis's actual consult traffic per the L-178 note ("daily-use
 pattern"):
 
-  * ``search_signals``  — substrate signal search (title ILIKE / category
-                          / time-window).
+  * ``search_signals``  — substrate signal search (Postgres FTS over
+                          title + summary).
   * ``query_facts``     — substrate fact search (subject/predicate/value
                           ILIKE).
   * ``inspect_entity``  — entity profile + recent fact bundle for one
@@ -240,7 +240,6 @@ class SubstrateQueryPort(Protocol):
         self,
         *,
         query: str,
-        category: str | None = None,
         limit: int = 20,
         scope_predicate: str | None = None,
     ) -> dict[str, Any]: ...
@@ -422,12 +421,15 @@ class SubstrateQueryPort(Protocol):
 
     async def get_calibration(self) -> dict[str, Any]: ...
 
+    # W2-T6 head coverage: the health readers default to whole-fleet limits
+    # (the port clamps at its _MAX_ROW_LIMIT=200) — a 40-row default silently
+    # dropped analysts/sources past the cap, world_assessor included.
     async def get_run_health(
         self,
         *,
         analyst_id: str | None = None,
         quiet_hours: int = 24,
-        limit: int = 40,
+        limit: int = 200,
     ) -> dict[str, Any]: ...
 
     async def get_source_health(
@@ -435,7 +437,7 @@ class SubstrateQueryPort(Protocol):
         *,
         silent_only: bool = False,
         silent_hours: int = 48,
-        limit: int = 40,
+        limit: int = 200,
     ) -> dict[str, Any]: ...
 
     async def get_budget_status(
@@ -488,11 +490,11 @@ _SYSTEM_PROMPT = with_preamble(
     """TASK — answer an operator's question over the substrate. You may call tools to gather evidence before answering; each call is a single strict-JSON object.
 
 Available tools:
-  - search_signals(query, [category], [limit], [scope_predicate]) — full-text search over indexed signals.
+  - search_signals(query, [limit], [scope_predicate]) — full-text search over indexed signals (title + summary).
   - query_facts([subject], [predicate], [value], [limit]) — fact store; at least one of subject/predicate/value is required.
   - inspect_entity(name) — canonical entity profile + recent facts.
   - vector_search(query, [limit]) — semantic similarity over signal embeddings.
-  - search_context(query, [corpus], [country], [k]) — semantic search over the CURATED reference corpora (world_context = country/topic priors + doctrine summaries; tradecraft = analytic standards / SAT handbooks). Returns cited chunks (corpus, doc_id, title, section, countries, source_url, effective_date). corpus narrows to one of world_context / tradecraft; country filters to chunks tagged for that country. This is BACKGROUND / method knowledge, NOT live substrate — use it to ground an assessment or recall a technique, not as current evidence.
+  - search_context(query, [corpus], [country], [k]) — semantic search over the CURATED reference corpora (world_context = country/topic priors + doctrine summaries; tradecraft = analytic standards / SAT handbooks). Returns cited chunks (corpus, doc_id, title, section, countries, source_url, effective_date). corpus narrows to one of world_context / tradecraft; country filters to chunks tagged for that country. This is BACKGROUND / method knowledge, NOT live substrate — use it to ground an assessment or recall a technique, not as current evidence. Its chunk refs are `ctx:`-prefixed and NON-CITABLE: never put a ctx: ref (or its bare UUID) in cited_refs — cite only substrate UUIDs other tools returned.
   - search_corpus(query, [filters], [size]) — LEXICAL BM25 keyword search over the FULL raw text of ALL ingested signals (the live news/report corpus, ~106k docs), returning scored rows. Optional keyword filters narrow by facet: geo, tags, source_id, language, modality, entity_classes, retention_class, license_class (a scalar or a list per key). Use it to FIND source documents by keyword across the whole corpus (broader recall than search_signals' title+summary FTS and complementary to vector_search's semantic match). A row's id is the signal id — pass it to read_document for the full body.
   - read_document(doc_id) — fetch ONE signal's full stored body + metadata by its doc_id (the signal id, e.g. from a search_corpus / search_signals hit) when you need the WHOLE article text, not a snippet. Returns status ('found' / 'not_found') and the full indexed document (title, raw_body, facets).
   - query_nexuses([subject], [object], [rel_type], [polarity], [limit]) — open signed/typed relationships (A->[intermediary]->B; polarity +1 supportive / -1 antagonistic / 0 neutral/dual-use).
@@ -506,7 +508,7 @@ Available tools:
 Finished intelligence — the platform's OWN analysis (analysis-derived; consult these FIRST, they encode prior work — weigh per the provenance rules above):
   - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit]) — recent LIVE findings the platform already produced (country/world situational assessments, meta-findings; superseded revisions are excluded unless include_superseded=true); effective_confidence folds in the critic's grade. Cite the finding id.
   - list_situations([status], [target_id], [since_hours], [limit]) — ongoing clustered situation frames, each with intensity_score + event_count (rank severity by these); call with NO filters (limit 20-30) for a world-state survey. Pass a returned situation_id to query_hypotheses for its ACH rows.
-  - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method 'naive_mean' ⇒ no trend could be fit, low-confidence; 'auto_arima' ⇒ fitted). Cite the id.
+  - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method 'naive_mean' ⇒ no trend could be fit, low-confidence; 'auto_arima' ⇒ fitted). The feed is FROZEN (writer retired 2026-07-01) — treat rows as historical, check latest_produced_at, never present one as a current forecast. Cite the id.
   - list_targets() — the monitored targets + their ids (e.g. country_g20_ir); call this to resolve a place/topic to a valid target_id before query_hypotheses / compare_targets / list_findings.
   - list_sources([active_only], [silent_only]) — ingest sources + freshness; use to tell "no coverage on X" apart from "a quiet feed".
 
@@ -918,7 +920,6 @@ async def _dispatch_tool(
         if name == "search_signals":
             return await port.search_signals(
                 query=str(args.get("query", "")),
-                category=args.get("category"),
                 limit=int(args.get("limit", 20)),
                 scope_predicate=scope_predicate,
             )

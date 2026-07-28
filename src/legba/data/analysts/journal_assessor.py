@@ -736,6 +736,22 @@ def _render_chronicle_user_prompt(inputs: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# E-1 (2026-07-27 sweep §"Track lens_capability empties") — the lens EMPTY-SLICE
+# priming fallback. When the period's slice renders NO rows, the faculty must
+# not read the blank as "nothing to do": its material was never the slice — it
+# is the VERIFIED TOWER TOP, exactly what the chronicle/consolidation kept
+# reasoning over on the same bad-input cycle. Appended in place of slice rows.
+_LENS_EMPTY_SLICE_FALLBACK_LINE = (
+    "(the signal slice is EMPTY this cycle — an APERTURE FACT to declare, not "
+    "world-silence, and not what you interpret anyway: your material is "
+    "unchanged, the VERIFIED TOWER TOP. Go straight to your read tools — "
+    "get_assessments, list_findings, list_situations, query_facts, "
+    "query_nexuses, the contentions — and weigh what the tower verified this "
+    "period through your declared prior, citing those refs. If the tower "
+    "itself is thin, say so honestly; never fabricate a reading.)"
+)
+
+
 def _render_lens_user_prompt(
     inputs: list[dict[str, Any]], *, prior_block: str
 ) -> str:
@@ -810,6 +826,7 @@ def _render_lens_user_prompt(
         "",
         "--- recent signal slice ---",
     ]
+    rendered_rows = 0
     for row in inputs[:60]:
         # Prefer the stored English title; a non-EN row lacking a stored
         # translation gets an [untranslated:<lang>] marker (the attribution hazard
@@ -824,6 +841,16 @@ def _render_lens_user_prompt(
             lines.append(f"- {tag}{untranslated}{title[:200]} [[ref:{sid}]]")
         else:
             lines.append(f"- {tag}{untranslated}{title[:200]}")
+        rendered_rows += 1
+    if rendered_rows == 0:
+        # E-1 (2026-07-27 sweep — the lens_capability "(empty lens read)" kill):
+        # a Monday bad-input cycle can deliver a slice with NOTHING renderable,
+        # and a faculty primed on a blank slice bails to an empty read. The
+        # chronicle/consolidation survive the same cycle by reasoning over the
+        # verified tower corpus (their stored, verified material) — mirror that
+        # here as an explicit priming redirect. Deterministic prompt text only;
+        # never fabricates content — the honesty disciplines above still apply.
+        lines.append(_LENS_EMPTY_SLICE_FALLBACK_LINE)
     return "\n".join(lines)
 
 
@@ -1261,6 +1288,26 @@ _EMPTY_BODY_FOR: dict[str, str] = {
     "lens": "(empty lens read)",
     "lens_diff": "(empty chorus diff)",
 }
+
+# E-1 (2026-07-27 sweep) — the lens EMPTY-READ narrate fallback. Live on 07-27
+# the Monday cycle's lens_capability NARRATE returned an empty body and the run
+# shipped "(empty lens read)" with 0 claims (it had 11 on 07-24) while the
+# chronicle/consolidation — fed the SAME degraded inputs — stayed substantive
+# by reasoning over the verified tower corpus. When a faculty's narrate comes
+# back EMPTY, run ONE fallback narrate carrying this redirect; a read that is
+# STILL empty after it stays honestly empty (never fabricate).
+_LENS_EMPTY_FALLBACK_INSTRUCTION = (
+    "\n\nYOUR LAST ATTEMPT PRODUCED AN EMPTY READ. An empty or degraded signal "
+    "window is an APERTURE FACT to declare, never a reason to fall silent: "
+    "your material was never the live slice — it is the VERIFIED TOWER CORPUS, "
+    "the same stored, verified output the chronicle and consolidation keep "
+    "reasoning over when live acquisition is dark. Pull the tower top NOW — "
+    "get_assessments, list_findings, list_situations, query_facts, "
+    "query_nexuses — and write your read through your declared prior over "
+    "what the tower has already verified this period, citing those refs. "
+    "NEVER fabricate: if the tower itself returns nothing worth weighing, say "
+    "exactly that in one honest sentence."
+)
 
 
 async def _field_notes(
@@ -1728,6 +1775,161 @@ async def _source_health_cross_check(
 
 
 # ---------------------------------------------------------------------------
+# S-1 (2026-07-27 sweep, SWEEP_SYNTHESIS §T1-#1 / SWEEP_SOURCES_SIGNALS §2) — the
+# DETERMINISTIC source-health NUMBER guard. The sibling _source_health_cross_check
+# validates the INSTRUMENT against the gather slice (total_wired ≥ delivered); it
+# NEVER reads the prose, and it no-ops on the lens tier (whose priming slice
+# carries no real signal rows, so distinct == 0). A faculty lens FABRICATED the
+# collection posture ("0 active feeds … the window is dark") while
+# get_source_health returned the correct 68/49/37 on every call — and it shipped
+# UNFLAGGED. This guard closes that hole: it EXTRACTS the whole-fleet source-health
+# COUNTS the narrator actually wrote and compares them against the live
+# get_source_health `summary`. On divergence it forces `source_health_fabricated`
+# — ANNOTATES, never rewrites the prose (the journal is contain-not-block; honesty
+# = flag, never strip). Runs on EVERY tier, so the lens path is covered where its
+# sibling is not.
+# ---------------------------------------------------------------------------
+
+_SOURCE_HEALTH_FABRICATED_FLAG = "source_health_fabricated"
+
+# Only the STRUCTURAL, within-cycle-STATIC fields are strictly validated:
+#   * total_wired  — count of head descriptors (state-driven; changes only when a
+#     new descriptor version lands, ~daily, never mid-run).
+#   * active_total — head descriptors WHERE state='active' (same driver).
+# active_fresh / active_stalled / active_erroring are DELIBERATELY excluded: they
+# key on the rolling 48h signal window + last-poll outcome and legitimately DRIFT
+# between the narrator's tool call and this compose-time re-call, so a strict
+# equality check on them would false-positive on ordinary freshness churn. The
+# structural pair already pins every observed fabrication ("0 active feeds / the
+# window is dark"; "active_total = 3 … total_wired = 3") — a dark-window claim
+# necessarily corrupts the structural counts. Each pattern captures ONE integer.
+_SOURCE_HEALTH_KEY_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    # The explicit `field = N` / `field: N` forms are UNAMBIGUOUS whole-fleet
+    # claims — those literal summary field names ARE the denominator-honest
+    # aggregate, so they carry no subset scope and need no scope guard.
+    "active_total": (re.compile(r"\bactive_total\s*[=:]\s*(\d+)", re.IGNORECASE),),
+    "total_wired": (re.compile(r"\btotal_wired\s*[=:]\s*(\d+)", re.IGNORECASE),),
+}
+
+# Natural-language forms — the exact register the fabrications used ("49 active
+# feeds", "58 total wired", "total wired = 68"). These DO carry the scope guard: a
+# properly-declared subset ("of the press-class subset, 3 active feeds") is the
+# persona's sanctioned "any subset count NAMES its scope" and must be exempt.
+_SOURCE_HEALTH_NL_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "active_total": (
+        re.compile(r"(\d+)\s+active\s+(?:feeds?|sources?)\b", re.IGNORECASE),
+    ),
+    "total_wired": (
+        re.compile(r"(\d+)\s+total\s+wired\b", re.IGNORECASE),
+        re.compile(r"\btotal\s+wired\s*[=:]?\s*(\d+)", re.IGNORECASE),
+    ),
+}
+
+# A subset scope cue immediately BEFORE a natural-language count exempts it (the
+# narrator declared a scope, so the number is not a whole-fleet claim).
+_SOURCE_HEALTH_SCOPE_CUE_RE = re.compile(
+    r"(?:of\s+the|of\s+its|of\s+\d|among|within|subset|press[- ]class|"
+    r"per[- ]class|this\s+window)",
+    re.IGNORECASE,
+)
+
+
+def _extract_source_health_claims(body: str) -> dict[str, set[int]]:
+    """PURE helper (no LLM, no binding): pull the whole-fleet source-health COUNTS
+    the narrator wrote, keyed to the get_source_health ``summary`` fields.
+
+    Explicit ``field = N`` forms are always taken (that literal field name is the
+    whole-fleet aggregate). Natural-language forms ("N active feeds", "N total
+    wired") are skipped when immediately preceded by a subset scope cue — a NAMED
+    subset carries its own count by the persona's contract and is not validated
+    against the fleet total. Returns ``{field: {claimed values}}`` (a set so a
+    repeated identical claim collapses)."""
+    claims: dict[str, set[int]] = {}
+    if not body:
+        return claims
+    for field, patterns in _SOURCE_HEALTH_KEY_PATTERNS.items():
+        for pat in patterns:
+            for m in pat.finditer(body):
+                claims.setdefault(field, set()).add(int(m.group(1)))
+    for field, patterns in _SOURCE_HEALTH_NL_PATTERNS.items():
+        for pat in patterns:
+            for m in pat.finditer(body):
+                window = body[max(0, m.start() - 30):m.start()]
+                if _SOURCE_HEALTH_SCOPE_CUE_RE.search(window):
+                    continue  # a declared subset — scope named, exempt
+                claims.setdefault(field, set()).add(int(m.group(1)))
+    return claims
+
+
+async def _source_health_number_check(
+    binding: Any,
+    body: str,
+    *,
+    steps: list[dict[str, Any]],
+) -> list[str]:
+    """S-1 — the DETERMINISTIC prose-vs-instrument NUMBER cross-check.
+
+    Extract the whole-fleet source-health counts the narrator WROTE and compare
+    them against the live ``get_source_health`` ``summary``. On ANY divergence
+    force ``source_health_fabricated`` (ANNOTATE, never rewrite the prose — honesty
+    = flag, never strip). Degrade-not-drop: no binding / no numeric claim / read
+    failure / missing summary → no flag (the run never blocks). Runs on EVERY
+    tier, so the LENS path is covered — its sibling ``_source_health_cross_check``
+    no-ops there (the lens priming slice has no real signal rows, distinct == 0)."""
+    claims = _extract_source_health_claims(body)
+    if binding is None or not claims:
+        return []
+    try:
+        outcome = await binding.run_tool("get_source_health", {})
+        if (
+            not outcome.admitted
+            or outcome.tool_result is None
+            or outcome.tool_result.status == "failed"
+        ):
+            return []
+        data = dict(outcome.tool_result.output)
+    except Exception as exc:  # degrade-not-drop
+        logger.warning(
+            "journal_assessor.source_number_check.read_failed err=%s", exc
+        )
+        return []
+    summary = data.get("summary") if isinstance(data.get("summary"), Mapping) else {}
+    if not summary:
+        return []
+    mismatches: list[dict[str, Any]] = []
+    for field, claimed_values in claims.items():
+        if field not in summary:
+            continue
+        try:
+            actual = int(summary[field])
+        except (TypeError, ValueError):
+            continue
+        for claimed in sorted(claimed_values):
+            if claimed != actual:
+                mismatches.append(
+                    {"field": field, "claimed": claimed, "actual": actual}
+                )
+    if mismatches:
+        logger.warning(
+            "journal_assessor.source_number_check.FABRICATED mismatches=%s — "
+            "narrated source-health counts diverge from get_source_health",
+            mismatches,
+        )
+        steps.append({
+            "phase": "honesty",
+            "kind": "source_health_fabricated",
+            "mismatches": mismatches,
+        })
+        return [_SOURCE_HEALTH_FABRICATED_FLAG]
+    steps.append({
+        "phase": "honesty",
+        "kind": "source_health_numbers_consistent",
+        "checked_fields": sorted(claims.keys()),
+    })
+    return []
+
+
+# ---------------------------------------------------------------------------
 # VOICES LV-1 — the chorus DIFF matrix (§3.3). The DETERMINISTIC part: the roster
 # (which faculties were seen this cycle, which are missing) computed BEFORE
 # narrate and stamped into ``data.matrix``, mirroring _forced_honesty_flags's
@@ -2061,6 +2263,39 @@ async def run_method(
     _fold(narrate_usage)
     body = (body or "").strip()
 
+    # --- E-1 lens EMPTY-READ fallback (2026-07-27 sweep) --------------------
+    # A faculty whose NARRATE returned nothing gets ONE more narrate pass with
+    # an explicit redirect at the verified tower corpus (the material the
+    # chronicle/consolidation reason over when the slice/acquisition is dark).
+    # Best-effort: any failure inside the fallback degrades to the honest
+    # empty body below — it never fails a run the primary narrate survived. A
+    # read still empty after the fallback stays honestly "(empty lens read)".
+    if entry_kind == "lens" and not body:
+        steps.append({"phase": "narrate", "kind": "empty_lens_fallback"})
+        try:
+            fb_body, fb_usage = await _narrate_with_tools(
+                deps,
+                field_notes=field_notes + _LENS_EMPTY_FALLBACK_INSTRUCTION,
+                binding=active_binding,
+                analyst_id=analyst_id,
+                steps=steps,
+            )
+            _fold(fb_usage)
+            body = (fb_body or "").strip()
+        except Exception as exc:  # degrade-not-drop — honest empty beats a crash
+            logger.warning(
+                "journal_assessor.empty_lens_fallback.failed id=%s err=%s",
+                analyst_id, exc,
+            )
+        steps.append({
+            "phase": "narrate",
+            "kind": (
+                "empty_lens_fallback_recovered"
+                if body else "empty_lens_fallback_still_empty"
+            ),
+            "body_chars": len(body),
+        })
+
     # --- V4 (GATHER [N]→[[ref:uuid]] bridge) — BEFORE reflect --------------
     # A [N] the narrator wrote against a GATHER-gathered corpus doc dies at render
     # (the journal renders [[ref:uuid]], never [N]). Rewrite the resolvable
@@ -2089,6 +2324,13 @@ async def run_method(
     honesty_flags = await _forced_honesty_flags(active_binding, steps=steps)
     honesty_flags += await _source_health_cross_check(
         active_binding, inputs, steps=steps
+    )
+    # S-1 (SWEEP_SYNTHESIS §T1-#1) — the prose-vs-instrument NUMBER guard: do the
+    # collection-posture COUNTS the narrator WROTE match the live tool? Runs on
+    # EVERY tier (the sibling cross_check reads the gather slice, so it no-ops on
+    # the lens path where the fabrication was found). Flags, never rewrites.
+    honesty_flags += await _source_health_number_check(
+        active_binding, body, steps=steps
     )
     # V2.2 — DETERMINISTIC apparatus-lead flag (R-3 style honesty, not a block).
     # The persona forbids opening on the apparatus; when the narrator regresses

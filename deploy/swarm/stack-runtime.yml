@@ -1,0 +1,315 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# deploy/swarm/stack-runtime.yml — DRAFT swarm stack: Dapr plane + app tier.
+#
+# ############################################################################
+# ##  DRAFT — NOT DEPLOYABLE YET. Phase-1 validation pending.               ##
+# ##  See deploy/swarm/README.md + planning/SWARM_CONVERSION_ASSESSMENT_    ##
+# ##  2026-07-25.md before touching this with `docker stack deploy`.        ##
+# ############################################################################
+#
+# Translation of the `dapr` + `runtime` + `dapr-workflow` profile services from
+# docker-compose.yml. The ENTIRE Dapr plane (placement, scheduler, sidecar)
+# lands on the RUNTIME node (node1), co-located with the actor host — only
+# Postgres/NATS/Qdrant/Redis traffic crosses to the data node. That keeps the
+# placement<->sidecar gRPC stream, the sidecar<->app channel, and the
+# scheduler's etcd all on one box: the fragile edges of Dapr-on-swarm stay
+# node-local (assessment §4b).
+#
+# SERVICES DELETED (vs compose) AND WHERE THEIR JOB WENT:
+#   * dapr-scheduler-init  → phase runbook step: `mkdir -p
+#     /var/lib/legba/dapr-scheduler-data && chown 65532:65532 ... && chmod 700`
+#     on the runtime node BEFORE first deploy. Swarm has no
+#     service_completed_successfully gating to sequence an init container.
+#   * dapr-init-db         → phase runbook step: `CREATE DATABASE dapr` via a
+#     one-off `docker run --network legba-swarm postgres:16-alpine psql ...`.
+#   * legba-mcp            → never a swarm service (launched per-conversation
+#     by the MCP client via `docker run -i`).
+#   * legba-media          → stays a compose-managed seam (503-serving, D2
+#     PREP-not-PROVISION); revisit if/when a real model backend lands.
+#
+# IMAGES: referenced by LOCAL REGISTRY tag (localhost:5000/legba/...) because
+# stack deploy IGNORES `build:` — every node's engine pulls from the registry
+# service (deploy/swarm/registry-service.yml; the routing mesh makes
+# localhost:5000 resolve on every node). Build+push happens on node1:
+#   docker build -f docker/Dockerfile.runtime -t localhost:5000/legba/legba-runtime-dapr:latest .
+#   docker push localhost:5000/legba/legba-runtime-dapr:latest
+#
+# ORDERING: stack deploy IGNORES depends_on (the live file's long
+# `condition:` form doesn't even parse — hard error "depends_on must be a
+# list"). Startup ordering must live in the services themselves:
+#   * legba-registry        — NEEDS a wait loop added to its entrypoint
+#     (src/legba/data/registry/server.py lifespan calls pg_store.connect() /
+#     nats_store.connect() with no retry → crash-loops until PG+NATS are up).
+#     Swarm's restart_policy gives crash-loop convergence as a floor; an
+#     explicit wait (postgres:5432, nats:4222, redis:6379, qdrant:6333) is the
+#     clean fix. NOT modified yet — draft-only phase.
+#   * legba-runtime-dapr    — NEEDS a wait loop (legba-registry:8090/healthz +
+#     postgres + nats + dapr-sidecar:50001). Same status: to-add, not modified.
+#   * legba-dapr-workflow-worker — NEEDS a wait loop (dapr-sidecar:50001 +
+#     legba-registry:8090).
+#   * dapr-sidecar (/daprd) — CANNOT get a wait loop (distroless image, no
+#     shell); relies on daprd's own component-init retry. The `dapr` database
+#     must pre-exist (runbook step above). PHASE-1 VERIFY: daprd recovers when
+#     PG comes up after it.
+#
+# INTERPOLATION + SECRETS: `${VAR:-default}` comes from the SHELL env only
+# (stack deploy never reads .env). Service-level `env_file: ../../.env` IS
+# honored (verified on Docker 29: values are read client-side at deploy time
+# and BAKED into the service spec) — which means every .env secret becomes
+# visible in `docker service inspect` and lives in the swarm raft store.
+# Acceptable single-operator interim; phase-3 target is swarm secrets +
+# entrypoint export shims (assessment §4e).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+services:
+  dapr-placement:
+    image: daprio/dapr:1.17.9   # pinned — all three Dapr containers same tag
+    logging: *default-logging
+    entrypoint: ["/placement"]
+    command: ["-port", "50005"]
+    networks:
+      legba-swarm:
+        aliases: [dapr-placement]
+    deploy:
+      replicas: 1   # NEVER scale: single-replica placement is the actor table
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 512M   # was mem_limit: 512m
+
+  dapr-scheduler:
+    image: daprio/dapr:1.17.9
+    logging: *default-logging
+    # Graceful etcd flush window (compose parity): default 10s SIGTERM->KILL
+    # can corrupt embedded etcd mid-write. NEVER partial-clear the data dir.
+    stop_grace_period: 45s
+    entrypoint: ["/scheduler"]
+    command:
+      - "--port"
+      - "50006"
+      - "--etcd-data-dir"
+      - "/var/lib/dapr-scheduler-data"
+      - "--etcd-client-port"
+      - "2379"
+    volumes:
+      # ABSOLUTE host bind (swarm binds must pre-exist on the target node;
+      # the compose file's relative ./deploy/dapr-scheduler-data doesn't
+      # translate). Pre-provisioned + chowned 65532:65532 by the phase
+      # runbook — replaces the dapr-scheduler-init one-shot.
+      - /var/lib/legba/dapr-scheduler-data:/var/lib/dapr-scheduler-data
+    networks:
+      legba-swarm:
+        aliases: [dapr-scheduler]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 512M
+
+  # daprd sidecar for app-id legba-runtime. SWARM CAVEATS (assessment §4b):
+  #   * app-channel-address resolves the `legba-runtime-dapr` alias over the
+  #     overlay — 1 replica ⇒ deterministic; >1 replicas would round-robin the
+  #     app channel across replicas, which is WRONG (daprd is 1:1 with an app
+  #     instance). Scale-out = explicit per-pair services, exactly the
+  #     docker-compose.replicas.yml pattern, co-pinned per pair.
+  #   * daprd advertises ITS OWN address to placement. On a multi-network task
+  #     (overlay + docker_gwbridge) it may pick the node-local gwbridge IP —
+  #     unreachable cross-node ⇒ actor invokes fail SILENTLY once sidecars span
+  #     nodes. Single-node phase 1 masks this; the phase-1 checklist still
+  #     captures the registered address from placement logs. Mitigation if it
+  #     bites: pin DAPR_HOST_IP to the overlay IP (needs an entrypoint shim —
+  #     distroless image, so that means a derived image; k3s trigger K-1).
+  #   * NO ordered-recovery equivalent: the B0-13 P2 restart order (runtime
+  #     first, WAIT healthy, then sidecar) is unexpressible in swarm task
+  #     scheduling — see the watchdog rework, assessment §4f.
+  dapr-sidecar:
+    image: daprio/dapr:1.17.9
+    logging: *default-logging
+    env_file: ../../.env   # local.env secret store reads the sidecar's env
+    environment:
+      LEGBA_NATS_TOKEN: ${LEGBA_NATS_TOKEN:-}
+    entrypoint: ["/daprd"]
+    command:
+      - "-app-id"
+      - "legba-runtime"
+      - "-app-channel-address"
+      - "${LEGBA_DAPR_APP_CHANNEL:-legba-runtime-dapr}"
+      - "-app-port"
+      - "6090"
+      - "-dapr-http-port"
+      - "3500"
+      - "-dapr-grpc-port"
+      - "50001"
+      - "-placement-host-address"
+      - "dapr-placement:50005"
+      - "-scheduler-host-address"
+      - "dapr-scheduler:50006"
+      - "-resources-path"
+      - "/dapr/components"
+      - "-config"
+      - "/dapr/components/configuration.yaml"
+      - "-max-body-size"
+      - "${LEGBA_DAPR_MAX_BODY_SIZE:-16Mi}"
+      - "-log-level"
+      - "info"
+    configs:
+      # was: ./dapr/components bind mount (ro). Four files → four configs;
+      # a dir bind would require pre-placing the tree on the node.
+      - source: dapr_configuration
+        target: /dapr/components/configuration.yaml
+      - source: dapr_pubsub
+        target: /dapr/components/pubsub.yaml
+      - source: dapr_secretstore
+        target: /dapr/components/secretstore.yaml
+      - source: dapr_statestore
+        target: /dapr/components/statestore.yaml
+    # extra_hosts host.docker.internal DROPPED: that was the host-mode systemd
+    # fallback path; "the host" is ambiguous on a multi-node cluster.
+    networks:
+      legba-swarm:
+        aliases: [dapr-sidecar]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 512M
+
+  legba-registry:
+    image: localhost:5000/legba/legba-registry:latest   # build: ignored → local registry
+    logging: *default-logging
+    env_file: ../../.env
+    environment:
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_REDIS_HOST: redis
+      LEGBA_DATA_QDRANT_HOST: qdrant
+      LEGBA_DATA_NATS_URL: nats://nats:4222
+      LEGBA_REGISTRY_API_HOST: 0.0.0.0
+      LEGBA_REGISTRY_API_PORT: "8090"
+    # Image HEALTHCHECK (curl :8090/healthz) carries over; swarm gates
+    # task-ready + restarts unhealthy tasks on it. Startup ordering: see the
+    # header — entrypoint wait loop TO ADD (crash-loop convergence until then).
+    networks:
+      legba-swarm:
+        aliases: [legba-registry]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 1G
+
+  legba-runtime-dapr:
+    image: localhost:5000/legba/legba-runtime-dapr:latest
+    logging: *default-logging
+    env_file: ../../.env
+    environment:
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_REDIS_HOST: redis
+      LEGBA_DATA_QDRANT_HOST: qdrant
+      LEGBA_DATA_NATS_URL: nats://nats:4222
+      LEGBA_RUNTIME_HTTP_HOST: 0.0.0.0
+      LEGBA_RUNTIME_HTTP_PORT: "6090"
+      DAPR_RUNTIME_HOST: dapr-sidecar
+      DAPR_HTTP_PORT: "3500"
+      DAPR_GRPC_PORT: "50001"
+      DAPR_HTTP_ENDPOINT: http://dapr-sidecar:3500
+      DAPR_GRPC_ENDPOINT: dapr-sidecar:50001
+      LEGBA_REGISTRY_URL: http://legba-registry:8090
+      LEGBA_REGISTRY_API_URL: http://legba-registry:8090
+      LEGBA_EMBED_WORKFLOW_WORKER: "${LEGBA_EMBED_WORKFLOW_WORKER:-1}"
+      LEGBA_FACT_CONTENTION: "${LEGBA_FACT_CONTENTION:-0}"
+      LEGBA_FACT_CONTENTION_LLM_TIEBREAK: "${LEGBA_FACT_CONTENTION_LLM_TIEBREAK:-0}"
+    networks:
+      legba-swarm:
+        aliases: [legba-runtime-dapr]
+    deploy:
+      replicas: 1   # >1 requires per-replica sidecars + LEGBA_REPLICA_COUNT/
+                    # LEGBA_LEADER_ELECTION knobs (docker-compose.replicas.yml
+                    # pattern) — and is gated by DIRECTION.md §6 regardless.
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 4G
+
+  legba-dapr-workflow-worker:
+    image: localhost:5000/legba/legba-dapr-workflow-worker:latest
+    logging: *default-logging
+    # durabletask gRPC runtime, not HTTP — the inherited runtime-image
+    # HEALTHCHECK would always fail (compose parity).
+    healthcheck:
+      disable: true
+    env_file: ../../.env
+    environment:
+      LEGBA_DATA_PG_HOST: postgres
+      LEGBA_DATA_PG_PORT: "5432"
+      LEGBA_DATA_PG_USER: legba
+      LEGBA_DATA_PG_PASSWORD: legba
+      LEGBA_DATA_PG_DB: legba
+      LEGBA_DATA_REDIS_HOST: redis
+      LEGBA_DATA_QDRANT_HOST: qdrant
+      LEGBA_DATA_NATS_URL: nats://nats:4222
+      DAPR_RUNTIME_HOST: dapr-sidecar
+      DAPR_GRPC_PORT: "50001"
+      DAPR_GRPC_ENDPOINT: dapr-sidecar:50001
+      LEGBA_REGISTRY_URL: http://legba-registry:8090
+      LEGBA_REGISTRY_API_URL: http://legba-registry:8090
+      LEGBA_OPTIMIZER_DAPR_WORKFLOW: "1"
+    entrypoint: ["legba-dapr-workflow-worker"]
+    networks:
+      legba-swarm:
+        aliases: [legba-dapr-workflow-worker]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == runtime"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 3G
+
+configs:
+  dapr_configuration:
+    file: ../../dapr/components/configuration.yaml
+  dapr_pubsub:
+    file: ../../dapr/components/pubsub.yaml
+  dapr_secretstore:
+    file: ../../dapr/components/secretstore.yaml
+  dapr_statestore:
+    file: ../../dapr/components/statestore.yaml
+
+networks:
+  legba-swarm:
+    external: true   # created once in phase 1: docker network create --driver overlay --attachable legba-swarm

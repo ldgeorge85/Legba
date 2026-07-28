@@ -437,6 +437,7 @@ export function App() {
         authenticated={getToken() != null}
         lastRefresh={lastRefresh}
         errorText={errorText}
+        onOpenExport={() => onOpenPanel('system.report_export', null)}
       />
       <CommandPalette
         open={paletteOpen}

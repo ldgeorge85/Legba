@@ -5,7 +5,11 @@
  * (⌘K) launcher, a compact Layouts menu (named save/restore workspaces), then
  * five collapsible verb-grouped sections — Awareness / Investigation / Analysis
  * / Products / Operations — over the singleton panel catalog, followed by the
- * per-target and per-analyst instance groups from the runtime registry.
+ * per-target and per-analyst instance groups. The instance groups render the
+ * runtime registry's rows UNION the synthesized bound-panel set built from
+ * descriptor heads (useRegistry + panel-registry/synthesize.ts) — the live
+ * `ui_panel_registrations` surface is empty, so without synthesis the bound
+ * panels (Target Map/Timeline/…, Analyst Runs/…) were unreachable here.
  *
  * This REPLACES the five stacked nav systems the prior sidebar carried (search +
  * 3 workspace-preset buttons + a "More layouts" dropdown + two Investigate
@@ -32,8 +36,10 @@ import { cn } from '@/lib/cn'
 
 const COLLAPSE_KEY = 'legba_nav_collapsed'
 
-/** Groups collapsed by default on first run — plumbing folds away. */
-const DEFAULT_COLLAPSED = ['operations']
+/** Groups collapsed by default on first run — plumbing folds away, and the
+ *  registry-scale Targets/Analysts sections (~124/~64 records live) start
+ *  folded so the first screenful stays the five-group tree. */
+const DEFAULT_COLLAPSED = ['operations', 'targets', 'analysts']
 
 /** Resolve a registry `iconName` to a lucide component (fallback: none). */
 function iconFor(name?: string): LucideIcon | null {
@@ -188,22 +194,31 @@ export function Sidebar({
         </CollapsibleSection>
       ))}
 
-      {/* Per-target groups — instance-scoped analysis panels from the registry. */}
+      {/* Per-target groups — instance-scoped analysis panels from the registry
+          (real rows) + the synthesized bound-panel set (useRegistry/synthesize).
+          At live scale (~124 targets) each record collapses to one row and a
+          filter box narrows by id. */}
       {grouped.targets.length > 0 && (
-        <Section title="Targets">
-          {grouped.targets.map((group) => (
-            <TargetGroupRows key={group.target_id} group={group} onOpen={onOpen} />
-          ))}
-        </Section>
+        <InstanceSection
+          id="targets"
+          title="Targets"
+          groups={grouped.targets.map((g) => ({ record_id: g.target_id, rows: g.rows }))}
+          collapsed={collapsed.has('targets')}
+          onToggle={() => toggleGroup('targets')}
+          onOpen={onOpen}
+        />
       )}
 
       {/* Per-analyst groups. */}
       {grouped.analysts.length > 0 && (
-        <Section title="Analysts">
-          {grouped.analysts.map((group) => (
-            <AnalystGroupRows key={group.analyst_id} group={group} onOpen={onOpen} />
-          ))}
-        </Section>
+        <InstanceSection
+          id="analysts"
+          title="Analysts"
+          groups={grouped.analysts.map((g) => ({ record_id: g.analyst_id, rows: g.rows }))}
+          collapsed={collapsed.has('analysts')}
+          onToggle={() => toggleGroup('analysts')}
+          onOpen={onOpen}
+        />
       )}
     </aside>
   )
@@ -282,12 +297,83 @@ function LayoutsMenu({
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** One record's registration rows inside an InstanceSection. */
+interface InstanceGroup {
+  record_id: string
+  rows: PanelRegistration[]
+}
+
+/**
+ * A collapsible per-record section (Targets / Analysts). Built to stay usable
+ * at live registry scale (~124 targets): the section itself collapses (state
+ * persisted with the nav groups), each record collapses to a single row by
+ * default, and a filter box narrows records by id once the list is long.
+ */
+function InstanceSection({
+  id,
+  title,
+  groups,
+  collapsed,
+  onToggle,
+  onOpen,
+}: {
+  id: string
+  title: string
+  groups: InstanceGroup[]
+  collapsed: boolean
+  onToggle: () => void
+  onOpen: SidebarProps['onOpen']
+}) {
+  const [filter, setFilter] = useState('')
+  // Records expanded to show their panel rows — collapsed by default so the
+  // section reads as one row per record (session-local, not persisted).
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const toggleRecord = (recordId: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(recordId)) next.delete(recordId)
+      else next.add(recordId)
+      return next
+    })
+  }
+
+  const q = filter.trim().toLowerCase()
+  const visible = q ? groups.filter((g) => g.record_id.toLowerCase().includes(q)) : groups
+
   return (
-    <div className="py-2">
-      <div className="px-3 text-label uppercase tracking-wider text-ink-2 mb-1">{title}</div>
-      <ul className="space-y-px">{children}</ul>
-    </div>
+    <CollapsibleSection
+      id={id}
+      title={`${title} (${groups.length})`}
+      collapsed={collapsed}
+      onToggle={onToggle}
+    >
+      {groups.length > 8 && (
+        <div className="px-3 pb-1">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={`filter ${title.toLowerCase()}…`}
+            spellCheck={false}
+            data-testid={`nav-filter-${id}`}
+            className="w-full rounded border border-line bg-surf-2 px-2 py-1 text-body text-ink-2 placeholder:text-ink-3 outline-none focus:border-line-strong"
+          />
+        </div>
+      )}
+      {visible.length === 0 && (
+        <div className="px-3 py-1 text-label text-ink-3">no {title.toLowerCase()} match</div>
+      )}
+      <ul className="space-y-px">
+        {visible.map((group) => (
+          <RecordGroupRows
+            key={group.record_id}
+            group={group}
+            expanded={expanded.has(group.record_id)}
+            onToggleExpand={() => toggleRecord(group.record_id)}
+            onOpen={onOpen}
+          />
+        ))}
+      </ul>
+    </CollapsibleSection>
   )
 }
 
@@ -355,46 +441,49 @@ function SidebarRow({
   )
 }
 
-function TargetGroupRows({ group, onOpen }: { group: TargetGroup; onOpen: SidebarProps['onOpen'] }) {
+/** One record row — collapsed to a single line; expanded, its panel rows. */
+function RecordGroupRows({
+  group,
+  expanded,
+  onToggleExpand,
+  onOpen,
+}: {
+  group: InstanceGroup
+  expanded: boolean
+  onToggleExpand: () => void
+  onOpen: SidebarProps['onOpen']
+}) {
   return (
-    <li className="py-1">
-      <div className="px-3 text-body font-medium text-ink-1">{group.target_id}</div>
-      <ul className="space-y-px">
-        {group.rows.map((reg) => {
-          const kind = PANEL_ID_TO_KIND[reg.panel_id]
-          if (!kind) return null
-          return (
-            <SidebarRow
-              key={reg.id}
-              indent={1}
-              label={PANEL_REGISTRY[kind].definition.defaultTitle}
-              onClick={() => onOpen(kind, reg)}
-            />
-          )
-        })}
-      </ul>
-    </li>
-  )
-}
-
-function AnalystGroupRows({ group, onOpen }: { group: AnalystGroup; onOpen: SidebarProps['onOpen'] }) {
-  return (
-    <li className="py-1">
-      <div className="px-3 text-body font-medium text-ink-1">{group.analyst_id}</div>
-      <ul className="space-y-px">
-        {group.rows.map((reg) => {
-          const kind = PANEL_ID_TO_KIND[reg.panel_id]
-          if (!kind) return null
-          return (
-            <SidebarRow
-              key={reg.id}
-              indent={1}
-              label={PANEL_REGISTRY[kind].definition.defaultTitle}
-              onClick={() => onOpen(kind, reg)}
-            />
-          )
-        })}
-      </ul>
+    <li>
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        aria-expanded={expanded}
+        data-testid={`nav-record-${group.record_id}`}
+        className="w-full flex items-center gap-1 px-3 row-density text-body font-medium text-ink-1 hover:bg-surf-2 text-left"
+      >
+        <ChevronRight
+          size={11}
+          className={cn('flex-shrink-0 text-ink-3 transition-transform', expanded && 'rotate-90')}
+        />
+        <span className="flex-1 truncate">{group.record_id}</span>
+      </button>
+      {expanded && (
+        <ul className="space-y-px">
+          {group.rows.map((reg) => {
+            const kind = PANEL_ID_TO_KIND[reg.panel_id]
+            if (!kind) return null
+            return (
+              <SidebarRow
+                key={reg.id}
+                indent={1}
+                label={PANEL_REGISTRY[kind].definition.defaultTitle}
+                onClick={() => onOpen(kind, reg)}
+              />
+            )
+          })}
+        </ul>
+      )}
     </li>
   )
 }

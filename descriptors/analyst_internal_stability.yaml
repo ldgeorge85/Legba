@@ -165,7 +165,7 @@ method:
   # Per-day token cap for this unit's fan-out — sized for the staggered
   # twice-daily cadence (kept well under the country_assessor cap because each
   # unit answers a single bounded question, not the full situational sweep).
-  budget_tokens_per_day: 300000
+  budget_tokens_per_day: 30000000
   # On a projected per-day cap crossing, PAUSE this unit until the next UTC
   # bucket rather than demoting to a paid fallback (the primary is the
   # self-hosted core plane; there is no cheap fallback wired here).

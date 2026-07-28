@@ -65,6 +65,15 @@ interface WorldState {
   windowEndMs: number
   setWindow: (startMs: number, endMs: number) => void
 
+  /**
+   * The scrubber's OUTER span (ms) — the total range its two thumbs sweep.
+   * `setSpan` re-anchors the window to the last `spanMs` ending at `now`
+   * (a span preset click), so widening to 7d/30d actually reaches back in the
+   * data rather than staying pinned to a 24h slice.
+   */
+  spanMs: number
+  setSpan: (spanMs: number, now?: number) => void
+
   /** Playback for the scrubber. */
   playing: boolean
   speed: number
@@ -108,6 +117,10 @@ export const useWorldState = create<WorldState>((set) => ({
   windowStartMs: Date.now() - DAY_MS,
   windowEndMs: Date.now(),
   setWindow: (windowStartMs, windowEndMs) => set({ windowStartMs, windowEndMs }),
+
+  spanMs: DAY_MS,
+  setSpan: (spanMs, now = Date.now()) =>
+    set({ spanMs, windowStartMs: now - spanMs, windowEndMs: now }),
 
   playing: false,
   speed: 1,

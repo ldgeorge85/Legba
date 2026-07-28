@@ -1,0 +1,277 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# deploy/swarm/stack-data.yml — DRAFT swarm stack: the DATA substrate.
+#
+# ############################################################################
+# ##  DRAFT — NOT DEPLOYABLE YET. Phase-1 validation pending.               ##
+# ##  See deploy/swarm/README.md + planning/SWARM_CONVERSION_ASSESSMENT_    ##
+# ##  2026-07-25.md before touching this with `docker stack deploy`.        ##
+# ############################################################################
+#
+# Translation of the substrate tier of docker-compose.yml (redis, postgres,
+# qdrant, opensearch, nats — the always-on, no-profile services) into a
+# compose-v3 stack file for `docker stack deploy -c stack-data.yml legba-data`.
+#
+# DELIBERATE DIFFERENCES from the live compose (each verified against the
+# Docker 29.2.1 `docker stack config` validator — see the assessment §3):
+#   * NO `profiles:` — stack deploy hard-errors on the key ("Additional
+#     property profiles is not allowed"). Stack membership = file membership.
+#   * NO `mem_limit:` — a FORBIDDEN property under stack deploy ("Configuration
+#     contains forbidden properties"). Same numbers moved to
+#     deploy.resources.limits.memory (hard task limits, same backstop intent).
+#   * NO published ports. The live file's `127.0.0.1:` loopback publishes are
+#     UNREPRESENTABLE in swarm (neither ingress nor host-mode publishing can
+#     bind an IP) — a naive translation would expose the un-authed substrate
+#     (OpenSearch security OFF, PG legba/legba) on every node interface.
+#     Services reach the substrate over the `legba-swarm` overlay by alias;
+#     host tooling (backup.sh, watchdog psql) is reworked per assessment §4f.
+#   * NO `restart:` — ignored under swarm; deploy.restart_policy carries it.
+#   * `./docker/nats.conf` bind → a swarm `config` (binds require the file to
+#     pre-exist on whichever node the task lands on; configs travel with the
+#     stack).
+#   * `depends_on` is dropped file-wide (the substrate tier had none anyway).
+#
+# PLACEMENT: every service pins to `node.labels.legba.role == data`
+# (phase 2: node2). Phase 1 single-node validation labels the one node with
+# BOTH roles. Volumes are LOCAL to that node — swarm does not move volumes;
+# the pin is what makes local named volumes correct.
+#
+# VOLUMES: stack-scoped (swarm names them legba-data_<vol>). NEVER declare the
+# live `legba_*` volume names (external) here — a validation stack sharing the
+# production postgres_data volume is the exact data-bleed the compose
+# isolation override exists to prevent. Phase-2 data move = backup/restore
+# into these fresh volumes on the data node (runbook, assessment §5).
+#
+# INTERPOLATION: `${VAR:-default}` is substituted from the SHELL environment
+# only — stack deploy does NOT read .env (verified). Deploy via:
+#   set -a; . ./.env; set +a; docker stack deploy -c deploy/swarm/stack-data.yml legba-data
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+services:
+  redis:
+    image: redis:7-alpine
+    logging: *default-logging
+    # Same command as the live compose: optional AUTH via LEGBA_REDIS_PASSWORD
+    # (shell-exported at deploy time), bounded keyspace + allkeys-lru.
+    command: ["redis-server", "--requirepass", "${LEGBA_REDIS_PASSWORD:-}", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
+    environment:
+      LEGBA_REDIS_PASSWORD: ${LEGBA_REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -n \"$$LEGBA_REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$LEGBA_REDIS_PASSWORD\" ping | grep -q PONG; else redis-cli ping | grep -q PONG; fi"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      legba-swarm:
+        aliases: [redis]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == data"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 1500M   # was mem_limit: 1500m
+
+  postgres:
+    image: apache/age:latest
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: legba
+      POSTGRES_PASSWORD: legba
+      POSTGRES_DB: legba
+    # Identical command to the live compose. CRITICAL: `-c
+    # shared_preload_libraries=age` re-asserts the image default CMD that this
+    # override replaces — drop it and every graph/cypher call fails.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=age"
+      - "-c"
+      - "shared_buffers=8GB"
+      - "-c"
+      - "effective_cache_size=24GB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=1GB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "wal_buffers=64MB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+    # `shm_size: 1gb` PASSES the Docker 29 stack-config validator, but swarm
+    # honoring it at the task level is a PHASE-1 VERIFY item (historically
+    # unsupported for services). The tmpfs mount below is the guaranteed
+    # equivalent — /dev/shm as a 1 GiB tmpfs — so parallel-worker/hash-join
+    # shared memory has room either way. Keep both until phase 1 proves one.
+    shm_size: 1gb
+    volumes:
+      - postgres_data:/var/lib/postgresql   # PG18+ subdirectory layout
+      - type: tmpfs
+        target: /dev/shm
+        tmpfs:
+          size: 1073741824   # 1 GiB — the shm_size equivalent swarm is known to honor
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legba"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      legba-swarm:
+        aliases: [postgres]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == data"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 12G   # was mem_limit: 12g — MUST stay above shared_buffers 8GB
+
+  qdrant:
+    image: qdrant/qdrant:v1.16.3   # pinned — matches the live container
+    logging: *default-logging
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      legba-swarm:
+        aliases: [qdrant]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == data"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 2G   # was mem_limit: 2g
+
+  # opensearch — full-text signal CORPUS. Security plugin OFF: under compose
+  # this rode on the loopback-only trust posture; under swarm the protection is
+  # "no published port + overlay-only reachability". The DATA NODE (node2)
+  # needs vm.max_map_count=262144 persisted (/etc/sysctl.d/99-opensearch.conf)
+  # — a phase-2 runbook step, it does NOT travel with the stack.
+  opensearch:
+    image: opensearchproject/opensearch:2.19.4
+    logging: *default-logging
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx2g"
+    # ulimits pass the stack-config validator on Docker 29 (supported for swarm
+    # services since Engine 20.10 / API 1.41). PHASE-1 VERIFY: memlock actually
+    # unlimited inside the task (`docker exec ... ulimit -l`).
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      legba-swarm:
+        aliases: [opensearch]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == data"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 3G   # was mem_limit: 3g
+
+  # nats — JetStream, still R1 (DIRECTION.md §6 truth #1, unchanged by the
+  # data-node MOVE; replication is a separate, gated program). Data-node loss
+  # = stream loss (signals also in PG; in-flight job messages are not).
+  nats:
+    image: nats:2-alpine
+    logging: *default-logging
+    environment:
+      LEGBA_NATS_TOKEN: ${LEGBA_NATS_TOKEN:-}
+    entrypoint: ["/bin/sh", "-c"]
+    # Same auth-branching wrapper as the live compose; `$$` defers expansion to
+    # the container shell (stack config leaves `$$` → `$` exactly like compose).
+    command:
+      - >-
+        if [ -n "$$LEGBA_NATS_TOKEN" ]; then
+        exec nats-server --jetstream --store_dir /data -m 8222 -c /etc/nats/nats.conf --auth "$$LEGBA_NATS_TOKEN";
+        else
+        exec nats-server --jetstream --store_dir /data -m 8222 -c /etc/nats/nats.conf;
+        fi
+    volumes:
+      - nats_data:/data
+    configs:
+      # was: ./docker/nats.conf bind mount — a config travels with the stack,
+      # a bind would require the file pre-placed on the data node.
+      - source: nats_conf
+        target: /etc/nats/nats.conf
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      legba-swarm:
+        aliases: [nats]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: ["node.labels.legba.role == data"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 3G   # was mem_limit: 3g — above the 2GB JetStream memory store
+
+configs:
+  nats_conf:
+    # Relative to THIS file → repo-root docker/nats.conf (JetStream store caps).
+    file: ../../docker/nats.conf
+
+networks:
+  # ONE shared attachable overlay for all three stacks + one-off `docker run`
+  # registrar/tooling containers. Created in phase 1 (runbook step, NOT here):
+  #   docker network create --driver overlay --attachable legba-swarm
+  # Attachable is load-bearing: deploy.sh's `compose run` registrar pattern
+  # becomes `docker run --network legba-swarm ...` one-offs.
+  legba-swarm:
+    external: true
+
+volumes:
+  # Stack-scoped names (legba-data_*). Deliberately NOT the live legba_*
+  # external volumes — see the header. Phase-2 populates these via
+  # backup/restore on the data node.
+  redis_data:
+  postgres_data:
+  qdrant_data:
+  opensearch_data:
+  nats_data:

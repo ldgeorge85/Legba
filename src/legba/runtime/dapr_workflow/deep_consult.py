@@ -151,11 +151,11 @@ Tools available to the acquire stage:
   Finished intelligence — the platform's OWN prior products; reach for these FIRST so the analysis builds on (and reconciles against) earlier work rather than re-deriving from the raw firehose:
   - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit]) — recent LIVE assessments/findings (analyst products; superseded revisions excluded unless include_superseded=true; effective_confidence already folds in the critic). Cite the output_id.
   - list_situations([status], [target_id], [since_hours], [limit]) — ongoing clustered situation frames (analysis-derived). A situation_id pairs with query_hypotheses to pull its ACH rows.
-  - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method='naive_mean' = no trend fit, low-confidence; 'auto_arima' = fitted). Cite the output_id.
+  - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method='naive_mean' = no trend fit, low-confidence; 'auto_arima' = fitted). The feed is FROZEN (writer retired 2026-07-01) — rows are historical, never a current forecast. Cite the output_id.
   - list_targets() — the monitored targets and their ids (e.g. country_g20_ir); resolve a place/topic to a valid target_id before list_findings / query_hypotheses.
   - list_sources([active_only], [silent_only]) — the ingest sources and their freshness/coverage; use to tell 'no source coverage on X' apart from 'a quiet feed' before concluding the substrate is silent.
   Raw substrate:
-  - search_signals(query, [category], [limit]) — full-text signal search.
+  - search_signals(query, [limit]) — full-text signal search (title + summary).
   - query_facts([subject], [predicate], [value], [limit]) — fact store.
   - inspect_entity(name) — entity profile + recent facts.
   - vector_search(query, [limit]) — semantic signal search.
@@ -354,11 +354,20 @@ async def _run_acquire(
             dispatch=_dispatch_tool,
         )
         # Lift any substrate refs (lineage) — same shape consult reads.
+        # W2-T4 ref honesty: only REAL UUIDs enter substrate lineage — a
+        # non-UUID ref (e.g. search_context's ``ctx:``-prefixed background-
+        # chunk refs) is excluded, mirroring consult's ``_coerce_uuid_list``,
+        # so a Qdrant chunk id can never masquerade as substrate here either.
         for ref in (result.get("refs") or []) if isinstance(result, Mapping) else []:
             sref = str(ref)
-            if sref and sref not in seen_refs:
-                seen_refs.add(sref)
-                collected_refs.append(sref)
+            if not sref or sref in seen_refs:
+                continue
+            try:
+                UUID(sref)
+            except (ValueError, AttributeError):
+                continue
+            seen_refs.add(sref)
+            collected_refs.append(sref)
         evidence.append({"tool": name, "args": dict(args), "result": result})
 
     return {

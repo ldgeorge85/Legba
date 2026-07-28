@@ -1,0 +1,105 @@
+# Desk Baseline analyst descriptor (P3-7 — CAST-recipe per-desk statistical
+# baseline; A7 borrowable #7, LLM-free).
+#
+# A first-class `deterministic`-kind META analyst that, on a DAILY cadence,
+# computes a falsifiable QUANTITATIVE PRIOR per desk (g20 + watch) over OUR OWN
+# substrate (signals + analyst_outputs) — the shape of the published ACLED CAST
+# methodology (feature recipe -> robust baseline expectation -> deviation), but
+# built entirely internally with NO external data and NO ACLED dependency.
+#
+# NOT a forecast. This does not reopen forecasting-as-claim (frozen). There is
+# no Brier, no skill score, no probability-of-event: `expected` is a trailing
+# MEAN rate, the deviation is an anomaly signal, and nothing is ever surfaced as
+# a free-text prediction. The row NEVER touches a faithfulness score.
+#
+# Per desk x {signal_volume_24h, high_sev_findings_24h} (the SAME two metrics
+# the P1-3 baseline_deviation trigger measures, with the SAME 24h-bucket window
+# shape) it stores into the desk_baselines sidecar (migration 0103):
+#   * expected      — trailing mean daily rate (the prior; mean-centred so the
+#                     band matches the trigger it feeds).
+#   * band          — expected +/- n_sigma * robust_sigma, where robust_sigma =
+#                     max(sample stddev, sqrt(mean)) (the sqrt(mean) Poisson
+#                     floor stops a steady desk's sigma collapsing to ~0).
+#   * deviation     — within | above | below. `above` reuses the trigger's
+#                     exact absolute-floor exceedance (signals>=10 / high-sev>=3
+#                     AND current > band) so a quiet desk's sigma~0 blip can
+#                     never read as a deviation; `below` fires only when the
+#                     baseline itself clears the floor.
+#   * insufficient_history — honesty flag when the band rests on thin history
+#                     (fewer than 3 active baseline days); does NOT suppress an
+#                     absolute-floor `above`.
+#   * features      — the rest of the CAST recipe (lags 1/7/28, rolling means
+#                     7/28, hours-since-last-high-sev, neighbour-desk spillover
+#                     over a coarse in-code land-border adjacency — a feature
+#                     input, never a geographic claim).
+#
+# The daily run refreshes the sidecar wholesale (upsert current set + prune
+# desks no longer present; no supersession chain — history lives in the trace)
+# and emits ONE honest distribution FINDING (which desks are above/below their
+# own band, how many rest on thin history) — the measurement product, stated as
+# a statistical baseline. The /eval/desk_baselines route projects the sidecar.
+#
+# Target-agnostic + META: reads the WHOLE substrate per run. No `targets`
+# selector -> a SINGLE global run per cadence tick; the handler reads directly
+# via deps.pg_pool and ignores the materialized input slice.
+#
+# Method:
+#   * kind = deterministic — pure SQL + stdlib-statistics arithmetic, NO LLM,
+#     token usage zero. lightgbm/scipy are NOT in the image; this is a
+#     dependency-light robust estimator by design (a falsifiable prior, not
+#     SOTA forecasting).
+#   * impl = the deterministic kind dispatcher module:run_method, which routes
+#     by `options.sub_handler`. Set explicitly AND id == sub-handler name so
+#     either resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "23 4 * * *" — daily at 04:23 UTC (clear of the
+#     on-the-hour sweeps and the natural lens cycle window). Baselines move on
+#     a daily timescale; a 24h recompute is ample.
+#   * cooldown_seconds = 43200 — a 12h floor below the daily tick, so an organic
+#     daily tick is never swallowed by its own cooldown.
+#
+# State: draft in-tree — registration (scripts/bringup_register_desk_baseline.py)
+# and the operator's activate flip are DEPLOY steps.
+
+identity:
+  id: desk_baseline
+  name: Desk Baseline
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: a7_desk_baseline
+
+subscription:
+  # No `targets` block -> META analyst: one global recompute per cadence tick
+  # over the whole desk set. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: desk_baseline
+  # Deterministic kind: no LLM block and no per-day token budget — the whole
+  # run is pure SQL + robust-statistics arithmetic over the live substrate.
+
+cadence:
+  fallback_schedule: "23 4 * * *"
+  cooldown_seconds: 43200
+
+# No output bindings: the honest distribution summary rides the deterministic
+# kind's FINDING dispatch (always emitted — the distribution IS the measurement
+# product, the source_track_record precedent). The REAL persistent product —
+# the desk_baselines sidecar rows — is side-written by the handler and projected
+# by the /eval/desk_baselines route.
+outputs: []

@@ -52,6 +52,8 @@ import {
 } from '@/lib/evalOps'
 import type { PanelProps } from '@/types'
 import { RecordLink } from '@/components/inspector/RecordLink'
+import { ProvenanceStateBadge } from '@/components/ProvenanceBadge'
+import { resolveNumberProvenance } from '@/lib/provenance'
 
 const BAND_PILL: Record<ScoreBand, string> = {
   good: 'bg-emerald-900 text-emerald-200',
@@ -209,6 +211,20 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
 
   const cards = useMemo(() => buildScorecards(data ?? []), [data])
   const banner = useMemo(() => calibrationBanner(cal), [cal])
+  // P4-5 — live|fallback|absent on the calibration NUMBERS. A number reads
+  // `live` when a real value backs it, `absent` when the pilot is missing OR the
+  // sample is too thin for an honest figure (insufficient = absent, never a bare
+  // positive number). The route carries no fallback-vs-live signal, so
+  // `fallback` is never emitted — that is the seam a backend fallback-flag would
+  // fill (pass an explicit `fallback` into resolveNumberProvenance then).
+  const exogenousState = resolveNumberProvenance({
+    value: 1,
+    treatAsAbsent: banner.absent || banner.exogenous.insufficient,
+  })
+  const acuteState = resolveNumberProvenance({
+    value: banner.acute.bss,
+    treatAsAbsent: banner.absent,
+  })
   const countryCards = useMemo(
     () => [...(scorecards ?? [])].sort((a, b) => a.target_id.localeCompare(b.target_id)),
     [scorecards],
@@ -249,6 +265,7 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
           >
             {banner.exogenous.label}
           </span>
+          <ProvenanceStateBadge state={exogenousState} className="ml-auto" />
         </div>
         <div className="flex items-baseline gap-2">
           <span className="w-32 shrink-0 text-slate-400">acute-forecast BSS</span>
@@ -264,6 +281,7 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
           >
             {banner.acute.label}
           </span>
+          <ProvenanceStateBadge state={acuteState} className="ml-auto" />
         </div>
         {banner.absent && (
           <div className="text-slate-600 text-[10px]">

@@ -40,6 +40,29 @@ Tag = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
 #                        facts — see the narrative_coordination unit prompt).
 SourceClass = Literal["reporting", "analysis", "official", "state_media"]
 
+# LIC-2 (planning/SOURCE_LICENSING_LEDGER_2026-07-10.md §E.4) — the license
+# class a source's content carries, stamped SourceScope → every signal's
+# ``payload.license_class`` at ingest (source_actor) and read by the OpenSearch
+# corpus facet + the P2-2 evidence-archiver retention gate. The closed §E.4
+# enum; ``None`` (the field default) = unset/unreviewed — honest absence, NOT
+# ``unknown`` (which is a REVIEWED "we looked and could not determine" verdict).
+# The orthogonal flags + the derived public_ledger_ok firewall bit remain the
+# rest of the LIC-2 build (not yet fielded).
+LicenseClass = Literal[
+    "public_domain",             # US-gov / CC0
+    "open_gov_attribution",      # OGL / Etalab / EU / IGO-reuse
+    "cc_by",
+    "cc_by_sa",
+    "cc_nc",                     # any NC variant
+    "open_data_sharealike",      # ODbL
+    "permissive_feed_unreviewed",  # the honest default for public RSS
+    "tos_restrictive",           # reviewed-restrictive publisher terms
+    "personal_use_only",
+    "api_terms",
+    "anti_ai_walled",            # TollBit/402 or anti-inference EULA
+    "unknown",
+]
+
 
 # ---------------------------------------------------------------------------
 # Identity + scope
@@ -76,6 +99,12 @@ class SourceScope(BaseModel):
     # pre-S1-T8 descriptor still validates unchanged; the analysis side reads it
     # (e.g. narrative_coordination weighs ``state_media`` as framing, not fact).
     source_class: SourceClass = "reporting"
+    # LIC-2 stamp (see :data:`LicenseClass`). OPTIONAL / defaulted to ``None``
+    # (unset — every pre-LIC-2 descriptor validates unchanged). When set, the
+    # ingest path copies it onto every signal's ``payload.license_class``
+    # (source_actor), where the corpus facet + the P2-2 evidence-archiver
+    # retention gate read it.
+    license_class: LicenseClass | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +363,7 @@ class SourceRef(BaseModel):
 
 
 __all__ = [
+    "LicenseClass",
     "SourceClass",
     "SourceIdentity",
     "SourceScope",

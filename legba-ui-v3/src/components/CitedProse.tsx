@@ -36,6 +36,7 @@ import {
   tokenizeProse,
   type Citation,
 } from '@/lib/citationsModel'
+import { claimVerdictForMarker, type ClaimVerdict } from '@/lib/claimVerdicts'
 import { stripMarkdown, unwrapEnvelope } from '@/lib/proseText'
 
 export interface CitedProseProps {
@@ -43,6 +44,15 @@ export interface CitedProseProps {
   text: string
   /** The citation list extracted from the finding/composition body. */
   citations: Citation[]
+  /**
+   * The finding-level faithfulness `verification` block (P1-8). When present,
+   * each chip's hover card derives its per-claim verdict from
+   * `unsupported_spans` (the ONLY per-claim record the verify pass persists —
+   * flags carry the flagged claim text + the citation ordinals it rested on;
+   * per-claim SUPPORTED verdicts are not recorded). Absent → the card shows an
+   * honest `claim-level verdict not recorded` line, never a fabricated one.
+   */
+  verification?: Record<string, unknown> | null
   variant?: 'block' | 'inline'
   /**
    * What a chip click does. Defaults to scrolling to the citation's evidence
@@ -67,8 +77,70 @@ function defaultCiteClick(c: Citation): void {
   selectRow(c.refKind, c.refId, c.title ?? undefined, { origin: 'cited-prose' })
 }
 
+/**
+ * The per-claim verify line inside the hover card (P1-8). Renders EXACTLY what
+ * the verification block records for this chip's ordinal:
+ *  * a flag naming this ordinal → the flag's honesty-vocabulary label + the
+ *    flagged claim text (the judge's per-claim subject);
+ *  * LLM judge ran, nothing names it → "not flagged" + the pooled context
+ *    (per-claim SUPPORTED verdicts are not persisted, so we never claim one);
+ *  * floor-only / no verify block → the explicit not-recorded line.
+ */
+function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
+  if (verdict.kind === 'not-recorded' || verdict.kind === 'not-checked') {
+    return (
+      <span
+        className="mt-1.5 block text-[10px] italic text-ink-3"
+        data-testid="citation-card-verdict"
+        data-verdict={verdict.kind}
+      >
+        {verdict.label}
+      </span>
+    )
+  }
+  if (verdict.kind === 'not-flagged') {
+    return (
+      <span
+        className="mt-1.5 block text-[10px] text-ink-2"
+        data-testid="citation-card-verdict"
+        data-verdict={verdict.kind}
+      >
+        verify judge: {verdict.label}
+        {verdict.checkable != null && verdict.supported != null && (
+          <span className="text-ink-3">
+            {' '}
+            · {verdict.supported}/{verdict.checkable} checkable claims supported overall
+          </span>
+        )}
+      </span>
+    )
+  }
+  // contradicted / unsupported / flagged — a recorded per-claim flag.
+  const tone = verdict.kind === 'contradicted' ? 'text-accent-critical' : 'text-accent-warning'
+  const firstSpan = verdict.spans[0]
+  return (
+    <span
+      className="mt-1.5 block text-[10px]"
+      data-testid="citation-card-verdict"
+      data-verdict={verdict.kind}
+    >
+      <span className={`inline-flex items-center gap-1 font-medium ${tone}`}>
+        <AlertTriangle className="h-2.5 w-2.5 shrink-0" aria-hidden />
+        verify judge: {verdict.label}
+      </span>
+      {firstSpan && (
+        <span className="mt-0.5 block leading-snug text-ink-3">
+          claim: “
+          {firstSpan.text.length > 160 ? `${firstSpan.text.slice(0, 160)}…` : firstSpan.text}”
+          {verdict.spans.length > 1 && ` (+${verdict.spans.length - 1} more flagged)`}
+        </span>
+      )}
+    </span>
+  )
+}
+
 /** The hover/focus card body for a resolved citation. */
-function CitationCard({ c }: { c: Citation }) {
+function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
   const hasCredibility = typeof c.effectiveConfidence === 'number'
   return (
     <span
@@ -92,11 +164,17 @@ function CitationCard({ c }: { c: Citation }) {
           {c.source}
         </span>
       )}
-      {c.evidenceText && (
+      {c.evidenceText ? (
         <span className="mt-1.5 block max-h-24 overflow-hidden text-[11px] italic leading-snug text-ink-2">
           “{c.evidenceText.length > 240 ? `${c.evidenceText.slice(0, 240)}…` : c.evidenceText}”
         </span>
+      ) : (
+        <span className="mt-1.5 block text-[10px] italic text-ink-3">
+          cited passage not recorded
+        </span>
       )}
+      {/* P1-8 — the per-claim verify verdict for THIS chip's ordinal. */}
+      <CardVerdictLine verdict={verdict} />
       <span className="mt-2 flex items-center justify-between gap-2">
         {hasCredibility ? (
           <VerdictBadge
@@ -110,8 +188,19 @@ function CitationCard({ c }: { c: Citation }) {
   )
 }
 
-/** One resolved citation chip + its hover/focus card. */
-function CitationChip({ c, onClick }: { c: Citation; onClick: () => void }) {
+/** One resolved citation chip + its hover/focus card. Hover, keyboard focus,
+ *  AND touch (tapping focuses the button → `group-focus-within` shows the
+ *  card) all reveal it; the card is absolutely positioned so it never shifts
+ *  layout. */
+function CitationChip({
+  c,
+  verdict,
+  onClick,
+}: {
+  c: Citation
+  verdict: ClaimVerdict
+  onClick: () => void
+}) {
   return (
     <span className="group/cite relative inline-block align-baseline">
       <button
@@ -124,7 +213,7 @@ function CitationChip({ c, onClick }: { c: Citation; onClick: () => void }) {
       >
         {citationLabel(c.marker)}
       </button>
-      <CitationCard c={c} />
+      <CitationCard c={c} verdict={verdict} />
     </span>
   )
 }
@@ -153,6 +242,7 @@ function linkChildren(
   children: ReactNode,
   byMarker: Map<string, Citation>,
   onCite: (c: Citation) => void,
+  verdictFor: (marker: string) => ClaimVerdict,
 ): ReactNode {
   return Children.map(children, (child, i) => {
     if (typeof child === 'string') {
@@ -160,7 +250,14 @@ function linkChildren(
       if (tokens.length === 1 && tokens[0].kind === 'text') return child
       return tokens.map((tok, j) => {
         if (tok.kind === 'marker') {
-          return <CitationChip key={`c-${i}-${j}`} c={tok.citation} onClick={() => onCite(tok.citation)} />
+          return (
+            <CitationChip
+              key={`c-${i}-${j}`}
+              c={tok.citation}
+              verdict={verdictFor(tok.citation.marker)}
+              onClick={() => onCite(tok.citation)}
+            />
+          )
         }
         if (tok.kind === 'unresolved') {
           return <UnresolvedChip key={`u-${i}-${j}`} marker={tok.marker} />
@@ -173,7 +270,7 @@ function linkChildren(
       if (props && props.children != null) {
         return {
           ...child,
-          props: { ...props, children: linkChildren(props.children, byMarker, onCite) },
+          props: { ...props, children: linkChildren(props.children, byMarker, onCite, verdictFor) },
         }
       }
     }
@@ -186,12 +283,13 @@ function linkChildren(
 function citedComponents(
   byMarker: Map<string, Citation>,
   onCite: (c: Citation) => void,
+  verdictFor: (marker: string) => ClaimVerdict,
 ): Components {
   const base = MD_COMPONENTS
   const wrap = (key: keyof Components) => {
     const Original = base[key] as ((p: { children?: ReactNode }) => ReactNode) | undefined
     return (props: { children?: ReactNode }) => {
-      const linked = linkChildren(props.children, byMarker, onCite)
+      const linked = linkChildren(props.children, byMarker, onCite, verdictFor)
       return Original ? Original({ ...props, children: linked }) : <>{linked}</>
     }
   }
@@ -211,6 +309,7 @@ function citedComponents(
 export default function CitedProse({
   text,
   citations,
+  verification = null,
   variant = 'block',
   onCiteClick,
   className,
@@ -220,6 +319,19 @@ export default function CitedProse({
   const prose = useMemo(() => normalizeCitationMarkers(unwrapEnvelope(text ?? '')), [text])
   const byMarker = useMemo(() => citationsByMarker(citations), [citations])
   const onCite = onCiteClick ?? defaultCiteClick
+  // P1-8 — memoized per-marker verify verdicts (small map; derived once per
+  // verification block, so re-renders never re-scan the spans list per chip).
+  const verdictFor = useMemo(() => {
+    const cache = new Map<string, ClaimVerdict>()
+    return (marker: string): ClaimVerdict => {
+      let v = cache.get(marker)
+      if (!v) {
+        v = claimVerdictForMarker(verification, marker)
+        cache.set(marker, v)
+      }
+      return v
+    }
+  }, [verification])
 
   if (variant === 'inline') {
     // A clamped scan line: strip markdown to a flat flow (no headings/blocks) and
@@ -252,7 +364,7 @@ export default function CitedProse({
     )
   }
 
-  const components = citedComponents(byMarker, onCite)
+  const components = citedComponents(byMarker, onCite, verdictFor)
   return (
     // `report-prose` gives the reading columns a 45–75ch measure + 16px/1.7
     // off-white type scale (S7-T6); the caller's className still layers on top.

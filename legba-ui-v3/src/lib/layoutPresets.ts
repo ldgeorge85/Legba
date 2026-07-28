@@ -44,6 +44,22 @@ export interface LayoutPreset {
  */
 export const LAYOUT_PRESETS: LayoutPreset[] = [
   {
+    id: 'wall',
+    label: 'Wall',
+    description:
+      'The mission-control anchor — the Wall tile (world at a glance + movers since last visit) with the Inspector beside it.',
+    // P1-7: OPTIONAL preset only — the default boot grid is unchanged; the
+    // operator opts in. The Inspector rides right so the Wall's finding /
+    // desk / situation rows have somewhere to land.
+    panels: [
+      { kind: 'system.wall' },
+      {
+        kind: 'system.inspector',
+        position: { referencePanel: 'system.wall', direction: 'right' },
+      },
+    ],
+  },
+  {
     id: 'monitoring',
     label: 'Monitoring',
     description: 'Live findings, the Inspector, and the target registry — the daily-driver grid.',

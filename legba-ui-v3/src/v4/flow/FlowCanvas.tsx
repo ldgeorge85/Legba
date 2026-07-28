@@ -34,15 +34,17 @@ import {
   Controls,
   MiniMap,
   ReactFlowProvider,
+  useReactFlow,
   type Node,
   type NodeMouseHandler,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Search } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { useDockviewTileRedraw } from '@/components/useTileRedraw'
 import { useSelection, type SelectionKind } from '@/state/selection'
 import { FlowNode } from './FlowNode'
-import { useFlowState, EDGE_KINDS } from './flowState'
+import { useFlowState, EDGE_KINDS, DENSE_EDGE_COUNT_THRESHOLD } from './flowState'
 import type {
   GraphProjection,
   FlowNode as FlowNodeType,
@@ -88,6 +90,7 @@ function FlowCanvasInner({ projection }: FlowCanvasProps) {
   const hiddenEdgeKinds = useFlowState((s) => s.hiddenEdgeKinds)
   const toggleEdgeKind = useFlowState((s) => s.toggleEdgeKind)
   const resetEdgeKinds = useFlowState((s) => s.resetEdgeKinds)
+  const applyEdgeDensityDefaults = useFlowState((s) => s.applyEdgeDensityDefaults)
   const select = useSelection((s) => s.select)
   // Highlight is derived from the SHARED selection (Move 2). A node is selected
   // when the selection's instanceKey matches the node id (preferred) or the
@@ -116,6 +119,14 @@ function FlowCanvasInner({ projection }: FlowCanvasProps) {
     }
     return counts
   }, [edges])
+
+  // Density gate (P0-2f): at live scale (~1,180 subscription edges) the full
+  // wiring is an illegible moiré, so kinds past the threshold default to
+  // hidden. Operator toggles win once touched; the chips keep showing the
+  // true count for every hidden kind.
+  useEffect(() => {
+    applyEdgeDensityDefaults(edgeCounts)
+  }, [edgeCounts, applyEdgeDensityDefaults])
 
   const hidden = useMemo(() => new Set<FlowEdgeKind>(hiddenEdgeKinds), [hiddenEdgeKinds])
 
@@ -171,6 +182,22 @@ function FlowCanvasInner({ projection }: FlowCanvasProps) {
       visibleEdges: kindFilteredEdges,
     }
   }, [focusedNodeId, nodes, kindFilteredEdges])
+
+  // ---- keep the graph in the viewport (P0-2f) -----------------------------
+  // The static `fitView` prop only fits the INITIAL nodes; live re-projections
+  // (ELK re-layout), edge-kind toggles, and focus changes all reshape the
+  // visible set and previously left every node off-viewport. Re-fit whenever
+  // the visible node set changes, and when the Dockview tile becomes visible
+  // (a fit computed while the tile was hidden used a zero-size viewport).
+  const { fitView } = useReactFlow()
+  const redrawTick = useDockviewTileRedraw()
+  useEffect(() => {
+    // Defer a frame so ReactFlow has rendered/measured the new nodes first.
+    const raf = requestAnimationFrame(() => {
+      void fitView({ padding: 0.15, duration: 150 })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [fitView, visibleNodes, redrawTick])
 
   // Paint each visible edge with its kind's color so the canvas reads as a
   // legend-backed diagnostic (the toggle swatches use the same colors).
@@ -266,13 +293,18 @@ function FlowCanvasInner({ projection }: FlowCanvasProps) {
             const { color, label } = EDGE_KIND_STYLE[kind]
             const on = !hidden.has(kind)
             const count = edgeCounts[kind]
+            const dense = count > DENSE_EDGE_COUNT_THRESHOLD
             return (
               <button
                 key={kind}
                 type="button"
                 onClick={() => toggleEdgeKind(kind)}
                 aria-pressed={on}
-                title={`${on ? 'Hide' : 'Show'} ${label} edges (${count})`}
+                title={`${on ? 'Hide' : 'Show'} ${label} edges (${count})${
+                  !on && dense
+                    ? ` — hidden by default above ${DENSE_EDGE_COUNT_THRESHOLD} edges`
+                    : ''
+                }`}
                 data-testid={`flow-edge-toggle-${kind}`}
                 className={cn(
                   'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors',

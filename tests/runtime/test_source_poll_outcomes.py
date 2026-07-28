@@ -96,6 +96,7 @@ class _CapturingPool:
         cols = (
             "source_id", "source_version", "owner_tenant", "outcome",
             "health_state", "capped", "signals_written", "error",
+            "newest_entry_ts",
         )
         rows = []
         for query, args in self.executes:
@@ -200,6 +201,7 @@ async def test_empty_poll_writes_empty_outcome() -> None:
     assert row["capped"] is False
     assert row["signals_written"] == 0
     assert row["error"] is None
+    assert row["newest_entry_ts"] is None  # no health record → no observation
 
 
 @pytest.mark.asyncio
@@ -272,13 +274,17 @@ async def test_capped_zero_written_does_not_consult_health(monkeypatch) -> None:
     monkeypatch.setattr(sa, "_MAX_ENTRIES_PER_POLL", 1)
 
     # Handler reports 'unhealthy' but the pull is CAPPED mid-stream, so that
-    # health record may be stale — the stale-guard must NOT consult it.
-    health = {"state": "unhealthy", "last_error": "stale!", "detail": {}}
+    # health record may be stale — the stale-guard must NOT consult it (nor
+    # its newest_entry_ts observation).
+    health = {
+        "state": "unhealthy", "last_error": "stale!",
+        "detail": {"newest_entry_ts": "2026-06-20T10:00:00+00:00"},
+    }
     core, pool, _store, source_id = _build(
         _StubHandler([_entry("source.test") for _ in range(3)], health=health)
     )
 
-    async def _drop(conn, ctx, raw):   # everything dropped → 0 written
+    async def _drop(conn, ctx, raw, *, dedup_stats=None):  # all dropped → 0 written
         return None
 
     core._process_one = _drop  # type: ignore[method-assign]
@@ -291,6 +297,7 @@ async def test_capped_zero_written_does_not_consult_health(monkeypatch) -> None:
     assert row["outcome"] == "empty"        # NOT 'error' — health was not read
     assert row["health_state"] is None
     assert row["error"] is None
+    assert row["newest_entry_ts"] is None   # stale health NOT consulted (B0-12 too)
 
 
 @pytest.mark.asyncio
@@ -303,3 +310,56 @@ async def test_outcome_write_failure_does_not_mask_pull() -> None:
     assert result["signals_written"] == 0
     # The cursor still persisted normally (the failure was isolated).
     assert (await store.get("cursor")) is not None
+
+
+# ---------------------------------------------------------------------------
+# B0-12: the handler's newest-observed-upstream-entry evidence flows onto the
+# poll-outcome row (the watchdog's quiet-vs-cursor-fault discriminator input).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_newest_entry_ts_flows_to_outcome_row() -> None:
+    health = {
+        "state": "healthy", "last_error": None,
+        "detail": {"newest_entry_ts": "2026-06-20T10:00:00+00:00"},
+    }
+    core, pool, _store, _sid = _build(_StubHandler([], health=health))
+    await core.pull_once()
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "empty"
+    assert row["newest_entry_ts"] == datetime(
+        2026, 6, 20, 10, 0, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+async def test_health_naive_newest_entry_ts_coerced_to_utc() -> None:
+    health = {
+        "state": "healthy", "last_error": None,
+        "detail": {"newest_entry_ts": "2026-06-20T10:00:00"},  # tz-less
+    }
+    core, pool, _store, _sid = _build(_StubHandler([], health=health))
+    await core.pull_once()
+
+    row = pool.outcome_writes[0]
+    assert row["newest_entry_ts"] == datetime(
+        2026, 6, 20, 10, 0, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.asyncio
+async def test_health_bad_newest_entry_ts_degrades_to_null() -> None:
+    # A junk observation string must not break the provenance write — it
+    # degrades to NULL (the watchdog's no-evidence class).
+    health = {
+        "state": "healthy", "last_error": None,
+        "detail": {"newest_entry_ts": "not-a-timestamp"},
+    }
+    core, pool, _store, _sid = _build(_StubHandler([], health=health))
+    await core.pull_once()
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "empty"
+    assert row["newest_entry_ts"] is None

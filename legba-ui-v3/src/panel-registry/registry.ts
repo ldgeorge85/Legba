@@ -64,6 +64,8 @@ const SourceFanout = lazy(() => import('@/panels/source/FanoutExplorer'))
 
 // Eval + Ops surfaces (UI-5 / Tiers E+F — appended)
 const SystemEvalScorecard = lazy(() => import('@/panels/system/EvalScorecard'))
+// Correctness gold-set weekly labeling worksheet (P2-5).
+const SystemGoldset = lazy(() => import('@/panels/system/Goldset'))
 const SystemOptimizerDiff = lazy(() => import('@/panels/system/OptimizerDiff'))
 const SystemGovernorEvents = lazy(() => import('@/panels/system/GovernorEvents'))
 const SystemAuditChain = lazy(() => import('@/panels/system/AuditChain'))
@@ -71,12 +73,17 @@ const SystemStreamLag = lazy(() => import('@/panels/system/StreamLag'))
 const SystemActorHealth = lazy(() => import('@/panels/system/ActorHealth'))
 // System Status — the at-a-glance per-layer health view (#89 ops surface).
 const SystemStatus = lazy(() => import('@/panels/system/SystemStatus'))
+// The Timeline — the validity-window temporal view (P4-4).
+const SystemTimeline = lazy(() => import('@/panels/system/Timeline'))
+// The Wall — the mission-control anchor tile (P1-7).
+const SystemWall = lazy(() => import('@/panels/system/Wall'))
 // Product surfaces (UI-6 / Tier G — pivot)
 const SystemSearch = lazy(() => import('@/panels/system/Search'))
 const SystemEntities = lazy(() => import('@/panels/system/Entities'))
 const SystemEntityGraph = lazy(() => import('@/panels/system/EntityGraph'))
 const SystemNotableStructure = lazy(() => import('@/panels/system/NotableStructure'))
 const SystemAlertCenter = lazy(() => import('@/panels/system/AlertCenter'))
+const SystemWatchlist = lazy(() => import('@/panels/system/Watchlist'))
 const SystemEscalations = lazy(() => import('@/panels/system/Escalations'))
 const SystemReportExport = lazy(() => import('@/panels/system/ReportExport'))
 
@@ -244,6 +251,13 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.eval_scorecard', 'system_eval_scorecard', 'system', null, 'Eval Scorecard', false, ['personal'], 'ClipboardCheck'),
     Component: SystemEvalScorecard,
   },
+  // Correctness gold-set weekly labeling worksheet (P2-5) — personal-only:
+  // the operator judges the week's pinned sample; verdicts grow the eval
+  // scoreboard's per-unit operator-correctness n.
+  'system.goldset': {
+    definition: def('system.goldset', 'system_goldset', 'system', null, 'Correctness Gold Set', false, ['personal'], 'ClipboardPen'),
+    Component: SystemGoldset,
+  },
   'system.optimizer.diff': {
     definition: def('system.optimizer.diff', 'system_optimizer_diff', 'system', null, 'Prompt-Module Diff', false, ['personal'], 'GitCompare'),
     Component: SystemOptimizerDiff,
@@ -271,6 +285,22 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.status', 'system_status', 'system', null, 'System Status', false, ['personal'], 'Gauge'),
     Component: SystemStatus,
   },
+  // The Timeline (P4-4) — the validity-window temporal view: facts/situations/
+  // findings as ranged items ([valid_from,valid_until) / lifecycle /
+  // [produced_at,superseded_at)) + supersession edges, brushable + zoomable
+  // (ms→months). Desk-scoped to the unified selection; ships personal + cis.
+  'system.timeline': {
+    definition: def('system.timeline', 'system_timeline', 'system', null, 'Timeline', false, ['personal', 'cis'], 'GanttChartSquare'),
+    Component: SystemTimeline,
+  },
+  // The Wall (P1-7) — the mission-control anchor: world-at-a-glance band grid
+  // + movers-since-last-visit + newest high-severity verified + health corner.
+  // Ships in personal + cis; opened from the sidebar (Awareness) or the
+  // optional "Wall" layout preset — the default boot grid is unchanged.
+  'system.wall': {
+    definition: def('system.wall', 'system_wall', 'system', null, 'The Wall', false, ['personal', 'cis'], 'LayoutGrid'),
+    Component: SystemWall,
+  },
   // --- Product surfaces (UI-6 / Tier G — pivot) ---
   // System-category singletons; ship in personal + cis (the Travis-ASM
   // multi-tenant model uses cis). No binding — all four scope themselves.
@@ -293,6 +323,14 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'system.alert_center': {
     definition: def('system.alert_center', 'system_alert_center', 'system', null, 'Alert Center', false, ['personal', 'cis'], 'Bell'),
     Component: SystemAlertCenter,
+  },
+  // Watchlist v2 (P5-6) — SERVER-side standing watches (entity/topic/place)
+  // over GET/POST/PUT/DELETE /api/v1/v3/watchlist; the alert_trigger_scan's
+  // watchlist_hit class pages on verified hits through the shared dispatcher.
+  // Live tier (real backend route), unlike the alert_center preview.
+  'system.watchlist': {
+    definition: def('system.watchlist', 'system_watchlist', 'system', null, 'Watchlist', false, ['personal', 'cis'], 'Telescope'),
+    Component: SystemWatchlist,
   },
   // Escalation Deliveries — the human-visible alert edge (audit finding C3 /
   // decision D1). Renders alert_sink_deliveries: did each escalation LAND
@@ -371,13 +409,14 @@ function def(
 //   * system.backfill        — backend POST is an honest 501 (cross-plane
 //                              runtime trigger not exposed through the registry)
 //   * system.optimizer.diff  — operator review aid over the GEPA loop
-//   * system.search / alert_center / report_export / tenant_view — client-only
-//                              product surfaces (no dedicated backend route yet)
+//   * system.search / alert_center — client-only product surfaces (no
+//                              dedicated backend route yet)
+// (system.report_export left this set in A10 — it now fronts the real
+// POST /api/v1/v3/export collection-basket route, shipped on the same train.)
 const PREVIEW_KINDS: ReadonlySet<PanelKind> = new Set([
   'system.optimizer.diff',
   'system.search',
   'system.alert_center',
-  'system.report_export',
 ])
 for (const k of PREVIEW_KINDS) {
   PANEL_REGISTRY[k].definition.tier = 'preview'
@@ -390,14 +429,16 @@ for (const k of PREVIEW_KINDS) {
 // dashboard.dynamic, registry.discovery, system.backfill/runtime/tenant_view,
 // system.targets.roster, v4.case) was DELETED outright in S7-T2 — those kinds no
 // longer exist.  What remains hidden here are LIVE panels merged into a peer:
-//   * system.report_export       — the Report panel's own Download supersedes it
 //   * system.optimizer.diff       — operator review aid folded under Optimizer
 //   * source.subscription_builder — niche source-config; reachable via ⌘K
 //   * source.subscription_policy  — niche source-config; reachable via ⌘K
 //   * source.fanout               — niche explorer; reachable via ⌘K
 //   * system.stream_lag           — rolled into the System Status at-a-glance view
+// (system.report_export UNHIDDEN in A10 — no longer the Report panel's download
+// twin but the collection-basket export surface: the target of every "add to
+// export" affordance + the status-bar basket chip, backed by the live
+// POST /api/v1/v3/export route shipped on the same train.)
 const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
-  'system.report_export',
   'system.optimizer.diff',
   'source.subscription_builder',
   'source.subscription_policy',

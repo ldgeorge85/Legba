@@ -159,6 +159,17 @@ class ChannelEmitter:
     in-memory ``emitted`` list is process-local and vanishes on restart. The
     write is best-effort: an audit-write failure is logged, never raised, so a
     blipped writer connection cannot break an escalation the operator needs.
+
+    ``alert_sinks`` (optional, P1-1) is the OUTWARD fan-out: an
+    :class:`legba.data.alerts.AlertSinkDispatcher`. After the internal emit +
+    audit row, the escalation payload is shaped into the converged
+    :class:`~legba.data.alerts.AlertSinkPayload` (summary / severity / verify
+    state / source links / receipt link) and fanned out through every
+    registered sink (webhook first) — each sink outcome landing its OWN
+    ledger row (sink_kind='webhook', host-redacted target). Best-effort +
+    never-raising by the dispatcher's contract; fan-out runs even when the
+    internal NATS publish failed (an operator page must not depend on the
+    internal bus being healthy).
     """
 
     def __init__(
@@ -166,9 +177,11 @@ class ChannelEmitter:
         *,
         nats_publish: Callable[[str, bytes], Awaitable[None]] | None = None,
         pg_pool: Any | None = None,
+        alert_sinks: Any | None = None,
     ) -> None:
         self._nats_publish = nats_publish
         self._pg_pool = pg_pool
+        self._alert_sinks = alert_sinks
         self.emitted: list[dict[str, Any]] = []
 
     async def emit(
@@ -209,7 +222,40 @@ class ChannelEmitter:
             record["status"] = "logged_only"
         self.emitted.append(record)
         await self._write_delivery_audit(channel, subject, payload, record)
+        await self._fan_out_alert_sinks(channel, payload)
         return record
+
+    async def _fan_out_alert_sinks(
+        self, channel: Channel, payload: dict[str, Any]
+    ) -> None:
+        """P1-1 outward fan-out — shape the escalation into the converged
+        alert payload and push it through the sink dispatcher.
+
+        Best-effort: the dispatcher's own ``fan_out`` never raises, but the
+        payload-assembly enrichment path is guarded here too so a shaping
+        bug cannot break the escalation the operator needs. Per-alert-row
+        idempotency lives in the dispatcher (a two-channel pack reaching
+        this twice for one finding POSTs once).
+        """
+        if self._alert_sinks is None:
+            return
+        try:
+            sink_payload = await self._alert_sinks.payload_for_finding(
+                channel_name=channel.name,
+                alert_row_id=payload.get("output_id"),
+                target_id=payload.get("target_id"),
+                severity=payload.get("severity"),
+                effective_confidence=payload.get("effective_confidence"),
+                title=str(payload.get("title") or ""),
+                detail=str(payload.get("detail") or ""),
+                faithfulness_score=payload.get("faithfulness_score"),
+            )
+            await self._alert_sinks.fan_out(sink_payload)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(
+                "channel.emit.alert_sink_fanout_failed name=%s err=%s",
+                channel.name, exc,
+            )
 
     async def _write_delivery_audit(
         self,
@@ -442,6 +488,11 @@ async def _emit_to_channels(
         "output_id": call.args.get("output_id"),
         "target_id": call.args.get("target_id"),
         "effective_confidence": call.args.get("effective_confidence"),
+        # P1-1: the RAW faithfulness score (when the verify pass produced a
+        # verdict) rides along so the outward alert-sink payload can state
+        # its verify posture explicitly — "faithfulness=<score>" vs
+        # "unverified — <reason>". None when nothing was verified.
+        "faithfulness_score": call.args.get("faithfulness_score"),
     }
     emitted = []
     for ch in targets:

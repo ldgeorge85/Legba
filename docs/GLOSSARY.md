@@ -284,11 +284,30 @@ and records the disagreement in a sidecar so it surfaces honestly as
 *disputed*. Gated behind `LEGBA_FACT_CONTENTION` (default off); see
 [ANALYSIS.md](ANALYSIS.md) §7.11.
 
+**earned track record** — A per-source win/loss record computed from the
+system's **own substrate**: how often a source's claims ended on the winning
+side of resolved **contentions** (Beta-smoothed, Wilson-lower-bounded,
+corroboration-counted), written by the `source_track_record` analyst (ships
+draft). It is *earned*, not asserted — distinct from operator-authored
+ratings — and guarded for acyclicity (a lag window plus self-exclusion, so a
+source can never vote on its own dispute). Consuming it in arbiter tie-breaks
+is flag-gated **off by default**, and it never touches faithfulness.
+
 **entity** — A resolved, disambiguated real-world actor (person, org, place)
 stored as one canonical profile (keyed by name + class, with version history);
 different surface mentions ("US", "U.S.", "United States") are merged by
 entity resolution. Entity-resolution fragmentation and NER junk are known open
 data-quality gaps in the audits.
+
+**evidence archive / content addressing (`cas:sha256`)** — The preservation
+sidecar for cited evidence: signals cited by **verified** findings have their
+original bytes fetched (SSRF-guarded, license-gated, size-capped) and stored
+**content-addressed** — the stored object's name *is* the SHA-256 of its
+bytes, recorded on the signal as `object_ref = cas:sha256/<hex>` — so the
+receipt chain terminates in a verifiable stored copy rather than a rotting
+URL, and the address survives any later storage-backend swap. Archived
+signals become `evidence_hold` (purge-exempt); nothing ever deletes archived
+evidence today (a declared seam). The archiver ships as a draft descriptor.
 
 **fact** — An atomic, temporally-versioned assertion (subject, predicate,
 value) in the `facts` table with `valid_from` / `valid_until` and a
@@ -323,6 +342,14 @@ or binary — treated as a first-class axis from ingest onward. A modality
 registry binds each one to an ingest extractor and a UI renderer, so adding a
 content type needs no schema change; some renderers and the media extractors
 (Whisper/VLM/OCR) are declared seams.
+
+**narrative** — A *reified* contested-claim family: one durable row per
+family of competing accounts, carrying its **carrier sources**, first-seen
+times, echo lags, lead source, and value variants — written wholesale each
+pass by the draft `narrative_mapper` analyst as a live readout over the
+contention sidecar. **Detect-only and descriptive-not-causal**: a narrative
+records who carried a claim and when, never *why*, and the mapper is honest
+when no systematic pattern exists.
 
 **nexus / nexuses** — A coined Legba term: a *reified* (stored, queryable)
 relationship row between two entities, carrying a relation type, a
@@ -360,6 +387,13 @@ alliances, conflict data) straight into facts/nexuses marked
 `source_type='seed'`, tracked in a `seed_batches` ledger and idempotent on
 re-run. Adapters include `world_baseline` (curated) and `wikidata_leaders`
 (live SPARQL); some adapters (e.g. SIPRI) are registered but unseeded.
+
+**source-echo edge** — A directed lead→follow edge in the narrative echo
+graph: source A systematically publishes a narrative's claims before source B,
+at a measured median lag and co-carriage ratio. An edge is only marked
+*systematic* when the pattern clears honest thresholds — the live graph
+showing co-carriage but zero systematic fast-echo is reported exactly as that,
+never dressed up as coordination. Descriptive, not causal.
 
 **source_credibility** — A nullable per-fact trust weight where **NULL means
 unknown** (never 0): nominally 0.9 for seed/curated and 0.5 for
@@ -405,6 +439,25 @@ plus operator-registered extensions) classifying what an analyst reads and
 writes (`inline_target`, `meta_findings_synthesizer`, `predictor`, `critic`,
 `consult_on_demand`, `deterministic`, …). `method.kind` names *how* it reasons
 (`llm_planner`, `react_loop`, `stat_forecaster`, `deterministic`, …).
+
+**band persistence / reversal rate** — The scorecard's calibration record:
+every band change is logged as a resolvable claim and graded
+**deterministically** at 14/28-day horizons — *held* (persisted), *reverted*
+(the band moved back), or *worsened/improved* — published as persistence and
+reversal rates. Deliberately **not a Brier score**: bands are rule-derived
+labels, not probabilities, and pretending otherwise would manufacture a skill
+metric; the route and the finding both say so.
+
+**basis / periphery (two-tier composition evidence)** — The two evidence
+tiers a composition may consume when the tiered-evidence flag is on (default
+**off**). The **basis** is the verify-passed sub-claims clearing the floor
+(`effective_confidence ≥ 0.50` by default) — the load-bearing evidence the
+composition may cite as established. The **periphery** is a small, capped,
+explicitly-labeled tail of below-floor or unverified sub-claims that may only
+inform *hedged* context; a bald claim resting solely on periphery citations is
+a counted verify failure. Weak signal is thus distilled, never laundered into
+the basis and never silently dropped. Each composition stamps "built on N
+verified + M weak."
 
 **Brier score / Brier skill score (BSS)** — The *Brier score* is the mean
 squared error between predicted probability and the 0/1 outcome (lower is
@@ -461,6 +514,13 @@ member of this family.
 calls are trivially near-0 / near-1 or geography-dominated — beating
 climatology on "which countries are seismic" is static geography, not
 anticipating the future.
+
+**desk baseline** — A per-desk statistical prior computed from Legba's own
+signal history (lags, rolling means, time-since-event, neighbour spillover;
+pure-stdlib, Poisson-floored) by the draft `desk_baseline` analyst. It is a
+**falsifiable prior, never a forecast claim**: its only product roles are a
+divergence input to the alert trigger scan (a desk deviating from its own
+baseline) and an honest reference the LLM read can be compared against.
 
 **effective_confidence** — The read-time fold
 `min(confidence, faithfulness_score)`: a poorly-grounded claim can only be
@@ -567,9 +627,26 @@ triangles as balanced or "frustrated"; *graph mining* finds communities,
 centrality, and brokers. Computed with networkx over the `nexuses` table;
 built but unproven research surfaces.
 
+**structural-verified vs unverified-structural** — The two honest badges a
+*deterministic* (structural) analyst's claim-bearing output can carry.
+Structural analysts are exempt from the LLM faithfulness judge (there is no
+prose-grounding question to judge), so their outputs long read
+`unverified — structural`. The structural-claims verify profile now
+**re-derives asserted quantities from the output's own lineage**: a match
+upgrades the badge to *structural-verified*, a miscount lands a flagged
+critique. Verdicts are computed and shown always; folding them into
+`effective_confidence` is flag-gated **off by default**.
+
 **substrate slice / read slice** — The bounded window of substrate an analyst
 reads each run (default ~last 24h, scope-filtered, ~50 rows plus peer
 findings) rather than the whole pool. Each analyst kind has its own reader.
+
+**tensions worth watching** — The required surfacing, in a two-tier
+composition, of periphery evidence that *conflicts with the basis*: a weak or
+unverified account contradicting the verified read is named as a tension —
+hedged and attributed — rather than blended in or dropped. The phrase is the
+prompt contract's own vocabulary; its point is that disagreement is signal,
+not noise to launder away.
 
 **world_assessor** — The global, target-less **composition**: it runs exactly
 once per tick, composing over the per-region **region_composition** reads (which
@@ -602,6 +679,13 @@ database rows (the "catalog"), not the YAML files. Registrars are
 **create-only** — model changes go via the registry `PUT` API — and
 re-registering to a live runtime needs the correct DB and python entrypoint.
 
+**coalesced alert** — The anti-noise contract of the alert-sink plane: when a
+per-sink cooldown suppresses alerts, they are not silently thinned — each
+suppressed alert keeps its own ledger row, and the **next** allowed
+notification carries them as "+N more during cooldown" with a bounded
+preview. A burst is distilled into one honest notification; nothing outward
+is ever dropped without a trace.
+
 **cold-start verification set** — The minimal 3-feed bootstrap (BBC World,
 Deutsche Welle, Al Jazeera) that verifies the whole source → enrich → fan-out
 → assess loop from empty volumes, before scaling to the full source catalog
@@ -630,13 +714,26 @@ TAXII 2.1), an alert, a webhook, a NATS stream, an A2A envelope, or MCP.
 emit surfaces (TAXII push, the A2A skill router) are off-by-default declared
 seams.
 
-**escalate_finding / alert sink** — A pack that fires when a finding crosses an
-escalation gate keyed on **post-verify `effective_confidence × severity`** (severity
-is a first-class read column now, not a tag, so a verify-demoted finding does NOT
-alert), with per-attempt delivery audit rows. External delivery currently lands on
-the NATS subject `channels.escalations` only (**bus-only**); other alert-sink handlers
-(Pushover, XMPP/Matrix) exist in code but are not the live escalation edge, and no
-paged-human integration is claimed.
+**escalate_finding / alert-sink plane** — `escalate_finding` is the pack that
+fires when a finding crosses an escalation gate keyed on **post-verify
+`effective_confidence × severity`** (severity is a first-class read column, not
+a tag, so a verify-demoted finding does NOT alert). Outward delivery runs
+through the modular **alert-sink plane**: a dispatcher fans each alert to
+registered sinks — a generic webhook and a native **ntfy** push sink — with one
+durable ledger row per outcome, per-alert idempotency, and a cooldown that
+produces **coalesced alerts**. Every payload states its verification posture
+(a faithfulness score or an explicit `unverified — <reason>`) and carries a
+**receipt link**. Sinks activate by operator env (`LEGBA_ALERT_WEBHOOK_URL` /
+`LEGBA_ALERT_NTFY_URL`); unset means every alert is an audited
+`skipped_unconfigured` row and the NATS subject `channels.escalations` remains
+the always-on bus edge.
+
+**freshness grade** — A per-source honesty grade on the source-firing surface
+— `ok` / `stale` / `warn` / `empty` / `ungraded` — judged against a budget
+*derived from the source's own declared cadence* (the cron-walked maximum gap
+times a grace factor), so a slow-by-design weekly feed is not falsely alarmed
+and a quiet fast feed is. A source with no parsable cadence reads
+`ungraded` — never a fake `ok`.
 
 **governor** — The `PackGovernorEnforcer`: per-pack invocation/rate/cost caps
 plus the global token envelope, applied before each tool call (precall-check →
@@ -666,6 +763,13 @@ low-faith ratio, or a token-cost rise (≥35%); it is actuated by
 (`world_context_top_score` / `retained` / `min_score`) so the measurement is
 honest. Known limit: the pilot state file currently lives at an ephemeral path
 (move to a volume for persistence).
+
+**receipt link** — The URL every outward alert carries back into the lineage
+API: tapping the notification opens the receipt chain for the exact finding or
+transition that fired it, so an alert is never an unaccountable ping — the
+claim, its citations, its verify verdict, and its source hops are one link
+away. Built from `LEGBA_PUBLIC_BASE_URL`; the link is part of the mandatory
+alert anatomy, not an optional nicety.
 
 **security perimeter (Caddy basic-auth)** — The single outer boundary: Caddy
 serves the operator UI over HTTPS behind HTTP basic auth and proxies `/api` to
@@ -713,3 +817,13 @@ analyst's daily token use; a system-wide envelope blocks any pack call once
 exhausted. On exhaustion the strategy is *demote-and-continue* to a cheaper
 fallback model, or — if none is wired — pause loudly until the next budget
 window (`BUDGET_THROTTLED`).
+
+**watchlist / watch** — An operator-defined standing watch: an **entity**
+(alias- and merge-fold-resolved), a free-text **topic** (served by the
+existing text-search plane, with its limits stated rather than papered over),
+or a **place** (countries, or a point+radius that matches only
+trustworthy-precision geo). Watches are CRUD'd via `/v3/watchlist` (soft
+delete) and fire through the same verification-gated alert loop as everything
+else, as the `watchlist_hit` trigger class — per-watch caps with honest
+rollups, and a new watch starts against a no-history guard so it cannot flood
+from backfill.

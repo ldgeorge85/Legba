@@ -41,6 +41,8 @@ dependencies = [
     "scikit-learn>=1.3",
     "pandas>=2.0",
     "feedparser>=6.0",
+    # Scraper-kind body extraction AND (P2-1/S-10) the evidence_archiver's
+    # main-text extraction over archived original bytes (Apache-2.0).
     "trafilatura>=1.8",
     "pycountry>=24.6",
     "geopy>=2.4",

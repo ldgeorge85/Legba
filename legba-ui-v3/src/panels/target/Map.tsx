@@ -33,6 +33,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet } from '@/lib/api'
 import { useMapResize } from '@/lib/useMapResize'
+import { useDockviewTileRedraw } from '@/components/useTileRedraw'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
 import {
@@ -162,6 +163,13 @@ export default function TargetMapPanel({ registration, scope }: PanelProps) {
   // Fill the tile even when it initialises at 0 height in a Dockview/flex
   // container — THE blank-map root cause (UI_V4_PLAN W0.7).
   useMapResize(mapContainerRef, () => mapRef.current)
+
+  // Background-tab fix (P0-2f): a bound map opened into an INACTIVE Dockview
+  // tab mounts hidden at zero size and stays a blank canvas on activation.
+  // The tile's own visibility/size events drive a `map.resize()`, and the
+  // returned tick re-runs the data/fit effect below so the camera re-fits
+  // against the tile's real dimensions.
+  const redrawTick = useDockviewTileRedraw(() => mapRef.current?.resize())
 
   // Initialise the map once on mount.
   useEffect(() => {
@@ -335,7 +343,9 @@ export default function TargetMapPanel({ registration, scope }: PanelProps) {
     }
     if (map.isStyleLoaded()) apply()
     else map.once('load', apply)
-  }, [points])
+    // redrawTick: re-apply (incl. fitBounds) after the tile becomes visible —
+    // a fit computed while the tile was hidden used a zero-size viewport.
+  }, [points, redrawTick])
 
   const geoCount = points.length
   const totalSignals = signalsQ.data?.data.length ?? 0

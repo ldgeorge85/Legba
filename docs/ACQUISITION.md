@@ -62,6 +62,34 @@ An active, non-discovery poll source *must* declare a `cadence.schedule`
 (enforced by the descriptor validator). Constant-period crons map cleanly to a
 Reminder; variable-period schedules are a future seam (Dapr Jobs).
 
+### 1.1.1 Poll liveness — quiet vs. broken, graded honestly (2026-07)
+
+Two additions let the watchdog and the operator tell a *quiet* feed apart from
+a *broken* cursor, instead of one undifferentiated "silent":
+
+- **`newest_entry_ts`** (migration 0092). On every parsed HTTP-200 poll the RSS
+  handler records the newest entry timestamp it *saw* — **before** the
+  since-filter, so a poisoned cursor still observes what the feed is serving.
+  A future-skew clamp (+26h) rejects junk dates, and an HTTP-304 carries the
+  prior observation forward so a 304 streak stays classifiable. The value lands
+  on the `source_poll_outcomes` row. The liveness watchdog's empty-streak
+  classifier then distinguishes **`honest_quiet`** (the feed itself has served
+  nothing new — no alert), **`cursor_fault`** (the feed *is* serving entries
+  newer than our last ingest but we store none — a distinct high-severity
+  alert), and **`unknown`** (no observation — the legacy behavior, no
+  regression). Per-source and per-analyst stall alerts fire on state
+  **transitions only** (`entered` / `recovered`) — the durable
+  `alert_sink_deliveries` ledger doubles as the state store, so a restart
+  cannot re-fire a standing alert as a repeating level.
+- **Freshness grades** (`registry/source_freshness.py`, surfaced on
+  `GET /api/v1/v3/system/source-firing`). Each active source is graded
+  `ok | stale | warn | empty | ungraded` against a **cadence-derived budget**:
+  the descriptor's cron is walked (croniter) for its *maximum* fire-to-fire
+  gap, × a 4× grace multiple, floored at 30 minutes (`warn` beyond 3× the
+  budget). A source with no parseable cadence — or a non-active head — reads
+  `ungraded`, never a fake `ok`; an active, budgeted source that has never
+  produced reads `empty`.
+
 ### 1.2 Push (webhook)
 
 For `acquisition: "push"` the actor registers no reminder. The source's
@@ -100,6 +128,14 @@ OpenSanctions, IntelMQ, Telegram, Discord, Firecrawl, Common Crawl, a generic
 webhook, scrapers, a generic polled `json_api` for JSON/CSV HTTP APIs, and a
 model-free `geojson` GIS handler). Each conforms to the same contract.
 
+The **Telegram** poller is hardened with five bounded guards (2026-07, additive
+to the earlier flood-control work): a 60s startup delay, a 15s per-channel
+deadline, a 180s whole-cycle cap (per-channel budgets clamp to it), a
+`FLOOD_WAIT` abort that persists the server-imposed deadline across polls
+(honored on the next cycle rather than hammered), and a stale poll-lock
+force-clear (single-flight lock, cleared past 300s) — so one slow or
+rate-limited channel can never wedge the cycle or the actor.
+
 The 3-feed RSS set (BBC, Deutsche Welle, Al Jazeera) is the **minimal
 cold-start verification set** — the smallest loop that proves the path from
 empty volumes. It is *not* the deployed scope. A fresh instance reaches
@@ -117,6 +153,25 @@ nexuses. See `DATA_SOURCES.md` for the full catalog (the
 three-tier 3 / 46 / ~53 scope model, the per-source table, and the
 handler-kind detail), and `SETUP.md` for the from-zero
 cold-start-to-current-scope deploy commands.
+
+**Two draft breadth lanes (2026-07) — registered, operator-activated.** A
+breadth wave added **51 draft source descriptors** under `descriptors/`, all
+`state: draft` (bulk registration creates no live actor; activation is
+`draft → configured → active`, operator-paced):
+
+- **Wave-A** — 41 verified no-auth feeds (38 `rss` + 3 `json_api`; 25
+  country-scoped + 16 global), registered by
+  `scripts/bringup_register_wave_a_sources.py` with credibility and
+  state-affiliation seeds.
+- **The RSSHub lane** — 10 descriptors (feeding under-covered watch desks)
+  whose `rss` handler points at a **profile-gated local RSSHub service**
+  (compose profile `sources-extra`, image `diygod/rsshub`, loopback `:1200`,
+  no puppeteer; registered by `scripts/bringup_register_rsshub_sources.py`).
+  Because the RSS fetch path carries an SSRF guard that blocks internal
+  hosts, the guard takes an explicit allowlist —
+  `LEGBA_EGRESS_ALLOW_HOSTS` (comma-separated, exact-name; code default
+  empty, compose default `rsshub`) — so exactly the named internal host is
+  reachable and nothing else.
 
 ---
 
@@ -164,6 +219,42 @@ indexed on `signals` for subscription push-down)
   linked).
 
 - `schema_uri` — versions the contract (`iglu:legba/signal/jsonschema/3-0-0`).
+
+**Intra-source exact-duplicate collapse at write (2026-07).** A live audit
+found ~41% of stored rows were *intra-source* exact-hash duplicates — feeds
+re-serving the same entry poll after poll (one earthquake bulletin stored
+194×). `write_canonical_signal` (`runtime/source_actor.py`) now runs an atomic
+pre-insert check keyed on `(source_id, content_hash, owner_tenant)` inside a
+168h window (`LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS`): on a hit it **bumps the
+existing row's `fetched_at` forward and skips the insert** — recency is
+preserved, no second row lands. The bump targets the *most-recent* matching
+row, so the "earliest `fetched_at` = canonical" rule the dedup analysts rely
+on stays stable. It is strictly **intra-source** (cross-source linking remains
+§5's alias machinery, never a skipped insert), provably lossless for an exact
+hash, and gated by `LEGBA_INTRASOURCE_DEDUP` (**default ON**; empty
+`content_hash` is never a dedup key). A skipped-because-duplicate poll is
+counted so the liveness watchdog does not read a healthy re-serving feed as an
+empty streak. No migration — it rides the existing indexes; the historical
+duplicate pool is an operator cleanup previewed by the read-only
+`scripts/report_intrasource_dupes.py`.
+
+**Retention + the evidence archive (2026-07).** Two fields close the loop
+from citation to preserved evidence. At ingest the source's declared
+`SourceScope.license_class` is stamped into `payload.license_class`. Later —
+*after* a finding that cites the signal clears the faithfulness verify floor —
+the `evidence_archiver` deterministic analyst fetches the signal's original
+bytes and stores them content-addressed; the signal's `object_ref` becomes
+`cas:sha256/<hex>` and its `retention_class` is upgraded to `evidence_hold`.
+The fetch path is deliberately narrow and guarded: **verified-cited-only**
+selection (never bulk crawling), the SSRF egress guard, per-host politeness
+(2s), a hard 20 MB cap, and the **LIC-2 license gate** — a forbidden
+`license_class` (`anti_ai_walled` / `tos_restrictive` / `personal_use_only`)
+is *skipped with a recorded counter*, an unknown class archives with the
+class recorded. Outcomes land in the `evidence_archive` sidecar (mig 0104:
+`archived` / `failed` / `skipped_license` / `skipped_size`), and extracted
+full text is marked for re-indexing into the search corpus. See
+`ARCHITECTURE.md` §8.6 and `SEAMS.md` #42 for the store and its declared
+non-features.
 
 ---
 
@@ -218,6 +309,26 @@ enrichment alone still produces a filterable signal. The net effect:
 payload-and-hint data is promoted into indexed columns (`language`, `geo`,
 `tags`, `entity_classes`) so the fan-out plane can push matching down to SQL
 and NATS subjects.
+
+**Geo honesty — two contamination fixes (2026-07).** A full-layer sweep found
+two mechanisms mistagging signals with the *publisher's* geography instead of
+the *story's*; both are now precision-improving gates, and both prefer
+**untagged over mistagged** (a missing geo only under-includes; a wrong one
+actively misroutes a signal to the wrong desk):
+
+- **Publisher-origin fallback is content-corroborated** (`baseline.py`,
+  `_origin_corroborated_by_content`). The source's origin country is parked in
+  the payload and reaches `signal.geo` only when the *content* attests it —
+  the country appears in the title/body text or the NER country entities.
+  A Singapore outlet's world-news story no longer tags `SG`.
+- **Dateline subject-guard** (`geocode.py`). An NER `location` entity is
+  treated as the story's *subject* only if it appears in the **title**;
+  body-only locations (datelines, "reported from…") are demoted below the
+  in-body country sweep. A wire item datelined in one capital about another
+  country no longer tags the dateline.
+
+The gates apply forward; re-geocoding historical rows is a separate
+operator-gated backfill.
 
 ---
 
@@ -367,6 +478,9 @@ analyst/coalescing/finding model is documented in `ANALYSIS.md`.
 Two independent sources reporting the same event produce two raw signals.
 Dedup is **alias/canonical and non-destructive**: a duplicate is *linked* to a
 canonical row via `canonical_signal_id`; the raw rows are always preserved.
+(A *same-source exact re-serve* never reaches this machinery at all — the
+write path's intra-source collapse, §2, bumps the existing row and skips the
+insert.)
 
 - A progressive multi-tier dedup filter handler exists
   (`src/legba/data/filters/dedupe.py`): URL-exact → content-hash →
@@ -430,6 +544,19 @@ disappearance ratio exceeds its threshold, so a flaky upstream listing can't
 silently retire a fleet of materialised instances. The Discovery Pipeline
 operator panel ships in `legba-ui-v3` (it reads the frozen generic registry
 routes — no bespoke discovery REST surface).
+
+**Adjacent but distinct: seed adapters.** Seeds (`data/seed/adapters/`,
+operator-run via `scripts/seed.py`) materialise *facts*, not sources — they
+never touch the signal pipeline (see `ARCHITECTURE.md` §0). One acquisition-
+relevant hardening (2026-07): the officeholder adapter (`wikidata_leaders`)
+now resolves **exactly one current holder per (country, office)** — the
+upstream query drops end-dated statements and the mapper keeps the latest
+term-start per office, with head-of-state and head-of-government on separate
+supersession keys — and stamps `data.as_of` on every emitted fact so upstream
+data-lag is visible. A read-only diagnostic
+(`scripts/diagnose_stale_leaders.py` — SELECT-only, writes nothing) previews
+the re-seed delta first, because the live upstream can carry vandalism the
+heuristic would import; **re-seeding is operator-gated, never automatic**.
 
 ---
 

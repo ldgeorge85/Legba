@@ -1,0 +1,66 @@
+# P3-6 Wave-A (A4) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Le Monde (English) — France desk / Africa angle beyond France 24. Verified live 2026-07-03.
+#
+# source_class: reporting. Credibility host lemonde.fr (seeded 0.82/wire by the registrar).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route live.
+
+identity:
+  id: source.lemonde.english
+  name: Le Monde — English
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: p3_6_wave_a
+  created: "2026-07-27T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [FR]
+  languages: [en]
+  tags: [news, world, france, wave_a]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "28 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.lemonde.fr/en/rss/une.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

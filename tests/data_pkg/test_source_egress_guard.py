@@ -62,3 +62,33 @@ async def test_guarded_transport_rejects_private_url():
 
     with pytest.raises(EgressBlockedError):
         await transport.handle_async_request(req)
+
+
+# ---------------------------------------------------------------------------
+# A7 — opt-in internal-host allowlist (RSSHub lane sidecar).
+# ---------------------------------------------------------------------------
+
+
+def test_internal_host_blocked_without_allowlist():
+    """A private hostname (e.g. the RSSHub sidecar) is blocked by default —
+    the allowlist is opt-in; unset means the guard is unchanged."""
+    with pytest.raises(EgressBlockedError):
+        # `localhost` stands in for any private-resolving internal name; it is
+        # not on the (unset) allowlist, so the guard must still block it.
+        assert_public_host("localhost", 1200)
+
+
+def test_allowlisted_internal_host_permitted(monkeypatch):
+    """With the sidecar hostname on LEGBA_EGRESS_ALLOW_HOSTS the exact-name
+    match is permitted BEFORE resolution — so `rsshub` (private compose IP) is
+    reachable while every other internal address stays blocked."""
+    monkeypatch.setenv("LEGBA_EGRESS_ALLOW_HOSTS", "rsshub, other-sidecar")
+    # Exact allowlisted names — permitted without a DNS round trip.
+    assert_public_host("rsshub", 1200)
+    assert_public_host("RSSHub", 1200)  # case-insensitive
+    assert_public_host("other-sidecar", 8080)
+    # A NON-allowlisted internal name is still blocked.
+    with pytest.raises(EgressBlockedError):
+        assert_public_host("localhost", 80)
+    # A public IP remains allowed regardless of the allowlist.
+    assert_public_host("8.8.8.8", 443)

@@ -37,8 +37,9 @@ cannot be wired against today's substrate raises a clear
 from __future__ import annotations
 
 import logging
+import os
 import re
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, NamedTuple, Sequence
 from urllib.parse import urlparse
 
 import asyncpg
@@ -59,9 +60,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AnalystDepsBuildError",
+    "JUDGE_STACK_REF_ENV",
+    "JudgeRoute",
     "build_analyst_run_method",
     "build_llm_handler_from_stack_component",
     "infer_llm_subprovider",
+    "resolve_judge_route",
+    "resolve_judge_route_from_llm_block",
     "resolve_llm_budget_params",
 ]
 
@@ -2097,6 +2102,115 @@ def _verify_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
     if isinstance(verify, str) and verify:
         return verify
     return None
+
+
+# ---------------------------------------------------------------------------
+# P2-4 — the JUDGE ROUTE (build for the absent second model)
+# ---------------------------------------------------------------------------
+#
+# Today the faithfulness judge resolves the SAME stack ref as the producer:
+# every live escalation-family descriptor declares
+# ``verify: {factory_kind: stack_ref, raw: llm.primary.openai_compat}`` — i.e.
+# the judge ref literally names the core producer plane. The route below is the
+# EXPLICIT judge-route resolution that lets a second (independent) judge model
+# drop in later with ONE config change, while resolving byte-identically to the
+# current core model until then.
+#
+# RESOLUTION LADDER (first hit wins; documented contract):
+#
+#   0. OPT-IN GATE — the descriptor's ``method.llm`` must carry a ``judge`` or
+#      ``verify`` KEY (any shape). No key → ``None`` → no judge route: an
+#      analyst that never opted into a judge is NEVER judge-wired, exactly as
+#      today (the global override below cannot conscript it either — the env
+#      var re-POINTS judge calls, it never turns judging ON).
+#   1. ``LEGBA_JUDGE_STACK_REF`` (env, non-empty) — the GLOBAL operator
+#      override: one setting repoints EVERY judge call in the deployment when
+#      the second model lands (source ``env:LEGBA_JUDGE_STACK_REF``).
+#   2. ``method.llm.judge`` — the explicit per-descriptor judge ref (the new,
+#      preferred key; source ``method.llm.judge``).
+#   3. ``method.llm.verify`` — today's live key (source ``method.llm.verify``);
+#      every current descriptor resolves here, to the core producer plane.
+#   4. ``method.llm.primary`` — the terminal rung (source
+#      ``method.llm.primary``): an analyst that OPTED IN but whose judge/verify
+#      refs are malformed still judges on the producer's plane rather than
+#      silently degrading to un-judged.
+#   5. Nothing resolvable → ``None`` (deterministic floor only).
+#
+# The resolved route's ``component_id`` is what the host hands the LLM handler
+# factory AND what gets stamped into the critique row (``judge_llm_ref``) so
+# provenance records which model judged, forever.
+
+#: Env var carrying the deployment-wide judge stack-ref override (ladder rung 1).
+JUDGE_STACK_REF_ENV = "LEGBA_JUDGE_STACK_REF"
+
+
+class JudgeRoute(NamedTuple):
+    """A resolved judge route: the stack component id + which ladder rung won."""
+
+    component_id: str
+    #: ``env:LEGBA_JUDGE_STACK_REF`` | ``method.llm.judge`` |
+    #: ``method.llm.verify`` | ``method.llm.primary``
+    source: str
+
+
+def _stack_ref_raw(value: Any) -> str | None:
+    """Shape-tolerant StackRef extraction: dump mapping / live StackRef / bare
+    string → the component id, else ``None``. The same variants
+    :func:`_primary_llm_component_id` / :func:`_verify_llm_component_id` accept.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        raw = value.get("raw")
+        return str(raw) if isinstance(raw, str) and raw else None
+    raw = getattr(value, "raw", None)
+    if isinstance(raw, str) and raw:
+        return raw
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def resolve_judge_route_from_llm_block(llm: Any) -> JudgeRoute | None:
+    """Resolve the judge route over a raw ``method.llm`` mapping (the ladder
+    documented above). Shared by the descriptor-object path
+    (:func:`resolve_judge_route`) and typed-dict consumers (the GEPA measure
+    arm), so every judge call in the system resolves through ONE ladder.
+    """
+    if not isinstance(llm, Mapping):
+        return None
+    # Rung 0 — the opt-in gate: no judge/verify key ⇒ no judge route, ever.
+    if "judge" not in llm and "verify" not in llm:
+        return None
+    # Rung 1 — the global operator override (repoints, never enables).
+    env_ref = (os.getenv(JUDGE_STACK_REF_ENV) or "").strip()
+    if env_ref:
+        return JudgeRoute(component_id=env_ref, source=f"env:{JUDGE_STACK_REF_ENV}")
+    # Rung 2 — the explicit per-descriptor judge key.
+    judge_ref = _stack_ref_raw(llm.get("judge"))
+    if judge_ref:
+        return JudgeRoute(component_id=judge_ref, source="method.llm.judge")
+    # Rung 3 — today's live key (every current descriptor resolves here).
+    verify_ref = _stack_ref_raw(llm.get("verify"))
+    if verify_ref:
+        return JudgeRoute(component_id=verify_ref, source="method.llm.verify")
+    # Rung 4 — terminal: opted in but refs malformed → judge on the producer.
+    primary_ref = _stack_ref_raw(llm.get("primary"))
+    if primary_ref:
+        return JudgeRoute(component_id=primary_ref, source="method.llm.primary")
+    return None
+
+
+def resolve_judge_route(descriptor: AnalystDescriptor) -> JudgeRoute | None:
+    """The judge route for an analyst descriptor (``None`` = no judge opt-in).
+
+    See the ladder above. For every LIVE descriptor today (``verify`` key →
+    ``llm.primary.openai_compat``, no ``judge`` key, env unset) this resolves
+    byte-identically to :func:`_verify_llm_component_id` — asserted by the
+    wiring tests' same-ref-in → same-client-out check.
+    """
+    llm = getattr(descriptor.method, "llm", None) or {}
+    return resolve_judge_route_from_llm_block(llm)
 
 
 async def resolve_llm_budget_params(

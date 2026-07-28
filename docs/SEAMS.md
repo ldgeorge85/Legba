@@ -105,7 +105,7 @@ allowlist lines.
 | | |
 |---|---|
 | **What** | An operator-confirmed upstream **TAXII 2.1 server / collection** to push STIX bundles to. The client + wiring are **real and built** (export-interop): `src/legba/data/outputs/taxii_client.py:push_bundle_to_taxii` POSTs the bundle's objects (as a TAXII envelope) to `{server_url}/{api_root}/collections/{collection_id}/objects/` via the structural HTTP port; `stix_bundle.emit` invokes it behind the descriptor `outputs.stix_bundle.config.taxii` binding flag, best-effort (degrade-not-drop — transient/5xx retried with backoff then returned as a structured result, never raised, never blocking the durable NATS/file sinks). What is **not** provisioned is a live destination server — no descriptor in-tree carries a `taxii` binding with a real `server_url`. |
-| **Why deferred** | No operator-confirmed TAXII server target exists yet. The transport is finished; only the destination is unprovisioned. Broader STIX/TAXII direction: see `docs/DIRECTION.md`. |
+| **Why deferred** | No operator-confirmed TAXII server target exists yet. The transport is finished; only the destination is unprovisioned. Note the companion fact (`docs/DIRECTION.md` §3): the two descriptors that declared `outputs.stix_bundle` bindings are retired/frozen, so **no active analyst currently emits a bundle** — the STIX leg is dormant end-to-end until an emitter is re-bound; the markdown/JSON report-export surface is the nearer product direction. Broader STIX/TAXII direction: see `docs/DIRECTION.md`. |
 | **Guard rail** | `src/legba/data/outputs/taxii_client.py:push_bundle_to_taxii` / `upload_bundle_to_taxii` — raise `TaxiiServerNotConfiguredError` (a `RuntimeError`, NOT a stub) when asked to push with no `server_url`, no HTTP client, or a cleartext non-loopback host. An un-provisioned/half-configured `taxii` binding refuses loudly; it never fabricates a delivery or silently drops the TLP-marked bundle. (No allowlist line — the code fails loud, it does not stub output.) |
 
 ### 11. Consult `vector_search` embedder wiring — RESOLVED (L-114, 2026-07-02)
@@ -136,7 +136,7 @@ allowlist lines.
 
 | | |
 |---|---|
-| **What** | Platform-level direction items: role-based access control, the fuller STIX/TAXII story (beyond seam #10), the expanded MCP surface, and real multi-tenant isolation (today `tenant_id` is stamped through envelopes/ledgers but there is one operating tenant). |
+| **What** | Platform-level direction items: role-based access control, the fuller STIX/TAXII story (beyond seam #10), and real multi-tenant isolation (today `tenant_id` is stamped through envelopes/ledgers but there is one operating tenant). *(2026-07 update: the MCP surface expansion formerly listed here is now BUILT — seven built-in substrate tools serve a standalone `legba-mcp` process, fixing the standalone-empty catalog; `docs/DIRECTION.md` §4 carries the honest residuals — stdio-only transport, registry must be reachable, descriptor-declared tools still empty standalone.)* |
 | **Why deferred** | These are product-direction decisions, not wave-scope code seams. The authoritative write-up is `docs/DIRECTION.md` (authored in parallel with this registry). |
 | **Guard rail** | `docs/DIRECTION.md`. In-tree today: registry API requires bearer auth (`require_bearer`); MCP tool outputs (`src/legba/data/outputs/mcp_tool.py`) and STIX bundle export (`src/legba/data/outputs/stix_bundle.py`) are real, built surfaces. |
 
@@ -323,6 +323,7 @@ allowlist lines.
 | **What** | The alert rewire is real and live: `severity` is a first-class READ COLUMN (`analyst_outputs.severity`, indexed on `high`/`critical`), and the `escalate_finding` action pack (`descriptors/action_pack_escalate.yaml`) fires on the POST-VERIFY alert score (`effective_confidence × per-severity weight`) crossing the gate — a verify-DEMOTED finding no longer alerts on a high-severity tag alone. What is NOT built is an EXTERNAL human-facing delivery edge. On dispatch the pack's channel emitter publishes the escalation onto the NATS subject `channels.escalations` (bus-only) and DURABLY audits each delivery — a per-delivery row in `alert_sink_deliveries` (repurposed 2026-07-03 from the retired `alert` output-kind path: channel, target, finding/output id, severity, effective_confidence, outcome), alongside the `action_pack_invocations` / `governor_events` trail — so "who was alerted, with what confidence" is answerable after the fact. What is still NOT built is a paged-human edge: there is NO pager / webhook / email / SMS sink wired — a consumer must tail the bus. |
 | **Why deferred** | The delivery-edge choice (which pager / webhook / on-call system) is an operator/infra decision, not wave-scope code. The internal alert MECHANICS (severity column, verify-folded gate, agency-governed dispatch) are the load-bearing part and are complete; wiring a concrete external sink is the deferred leg. (`system.alert_center` in the UI is likewise a client-only view today — RELEASE_STATE_MATRIX §2.) |
 | **Guard rail** | NOT a stub — nothing is fabricated; the escalation is durably published to the bus and audited. There is simply no external-sink code path, so nothing can silently claim a human was paged. (No allowlist line — no stub symbol; the bus publish is real, the external edge is absent, not faked.) |
+| **Reconcile (RESOLVED 2026-07-28 — the sink plane landed)** | The external delivery edge is now **BUILT**: a modular alert-sink plane (`src/legba/data/alerts/` — `AlertSink` protocol + registry + `AlertSinkDispatcher`) fans each escalation / global-stall / trigger-scan alert to registered sinks — a generic webhook sink (`LEGBA_ALERT_WEBHOOK_URL`) and a native ntfy push sink (`LEGBA_ALERT_NTFY_URL`) — with one durable `alert_sink_deliveries` row per outcome, per-alert idempotency, and a per-sink cooldown whose suppressed alerts **coalesce onto the next send** (never silently thinned). Payloads carry the verification posture + a receipt link. The **code default remains no outward delivery**: with both URLs unset, every alert is a ledgered `skipped_unconfigured` (visible, never silent) and the NATS subject stays the always-on bus edge — so what remains of this seam is an operator config decision, not a code gap. An unconfigured sink drops out of fan-out only when a configured sibling exists (the no-sinks visibility guarantee holds). |
 
 ### 37. UCDP GED source — registered but live poll UNAUTHORIZED (paused pending access token)
 
@@ -363,6 +364,62 @@ allowlist lines.
 | **What** | A periodic (5-min) sweep compares each registered action-pack descriptor's content hash against the version an analyst's dependencies were built from and logs a loud WARNING when they drift (the pack was PUT after the analyst's deps were assembled). What is NOT built: **eviction/rebuild** — a stale pack binding is *reported*, not automatically refreshed; the analyst keeps its already-built toolset until its next natural deps rebuild (restart or descriptor change). |
 | **Why deferred** | Safe eviction needs a pack→analyst reverse index (which analysts hold which pack version) so a refresh can be targeted; without it a blanket rebuild would churn every live analyst on any pack PUT. The warning makes the drift visible instead of silent, which was the incident class being fixed. |
 | **Guard rail** | Warn-only by construction — the rider never mutates a binding, so it cannot half-apply. The drift window is bounded by the next runtime recreate (the standing deploy step), and the WARNING names the pack + analyst so an operator can force the rebuild deliberately. |
+
+### 42. Evidence-archive retention interplay + object-store backend (P2-1 riders)
+
+| | |
+|---|---|
+| **What** | The `evidence_archiver` (P2-1) is BUILT: cited signals' original bytes are fetched (SSRF egress guard + the P2-2 license gate), stored content-addressed on the plain-filesystem `legba_archive` volume, hash-stamped onto `signals.object_ref` (`cas:sha256/<hex>`) + the `evidence_archive` sidecar (mig 0104). NOT built: (a) any retention/expiry machinery over the archive — archived objects are evidence and NOTHING deletes them (no `media_ref_expires_at` sweep, no object GC, no operator-gated erasure for a license policy flip; `skipped_license`/`skipped_size` sidecar rows are the recorded re-evaluation queue for such a flip); (b) an object-store backend (MinIO/SeaweedFS per DIRECTION §5) — the `cas:sha256/<hex>` relative address is deliberately backend-agnostic so a later store swap rewrites zero rows; (c) archive-wide coverage beyond cited-only (the per-source depth lane). |
+| **Why deferred** | Operator-decided stage-1 scope (program §A3): cited-only + plain FS first, prove it out before widening or adding a store; deletion policy for *evidence* needs an operator decision, not a default. |
+| **Guard rail** | Nothing half-built to guard: the archiver only ever ADDS objects and stamps rows; archived signals are upgraded to `retention_class='evidence_hold'`, which the existing `signals_retention` purge already exempts, so no purge can orphan an archive. A missing/unwritable archive root no-ops the tick LOUDLY (`skipped_no_root` counter + warning), never a silent drop. |
+
+### 43. `signals_retention` TTL is options-only — no env treatment (opt-in gap)
+
+| | |
+|---|---|
+| **What** | The `signals_retention` purge reads its `ttl_days` ONLY from the handler `options` mapping (`src/legba/data/analysts/deterministic_handlers/signals_retention.py` — `options.get("ttl_days", 0)`), but the cadence dispatch path passes an options dict carrying only `sub_handler` and the descriptor schema forbids arbitrary `method.options`, so an operator has no working lever to opt in on a cadence tick. The SAME class of gap was found and FIXED on the sibling `analyst_traces_retention` handler (2026-07-28): it now falls back to a `LEGBA_ANALYST_TRACES_TTL_DAYS` env var. `signals_retention` has NOT received the equivalent env fallback yet. |
+| **Why deferred** | Noted-open at the traces-TTL fix; a signals TTL is a heavier data-deletion decision than a telemetry TTL, so wiring its env lever deserves its own deliberate pass (the purge deletes substrate, not telemetry). Tracked as a small code item. |
+| **Guard rail** | Fail-safe by construction, not a stub: with `ttl_days <= 0` (the unreachable-in-practice default) the handler is an honest no-op that emits a "disabled — no purge" finding every run — nothing is deleted, nothing pretends to be. The `retain_always` / `evidence_hold` exemptions are unaffected. (No allowlist line — no stub symbol; the purge logic is real, only the opt-in lever is missing.) |
+
+### 44. World/thematic compositions keep the legacy floor (tiered-evidence periphery seam)
+
+| | |
+|---|---|
+| **What** | The C-TIER two-tier evidence split (basis ≥ floor + hedged capped periphery, `LEGBA_COMPOSITION_TIERED_EVIDENCE`) engages on the PER-COUNTRY and REGION composition reads only. The WORLD and THEMATIC (`escalation_composition`) branches keep `_resolve_verify_floor` even when the flag is ON — no periphery is gathered or rendered for them (`src/legba/data/analysts/meta_findings_synthesizer.py`, the C-TIER comment block). |
+| **Why deferred** | Deliberate: raising their bar WITHOUT the periphery machinery would hard-DROP their 0<eff<0.5 heads — exactly the signal loss the two-tier design exists to prevent. Their slices already carry degrade/gap coverage honesty; `_run` is data-driven, so a branch that later marks periphery rows gets the full rendering/citation/envelope treatment with no further `_run` change. |
+| **Guard rail** | Nothing fabricated: the world/thematic behavior is the unchanged legacy path, and the flag-ON country/region path stamps `data.evidence_tiers` so a reader can see which compositions carry the split. (No allowlist line — no stub symbol; the extension is absent, not faked.) |
+
+### 45. Tier-aware LLM-judge rubric (two-tier verify follow-up)
+
+| | |
+|---|---|
+| **What** | The periphery hedge rule (`unhedged_periphery_citation` — a bald claim resting only on periphery-tier citations is a counted soft failure) runs on the DETERMINISTIC floor profile only. The optional LLM judge grades GROUNDING and knows nothing about evidence tiers; a floor span whose clause the judge also graded dedups by text. Teaching the judge rubric the basis/periphery distinction is a declared follow-up (`src/legba/data/provenance/verify.py`, the C-TIER scope note — "not smuggled in here"). |
+| **Why deferred** | The C1 no-co-veto decision: the judge stays authoritative over the prose it graded; changing its rubric is a measured prompt change, not a rider on the floor rule. |
+| **Guard rail** | The floor rule is always-on for tiered compositions, so an unhedged periphery claim is counted regardless of what the judge does — the follow-up ADDS judge nuance, its absence never lets an overclaim through unflagged. (No allowlist line — the floor rule is real; the judge extension is absent, not faked.) |
+
+### 46. Provenance-badge backend fallback signal (`live|fallback|absent` — the `fallback` input)
+
+| | |
+|---|---|
+| **What** | The UI provenance enum on displayed numbers (`legba-ui-v3/src/lib/provenance.ts`) classifies `live \| fallback \| absent`, but `fallback` is only ever returned when the caller passes an EXPLICIT backend fallback flag — and most backend routes do not yet carry one (no "this number came from a canned table / last-known value" stamp). Until a route stamps it, a degraded number reads `absent` (when missing) or `live` (when the route serves it without saying it degraded). |
+| **Why deferred** | Wiring a per-route fallback stamp is backend-by-backend work; the UI seam was built first so the honest enum exists to receive it. |
+| **Guard rail** | The UI NEVER fabricates a fallback state: no explicit backend signal ⇒ never `fallback` (documented in the module header; the `fallback` input is named as the seam a backend follow-up fills). Nothing can claim a degraded number is live-computed — the failure mode is under-labeling (`live` without a degradation note), which the per-route stamps close as they land. |
+
+### 47. Map co-mention arcs are honest-empty (single-country `geo[]` data seam)
+
+| | |
+|---|---|
+| **What** | The map's co-mention ArcLayer needs a signal whose `geo[]` names ≥2 countries to form an arc, but baseline enrichment currently resolves each signal to a SINGLE country — so no pair ever forms and the layer renders honest-empty (`legba-ui-v3/src/v4/world/MapLibreWorldMap.tsx`, the recorded DATA SEAM comment; matching note in `lib/mapLayers.ts`). A data seam upstream of the UI, not a UI bug. |
+| **Why deferred** | Multi-country geo tagging is an enrichment-quality work item (and interacts with the geo-contamination fixes that deliberately made tagging MORE conservative); an empty layer is honest, a guessed second country is not. |
+| **Guard rail** | The layer renders exactly what the data supports — empty — and the seam is stated in code at the render site; nothing draws a fabricated arc. (UI-side + enrichment data; no allowlist line — no stub symbol.) |
+
+### 48. `narrative_coordination` grounding on the narratives sidecar (grounding-token seam)
+
+| | |
+|---|---|
+| **What** | The `narrative_coordination` LLM unit could ground on the reified `narratives` sidecar (carrier sources, echo lags, lead/follow edges) via a new `"narratives"` grounding-source token — a sources-dispatch entry in `analyst_deps_builder.py` plus a block builder in `grounding.py`. Not wired: the unit today reads its signal slice + the standard grounding tiers only (`src/legba/data/analysts/deterministic_handlers/narrative_mapper.py`, the "Seams" docstring section). A sibling display enrichment — tagging carriers with `state_affiliation` from the ratings rubric — is likewise noted-not-wired. |
+| **Why deferred** | Additive and deliberately out of the P4 wave scope; the narrative objects needed to exist and prove stable before an LLM unit grounds on them. |
+| **Guard rail** | Nothing half-built to guard — the token does not exist in the `GroundingBlock.sources` Literal (`src/legba/data/schemas/analyst.py`), so a descriptor declaring `"narratives"` is refused at schema validation (loud pydantic error, the same mechanism as the `stream` seam #2) rather than silently injecting nothing; the narratives read routes and the mapper are real and complete. (No allowlist line — no stub symbol.) |
 
 ---
 

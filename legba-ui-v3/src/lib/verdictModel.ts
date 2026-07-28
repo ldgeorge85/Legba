@@ -37,6 +37,74 @@ export type LikelihoodBand =
  *  likelihood). `unassessed` = no verify pass ran → we do NOT invent a level. */
 export type ConfidenceLevel = 'low' | 'moderate' | 'high' | 'unassessed'
 
+/**
+ * P0-4 — the verify-EXEMPT structural analysts. The mandatory faithfulness
+ * verify pass covers the LLM read/composition kinds only; these deterministic
+ * structural/mining analysts emit findings OUTSIDE it (no LLM prose to grade,
+ * flat confidence). Their rows must never render indistinguishable from
+ * verified ones, so the badge shows `unverified — structural`.
+ *
+ * Mirror of the ONE server registry
+ * (`legba.data.provenance.kinds.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS`, which
+ * stamps `/findings` rows with `verify_exempt: "structural"`). The client
+ * mirror exists because live-tail rows (NATS envelopes) never pass through
+ * the reads-API projection. Keep in sync with the server set — the server
+ * side is drift-guarded in tests/data_pkg/test_trace_only_output_split.py.
+ */
+export const STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: ReadonlySet<string> = new Set([
+  'graph_mining',
+  'anomaly_detection',
+  'band_calibration_tracker',
+  'calibration_tracking',
+  'unit_correctness_scorer',
+  'composition_lineage_sweep',
+  'adversarial_signals',
+  'situation_clustering',
+  'thematic_proposal',
+  'indicator_tracker',
+  'collection_gap',
+  'hypothesis_lifecycle',
+  'signals_retention',
+  'analyst_traces_retention',
+  'geo_convergence_scan',
+  'fact_decay_scan',
+  'source_track_record',
+  'narrative_mapper',
+  'desk_baseline',
+])
+
+/** One-line explanation of the structural exemption, for tooltips/subtext. */
+export const STRUCTURAL_EXEMPT_NOTE =
+  'deterministic structural read — not routed through the faithfulness verify pass'
+
+/**
+ * True when a finding is verify-exempt STRUCTURAL: either the server stamped
+ * it (`verify_exempt === 'structural'`, authoritative) or its analyst_id is in
+ * the client mirror registry (live-tail rows carry no stamp). Never true for
+ * an unknown analyst — the badge is classification, not fabrication.
+ */
+export function isStructuralExempt(
+  analystId?: string | null,
+  verifyExempt?: string | null,
+): boolean {
+  // C2b — 'structural-verified' is still a STRUCTURAL row (its claims were
+  // deterministically re-derived); isStructuralVerified() below tells the two
+  // apart for the badge label.
+  if (verifyExempt === 'structural' || verifyExempt === 'structural-verified') return true
+  return analystId != null && STRUCTURAL_VERIFY_EXEMPT_ANALYSTS.has(analystId)
+}
+
+/**
+ * C2b (P4-6) — true when a structural finding's asserted quantities were
+ * DETERMINISTICALLY re-derived and MATCHED (the server stamped
+ * `verify_exempt === 'structural-verified'`). The badge then reads
+ * `structural — verified` instead of the honest `unverified — structural`.
+ * A structural row without a passing structural critique is not verified.
+ */
+export function isStructuralVerified(verifyExempt?: string | null): boolean {
+  return verifyExempt === 'structural-verified'
+}
+
 /** One finding/composition verify block, read defensively (all fields optional
  *  — the lineage read path often carries none of them). */
 export interface VerificationBlock {
@@ -58,6 +126,14 @@ export interface Verdict {
   judgeStatus: string | null
   /** Count of resolved citations backing the prose (corroboration breadth). */
   citationCount: number
+  /** P0-4 — true for a verify-EXEMPT structural analyst's finding. When the
+   *  confidence axis is `unassessed` the badge renders
+   *  `unverified — structural` instead of the bare `unverified`. */
+  structural: boolean
+  /** C2b — true when a structural finding's asserted quantities were
+   *  deterministically re-derived and matched (server stamp
+   *  `structural-verified`). The badge then reads `structural — verified`. */
+  structuralVerified: boolean
 }
 
 /** ICD-203 probability bands, as [low, high] inclusive-low/exclusive-high cuts
@@ -123,6 +199,10 @@ export interface VerdictInput {
   effectiveConfidence?: number | null
   verification?: VerificationBlock | null
   citationCount?: number
+  /** The emitting analyst id — classifies verify-exempt structural rows (P0-4). */
+  analystId?: string | null
+  /** The server's `verify_exempt` stamp from `/findings`, when present. */
+  verifyExempt?: string | null
 }
 
 /** Assemble the two-axis {@link Verdict} from a finding's fields. */
@@ -142,6 +222,8 @@ export function buildVerdict(input: VerdictInput): Verdict {
     faithfulness: conf.faithfulness,
     judgeStatus: conf.judgeStatus,
     citationCount,
+    structural: isStructuralExempt(input.analystId, input.verifyExempt),
+    structuralVerified: isStructuralVerified(input.verifyExempt),
   }
 }
 
@@ -175,5 +257,10 @@ export const CONFIDENCE_LEGEND: Array<{ level: ConfidenceLevel; meaning: string 
   { level: 'high', meaning: 'LLM-judged faithful ≥80% over ≥2 corroborating citations' },
   { level: 'moderate', meaning: 'verified faithful ≥60% (or judged high on a single citation)' },
   { level: 'low', meaning: 'verified but faithfulness below 60% — read with caution' },
-  { level: 'unassessed', meaning: 'no faithfulness-verify pass on this read — unverified' },
+  {
+    level: 'unassessed',
+    meaning:
+      'no faithfulness-verify pass on this read — unverified; "— structural" marks a ' +
+      'deterministic structural/mining read that is verify-exempt by design',
+  },
 ]

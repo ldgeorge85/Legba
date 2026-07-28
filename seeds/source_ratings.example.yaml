@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# source_ratings.example.yaml — SCHEMA DOC for the curated source-ratings seed
+# (P3-1, assurance ledger layer 2). Copy to `seeds/source_ratings.yaml` (which
+# is gitignored — curated DATA never ships) and replace these FAKE example
+# sources with your own. Load with:
+#
+#     python3 scripts/seed_source_ratings.py [--dry-run]
+#
+# Every row becomes a `source_ratings` row with method='catalog_seed' and
+# visibility_class='public'. Re-runs are idempotent; a changed row supersedes
+# the previous rating from the same rater (history is kept, never overwritten).
+#
+# Fields per row:
+#   source_id   (required) — the source DESCRIPTOR id in the registry. Rating
+#               a not-yet-registered source is allowed (the ledger is not
+#               FK-coupled to descriptor lifecycle).
+#   rater       (required) — who issued the rating, e.g. 'catalog:<name>'.
+#               Distinct raters coexist: the same source may concurrently
+#               carry ratings from several catalogs and a private annex.
+#   admiralty   (optional) — the DISPLAY vocabulary. reliability: A..F
+#               (source reliability), credibility: 1..6 (information
+#               credibility). Either may be omitted for a rubric-only row.
+#               NEVER consumed by the faithfulness score.
+#   rubric      (optional) — typed keys, all optional, all free text unless
+#               noted: type / ownership / state_affiliation /
+#               editorial_posture / bias_notes. Extra keys are kept verbatim
+#               (the loader warns).
+#   references  (optional) — list of {url, title} citations backing the
+#               rubric claims (ownership records, press-freedom indexes,
+#               media directories…).
+#   rated_at    (optional) — YYYY-MM-DD or ISO timestamp; defaults to load
+#               time.
+#
+# ALL THREE SOURCES BELOW ARE FAKE — schema illustration only.
+
+version: 1
+
+ratings:
+  - source_id: source.rss.examplewire_world
+    rater: "catalog:example-catalog"
+    admiralty:
+      reliability: B
+      credibility: 2
+    rubric:
+      type: news_agency
+      ownership: "Example Wire Holdings plc (publicly listed; no controlling stake)"
+      state_affiliation: none
+      editorial_posture: "centrist international wire service"
+      bias_notes: "Headline framing occasionally softer on advertiser sectors."
+    references:
+      - url: "https://directory.example.org/outlets/examplewire"
+        title: "Example Media Directory — Example Wire"
+      - url: "https://registry.example.gov/companies/examplewire-holdings"
+        title: "Example corporate registry — ownership filing"
+    rated_at: "2026-07-01"
+
+  - source_id: source.rss.tribune_national_daily
+    rater: "catalog:example-catalog"
+    admiralty:
+      reliability: C
+      credibility: 3
+    rubric:
+      type: newspaper
+      ownership: "Tribune National Media Group (family-held)"
+      state_affiliation: state_aligned
+      editorial_posture: "pro-government national daily"
+      bias_notes: "Reliable on procedure/logistics; systematically favorable on domestic politics."
+    references:
+      - url: "https://pressindex.example.org/profiles/tribune-national"
+        title: "Example Press Freedom Index — outlet profile"
+
+  - source_id: source.telegram.frontline_watch_channel
+    rater: "catalog:example-catalog"
+    admiralty:
+      reliability: D
+      credibility: 4
+    rubric:
+      type: aggregator_channel
+      ownership: "Anonymous administrators (unverified)"
+      state_affiliation: unknown
+      editorial_posture: "conflict-tracking aggregation, partisan framing"
+      bias_notes: "Fast but frequently unconfirmed; geolocation claims often uncorroborated."
+    references:
+      - url: "https://osint.example.net/channel-reviews/frontline-watch"
+        title: "Example OSINT review — channel reliability notes"

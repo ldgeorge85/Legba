@@ -21,7 +21,11 @@ import { RecordLink } from '@/components/inspector/RecordLink'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
 import { VerdictBadge } from '@/components/VerdictBadge'
 import { type Citation, evidenceAnchorId } from '@/lib/citationsModel'
-import { buildVerdict, type VerificationBlock } from '@/lib/verdictModel'
+import {
+  STRUCTURAL_EXEMPT_NOTE,
+  buildVerdict,
+  type VerificationBlock,
+} from '@/lib/verdictModel'
 
 export interface CitedAssessmentProps {
   /** The report prose (carries inline `[N]` / `[[ref:N]]` markers when cited). */
@@ -54,6 +58,9 @@ export default function CitedAssessment({
     confidence,
     verification: (verification as VerificationBlock | null) ?? null,
     citationCount: citations.length,
+    // P0-4 — a verify-exempt structural analyst's read renders the explicit
+    // `unverified — structural` badge, never the ambiguous bare `unverified`.
+    analystId,
   })
 
   return (
@@ -78,11 +85,24 @@ export default function CitedAssessment({
         <UnitEvalBadge analystId={analystId} />
       </div>
 
+      {/* P0-4 — one-line subtext for a verify-EXEMPT structural read, so the
+          exception is stated in place (the badge tooltip repeats it). */}
+      {verdict.structural && verdict.confidence === 'unassessed' && (
+        <div
+          className="mb-2 text-label italic text-ink-3"
+          data-testid="structural-exempt-note"
+        >
+          {STRUCTURAL_EXEMPT_NOTE}
+        </div>
+      )}
+
       {/* The report prose — one shared renderer: markdown always rendered, markers
           tokenized to chips (hover-card + unresolved state). Chip click scrolls to
-          the evidence row below (CitedProse's default finds the on-page anchor). */}
+          the evidence row below (CitedProse's default finds the on-page anchor).
+          The verify block rides along (P1-8) so each chip's hover card carries
+          its per-claim judge verdict — or the honest not-recorded line. */}
       <div className="text-body text-ink-1">
-        <CitedProse text={text} citations={citations} />
+        <CitedProse text={text} citations={citations} verification={verification} />
       </div>
 
       {/* Evidence panel — one row per citation, an anchor a chip scrolls to. */}

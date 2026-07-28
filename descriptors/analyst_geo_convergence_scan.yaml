@@ -1,0 +1,92 @@
+# Geo Convergence Scan analyst descriptor (A7 — geographic convergence
+# detector, worldmonitor pattern, LLM-free).
+#
+# A first-class `deterministic`-kind META analyst that, on a ~30-minute
+# cadence, bins the rolling 24h of geolocated signals into geographic bins and
+# side-writes a `medium` `kind='alert'` analyst_outputs row when at least 3
+# DISTINCT source families converge in one bin — diversity is the signal; a
+# same-family pile-on (one feed's burst, syndication) never fires.
+#
+# Two honest binning tiers (the geo data supports no more):
+#   * cell    — 1°×1° cells (floor(lat)×floor(lon)) fed ONLY by signals whose
+#               payload.geo point is trustworthy at sub-degree scale: geocode
+#               precision region/municipality/address, or source='geometry'
+#               (the exact authoritative source coordinate — USGS/GDACS/NASA).
+#               Country-precision geocodes are country CENTROIDS and are NEVER
+#               cell-binned (that would fabricate precision).
+#   * country — one bin per ISO2 tag in signals.geo, fed by every
+#               country-tagged signal.
+#
+# Source family = the first scope.tags entry of the signal's head source
+# descriptor (news / gis / health / defense / crisis / social / osint / …);
+# a source without one gets the per-source fallback family `src:<id>`.
+# Score = distinct-family count + a small volume bonus (+1 per 10 signals,
+# cap +2); severity is flat medium on formation, info on dissolution.
+#
+# Statefulness: per-bin watermarks under trigger_class='geo_convergence' in
+# the EXISTING alert_trigger_watermarks table (migration 0091 — generic
+# (trigger_class, watermark_key, state) store; NO new migration). Fires on the
+# FORMATION edge and once on the DISSOLUTION edge; a persisting convergence
+# (e.g. a permanently-diverse country bin like US) never refires. The
+# first-ever scan seeds every already-formed bin silently. Per-desk cap 3 with
+# an honest rollup (the shared alert_trigger_scan cap).
+#
+# Target-agnostic + META: reads the WHOLE substrate per scan. No `targets`
+# selector → a SINGLE global run per cadence tick; the handler reads directly
+# via deps.pg_pool and ignores the materialized input slice.
+#
+# Method:
+#   * kind = deterministic — pure SQL + arithmetic, NO LLM, token usage zero.
+#   * impl = the deterministic kind dispatcher module:run_method, which routes
+#     by `options.sub_handler`. Set explicitly AND id == sub-handler name so
+#     either resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "7-59/30 * * * *" — every 30 minutes at :07/:37
+#     (clear of the :03 alert trigger scan offsets and the on-the-hour sweeps).
+#   * cooldown_seconds = 1500 — a 25-min floor below the 30-min tick, so an
+#     organic tick is never swallowed by its own cooldown.
+#
+# State: draft in-tree — registration (scripts/bringup_register_
+# geo_convergence_scan.py) and the operator's activate flip are DEPLOY steps.
+
+identity:
+  id: geo_convergence_scan
+  name: Geo Convergence Scan
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: a7_geo_convergence
+
+subscription:
+  # No `targets` block → META analyst: one global scan per cadence tick over
+  # the whole substrate. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: geo_convergence_scan
+  # Deterministic kind: no LLM block and no per-day token budget — the whole
+  # run is pure SQL + binning arithmetic over the live substrate.
+
+cadence:
+  fallback_schedule: "7-59/30 * * * *"
+  cooldown_seconds: 1500
+
+# No output bindings: the summary finding rides the deterministic kind's
+# FINDING dispatch (suppressed to trace-only on quiet sweeps); the REAL
+# product — the kind='alert' formation/dissolution rows — is side-written by
+# the handler and fanned outward through the shared P1-1 dispatcher.
+outputs: []

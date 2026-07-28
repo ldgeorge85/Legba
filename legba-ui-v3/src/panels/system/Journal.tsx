@@ -43,12 +43,13 @@
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, BookOpen, ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertTriangle, BookOpen, ChevronDown, ChevronRight, FilePlus2 } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import ProvenanceChip from '@/v4/components/ProvenanceChip'
 import CitedProse from '@/components/CitedProse'
 import { cn } from '@/lib/cn'
 import { selectRow } from '@/state/selection'
+import { useExportBasket } from '@/state/exportBasket'
 import { fetchJournalSummary, fetchJournalEntry } from '@/lib/api'
 import type {
   JournalEntry,
@@ -287,6 +288,38 @@ function VerdictBlock({ verifyBody }: { verifyBody: string | null }) {
 // reader pane (§2c).
 // ---------------------------------------------------------------------------
 
+/**
+ * A10 — "add to export" for a journal entry, mirroring consult's
+ * pin-to-context affordance: one click drops the entry into the persistent
+ * export basket as a `journal_entry` item (the export route frames it with
+ * its tier label + the reflective off-product-chain VOICE note).
+ */
+function JournalAddToExport({ entry }: { entry: JournalEntry }) {
+  const add = useExportBasket((s) => s.add)
+  const inBasket = useExportBasket(
+    (s) => s.items.some((i) => i.kind === 'journal_entry' && i.id === entry.id),
+  )
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        add({
+          kind: 'journal_entry',
+          id: entry.id,
+          label: `${kindLabel(entry.entry_kind)} — ${entry.title}`,
+        })
+      }
+      disabled={inBasket}
+      className="ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-slate-200 disabled:opacity-50"
+      title={inBasket ? 'already in the export basket' : 'add this entry to the export basket'}
+      data-testid={`journal-add-export-${entry.id}`}
+    >
+      <FilePlus2 className="h-3 w-3" aria-hidden />
+      {inBasket ? 'in export' : 'add to export'}
+    </button>
+  )
+}
+
 /** One journal entry / consolidation card — title, period, honesty pills, the
  *  verdict block (when disputed spans exist), the narrative body, and the
  *  per-claim cited spans with chips. */
@@ -329,7 +362,8 @@ function EntryCard({
           {entry.title}
         </h3>
         <VerifyScorePill score={entry.verify_score} />
-        <span className="ml-auto shrink-0 text-[11px] text-slate-500" title={period}>
+        <JournalAddToExport entry={entry} />
+        <span className="shrink-0 text-[11px] text-slate-500" title={period}>
           {new Date(entry.produced_at).toLocaleString()}
         </span>
       </header>
@@ -723,7 +757,7 @@ function CycleGroupSection({
         ) : (
           <ChevronRight className="h-3 w-3 shrink-0" aria-hidden />
         )}
-        Cycle — week of {group.bucket}
+        Cycle — {group.bucket}
         <span className="font-mono text-[10px] text-slate-600">({group.rows.length})</span>
       </button>
       {expanded && (

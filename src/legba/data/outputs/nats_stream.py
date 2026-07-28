@@ -52,7 +52,7 @@ import asyncio
 import inspect
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -239,24 +239,65 @@ def _resolve_publisher(deps: Any) -> _ResolvedPublisher:
 # ---------------------------------------------------------------------------
 
 
+def _coerce_to_mapping(payload: Any) -> Mapping[str, Any] | None:
+    """Coerce a typed payload model into a Mapping, or return ``None``.
+
+    The runtime output dispatcher (``dapr_actors._emit_output_bindings``)
+    hands every sink the LIVE analyst payload — for ``nats_stream`` that is a
+    typed ``FindingPayload`` / ``AlertPayload`` / … (a pydantic model), NOT a
+    plain dict. Before this coercion, ``_encode_payload`` rejected it with
+    ``payload must be a Mapping/dict (got FindingPayload)`` and the finding
+    never reached the live UI event feed (it is durably persisted regardless
+    — a cosmetic/completeness gap, not data loss).
+
+    We coerce via the SAME canonical path the ``webhook`` / ``substrate``
+    sinks use — ``.model_dump()`` for pydantic models — with a
+    ``dataclasses.asdict`` fallback for plain dataclasses. ``mode="python"``
+    leaves UUID / datetime as objects, which the existing ``_json_default``
+    encodes on dump (identical to the pre-existing Mapping path). A payload
+    that is neither a Mapping nor a coercible model returns ``None`` so the
+    caller raises the same programmer-error ``OutputPayloadError``.
+    """
+    if isinstance(payload, Mapping):
+        return payload
+    model_dump = getattr(payload, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(mode="python")
+        except Exception:  # pragma: no cover - defensive; a valid model won't raise
+            return None
+        if isinstance(dumped, Mapping):
+            return dumped
+    # Plain (non-pydantic) dataclass instance — not a class object.
+    if is_dataclass(payload) and not isinstance(payload, type):
+        try:
+            return asdict(payload)
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return None
+
+
 def _encode_payload(payload: Any) -> bytes:
     """JSON-encode the payload or raise OutputPayloadError.
 
     The contract says `payload: dict` — but we accept any Mapping for
-    flexibility (pydantic .model_dump() returns dict; Mapping subclasses
-    work too). Bytes/str pass through unchanged so callers that already
-    encoded for a different transport don't pay twice.
+    flexibility (Mapping subclasses work too), plus typed payload models
+    (pydantic ``FindingPayload`` / ``AlertPayload`` / dataclasses) which we
+    coerce via :func:`_coerce_to_mapping` — the canonical ``.model_dump()``
+    path the other sinks use. Bytes/str pass through unchanged so callers that
+    already encoded for a different transport don't pay twice.
     """
     if isinstance(payload, (bytes, bytearray)):
         return bytes(payload)
     if isinstance(payload, str):
         return payload.encode("utf-8")
-    if not isinstance(payload, Mapping):
+    mapping = _coerce_to_mapping(payload)
+    if mapping is None:
         raise OutputPayloadError(
             f"payload must be a Mapping/dict (got {type(payload).__name__})"
         )
     try:
-        return json.dumps(dict(payload), default=_json_default).encode("utf-8")
+        return json.dumps(dict(mapping), default=_json_default).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise OutputPayloadError(
             f"payload is not JSON-serializable: {exc}"

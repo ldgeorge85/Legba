@@ -650,12 +650,22 @@ async def bring_up_source_first_planes(
     )
 
     # ---- Agency plane (P-11) ------------------------------------------
+    from ..data.alerts import AlertSinkDispatcher
     from ..data.analysts.agency import Agency
     from ..data.analysts.agency.tools import (
         ChannelEmitter,
         ToolContext,
         default_tool_registry,
     )
+
+    # P1-1 — ONE outward alert-sink dispatcher for the whole runtime: the
+    # escalation emit edge (ChannelEmitter below) and the liveness watchdog's
+    # global-stall alert both fan out through it, sharing the per-alert-row
+    # idempotency + per-sink cooldown state. Construction logs each sink's
+    # configured/declared-inactive posture once (the operator's boot-log
+    # answer to "is outward alerting live?"); an unconfigured webhook sink
+    # still records skipped_unconfigured ledger rows so the gap is visible.
+    alert_sink_dispatcher = AlertSinkDispatcher(pg_pool=pg_store.pool)
 
     async def _governor_publish(subject: str, payload: bytes) -> None:
         # G2 — report delivery HONESTLY. ``publish_json`` is a JetStream
@@ -690,10 +700,17 @@ async def bring_up_source_first_planes(
         # NATS edge (which retains nothing queryable per finding).
         emit=ChannelEmitter(
             nats_publish=_governor_publish, pg_pool=pg_store.pool,
+            alert_sinks=alert_sink_dispatcher,
         ),
     )
     AGENCY_HOLDER["agency"] = agency
     AGENCY_HOLDER["tool_context"] = tool_context
+    # P1-3 — publish the ONE shared dispatcher so the deterministic
+    # alert_trigger_scan analyst fans its trigger alerts through the SAME
+    # instance (shared per-sink cooldown + per-alert-row idempotency) as the
+    # escalation emit edge and the liveness watchdog, resolved at run time
+    # (mirrors the agency/tool_context holder contract above).
+    AGENCY_HOLDER["alert_sink_dispatcher"] = alert_sink_dispatcher
     logger.info("source_first.agency.ready tools=%s", agency_tool_names(agency))
 
     # ---- Subscription / fan-out plane (P-08) --------------------------
@@ -803,7 +820,12 @@ async def bring_up_source_first_planes(
             # pg_store enables OBS — the per-analyst cadence-liveness check
             # (alerts when ONE analyst goes dark while the aggregate pipeline
             # still flows; the global stall check above can't see that).
-            liveness_watchdog = LivenessWatchdog(nats_store, pg_store=pg_store)
+            # alert_sinks: the shared P1-1 dispatcher — a global stall also
+            # fans out through the configured outward sinks (webhook).
+            liveness_watchdog = LivenessWatchdog(
+                nats_store, pg_store=pg_store,
+                alert_sinks=alert_sink_dispatcher,
+            )
             await liveness_watchdog.start()
         except Exception as exc:                                # pragma: no cover
             logger.warning(

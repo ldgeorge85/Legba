@@ -124,6 +124,29 @@ describe('verification facet', () => {
     expect(matchesFilter(u, uv, onlyUnverified)).toBe(true)
     expect(matchesFilter(v, vv, onlyUnverified)).toBe(false)
   })
+
+  it('P0-4 — deriveRowVerdict flags verify-exempt structural rows', () => {
+    // Via the analyst_id registry mirror (live-tail rows carry no stamp)…
+    const tail = finding({
+      analyst_id: 'graph_mining',
+      verification: null,
+      verify_exempt: undefined,
+    })
+    const tv = deriveRowVerdict(tail, 0)
+    expect(tv.structural).toBe(true)
+    expect(tv.confidence).toBe('unassessed')
+    expect(isVerified(tv)).toBe(false)
+    // …and via the server verify_exempt stamp (REST rows), even for an id the
+    // client mirror does not know.
+    const rest = finding({
+      analyst_id: 'future_mining_analyst',
+      verification: null,
+      verify_exempt: 'structural',
+    })
+    expect(deriveRowVerdict(rest, 0).structural).toBe(true)
+    // A verified LLM read is never structural.
+    expect(deriveRowVerdict(finding(), 2).structural).toBe(false)
+  })
 })
 
 describe('matchesFilter', () => {

@@ -53,7 +53,13 @@ publisher's origin. ``transform`` runs, in order:
    present, geocode that directly.
 2. **entities** (in-body NER): the ``country`` / ``location`` -class
    entities the upstream ner_multilingual filter stamped onto
-   ``payload.entities`` — the place the *story* is about.
+   ``payload.entities`` — the place the *story* is about. **Subject guard
+   (S-2):** a ``country``-class entity is an explicit subject and keeps this
+   slot's priority, but a ``location``-class entity (a city / dateline) counts
+   as the subject ONLY when it also appears in the ``title``. A location a
+   person was merely *mentioned at* (an inter-Korean story whose envoy spoke in
+   Brasília) is demoted below every in-body country sweep — it may still resolve
+   if nothing else does, but it can no longer out-vote the story's real subject.
 3. **title / text / raw_body** (in-body gazetteer): a country-name / ISO
    sweep via :mod:`pycountry` over each configured text field — ``text`` is
    the telegram/chat body. The first text hit wins.
@@ -766,23 +772,20 @@ def extract_country_iso2_from_text(text: str) -> str | None:
 _PLACE_ENTITY_CLASSES: frozenset[str] = frozenset({"country", "location"})
 
 
-def place_candidates_from_entities(entities: Any) -> list[str]:
-    """Extract in-body place mentions from an NER ``entities`` list.
+def _partition_place_entities(entities: Any) -> tuple[list[str], list[str]]:
+    """Split NER place mentions into ``(country_texts, location_texts)``.
 
     Reads the ``payload.entities`` list the upstream ner_multilingual filter
-    stamps (each item ``{"class": ..., "text": ...}``). Returns the de-duped
-    place-bearing entity texts in list order, ``country``-class first (a named
-    country is a stronger, less ambiguous geocode query than a bare
-    ``location`` like "Springfield"). Non-place classes are ignored.
-
-    This is the step that fixes Venezuela-0/141: a Reuters / telegram story
-    *about* Caracas carries a ``location``/``country`` entity for it even when
-    the publisher origin (``.uk`` / ``t.me``) says nothing about the subject.
+    stamps (each item ``{"class": ..., "text": ...}``). De-duped case-
+    insensitively across BOTH lists (a name seen first as a country wins),
+    order-preserving within each. Non-place classes are ignored. The split
+    lets the inference ladder treat an explicit ``country``-class subject
+    differently from an incidental ``location`` (S-2 subject guard).
     """
     if not isinstance(entities, (list, tuple)):
-        return []
+        return [], []
     countries: list[str] = []
-    others: list[str] = []
+    locations: list[str] = []
     seen: set[str] = set()
     for ent in entities:
         if not isinstance(ent, dict):
@@ -800,11 +803,89 @@ def place_candidates_from_entities(entities: Any) -> list[str]:
         if key in seen:
             continue
         seen.add(key)
-        if cls == "country":
-            countries.append(text)
+        (countries if cls == "country" else locations).append(text)
+    return countries, locations
+
+
+def place_candidates_from_entities(entities: Any) -> list[str]:
+    """Extract in-body place mentions from an NER ``entities`` list.
+
+    Reads the ``payload.entities`` list the upstream ner_multilingual filter
+    stamps (each item ``{"class": ..., "text": ...}``). Returns the de-duped
+    place-bearing entity texts in list order, ``country``-class first (a named
+    country is a stronger, less ambiguous geocode query than a bare
+    ``location`` like "Springfield"). Non-place classes are ignored.
+
+    This is the step that fixes Venezuela-0/141: a Reuters / telegram story
+    *about* Caracas carries a ``location``/``country`` entity for it even when
+    the publisher origin (``.uk`` / ``t.me``) says nothing about the subject.
+    """
+    countries, locations = _partition_place_entities(entities)
+    return countries + locations
+
+
+def country_iso2s_in_text(text: str) -> set[str]:
+    """Every country ISO2 explicitly named in ``text`` (offline sweep).
+
+    A superset companion to :func:`extract_country_iso2_from_text` (which
+    returns only the first hit): here we collect ALL country-name and ISO-code
+    matches. Used by the source baseline to decide whether a publisher-origin
+    country is CORROBORATED by the story body before it may be applied to the
+    indexed ``geo`` column — the precision guard that stops a Singapore outlet's
+    LeBron story from landing geo=SG (S-2). Offline (pycountry only), no
+    backend call.
+    """
+    out: set[str] = set()
+    if not text:
+        return out
+    for m in _COUNTRY_REGEX.finditer(text):
+        iso = _COUNTRY_NAME_INDEX.get(m.group(1).lower())
+        if iso:
+            out.add(iso)
+    for m2 in _ISO_TOKEN_REGEX.finditer(text):
+        token = m2.group(1)
+        if token in _GEO_TOKEN_STOPSET:
+            continue
+        if len(token) == 2:
+            c = pycountry.countries.get(alpha_2=token)
         else:
-            others.append(text)
-    return countries + others
+            c = pycountry.countries.get(alpha_3=token)
+        if c is not None:
+            out.add(c.alpha_2)
+    return out
+
+
+def country_iso2s_from_country_entities(entities: Any) -> set[str]:
+    """ISO2s for the ``country``-class NER entities on ``payload.entities``.
+
+    Country-class entity text ("Singapore") is resolved offline via the
+    pycountry name index / lookup. ``location``-class entities (cities) are
+    intentionally NOT resolved here — corroboration is a country-level check
+    and a bare city can't be mapped to a country without the online gazetteer.
+    Companion to :func:`country_iso2s_in_text` for the S-2 origin-corroboration
+    guard in the source baseline.
+    """
+    out: set[str] = set()
+    if not isinstance(entities, (list, tuple)):
+        return out
+    for ent in entities:
+        if not isinstance(ent, dict):
+            continue
+        if str(ent.get("class") or "").strip().lower() != "country":
+            continue
+        text = ent.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        name = text.strip()
+        iso = _COUNTRY_NAME_INDEX.get(name.lower())
+        if not iso:
+            try:
+                iso = pycountry.countries.lookup(name).alpha_2
+            except LookupError:
+                iso = None
+        if iso:
+            out.add(iso)
+    return out
 
 
 def country_iso2_from_tld(url: str | None) -> str | None:
@@ -1162,6 +1243,14 @@ class GeocodeHandler:
         configured ``infer_from`` order. The publisher-origin (TLD) fallback
         is appended LAST and ONLY when ``tld_fallback`` is enabled — so a
         ``.uk`` / ``t.me`` host can never beat an in-body place mention.
+
+        S-2 subject guard: NER ``location`` entities are split into SUBJECT
+        locations (their text appears in the ``title``) and INCIDENTAL ones
+        (a dateline / a place a person was merely mentioned at). Subject
+        locations and all ``country``-class entities keep the ``entities``
+        slot's priority; incidental locations are demoted below every in-body
+        country sweep (above only the weak TLD fallback), so they can no longer
+        out-vote the story's actual subject.
         """
         out: list[str] = []
 
@@ -1170,9 +1259,38 @@ class GeocodeHandler:
                 out.append(candidate)
 
         payload = signal.payload or {}
+
+        entities_enabled = "entities" in self._config.infer_from
+        country_ents, location_ents = _partition_place_entities(payload.get("entities"))
+        title_val = payload.get("title")
+        title_lc = title_val.lower() if isinstance(title_val, str) else ""
+        subject_locations = (
+            [loc for loc in location_ents if loc.lower() in title_lc]
+            if title_lc
+            else []
+        )
+        body_only_locations = [
+            loc for loc in location_ents if loc not in subject_locations
+        ]
+
         for field_name in self._config.infer_from:
+            if field_name == "entities":
+                # Explicit country subjects + title-corroborated locations.
+                for cand in country_ents:
+                    _add(cand)
+                for cand in subject_locations:
+                    _add(cand)
+                continue
             for candidate in self._candidates_for_field(field_name, signal, payload):
                 _add(candidate)
+
+        # Incidental (non-subject) location entities — after every in-body
+        # country candidate, before the weak publisher-origin fallback. A
+        # place a person was mentioned at may still resolve if nothing more
+        # authoritative did, but never beats the story subject.
+        if entities_enabled:
+            for cand in body_only_locations:
+                _add(cand)
 
         # WEAK publisher-origin fallback — last resort, opt-out-able.
         if self._config.tld_fallback:
@@ -1204,10 +1322,9 @@ class GeocodeHandler:
                     return [loc.strip()]
             return []
         if field_name == "entities":
-            # In-body NER place mentions — hand the raw place text to the
-            # backend (a city/region resolves to a finer point than the
-            # country-name sweep would). Country-class entities first.
-            return place_candidates_from_entities(payload.get("entities"))
+            # Handled (with the S-2 subject split) directly in
+            # _derive_candidates — never reached from the field loop.
+            return []
         # All other fields are text — sweep for a country mention.
         value = payload.get(field_name)
         if not isinstance(value, str) or not value.strip():
@@ -1291,6 +1408,8 @@ __all__ = [
     "GoogleBackend",
     "NominatimBackend",
     "country_iso2_from_tld",
+    "country_iso2s_from_country_entities",
+    "country_iso2s_in_text",
     "extract_country_iso2_from_text",
     "geocoder_contact_email",
     "place_candidates_from_entities",

@@ -1,0 +1,78 @@
+# band_calibration_tracker — P2-3 scorecard calibration harness (deterministic META).
+#
+# A `deterministic`-kind META analyst (sub_handler=band_calibration_tracker)
+# that turns scorecard band CHANGES into RESOLVABLE claims, auto-resolved and
+# scored over time. Each daily tick:
+#
+#   (a) logs new calibration claims from desk×dimension band transitions since
+#       its watermark (the same ladder→ladder transitions P1-3's
+#       alert_trigger_scan detects — the comparison SHAPE is reused, its
+#       watermarks are NOT). Each claim pins desk / dimension / from→to band /
+#       direction / T0 + a HARD resolution spec into band_calibration_claims
+#       (migration 0093 — apply it BEFORE first activation).
+#   (b) resolves claims whose horizons (T0+14d, T0+28d) have passed by reading
+#       the then-current band from LATER scorecard rows ONLY — deterministic
+#       SQL, no LLM; held / worsened / improved / reverted, with honest
+#       insufficient / unresolvable states. Never overwrites a resolved
+#       horizon; skips 'voided:' rows (the acute_forecasts void contract).
+#   (c) emits ONE honest summary finding per run (claims logged / resolved /
+#       band-persistence + reversal rates split by horizon, direction and
+#       dimension) tagged `calibration` — NEVER a skill boast; the zero state
+#       reads "0 claims on record ... no persistence claim made".
+#
+# HONESTY: bands are ordinal risk categories, NOT probabilities — the harness
+# computes NO Brier and NO Brier-skill score (the finding's data carries an
+# explicit no_brier flag + honesty note saying exactly that). The aggregate
+# surfaces ONLY in the summary finding + the ADDITIVE `band_calibration`
+# section of GET /api/v1/v3/eval/calibration — segregated like the acute
+# pilot, never pooled into any Brier key.
+#
+# META analyst: no subscription.targets => single global sweep per tick; reads
+# scorecard rows + its own claims table directly via deps.pg_pool (the
+# calibration_tracking / forecast_scoreboard precedent). Pure SQL, NO LLM, $0.
+#
+# State: draft in-tree — registration
+# (scripts/bringup_register_band_calibration_tracker.py) and the operator's
+# activate flip are DEPLOY steps.
+
+identity:
+  id: band_calibration_tracker
+  name: Scorecard Band-Calibration Tracker (P2-3 harness)
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: p2_3_calibration
+
+subscription:
+  # META analyst: one global sweep per tick over the scorecard band history +
+  # the band_calibration_claims table. Reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: band_calibration_tracker
+  # No LLM block, no token budget — pure SQL over scorecard rows + claims.
+
+cadence:
+  # Once daily, AFTER the scorecard producer's daily rows and clear of the
+  # other deterministic sweeps (forecast_scoreboard "50 2", calibration_tracking
+  # "20 3") so the same-night scorecard head is visible to the scan.
+  fallback_schedule: "35 3 * * *"
+  cooldown_seconds: 79200        # 22h (strictly below the 24h interval)
+
+# The band_calibration_claims rows are side-written by the handler; the
+# returned summary finding is the genuine measurement product (OutputKind
+# FINDING via deterministic.OUTPUT_KIND_BY_SUB_HANDLER). No declared bindings.
+outputs: []

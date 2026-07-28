@@ -62,6 +62,11 @@ CORPUS_INDEX_MAPPING: dict[str, Any] = {
             "title": {"type": "text", "analyzer": "english"},
             "distilled_body": {"type": "text", "analyzer": "english"},
             "raw_body": {"type": "text", "analyzer": "english"},
+            # P2-1 / S-10: the evidence_archiver's Trafilatura-extracted FULL
+            # article text (payload.archived_text) — upgrades the thin teaser
+            # doc for every archived cited signal via the corpus_indexer
+            # dirty-marker re-index.
+            "archived_text": {"type": "text", "analyzer": "english"},
             "summary": {"type": "text", "analyzer": "english"},
             "best_body": {"type": "text", "analyzer": "english"},
             "entities_text": {"type": "text", "analyzer": "english"},
@@ -91,15 +96,18 @@ _SEARCH_FIELDS: tuple[str, ...] = (
     "title^2",
     "best_body^1.5",
     "distilled_body",
+    "archived_text",
     "summary",
     "raw_body",
     "entities_text",
 )
 
 #: best_body preference order (first non-empty wins) — OUR distilled brief first,
-#: then the full body, then the teaser, then rarer manual/derived text fields.
+#: then the archived FULL article text (P2-1 evidence archival, when present),
+#: then the ingest body, then the teaser, then rarer manual/derived text fields.
 _BEST_BODY_FIELDS: tuple[str, ...] = (
     "distilled_body",
+    "archived_text",
     "raw_body",
     "summary",
     "description",
@@ -209,6 +217,22 @@ def _license_class(row: Mapping[str, Any], payload: Mapping[str, Any]) -> str | 
     return None
 
 
+def signal_license_class(
+    row: Mapping[str, Any], payload: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Public license-class resolution for a ``signals`` row.
+
+    ``payload.license_class`` (the LIC-2 SourceScope→signal ingest stamp)
+    first, then the manual-batch ``raw_provenance`` license, else ``None``.
+    The ONE resolution shared by the corpus doc projection (facet hint) and
+    the P2-2 evidence-archiver license gate (enforcement) — so the gate and
+    the facet can never disagree. ``payload`` may be omitted; it is then
+    coerced from ``row['payload']`` (asyncpg jsonb may arrive as str)."""
+    if payload is None:
+        payload = _as_dict(row.get("payload"))
+    return _license_class(row, payload)
+
+
 def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
     """Project a ``signals`` row → an OpenSearch corpus doc.
 
@@ -227,6 +251,10 @@ def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
         "title": payload.get("title"),
         "distilled_body": payload.get("distilled_body"),
         "raw_body": payload.get("raw_body"),
+        # P2-1: the archived FULL article text (evidence_archiver writes
+        # payload.archived_text + nulls indexed_at per the dirty-marker
+        # contract, so the re-index lands it here — the S-10 depth fix).
+        "archived_text": payload.get("archived_text"),
         "summary": payload.get("summary"),
         "best_body": _first_nonempty(payload, _BEST_BODY_FIELDS) or None,
         "entities_text": _entities_text(payload) or None,

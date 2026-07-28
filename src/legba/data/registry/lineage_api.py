@@ -96,6 +96,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
 
+from ..archive import sha256_from_object_ref
 from ..provenance._core import compute_receipt_hash
 from .api import RegistryAPIDeps, require_bearer
 
@@ -140,6 +141,9 @@ class _SubstrateTable:
     media_ref_expr: str = "NULL::text"
     modality_expr: str = "NULL::text"
     mime_type_expr: str = "NULL::text"
+    # P2-1 evidence archival — only signals carry object_ref (the cas:sha256/
+    # <hex> content address of OUR archived copy of the original bytes).
+    object_ref_expr: str = "NULL::text"
     # The full report PAYLOAD (jsonb) carrying the written report (summary /
     # body / assessment / …). Projected for the ROOT node only (the Inspector
     # reads it to render the report text); the lineage walk root carries
@@ -171,6 +175,7 @@ _SUBSTRATE_TABLES: tuple[_SubstrateTable, ...] = (
         media_ref_expr="media_ref",
         modality_expr="modality",
         mime_type_expr="mime_type",
+        object_ref_expr="object_ref",
         body_expr="payload",
         # Signals are source-ingested, not analyst-run output — no run_id.
         run_id_expr="NULL::uuid",
@@ -301,6 +306,13 @@ class LineageNode(BaseModel):
     media_ref: str | None = None
     modality: str | None = None
     mime_type: str | None = None
+    # P2-1 evidence archival (additive): derived from signals.object_ref
+    # (cas:sha256/<hex>) — lets the receipt-chain walk state "evidence
+    # preserved" + the verifiable hash where the chain terminates in a signal.
+    # False/None for non-signal nodes and un-archived signals — never
+    # fabricated.
+    archived: bool = False
+    archive_sha256: str | None = None
     # The receipt-chain receipt for the run that produced this row — surfaced
     # on the ROOT *and* on every WALK node that maps to an analyst run (P1-T4,
     # so the P1-T5 UI can drill the DAG one hop at a time). Signals /
@@ -552,6 +564,8 @@ def _row_to_node(row: asyncpg.Record, *, depth: int) -> LineageNode:
         media_ref=row["media_ref"],
         modality=row["modality"],
         mime_type=row["mime_type"],
+        archived=row["object_ref"] is not None,
+        archive_sha256=sha256_from_object_ref(row["object_ref"]),
     )
 
 
@@ -578,6 +592,7 @@ def _projection(t: _SubstrateTable, *, with_body: bool = False) -> str:
         f"{t.media_ref_expr} AS media_ref, "
         f"{t.modality_expr} AS modality, "
         f"{t.mime_type_expr} AS mime_type, "
+        f"{t.object_ref_expr} AS object_ref, "
         f"{body_col}"
         f"schema_uri, derived_from "
         f"FROM {t.table} "

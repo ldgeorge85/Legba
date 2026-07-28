@@ -1,0 +1,66 @@
+# P3-6 Wave-A (A2) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Saudi-owned pan-Arab daily (English) — Gulf/narrative. Content-Type header lies (text/html) but the body is XML. Verified live 2026-07-02 (300 items).
+#
+# source_class: reporting. Credibility host aawsat.com (seeded 0.60/wire, state_affiliation True by the registrar).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route live.
+
+identity:
+  id: source.aawsat.english
+  name: Asharq Al-Awsat — English
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: p3_6_wave_a
+  created: "2026-07-27T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [SA]
+  languages: [en]
+  tags: [news, middle_east, gulf, wave_a]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "27 0-23/2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://english.aawsat.com/feed"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

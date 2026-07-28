@@ -1,0 +1,104 @@
+# narrative_mapper — P4-1 reified narratives + P4-2 source-echo graph
+# (deterministic META; planning/PROGRAM_RECOMMENDATIONS_2026-07-24.md §A11).
+#
+# A `deterministic`-kind META analyst (sub_handler=narrative_mapper) that reifies
+# the substrate-native NARRATIVE layer the operator amended in — NOT
+# account-level platform forensics (blocked on firehose data we do not hold), but
+# the reification of narratives over OUR OWN graph, the same philosophy as the
+# signed nexuses + the contention arbiter. Each daily tick:
+#
+#   (a) REIFIES NARRATIVES (P4-1). A narrative = a contested-claim family = one
+#       `fact_contention` group (a disputed subject/predicate + its competing
+#       value-cluster variants). The arbiter already finds these; the mapper
+#       enriches each with the PROPAGATION dimension — carrier sources,
+#       per-source first-seen, echo lag (who published first = the LEAD, who
+#       followed and at what delay), and the per-source co-carriage ordering —
+#       resolved through the SAME lineage the arbiter counts on
+#       (fact_contention_values.supporting_fact_ids -> facts.derived_from ->
+#       signals.source_id, publish time at signals.payload->>'published_at',
+#       fetched_at as proxy). Writes `narratives` (migration 0102).
+#   (b) REFRESHES THE SOURCE-ECHO GRAPH (P4-2). A DIRECTED aggregate over the
+#       whole narrative population — leader_source -> follower_source, "across
+#       the narratives both carried, how often did the follower publish AFTER the
+#       leader, within echo_window_hours?" — computed ONLY from publish-dated
+#       co-carriage. Writes `narrative_echo_edges` (migration 0102). The
+#       descriptive counterpart of structural_balance reading the nexus graph.
+#   (c) EMITS ONE honest summary FINDING per run (narratives reified / top echo
+#       relationships / systematic-echo count) — zero-state honest ("0
+#       contested-claim families reified").
+#
+# HONESTY (carried verbatim on the finding + the /v3/narratives route + mig 0102):
+#   * DETECT-ONLY. Reads the contention sidecar + lineage; writes ONLY the two
+#     derived tables + this summary finding. NEVER mutates a fact / contention /
+#     value cluster (the arbiter's never-mutate-facts invariant, extended).
+#   * ECHO-LEAD IS DESCRIPTIVE, NOT CAUSAL. "B published after A within N hours"
+#     is observable publish-order timing — NOT evidence B copied A, and NOT a
+#     coordination claim. No claim of coordination beyond co-carriage timing.
+#   * PUBLISH TIME IS BEST-EFFORT (two-tier honesty split, geo_convergence
+#     precedent): first/last-seen may fall back to fetched_at, but the echo GRAPH
+#     is built ONLY from publish-dated carriage — a fetch-time-only pair never
+#     mints an edge (fetch order is not publish order).
+#
+# RECOMPUTABLE READOUT (source_track_records precedent): both tables are
+# wholesale-refreshed each run (upsert current + prune gone) — a live readout, no
+# supersession chain (history lives in the trace).
+#
+# SEAM (documented, NOT wired): the LLM `narrative_coordination` unit could
+# ground on this sidecar via a new "narratives" grounding-source token
+# (analyst_deps_builder sources dispatch + a grounding.py block builder). Additive
+# and out of P4 scope — left as a seam.
+#
+# META analyst: no subscription.targets => single global sweep per tick; reads
+# the contention sidecar + fact/signal lineage directly via deps.pg_pool (the
+# source_track_record / band_calibration_tracker precedent). Pure SQL, NO LLM, $0.
+#
+# State: draft in-tree — registration
+# (scripts/bringup_register_narrative_mapper.py) and the operator's activate flip
+# are DEPLOY steps. Migration 0102 (narratives + narrative_echo_edges) must be
+# applied BEFORE first activation.
+
+identity:
+  id: narrative_mapper
+  name: Narrative Mapper (P4-1 narratives + P4-2 source-echo graph)
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: p4_narratives
+
+subscription:
+  # META analyst: one global sweep per tick over the fact_contention sidecar +
+  # the fact->signal->source lineage. Reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: narrative_mapper
+  # No LLM block, no token budget — pure SQL over the contention sidecar +
+  # lineage. Optional tunables (all defaulted in the handler):
+  #   echo_window_hours (48), min_co_carriage (2), systematic_floor (3),
+  #   echo_ratio_floor (0.6), max_narratives (5000).
+
+cadence:
+  # Once daily at 05:17 UTC — clear of the top-of-hour ticks and OFFSET from the
+  # other daily deterministic META sweeps (band_calibration "35 3",
+  # source_track_record "23 4", fact_decay_scan "52 4"). The arbiter refreshes
+  # the contention sidecar hourly (:37), so it is always fresh at tick time.
+  fallback_schedule: "17 5 * * *"
+  cooldown_seconds: 79200        # 22h (strictly below the 24h interval)
+
+# The narratives + narrative_echo_edges rows are side-written by the handler; the
+# returned summary finding is the genuine measurement product (OutputKind FINDING
+# via deterministic.OUTPUT_KIND_BY_SUB_HANDLER). No declared bindings.
+outputs: []

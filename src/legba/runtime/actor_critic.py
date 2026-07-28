@@ -455,6 +455,10 @@ async def verify_inline_target_finding(
             indicators=indicators,
             title=title,
             target_id=target_id,
+            # E-1: the same-turn conn powers the facts-reconciled officeholder
+            # guard (stale_leader_vs_facts — flag/demote only, never a
+            # correction; degrade-not-drop inside the guard on a read failure).
+            facts_conn=conn,
         )
     except Exception as exc:  # pragma: no cover — verify must never break a run
         logger.warning(
@@ -485,6 +489,11 @@ async def verify_inline_target_finding(
     analyzed_analyst_version = str(deps.descriptor.identity.version)
     analyzed_model = _extract_primary_model_ref(deps.descriptor)
     judge_model = str(getattr(deps.verify_judge, "subprovider", "") or "deterministic-floor")
+    # P2-4: the RESOLVED judge stack-ref (the JudgeRoute the host wired behind
+    # deps.verify_judge). Stamped into the critique row (``judge_llm_ref``) so
+    # provenance records which model judged, forever. "" = floor-only (no judge
+    # wired); judge_status in the report says whether the judge actually graded.
+    judge_llm_ref = str(getattr(deps, "verify_judge_ref", "") or "")
 
     payload = build_faithfulness_critique_payload(
         report,
@@ -493,6 +502,7 @@ async def verify_inline_target_finding(
         analyzed_analyst_version=analyzed_analyst_version,
         analyzed_model=analyzed_model,
         judge_model=judge_model,
+        judge_llm_ref=judge_llm_ref,
     )
 
     # The verify pass IS the critic here — stamp the analyst_ctx with this
@@ -541,3 +551,107 @@ async def verify_inline_target_finding(
         await _stamp_journal_contradicted_flag(conn, finding_id)
 
     return report.as_dict()
+
+
+async def verify_structural_claims_finding(
+    conn: asyncpg.Connection,
+    *,
+    deps: "_AnalystDeps",
+    finding_id: UUID,
+    finding_payload: Any,
+    run_id: Any,
+    derived_from: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    """Run the C2b ``structural_claims`` verify over a just-emitted STRUCTURAL
+    finding and PERSIST the verdict as a ``critique`` (the standard contract).
+
+    The claim-bearing structural analysts (``STRUCTURAL_CLAIMS_VERIFY_ANALYSTS``)
+    emit findings OUTSIDE the faithfulness pass but assert CHECKABLE quantities
+    (a converged-cell distinct-count, an echo count, a rollup identity). This
+    DETERMINISTICALLY re-derives each declared claim from the constituent set the
+    finding recorded and writes a ``kind='critique'`` row carrying a
+    ``structural_verified`` marker + per-claim ledger. A finding with no
+    ``data['structural_claims']`` block is a NO-OP (writes nothing; the row keeps
+    its honest ``unverified — structural`` badge). NEVER raises into the run path.
+
+    OFF-safe: the critique's ``overall_score`` is pinned to 1.0 unless
+    ``LEGBA_STRUCTURAL_VERIFY_GATE`` is on (compute-and-show, do-not-gate — the
+    verdict is shown via the badge + verification detail without demoting
+    effective_confidence). Returns the verification dict (for the trace) or None.
+    """
+    data = getattr(finding_payload, "data", None)
+    if not isinstance(data, Mapping):
+        return None
+
+    from ..data.provenance._core import AnalystContext
+    from ..data.provenance.verify import (
+        build_structural_critique_payload,
+        verify_structural_claims,
+    )
+    from ..data.provenance.writes import write_critique
+
+    try:
+        report = verify_structural_claims(data=data, derived_from=derived_from)
+    except Exception as exc:  # pragma: no cover — verify must never break a run
+        logger.warning(
+            "actor_critic.structural_verify.failed finding_id=%s err=%s",
+            finding_id, exc,
+        )
+        return None
+
+    # No declared claims → nothing to verify → no critique (honest no-op).
+    if not report.had_claims:
+        return None
+
+    analyzed_analyst_id = str(deps.descriptor.identity.id)
+    analyzed_analyst_version = str(deps.descriptor.identity.version)
+    payload = build_structural_critique_payload(
+        report,
+        analyzed_output_id=finding_id,
+        analyzed_analyst_id=analyzed_analyst_id,
+        analyzed_analyst_version=analyzed_analyst_version,
+    )
+    # The verify pass IS the critic; stamp this analyst's identity. A structural
+    # critique is not target-scoped (target_id NULL), mirroring the faithfulness
+    # critique.
+    ctx = AnalystContext(
+        analyst_id=analyzed_analyst_id,
+        analyst_version=analyzed_analyst_version,
+        run_id=run_id,
+        target_id=None,
+        target_version=None,
+    )
+    try:
+        row, dlq = await write_critique(
+            conn,
+            analyst_ctx=ctx,
+            payload=payload,
+            derived_from=[finding_id],
+        )
+        if row is None:
+            logger.warning(
+                "actor_critic.structural_verify.critique_dlq finding_id=%s — "
+                "structural critique failed validation (sent to DLQ)", finding_id,
+            )
+    except Exception as exc:  # pragma: no cover — best-effort persist
+        logger.warning(
+            "actor_critic.structural_verify.persist_failed finding_id=%s err=%s",
+            finding_id, exc,
+        )
+
+    if report.miscount:
+        logger.warning(
+            "actor_critic.structural_verify.miscount finding_id=%s analyst=%s "
+            "miscount=%d checkable=%d — a structural finding misstates its own "
+            "evidence", finding_id, analyzed_analyst_id, report.miscount,
+            report.checkable,
+        )
+
+    return {
+        "structural_verify": True,
+        "structural_verified": report.structural_verified,
+        "checkable_claims": report.checkable,
+        "supported_claims": report.supported,
+        "miscount_claims": report.miscount,
+        "unverifiable_claims": report.unverifiable,
+    }

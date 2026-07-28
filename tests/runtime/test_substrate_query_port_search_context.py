@@ -17,7 +17,11 @@ INFRA-FREE (no live Postgres / Qdrant). Exercises the port method contract:
     an empty query short-circuits, an embed failure degrades to ``unavailable``;
   * a per-collection Qdrant error is skipped (the other corpus still
     contributes) rather than failing the whole call; an empty-text chunk is
-    dropped.
+    dropped;
+  * REF HONESTY (W2-T4 residual): chunk ids come back ``ctx:``-prefixed —
+    visibly NOT substrate UUIDs, excluded from substrate lineage by the
+    loop's ``_coerce_uuid_list`` — with the parallel ``context_refs`` list +
+    ``refs_note`` stating they are non-citable background refs.
 
 ``pg_pool`` is never touched by ``search_context`` — a bare sentinel stands in.
 """
@@ -145,8 +149,13 @@ async def test_search_context_searches_both_corpora_and_merges_by_score() -> Non
 
     # Merged newest-similarity-first (tradecraft 0.90 before world_context 0.70).
     assert out["count"] == 2
-    assert [r["chunk_id"] for r in out["rows"]] == ["tc-1", "wc-1"]
-    assert out["refs"] == ["tc-1", "wc-1"]
+    assert [r["chunk_id"] for r in out["rows"]] == ["ctx:tc-1", "ctx:wc-1"]
+    # W2-T4 REF HONESTY: chunk refs are ctx:-prefixed (non-UUID, so the
+    # consult loop's _coerce_uuid_list EXCLUDES them from substrate lineage
+    # by design) and mirrored on the explicit context_refs list.
+    assert out["refs"] == ["ctx:tc-1", "ctx:wc-1"]
+    assert out["context_refs"] == ["ctx:tc-1", "ctx:wc-1"]
+    assert "non-citable" in out["refs_note"]
 
     # The Lane-4 payload metadata rides on each row.
     top = out["rows"][0]
@@ -173,7 +182,7 @@ async def test_search_context_corpus_filter_narrows_to_one_collection() -> None:
 
     assert out["corpora_searched"] == ["tradecraft"]
     assert {c["collection_name"] for c in qdrant.calls} == {_TC}
-    assert [r["chunk_id"] for r in out["rows"]] == ["tc-1"]
+    assert [r["chunk_id"] for r in out["rows"]] == ["ctx:tc-1"]
 
 
 @pytest.mark.asyncio
@@ -223,7 +232,7 @@ async def test_search_context_k_is_clamped_and_merged_across_corpora() -> None:
     # 4 hits total, clamped to k=3, ordered by score.
     assert out["k"] == 3
     assert out["count"] == 3
-    assert [r["chunk_id"] for r in out["rows"]] == ["tc-1", "tc-2", "wc-1"]
+    assert [r["chunk_id"] for r in out["rows"]] == ["ctx:tc-1", "ctx:tc-2", "ctx:wc-1"]
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +249,7 @@ async def test_search_context_unknown_corpus_is_structured_error_no_embed() -> N
     out = await port.search_context(query="q", corpus="bogus")
 
     assert "error" in out and "unknown corpus" in out["error"]
-    assert out["rows"] == [] and out["refs"] == []
+    assert out["rows"] == [] and out["refs"] == [] and out["context_refs"] == []
     # No embed round-trip, no Qdrant call.
     assert embedder.embed_calls == []
     assert qdrant.calls == []
@@ -267,7 +276,7 @@ async def test_search_context_empty_query_skips_embed() -> None:
 
     out = await port.search_context(query="   ")
 
-    assert out["rows"] == [] and out["refs"] == []
+    assert out["rows"] == [] and out["refs"] == [] and out["context_refs"] == []
     assert out["note"] == "empty_query"
     assert embedder.embed_calls == []
     assert qdrant.calls == []
@@ -300,7 +309,7 @@ async def test_search_context_per_collection_error_is_skipped() -> None:
 
     # tradecraft raised → skipped; world_context still contributes.
     assert out["corpora_searched"] == ["world_context"]
-    assert [r["chunk_id"] for r in out["rows"]] == ["wc-1"]
+    assert [r["chunk_id"] for r in out["rows"]] == ["ctx:wc-1"]
 
 
 @pytest.mark.asyncio
@@ -317,4 +326,4 @@ async def test_search_context_drops_empty_text_chunk() -> None:
     out = await port.search_context(query="q")
 
     # The empty-text chunk is dropped even though it scored higher.
-    assert [r["chunk_id"] for r in out["rows"]] == ["wc-good"]
+    assert [r["chunk_id"] for r in out["rows"]] == ["ctx:wc-good"]

@@ -30,6 +30,7 @@ import {
 } from 'recharts'
 import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet, ApiError } from '@/lib/api'
+import { useDockviewTileRedraw } from '@/components/useTileRedraw'
 import type { PanelProps } from '@/types'
 import { selectRow } from '@/state/selection'
 import {
@@ -87,6 +88,12 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: unknow
 
 export default function TargetTimelinePanel({ registration, scope }: PanelProps) {
   const target_id = scope.target_id ?? registration.descriptor_id
+
+  // Background-tab fix (P0-2f): recharts' ResponsiveContainer measures a
+  // zero-size box when the panel mounts into an inactive Dockview tab and
+  // renders a blank chart on activation. Remount it (key=tick) each time the
+  // tile becomes visible so it re-measures the real box.
+  const redrawTick = useDockviewTileRedraw()
 
   const signalsQ = useQuery<Page<TLSignal>>({
     enabled: !!target_id,
@@ -152,7 +159,7 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
           </div>
         ) : (
           <div className="flex-1 min-h-[260px]" data-testid="target-timeline-chart">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer key={redrawTick} width="100%" height="100%">
               <ScatterChart margin={{ top: 12, right: 16, bottom: 28, left: 64 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
                 <XAxis

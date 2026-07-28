@@ -86,7 +86,12 @@ from enum import Enum
 from pydantic import BaseModel
 
 from ..data.provenance._core import AnalystContext
-from ..data.provenance.kinds import TRACE_ONLY, OutputKind, _TraceOnly
+from ..data.provenance.kinds import (
+    TRACE_ONLY,
+    OutputKind,
+    _TraceOnly,
+    structural_claims_verify_opt_in,
+)
 from ..data.provenance.models import FindingPayload
 from ..data.provenance.output_graph import make_conn_age_output_hook
 from ..data.provenance.receipts import RuntimeReceiptChain
@@ -328,6 +333,11 @@ class _AnalystDeps(BaseModel):
     # deterministic citation-presence floor labelled 'judge-unavailable' (it
     # NEVER fabricates a judge number). Scoped to the inline_target finding kind.
     verify_judge: Any | None = None
+    # P2-4 — the RESOLVED judge stack-ref (``JudgeRoute.component_id``) behind
+    # ``verify_judge``. Set iff ``verify_judge`` was wired; stamped into every
+    # faithfulness critique row (``judge_llm_ref``) so provenance records which
+    # model judged, forever. ``""`` = no judge wired (floor-only).
+    verify_judge_ref: str = ""
 
 
 _TARGET_DEPS: dict[str, _TargetDeps] = {}
@@ -452,24 +462,27 @@ def _age_derived_from_enabled() -> bool:
 
 
 def _descriptor_declares_verify(descriptor: Any) -> bool:
-    """True iff the descriptor declares ``method.llm.verify`` (the P0-T2 verify
-    OPT-IN).
+    """True iff the descriptor opts into the P0-T2 verify pass (a judge route
+    resolves: ``method.llm.judge`` OR today's ``method.llm.verify``).
 
     The verify DISPATCH discriminator for the ``meta_findings_synthesizer`` kind:
     both the per-country and the GLOBAL/world composition carry a
     ``method.llm.verify`` block; the OLD global ``meta_synthesizer`` does NOT — so
     keying on this predicate (rather than ``bool(target_id)``) fires the
     faithfulness verify for the target-LESS world composition while keeping the
-    old global meta excluded. Lazily imports ``_verify_llm_component_id``
-    (runtime-side; the lazy import avoids any module load cycle). Any import/parse
-    error → ``False`` (verify degrades to not-firing, never crashes a run).
+    old global meta excluded. P2-4: keyed on the judge-route resolver so a future
+    descriptor carrying only the new ``method.llm.judge`` key also dispatches
+    (today no descriptor does — byte-identical to the old ``method.llm.verify``
+    presence test). Lazily imports ``resolve_judge_route`` (runtime-side; the
+    lazy import avoids any module load cycle). Any import/parse error →
+    ``False`` (verify degrades to not-firing, never crashes a run).
     """
     try:
-        from .analyst_deps_builder import _verify_llm_component_id
+        from .analyst_deps_builder import resolve_judge_route
     except Exception:  # pragma: no cover — defensive; keeps dispatch total
         return False
     try:
-        return _verify_llm_component_id(descriptor) is not None
+        return resolve_judge_route(descriptor) is not None
     except Exception:  # pragma: no cover
         return False
 
@@ -2836,6 +2849,48 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             "run_id=%s err=%s", actor_id, run_id, exc,
                         )
 
+                # C2b (P4-6) — the structural_claims verify PROFILE. A
+                # CLAIM-BEARING structural analyst (STRUCTURAL_CLAIMS_VERIFY_
+                # ANALYSTS: geo_convergence_scan / indicator_tracker /
+                # thematic_proposal / …) emits its FINDING outside the
+                # faithfulness pass (no LLM prose to grade) but asserts a
+                # CHECKABLE quantity. When its finding carries a
+                # ``data['structural_claims']`` block, DETERMINISTICALLY re-derive
+                # each asserted number from the constituent set the finding
+                # recorded and persist a ``structural_verified`` critique (the
+                # standard contract). OFF-safe: the critique never demotes
+                # effective_confidence unless LEGBA_STRUCTURAL_VERIFY_GATE is on.
+                # No claims block → no-op. Best-effort — never breaks a run.
+                if (
+                    not trace_only
+                    and output_row is not None
+                    and output_kind == OutputKind.FINDING
+                    and structural_claims_verify_opt_in(
+                        deps_bundle.descriptor.identity.id
+                    )
+                ):
+                    try:
+                        # Writes its own kind='critique' row (best-effort) and
+                        # returns a summary dict. Deliberately NOT folded into
+                        # ``verification_block`` — the structural verdict is a
+                        # SEPARATE critique (surfaced via the reads-API structural
+                        # lateral), never a faithfulness verdict for the S8-T2
+                        # escalation gate. Its effect on effective_confidence is
+                        # OFF-safe (gated behind LEGBA_STRUCTURAL_VERIFY_GATE).
+                        await verify_structural_claims_finding(
+                            conn,
+                            deps=deps_bundle,
+                            finding_id=output_row.id,
+                            finding_payload=output_payload,
+                            run_id=run_id,
+                            derived_from=derived_ids,
+                        )
+                    except Exception as exc:  # pragma: no cover — never break a run
+                        logger.warning(
+                            "dapr_actors.analyst.structural_verify.failed "
+                            "actor_id=%s run_id=%s err=%s", actor_id, run_id, exc,
+                        )
+
                 # Publish analyst-output event per L-191:
                 # ``analyst.<analyst_id>.<channel>`` where ``channel`` is
                 # the plural lower-snake form of the output kind name
@@ -3177,6 +3232,7 @@ from .actor_critic import (  # noqa: F401  -- re-export: public API stability (#
     _resolve_critic_context,
     _critic_descriptor_pinned_analyst_id,
     verify_inline_target_finding,
+    verify_structural_claims_finding,
 )
 
 

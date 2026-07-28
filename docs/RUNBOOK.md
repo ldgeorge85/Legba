@@ -29,7 +29,8 @@ specs under `docs/` for context. New here? Start with the
 [20 Pre-push scan + squash](#20-pre-push-secretcodename-scan--neutral-identity-squash) ·
 [21 Release checklist](#21-release-checklist-pre-tag) ·
 [22 Multi-replica proof](#22-multi-replica-local-proof-scaling-multinode) ·
-[23 Backup & restore](#23-backup--restore-resilience-observability-w-1b-5)
+[23 Backup & restore](#23-backup--restore-resilience-observability-w-1b-5) ·
+[24 Host stall watchdog](#24-host-stall-watchdog-actor-plane-auto-recovery)
 
 ## 0. Critical operator notes (read these first)
 
@@ -75,8 +76,8 @@ specs under `docs/` for context. New here? Start with the
 - **⚠️ The journal needs its OWN dead-analyst canaries — two of them.** The journal assessor (Legba's first-person reflective voice) runs as **two META single-global-run analysts** (`target_filter=None`, like `world_assessor`) that SHARE one extension analyst kind, `journal_assessor` (registered via `register_analyst_kind` + the vocabulary-entries family — NOT a built-in `AnalystKind`; the built-in-kind count is unchanged): the **entry tier** (`journal_assessor`, descriptor `descriptors/analyst_journal_assessor.yaml`, cadence `0 0,12 * * *` = every 12h) and the **consolidation tier** (`journal_consolidator`, `descriptors/analyst_journal_consolidator.yaml`, cadence `0 2 * * *` = daily 02:00 UTC). Each global-run analyst can go silently dead WITHOUT a target to flag it, so **each needs its OWN activation canary** — the entry-tier canary exercises a DIFFERENT actor id than the consolidator, so a green entry tier does NOT prove the consolidator is alive. **The daily consolidator hides death the LONGEST** (a 24h beat); watch its `produced_at` directly. Producer output lands in the dedicated `journal_entries` table (migration **0048**, which also adds `journal_proposals`) — NOT `analyst_outputs` — and is **OFF the fact/finding/nexus chain**: a journal row is a *perspective OVER* the provenance chain, carrying an always-empty `derived_from` and deliberately excluded from the lineage catalog, so a `GET /api/v1/lineage/...` walk can never surface it. The two analysts are granted ONLY the `journal_read` (14 read tools incl. 9 self-instruments) + `journal_propose` packs (both non-write-fact — the grant-layer backstop for the never-write-a-fact invariant). Register them with `scripts/bringup_register_action_packs.py` (packs) + `scripts/bringup_register_analysts.py` (descriptors + the `journal_assessor` kind). The journal writes ONLY its own entries/consolidations directly; every outward effect (a correction, a change, or a self-revision) goes to the **human-gated `journal_proposals` queue**, never a live table — operator review happens via the accept/reject routes (`GET /api/v1/journal_proposals?status=pending`, `POST /api/v1/journal_proposals/{id}/accept`, `POST /api/v1/journal_proposals/{id}/reject` — reject REQUIRES a `decision_reason`; a `self_revision` touching a protected section auto-rejects on accept). Entries themselves render via `GET /api/v1/journal` + the `system.journal` UI panel.
 
 - **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~57 registered source descriptors, ~50 live/active including seed/baseline plus the standalone state-media feeds IRNA / PressTV / Ukrinform and the UCDP GED adapter — the latter currently **paused pending an access token**). To stand a fresh instance up to current scope:
-  1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations — currently `0054`…`0085` (live head **0085**).
-  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the seven bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`); `bringup_register_watch_country_targets.py` adds the 6-desk watch tier; `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
+  1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations — currently `0054`…`0105` (live head **0105**; `0095`/`0100` intentionally unused — the runner discovers by sorted glob, so gaps are harmless).
+  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the seven bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`); `bringup_register_watch_country_targets.py` adds the watch tier (13 desks today — extend its `WATCH_ISO2` list to add more); `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
   3. **Then the FULL source catalog** — run `scripts/bringup_register_source_catalog.py` to register the 46-source catalog (this is what takes the instance from the 3-feed cold-start to current scope), plus the deterministic cadence analysts + the budget envelope (§7).
   4. Seed the knowledge roots (§7.2) and verify ingestion (§9). A current-scope instance reaches order-of-magnitude tens-of-thousands of signals and tens-of-thousands of findings — the 3-feed set will not.
 
@@ -100,7 +101,25 @@ specs under `docs/` for context. New here? Start with the
   the registry).
 * **MCP image (profile `mcp`):** `legba-mcp` — stdio MCP server
   launched per-conversation by the MCP client (e.g. Claude Code) via
-  `docker run -i --rm`.
+  `docker run -i --rm`. Ships **seven built-in substrate tools**
+  (`substrate_findings` / `substrate_situations` / `substrate_signals` /
+  `lineage_walk` / `since` / `export` / `consult`) — reads + consult only,
+  mutations rejected; needs the registry reachable (`--network legba_default`).
+* **Alerts (profile `alerts`):** `ntfy` — a local push-notification
+  service (image `binwiederhier/ntfy`, loopback `127.0.0.1:8093`, cache
+  volume `legba_ntfy_cache` so topic history survives recreates;
+  `NTFY_BASE_URL` via `LEGBA_NTFY_BASE_URL`). Inert unless the profile is
+  started AND a sink env (`LEGBA_ALERT_NTFY_URL`) points at it — see §4.0.1.
+* **Extra source lanes (profile `sources-extra`):** `rsshub` — a local
+  RSSHub instance (loopback `127.0.0.1:1200`; compose peers reach it as
+  `rsshub:1200`) backing the profile-gated RSSHub draft source
+  descriptors. Inert by default; the runtime's RSS SSRF guard is punched
+  for it via `LEGBA_EGRESS_ALLOW_HOSTS` (compose default `rsshub`).
+* **Evidence-archive volume:** `legba-runtime-dapr` mounts the named
+  volume `legba_archive` at `/var/lib/legba/archive` (`LEGBA_ARCHIVE_ROOT`)
+  — the content-addressed store the `evidence_archiver` writes
+  (`cas:sha256/<hex>`). Archived objects are evidence: nothing deletes
+  them (SEAMS #42) — disk is an operator watch item.
 
 The 2026-05-23 multi-image containerization makes container-mode the
 canonical bring-up. Host-mode systemd units are documented as an
@@ -204,14 +223,24 @@ python3 -m legba.data.migrate
 Idempotent. Re-runs skip already-applied migrations
 (ledger: `legba_data_migrations`).
 
-> A **fresh deploy** does not replay the 23-file migration history: it applies the
+> A **fresh deploy** does not replay the full migration history: it applies the
 > single round-trip-proven baseline `deploy/baseline/0001_baseline.sql` (which builds
 > the schema + AGE graph and pre-seeds the ledger to head **0053**), then `migrate`
-> applies any **future** (`0054`+) migrations — currently `0054`…`0085`; live head
-> **0085**. Highlights: the contested-claims schema, the `unit_reference_labels`
+> applies any **future** (`0054`+) migrations — currently `0054`…`0105`; live head
+> **0105** (`0095`/`0100` intentionally unused; the runner discovers by sorted glob,
+> so gaps are harmless). Highlights: the contested-claims schema, the
+> `unit_reference_labels`
 > gold table, and the composition-tower supersession fold (`0054`…`0060`); the
-> DQ-program migrations (`0061`…`0075`); and the 2026-07 audit-remediation sweep
-> (`0076`…`0080`). The audit-remediation migrations are **demote/close-only** (they
+> DQ-program migrations (`0061`…`0075`); the 2026-07 audit-remediation sweep
+> (`0076`…`0080`); the signal-content-depth markers (`0081`…`0085`); the
+> entity-identity / salience / journal-data wave (`0086`…`0090`); and the
+> 2026-07-28 release wave (`0091`…`0105` — alert-trigger watermarks, poll
+> `newest_entry_ts`, band-calibration claims, the source-assurance ledger,
+> correctness labels + gold-set pinning, contention surfacing + the tie-break
+> cache, fact-decay states, source track records, the traces-retention index,
+> narratives + echo edges, desk baselines, the evidence archive, and the
+> watchlist — all additive/idempotent; see `DATA_MODEL.md` for the per-table
+> detail). The audit-remediation migrations are **demote/close-only** (they
 > tombstone or re-fold junk, never hard-delete):
 >
 > - **0076** — entity re-fold + junk gate (`entity_profiles` 12,257 → 12,144).
@@ -262,6 +291,22 @@ Set in the gitignored `.env` (placeholders + full notes in `.env.example`):
 | `LEGBA_A2A_ENABLED` / `LEGBA_A2A_TRUSTED_KEYS` | mount + key-gate the runtime `/a2a/skills` surface | unset → a2a UNMOUNTED |
 | `LEGBA_ACTOR_INVOKE_TIMEOUT_SECONDS` | ActorProxy invoke round-trip budget (the trigger-engine → actor `run` call). Raised from 60→180 so a busy target's `cross_source_dedup` sweep doesn't time out; the actor's own cooldown + trigger-window CAS dedup a late completion. | unset / malformed / ≤0 → falls back to **180s** (`source_first_runtime.actor_invoke_timeout_seconds`) |
 
+### 4.0.1 Alerting + archive + retention keys (2026-07 wave)
+
+Also set in the gitignored `.env`. These reach the containers via `env_file`
+— most are NOT explicit compose `environment:` keys, so a `.env` edit +
+`--force-recreate` is the activation path (no rebuild).
+
+| Key | Purpose | Default behavior when unset |
+|---|---|---|
+| `LEGBA_ALERT_WEBHOOK_URL` | target URL for the generic webhook alert sink (`data/alerts/webhook_sink.py`) | unset → the sink declares itself unconfigured: attempts ledger as `skipped_unconfigured`, and the sink **drops out of fan-out entirely when a configured sibling sink exists** (the no-sinks-at-all case keeps writing the audited skip so the gap stays visible) |
+| `LEGBA_ALERT_WEBHOOK_MIN_SEVERITY` | severity floor for the webhook sink | `high` |
+| `LEGBA_ALERT_NTFY_URL` (+ `LEGBA_ALERT_NTFY_TOKEN`, `LEGBA_ALERT_NTFY_MIN_SEVERITY`) | the native ntfy push sink (`data/alerts/ntfy_sink.py` — `X-Title` / `X-Priority` / `X-Tags` / tap-to-open `X-Click` receipt link). Point it at the profile-gated local service, e.g. `http://ntfy/legba-alerts` | unset → unconfigured (same audited-skip semantics); min-severity defaults `high` |
+| `LEGBA_ALERT_SINK_COOLDOWN_SECONDS` | per-sink cooldown in the `AlertSinkDispatcher`. Suppressed alerts are **coalesced, never dropped**: the next delivery carries "+N more alert(s) during cooldown" with a bounded preview | `60` |
+| `LEGBA_PUBLIC_BASE_URL` | makes the receipt link on every outbound alert an absolute URL (`<base>/api/v1/lineage/…`) | unset → the payload carries the relative lineage path only (ntfy omits `X-Click`) |
+| `LEGBA_ARCHIVE_ROOT` | filesystem root of the evidence-archive CAS store (`data/archive.py`) | `/var/lib/legba/archive` (the compose-mounted `legba_archive` volume) |
+| `LEGBA_ANALYST_TRACES_TTL_DAYS` | TTL for the `analyst_traces_retention` purge handler (draft; mig 0101 adds its age-only purge-scan index; FK-safe — critiques cascade, DLQ rows null out). Keep the TTL **well above 7 days** (30+ recommended — the telemetry API aggregates a 7-day window over `analyst_traces`; documented guidance, not code-enforced) | `0` → **disabled** (ships inert; a positive value is the operator opt-in). The env var is the real config path: the descriptor schema forbids a `method.options` block, so the TTL cannot ride the descriptor. `signals_retention` has the **same options-only read with NO env fallback** — it currently cannot be enabled at all; tracked as the same-class gap |
+
 ### 4.1 Endpoint surface (as of 2026-05-29)
 
 Beyond the v1 registry CRUD (descriptors / stack / vault / DLQ / audit
@@ -288,6 +333,12 @@ endpoints for the UI + operator tooling:
 | `PUT /api/v1/source_credibility/{host}` | upsert single host |
 | `POST /api/v1/source_credibility/bulk` (CSV) | bulk import |
 | `GET/WS /api/v1/registry/events?filter=<NATS subject>` | live multiplexer (`descriptor.>`, `stack.>`, `legba.dlq.>`, `analyst.<id>.>`, etc.) |
+
+The 2026-07-28 wave added a further `/api/v1/v3` read family — `since` /
+`timeline` / `export` / `narratives`(+`/echo`) / `eval/goldset/*` /
+`eval/desk_baselines` / `eval/band_trajectory` / `sources/{id}/assurance` /
+`watchlist` (the family's first write surface) — and freshness grades on
+`system/source-firing`; the per-route table is `ARCHITECTURE.md` §8.7.
 
 All gated by `Authorization: Bearer <LEGBA_REGISTRY_API_TOKEN>` —
 fail-closed (503) when the token is unset, unless `LEGBA_DEV_MODE=1` (§4).
@@ -1719,6 +1770,13 @@ must never be committed). If `gitleaks` is on PATH it also runs (best-effort).
 `origin/main..HEAD` — resolved by the squash below, which is the intended
 remediation and is **operator-only**.
 
+**Changelog step (required before the squash):** draft the release's
+`CHANGELOG.md` entry FIRST — public history is squashed per release, so the
+changelog is the only public release record, and writing the entry forces the
+"what exactly is in this push?" review (public-docs vocabulary only: no hosts,
+no codenames, nothing not already public). The entry rides inside the release
+commit.
+
 ### Neutral-identity squash recipe (operator-only)
 
 The codename lives in commit *metadata*, not file content, and is ALREADY on
@@ -2017,4 +2075,18 @@ The cron entry is host-side (not in the repo); reinstall on a new host:
 
 ```
 */5 * * * * root /usr/local/deployments/active/legba/scripts/host_stall_watchdog.sh >> /var/log/legba_host_watchdog.log 2>&1
+```
+
+**Verifying a deploy while the watchdog is disabled — path-greps lie.** The
+app images install the `legba` package into **site-packages**; there is no
+`/app/src` copy of the code in a built image. Grepping a repo-style path
+inside a container therefore proves nothing about what the image actually
+runs. Verify a rebuilt image carries a change by **python-import**, e.g.:
+
+```
+docker exec legba-legba-runtime-dapr-1 python - <<'EOF'
+import inspect, legba.data.alerts.sinks as m
+print(m.__file__)                       # …/site-packages/legba/…
+print("suppressed_in_cooldown" in inspect.getsource(m))   # the marker you shipped
+EOF
 ```

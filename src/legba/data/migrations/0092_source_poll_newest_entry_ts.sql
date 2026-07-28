@@ -1,0 +1,34 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0091_source_poll_newest_entry_ts.sql
+--
+-- B0-12 (watchdog precision) — record the newest entry timestamp the handler
+-- OBSERVED upstream on each non-productive poll.
+--
+-- WHY:
+--   An empty-streak of HTTP-200-but-0-signals polls is ambiguous: the feed may
+--   simply be quiet (weekly/monthly feeds — 7/8 of the B0-11 "stalled cluster"
+--   were exactly this honest-quiet class), or the cursor / since-filter /
+--   ingestion filter may be EATING live entries (the B0-11 stategov
+--   cursor-poison class: a future-dated cursor filtered every real entry as
+--   already-seen for what would have been a year). The poll outcome row alone
+--   cannot discriminate — both look identical (outcome='empty',
+--   health_state='healthy').
+--
+--   `newest_entry_ts` is the discriminating evidence: the newest
+--   (future-skew-clamped) entry timestamp the handler saw in the fetched feed
+--   document, BEFORE the since-filter dropped anything (recorded by the rss
+--   handler's health record, surfaced here by SourceCore._record_poll_outcome).
+--   The liveness watchdog's empty-streak check compares it against the source's
+--   newest ingested signal:
+--     newest_entry_ts <= last ingest  → honest-quiet  → NO alert
+--     newest_entry_ts >  last ingest  → cursor/filter fault → escalate
+--   Nullable: handlers that do not (yet) record the observation leave it NULL
+--   and the watchdog keeps its pre-existing degraded escalation for that class.
+--
+-- WHAT (idempotent, additive — ADD COLUMN IF NOT EXISTS only; no data
+-- migration, no rewrite).
+
+ALTER TABLE public.source_poll_outcomes
+    ADD COLUMN IF NOT EXISTS newest_entry_ts TIMESTAMPTZ;

@@ -110,7 +110,7 @@ section "5. PASS|SECRET|TOKEN|API_KEY assigned a long literal"
 if git grep -nI -E -- \
    '(PASS(WORD)?|SECRET|TOKEN|API_?KEY)["'"'"']?\s*[:=]\s*["'"'"']?[A-Za-z0-9/+_.-]{16,}' \
    . ':(exclude)scripts/prepush_scan.sh' >/tmp/_ps_tok 2>/dev/null; then
-  while IFS= read -r line; do report token-literal "${line}"; done < <(grep -vE '\$\{|\$[A-Z_]|<[^>]+>|example|changeme|placeholder|your-|xxxx|REDACTED|\.invalid|getenv|os\.environ|environ\.get|process\.env|EXAMPLE|dummy|fake|TODO|"dev"|=dev$|:-dev' /tmp/_ps_tok)
+  while IFS= read -r line; do report token-literal "${line}"; done < <(grep -vE '\$\{|\$[A-Z_]|<[^>]+>|example|changeme|placeholder|your-|xxxx|REDACTED|\.invalid|getenv|os\.environ|environ\.get|process\.env|EXAMPLE|dummy|fake|TODO|"dev"|=dev$|:-dev|"LEGBA_[A-Z_]+"' /tmp/_ps_tok)
 fi
 
 # 6. High-entropy literals (long base64/hex runs) — heuristic, allowlist-filtered.

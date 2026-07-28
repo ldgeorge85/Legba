@@ -1001,7 +1001,16 @@ async def _resolve_candidate_arm(
     llm_block = ((typed.get("method") or {}).get("llm")) or {}
 
     primary_id = _component_id(llm_block.get("primary"))
-    verify_id = _component_id(llm_block.get("verify"))
+    # P2-4: the candidate arm's judge resolves through the SAME judge-route
+    # ladder as the live verify pass (env LEGBA_JUDGE_STACK_REF override →
+    # method.llm.judge → method.llm.verify → method.llm.primary), so the
+    # measure yardstick repoints together with every other judge call when the
+    # second model lands. Today (env unset, no judge key) this resolves the
+    # verify ref byte-identically to the old direct read.
+    from ..analyst_deps_builder import resolve_judge_route_from_llm_block
+
+    judge_route = resolve_judge_route_from_llm_block(llm_block)
+    verify_id = judge_route.component_id if judge_route is not None else None
     if not primary_id or not verify_id:
         return None
 

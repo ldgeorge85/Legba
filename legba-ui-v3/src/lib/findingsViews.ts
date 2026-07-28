@@ -329,6 +329,9 @@ export function mapTailEnvelope(
     critic_score: numOrNull(payload.critic_score),
     effective_confidence: numOrNull(payload.effective_confidence ?? payload.confidence),
     verification: isRecord(payload.verification) ? (payload.verification as Record<string, unknown>) : null,
+    // P0-4 — carry the structural verify-exemption stamp when the envelope has
+    // one; else the analyst_id registry mirror classifies the row downstream.
+    verify_exempt: strOrNull(payload.verify_exempt),
     live: true,
   }
 }
@@ -370,6 +373,13 @@ export interface UnifiedRow extends TailFinding {
    * verification facet + per-row VerdictBadge read the REAL verify pass, never a
    * fabricated block. Absent (undefined) for a signal or an unverified finding. */
   verification?: Record<string, unknown> | null
+  /**
+   * P0-4 — the server's verify-exemption stamp from `/findings`
+   * (`"structural"` for a deterministic structural/mining analyst whose
+   * findings never route through the faithfulness verify pass). Live-tail
+   * rows may not carry it — `isStructuralExempt` falls back to the
+   * `analyst_id` registry mirror. Never fabricated for signals. */
+  verify_exempt?: string | null
   /** Signal source descriptor id, for the source chip (signals only). */
   source_id?: string | null
   /** Signal typed `tags` column (top-level, also mirrored in data). */

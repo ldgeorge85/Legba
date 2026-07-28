@@ -52,7 +52,7 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 - **TIER 1 — INLINE, at-ingest, per-signal (deterministic, no LLM).** The `data/filters/` **baseline enrichment pipeline** runs *synchronously on each Signal at acquisition*, BEFORE fan-out, inside the `SourceActor`: `language_detect → geocode → ner_multilingual → classify → source_credibility → ingest_dedupe (dedupe_4tier, tiers 1-2) → fact_extractor`. It is deterministic / local-NLP (GLiREL + DeBERTa zero-shot + pycountry/Nominatim) — **no analyst LLM** — and its *writes are altitude-0 substrate*: the **enriched signal** (geo/language/tags/entity_classes promoted to indexed columns, in-place on the one `signals` row) plus **altitude-0 `facts`** (`source_type='ingestion'`, `valid_from`-stamped) + **entity rows / `signal_entity_links`** off the NER spans. This is the "enrich once, read many" tier (§6.1, Flow 1). See `data/filters/__init__.py` for the kind registry; `data/sources/baseline.py:282-294` for the tier ordering; `data/filters/dedupe.py:248` (`kind="dedupe_4tier"`); `data/filters/fact_extractor.py` (§5.7).
 - **TIER 2 — SLICE / CADENCE analysts (`data/analysts/`, LLM + deterministic reasoning).** These read *accumulated slices / substrate* on a Dapr reminder or a reactive trigger and *reason* — they do NOT run per-signal. This is altitudes 1-3 (findings, situations, hypotheses, nexuses, meta-findings, deep consult). The cost firewall between the two: heavy reasoning is cadence-batched so LLM cost is decoupled from the ingest firehose.
 
-**What triggers / schedules what** (Tier 2) — two mechanisms, both **Dapr reminders/triggers** (no external cron in the loop): **(a) reactive coalescing triggers** — per-target analysts fire when enough new signals accumulate (NATS-driven); **(b) cadence reminders** — cross-target & meta analysts fire on a schedule (the seven bounded reasoning UNITS + the `country_composition`/`region_composition`/`world_assessor` composition tower + the thematic `escalation_composition` on a ~6–12h beat, the deterministic I&W pair `indicator_tracker`/`collection_gap`, `competing_hypotheses`/`graph_mining`/`relationship_reifier` ~12h, `scorecard_producer`/`calibration_tracking` daily, `forecast_scoreboard` weekly). SourceActors schedule their own polls (the Tier-1 pipeline rides each poll). The reminder *is* the scheduler.
+**What triggers / schedules what** (Tier 2) — two mechanisms, both **Dapr reminders/triggers** (no external cron in the loop): **(a) reactive coalescing triggers** — per-target analysts fire when enough new signals accumulate (NATS-driven); **(b) cadence reminders** — cross-target & meta analysts fire on a schedule (the seven bounded reasoning UNITS + the `country_composition`/`region_composition`/`world_assessor` composition tower + the thematic `escalation_composition` on a ~6–12h beat, the deterministic I&W pair `indicator_tracker`/`collection_gap`, `competing_hypotheses`/`graph_mining`/`relationship_reifier` ~12h, `scorecard_producer`/`calibration_tracking` daily, `forecast_scoreboard` weekly; plus the 2026-07 deterministic wave — `alert_trigger_scan` every 10 min and `geo_convergence_scan` + `evidence_archiver` every 30 min feed the alert/archive loops, and the daily readout family `band_calibration_tracker` / `fact_decay_scan` / `source_track_record` / `narrative_mapper` / `desk_baseline` computes derived sidecars, all registered as drafts an operator activates). SourceActors schedule their own polls (the Tier-1 pipeline rides each poll). The reminder *is* the scheduler.
 
 **Where Wikidata / grounding fit (out-of-band, decoupled by the substrate):** Wikidata is **not a live source** — it never touches the signal pipeline. It is a **seed** (`scripts/seed.py --source wikidata_leaders`, operator-run / cron-able) that writes *current* `head of state` facts INTO the substrate (superseding the stale officeholder). Separately, at *analysis time*, grounding-enabled analysts' **GROUND phase** READS those current facts back OUT of the substrate and injects a dated preamble into the LLM prompt (Flow 10). The two movements don't know about each other — the substrate is the hand-off. See §5.8.
 
@@ -66,7 +66,7 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 - **Maintenance / GC** (deterministic analysts on cadence, `data/analysts/deterministic_handlers/`): `fact_decay` / `nexus_decay` (temporal-confidence decay + expiry), `finding_supersession`, `entity_gc`, `signals_retention` (0036), `integrity_sweep`, `reminder_gc` (`runtime/reminder_gc.py`, GC of reminders for retired `actor_state` rows). These UPDATE/prune pre-existing rows.
 - **Per-source liveness watchdog** (`liveness_watchdog.check_source_cadence_once`, cadence): detects a silent source by comparing `now()` to `max(signals.fetched_at)` per source, then lateral-joins `source_poll_outcomes` (0046) for the *why* — `SourceActor.pull_once` writes a `source_poll_outcomes` row for every NON-productive poll (empty HTTP-200-with-0-signals, or error; productive polls are self-evidencing via their `signals` rows and are not logged), carrying the handler's own health diagnosis so the watchdog alert (and the UI) can distinguish a genuinely quiet feed from a broken one.
 - **Meta-analysts over the substrate** (altitude 2): `meta_findings_synthesizer` / `cross_analyst_correlator` / `competing_hypotheses` / `calibration_tracking` — they read accumulated outputs, not signals (Tier-2 cadence, but analysis-of-analysis rather than first-order).
-- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0085`, current head **0085**): schema evolution, applied PG-direct out of band. Beyond 0060 the chain adds the contested-claims + data-quality-program migrations (0061–0075), the 2026-07-06 audit sweep (0076–0080: entity re-fold + junk gate, semantic/junk-fact close, nexus junk/self-edge/dyad canonicalize, cross_correlator stale-head sweep, state-media `source_credibility` seed — the 0077–0080 closes are reversible), and the signal-content-depth / NER-reenrich wave (0081–0085: the `signal_summarized` / `signal_indexed` / reindex-summarized / `signal_embedding` / `signal_reenriched` markers that drive the OpenSearch corpus + Qdrant embeddings + NER backfill). The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), the `unit_reference_labels` correctness-gold table (0057, §5.10), and the composition-supersession fold + critique index + null-target composition-head fold (0058–0060, supporting the one-live-head-per-desk composition tower).
+- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0105`, current head **0105**; `0095`/`0100` intentionally unused — the runner discovers by sorted glob, so gaps are harmless): schema evolution, applied PG-direct out of band. Beyond 0060 the chain adds the contested-claims + data-quality-program migrations (0061–0075), the 2026-07-06 audit sweep (0076–0080: entity re-fold + junk gate, semantic/junk-fact close, nexus junk/self-edge/dyad canonicalize, cross_correlator stale-head sweep, state-media `source_credibility` seed — the 0077–0080 closes are reversible), and the signal-content-depth / NER-reenrich wave (0081–0085: the `signal_summarized` / `signal_indexed` / reindex-summarized / `signal_embedding` / `signal_reenriched` markers that drive the OpenSearch corpus + Qdrant embeddings + NER backfill). The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), the `unit_reference_labels` correctness-gold table (0057, §5.10), and the composition-supersession fold + critique index + null-target composition-head fold (0058–0060, supporting the one-live-head-per-desk composition tower).
 
 ### 0.1 Substrate data inventory — what is kept where, written-by / read-by
 
@@ -74,12 +74,13 @@ Per store, the actual datasets and their producers/consumers (verified 2026-06).
 
 | Store | Datasets kept | Written by | Read by |
 |---|---|---|---|
-| **Postgres + Apache AGE** (PRIMARY / source of truth) | **descriptors** (`source_/target_/analyst_/action_pack_/stack_/wiring_descriptors`); **acquisition** (`signals`, `signal_aliases`, `signal_entity_links`); **knowledge substrate** (`facts`, `nexuses`, `entity_profiles`/`entity_profile_versions`, `hypotheses`, `proposed_edges`, `situations`, `graph_metrics`); **outputs/provenance** (`analyst_outputs`, `analyst_traces`, `analyst_critiques`, `output_dead_letter`, `descriptor_dead_letter`); **journal (OFF-chain)** (`journal_entries`, `journal_proposals` — 0048; the reflective voice, empty `derived_from`, excluded from the lineage catalog, §8.4); **runtime state** (`actor_state`, `actor_filter_state`, `trigger_state`, `discovery_state`); **governance** (`governor_events`, `budget_ledger`, `global_budget_envelope`, `budget_demotion_events`, `action_pack_invocations`, `alert_sink_deliveries`); **liveness** (`source_poll_outcomes` — provenance for non-productive source polls, 0046); **consult audit** (`consult_sessions` / `consult_turns`, 0039); **audit** (`audit_checkpoints`, `descriptor_audit_log`); **seeding** (`seed_batches`); **reference** (`iso_countries`, `source_credibility`, `vocabulary_entries`); plus the **dormant AGE graph `legba_graph`** *inside* PG (9 vertex / 14 edge labels registered, but **near-empty / off-path** — the operative graph is the relational `nexuses` table; §5.5 "AGE re-evaluation") | Tier-1 pipeline (signals/facts/entities); Tier-2 analysts + workflows (outputs/facts/nexuses/hypotheses); registry (descriptors/audit); runtime (state); seeds (facts/nexuses + `seed_batches`) | every read path — analyst slices, consult tools, grounding resolver, the API/UI, lineage walks |
+| **Postgres + Apache AGE** (PRIMARY / source of truth) | **descriptors** (`source_/target_/analyst_/action_pack_/stack_/wiring_descriptors`); **acquisition** (`signals`, `signal_aliases`, `signal_entity_links`); **knowledge substrate** (`facts`, `nexuses`, `entity_profiles`/`entity_profile_versions`, `hypotheses`, `proposed_edges`, `situations`, `graph_metrics`); **outputs/provenance** (`analyst_outputs`, `analyst_traces`, `analyst_critiques`, `output_dead_letter`, `descriptor_dead_letter`); **journal (OFF-chain)** (`journal_entries`, `journal_proposals` — 0048; the reflective voice, empty `derived_from`, excluded from the lineage catalog, §8.4); **runtime state** (`actor_state`, `actor_filter_state`, `trigger_state`, `discovery_state`); **governance** (`governor_events`, `budget_ledger`, `global_budget_envelope`, `budget_demotion_events`, `action_pack_invocations`, `alert_sink_deliveries`); **liveness** (`source_poll_outcomes` — provenance for non-productive source polls, 0046); **consult audit** (`consult_sessions` / `consult_turns`, 0039); **audit** (`audit_checkpoints`, `descriptor_audit_log`); **seeding** (`seed_batches`); **reference** (`iso_countries`, `source_credibility`, `vocabulary_entries`); **alerting (2026-07)** (`alert_trigger_watermarks` — durable trigger/convergence watermarks, 0091; `watchlist` — operator standing watches, 0105); **evaluation** (`band_calibration_claims` 0093; `correctness_labels` + `goldset_week_samples` 0096; `unit_reference_labels` 0057); **source assurance** (`source_ratings` + `source_dossiers` 0094; `source_track_records` 0099); **derived readout sidecars** (`fact_decay_states` 0098; `narratives` + `narrative_echo_edges` 0102; `desk_baselines` 0103; the contention tie-break cache `fact_contention_tiebreak` 0097); **evidence archive** (`evidence_archive` 0104 — the CAS sidecar; bytes live on the `legba_archive` volume, not in PG); plus the **dormant AGE graph `legba_graph`** *inside* PG (9 vertex / 14 edge labels registered, but **near-empty / off-path** — the operative graph is the relational `nexuses` table; §5.5 "AGE re-evaluation") | Tier-1 pipeline (signals/facts/entities); Tier-2 analysts + workflows (outputs/facts/nexuses/hypotheses); registry (descriptors/audit); runtime (state); seeds (facts/nexuses + `seed_batches`) | every read path — analyst slices, consult tools, grounding resolver, the API/UI, lineage walks |
 | **NATS JetStream** | **transport / events, NOT a dataset store** — `legba_signals` (interest-retention signal bus), 4 registry-lifecycle streams, the DLQ stream, work-queues, consult-step relay. Transient fan-out; the durable copy is always in PG | SourceActors (signal publish), registry (lifecycle events), analysts (output envelopes + consult steps) | subscription consumers, the reconcile loop, the SSE relay, job workers |
 | **Qdrant** | **3 collections** — `legba_signals` (signal vectors, 1024-dim BGE-M3 cosine, ingest-dedupe tiers 3-4) **plus the two LIVE RAG corpora** `tradecraft` (~1716 chunks) and `world_context` (~293 chunks), both 1024-dim bge-m3 cosine, embedded through the stack embedder port | Tier-1 dedupe / embedder; the RAG loader (`data/rag/`) for the corpora | dedupe tier 3-4; consult `vector_search` + `search_context`; the **live** grounding resolver — `vector:world_context` retrieval is provisioned and flipped ON for `leadership_transition` + `internal_stability` (opportunistic, relevance-floored, country-filtered, degrade-not-drop), §5.8 |
 | **Redis** | **TTL'd cache only** — geocode cache, ingest-dedup hints, registry-health, intelmq source state (~84 keys live) | Tier-1 filters, health checker | the same filters / health (cache-aside; never a source of truth) |
 | **OpenSearch** (single-node) | **1 index** — `legba_signals_corpus` (BM25 full-text over the whole raw body of every ingested signal, ~112k docs — the signal-content-depth corpus) | the `corpus_indexer` deterministic analyst (full-body signal reads → OpenSearch) | the `search_corpus` (BM25 lexical search) + `read_document` (by-id full-doc fetch) substrate-read tools; the `corpus_researcher` / `cross_doc_corroborator` agentic analysts |
 | **SeaweedFS** | object store for retained media — **schema-slotted stack-component kind; NO handler shipped** (eager-media extraction is a seam, §6.3) | (none) | (none) |
+| **Filesystem CAS archive** (`legba_archive` volume) | the **evidence archive** — original bytes of signals cited by verified findings, content-addressed at `<root>/<sha[:2]>/<sha256>` (`LEGBA_ARCHIVE_ROOT`, default `/var/lib/legba/archive`); addressed from PG as `signals.object_ref = cas:sha256/<hex>` + the `evidence_archive` sidecar (0104). Backend-agnostic address: a later object-store swap rewrites zero rows (§8.6, SEAMS #42) | the `evidence_archiver` deterministic analyst (verified-cited-only, SSRF-guarded, license-gated) | lineage / export / signal projections (`archived` + sha); the corpus indexer re-indexes archived full text |
 
 > **OpenSearch (LIVE full-text corpus) + the one removed store.** A dedicated time-series-metrics store (Grafana/TimescaleDB observability) was *provisioned-but-idle* with zero callers and has been **removed from the codebase**; time-series metrics are now a **declared seam** (see SEAMS) — there is no metrics store, and `anomaly_detection` reads `time_bucket()` from the **primary Postgres pool**, not a separate cluster. Full-text search, by contrast, is **LIVE and load-bearing**: a **single-node OpenSearch cluster** (service `legba-opensearch-1`) holds the `legba_signals_corpus` index — the full raw body of every ingested signal (~112k docs), populated by the `corpus_indexer` deterministic analyst and queried by the `search_corpus` / `read_document` substrate-read tools (the signal-content-depth subsystem, alongside `signal_summarizer`, `signal_embedder` → Qdrant `vector_search`, `corpus_researcher`, and `cross_doc_corroborator`). The legacy `search_signals` tool still uses Postgres FTS (`to_tsvector`/`plainto_tsquery`).
 
@@ -96,7 +97,7 @@ lens for the rest of this document.
 |---|---|---|---|
 | **0 — Extraction** | temporal facts (atomic `(subject, predicate, value)` assertions, valid-from/until + supersession) | the ingest-time **`fact_extractor`** enrichment stage (per-signal, GLiREL backend) + analyst/workflow `write_fact` | **LIVE** — `OutputKind.FACT` + `write_fact` + `facts` temporal schema; ≈4.6k facts total (≈3.7k ingestion-sourced) (§5.7) |
 | **0 — Relations** | reified typed signed **Nexus** (`subject →[intermediary]→ object`, `rel_type` + polarity ∈ {−1,0,+1} + intent) | the **`relationship_reifier`** META analyst (8B-LLM types co-mention pairs) | **LIVE** — `OutputKind.NEXUS` + `write_nexus` + `nexuses` table; ≈4.9k nexuses total (≈3.2k signed, polarity ≠ 0) (§5.7) |
-| **1 — First-order (bounded units)** | cited, faithfulness-verified findings — each unit answers ONE narrow question | SEVEN `inline_target` reasoning UNITS (`leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`, `economic_coercion`; `method.kind=llm_planner`), each fanned out per desk — 25 desks: the 19 G20 country desks + a 6-country high-consequence `watch` tier (§7.2) | **LIVE** — the monolithic `country_assessor` is RETIRED and STOPPED (nothing in the spine reads it; ≈1.2k historical findings remain in the DB, unread — not a clean slate); the forecast-as-claim `country_predictor` is RETIRED/STOPPED (≈539 historical prediction rows remain) (§5.10, §14) |
+| **1 — First-order (bounded units)** | cited, faithfulness-verified findings — each unit answers ONE narrow question | SEVEN `inline_target` reasoning UNITS (`leadership_transition`, `energy_security`, `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`, `economic_coercion`; `method.kind=llm_planner`), each fanned out per desk — 32 desks: the 19 G20 country desks + a 13-country high-consequence `watch` tier (§7.2) | **LIVE** — the monolithic `country_assessor` is RETIRED and STOPPED (nothing in the spine reads it; ≈1.2k historical findings remain in the DB, unread — not a clean slate); the forecast-as-claim `country_predictor` is RETIRED/STOPPED (≈539 historical prediction rows remain) (§5.10, §14) |
 | **1 — Maintenance** | situations (**first-class temporal frames**, 0040–0042) / supersessions / critiques / STIX / fact-&-nexus decay | situation_clustering (+ `thematic_proposal`), finding_supersession, `critic`, emit-bindings, `fact_decay` / `nexus_decay` / `structural_balance` / `graph_mining` | **LIVE** — situations carry `situation_signature` + `valid_from`/`valid_until`/`superseded_by` + `target_id` (0040–0042); the events substitute (no `events` table). The forecast-as-claim `predictor` producers (`country_predictor`, `india_energy_predictor`) are RETIRED/STOPPED (≈539 historical prediction rows remain) — forecasting returns only as the measured `acute_forecasts` scoreboard (§5.10) |
 | **2 — Composition** | the composition tower (a hedged, cited synthesis over the *verified* units; an unverified sub-claim never enters — INNER JOIN on the faithfulness critique) + meta-findings | `country_composition` → `region_composition` (5 region frames: Africa, Americas, Europe, Indo-Pacific, MENA) → `world_assessor`, plus the thematic cross-desk `escalation_composition` (carries a correlation guard against double-counting correlated desks) — all on `meta_findings_synthesizer`; `cross_analyst_correlator` | **LIVE** — `world_assessor` GRADUATED into the world composition; it is NOT the old verdict-from-nowhere monolith; one live head per desk survives supersession (§5.10) |
 | **top — Banded scorecard + skill scoreboard** | one banded per-country row from high-precision RULES over already-verified claims (demote-never-promote) + the per-unit skill numbers | `scorecard_producer` (deterministic META, 12th OutputKind `scorecard`), `unit_correctness_scorer` / `calibration_tracking` / `forecast_scoreboard` | **LIVE** — honest: an unqualified dimension reads `insufficient-evidence`; the live scorecard is a MIX (some countries band, e.g. the US reads all-insufficient because its unit faithfulness is genuinely low); the forecast pilot reports NO proven skill (§5.10) |
@@ -506,6 +507,7 @@ never plaintext.
 | **Vault** | `stack_credentials` table, XSalsa20-Poly1305, versioned rotation | **LIVE** (`registry/credentials.py`) |
 | **Redis** | hot state / caches — geocode cache, ingest-dedup, registry health, intelmq source | **LIVE as a cache** (`data/redis.py`, `data/filters/geocode.py`, `data/filters/dedupe.py`) |
 | **SeaweedFS** | object store for retained media | **schema-slotted stack-component kind; NO handler shipped** |
+| **Filesystem CAS archive** | evidence archive — original bytes of verified-cited signals, content-addressed `cas:sha256/<hex>` on the `legba_archive` volume (`LEGBA_ARCHIVE_ROOT`) | **LIVE** (`data/archive.py`; written by the `evidence_archiver`; §8.6, SEAMS #42) |
 | **OpenSearch** (single-node) | full-text signal corpus — `legba_signals_corpus` (~112k docs, BM25 over the whole raw signal body) | **LIVE** (`corpus_indexer` indexes; `search_corpus`/`read_document` read; `data/opensearch.py`) |
 | time-series metrics | observability store | **REMOVED — declared seam** (no metrics store; `search_signals` uses Postgres FTS; see SEAMS) |
 
@@ -939,9 +941,10 @@ above it may consume it.
 (`descriptors/analyst_*.yaml`, `method.kind=llm_planner`, core plane
 `llm.primary.openai_compat` = self-hosted gpt-oss-120b, $0) — each answer **one
 narrow question** and are scoped to every desk by a single coverage-tag fan-out
-`has_tag("g20") or has_tag("watch")` (25 desks: the 19 G20 country desks + a
-6-country high-consequence `watch` tier — Israel, Iran, Ukraine, Taiwan, North
-Korea, Pakistan, descriptor ids `country_watch_il/ir/ua/tw/kp/pk`; adding a country is
+`has_tag("g20") or has_tag("watch")` (32 desks: the 19 G20 country desks + a
+13-country high-consequence `watch` tier — Israel, Iran, Ukraine, Taiwan, North
+Korea, Pakistan, and the escalation-risk band Sudan, Mali, Burkina Faso,
+Niger, DR Congo, Myanmar, Haiti; descriptor ids `country_watch_<iso2>`; adding a country is
 register-a-target, no code — §7.2). Each run: **ASSEMBLE** a cited 72h raw-signal
 slice + the §5.8 grounding preamble of ACCUMULATED facts/nexuses/situations (e.g.
 "US head of government Trump since 2025-01-20; US–Iran active conflict since
@@ -1086,7 +1089,13 @@ operator-pinned `descriptors/source_*.yaml`, **plus** the 46-entry **catalog**
 (43 `rss` + 3 `geojson`) in `scripts/bringup_register_source_catalog.py`
 registered directly into `source_descriptors` — NWS, NASA EONET, WHO/CDC/HRW, RSS
 feeds — so the full live source set is the DB rows, not the YAML files; see
-`docs/DATA_SOURCES.md` for the catalog table and the 3 / 46 / 49 scope model.) **Enrichment mutates the signal in
+`docs/DATA_SOURCES.md` for the catalog table and the 3 / 46 / 49 scope model. A
+2026-07 breadth wave adds **51 draft source descriptors**: 41 verified no-auth
+Wave-A feeds (`scripts/bringup_register_wave_a_sources.py`) plus 10 riding a
+profile-gated local **RSSHub** lane — compose profile `sources-extra`, loopback
+`:1200`, reached by the ordinary `rss` handler through the SSRF guard's
+`LEGBA_EGRESS_ALLOW_HOSTS` allowlist (compose default `rsshub`) — all
+registered `state: draft`, activated operator-paced; see `ACQUISITION.md`.) **Enrichment mutates the signal in
 place** — there is
 no separate enrichment table; the enriched signal is written canonically to the
 single `signals` table (`source_actor.py:520-525`), with the structured columns
@@ -1209,8 +1218,8 @@ This is the heart of the analysis runtime (`AnalystActor`,
    `_reminder_guard` → `_cadence_targets()` (`:1464`) evaluates the
    `subscription.targets` Starlark predicate (`ANALYST_SUBSCRIPTION` surface,
    e.g. `has_tag('g20') or has_tag('watch')`) against the active target
-   descriptors. **One selector binds all 25 desks** (the 19 G20 targets + the
-   6-country `watch` tier) — no per-target enumeration.
+   descriptors. **One selector binds all 32 desks** (the 19 G20 targets + the
+   13-country `watch` tier) — no per-target enumeration.
 3. **Fan-out (A2 concurrency).** `_fanout_to_workers()` (`:1351`) chunks the
    matched targets at `_FANOUT_CHUNK = 5` (`:548`) and dispatches **one run per
    matched target** to a distinct **per-(analyst,target) worker actor**
@@ -1462,6 +1471,111 @@ distinct style.
 > the journal's *own voice* — is **future / designed-not-built**, gated on first
 > building a critic actuator.
 
+### 8.5 The alert-sink plane — verification-gated alerting (2026-07)
+
+The 2026-07-28 wave closed the loop from a verified state change to an
+operator's device without the console open. It is two decoupled halves: a
+**deterministic trigger analyst** decides *what* is alert-worthy (documented
+with the other analysts in `ANALYSIS.md` — `alert_trigger_scan`, five trigger
+classes over verified state transitions, durable watermarks so a transition
+never re-fires), and a **modular sink plane** (`src/legba/data/alerts/`)
+decides *where* it goes.
+
+- **The dispatcher.** `AlertSinkDispatcher` (`data/alerts/sinks.py`) fans one
+  converged `AlertSinkPayload` out to every registered sink (`AlertSink` is a
+  `@runtime_checkable` Protocol; `register_alert_sink` adds one — a new sink is
+  one module + one register call). It is built process-wide at host bring-up
+  (`source_first_runtime.py`) and reached from four edges: the escalation pack
+  (`agency/tools.py`, channel `escalations`), the liveness watchdog's
+  global-stall edge (channel `liveness_stall`), `alert_trigger_scan` (channel
+  `trigger_scan`), and `geo_convergence_scan`.
+- **A ledger row per outcome.** Every sink attempt lands an
+  `alert_sink_deliveries` row — `delivered` / `failed` /
+  `skipped_unconfigured` / `skipped_cooldown` (below-severity and
+  duplicate-suppressed attempts write no row); the sink target URL is
+  redacted to host-only before it is ledgered. Per-alert idempotency keys on
+  the alert's output-row id (a bounded in-process LRU — a restart may
+  re-attempt, which is the right failure direction for an alert).
+- **Anti-noise, honestly.** A per-sink cooldown
+  (`LEGBA_ALERT_SINK_COOLDOWN_SECONDS`, default 60s) suppresses bursts — but
+  suppressed alerts **coalesce onto the next delivery** ("+N more alert(s)
+  during cooldown" with a bounded preview and an honest overflow line),
+  never silently thin. And an unconfigured sink **drops out of fan-out when a
+  configured sibling exists**; when *no* sink is configured, every sink stays
+  in so the `skipped_unconfigured` ledger rows keep the gap visible.
+- **Two sinks ship.** A generic webhook sink (`LEGBA_ALERT_WEBHOOK_URL`,
+  severity floor `LEGBA_ALERT_WEBHOOK_MIN_SEVERITY` default `high`) and a
+  native **ntfy** push sink (`data/alerts/ntfy_sink.py` — `X-Title` /
+  `X-Priority` / `X-Tags` and a tap-to-open `X-Click` receipt link;
+  `LEGBA_ALERT_NTFY_URL` / `_TOKEN` / `_MIN_SEVERITY`). A profile-gated local
+  ntfy service ships in compose (profile `alerts`, loopback `:8093`, cache
+  volume so topic history survives recreates) — the last inch to a phone is
+  the ntfy app pointed at an operator-exposed vhost.
+- **Verification posture is mandatory.** The payload's `verify_state` is
+  never empty: a real `faithfulness=<score>` where a verify verdict exists,
+  else an explicit `unverified — <reason>`. Every alert carries a receipt
+  link into the lineage API (`/api/v1/lineage/{row_kind}/{row_id}`; absolute
+  when `LEGBA_PUBLIC_BASE_URL` is set).
+
+### 8.6 The evidence archive — the receipt chain's terminal copy
+
+Before this wave the receipt chain ended at a URL — and URLs rot. The
+**evidence archiver** (`data/analysts/deterministic_handlers/
+evidence_archiver.py`, a deterministic cadence analyst) fetches the original
+bytes of signals **cited by verified findings** — the selection is
+verified-cited-only: a signal in the `derived_from` of a non-superseded
+finding whose faithfulness critique clears the floor, with no `object_ref`
+yet and a non-empty `canonical_url` — and stores them content-addressed
+(`data/archive.py`: `<root>/<sha256[:2]>/<sha256>` under
+`LEGBA_ARCHIVE_ROOT`, atomic temp-file + rename, dedup by content). The
+signal's `object_ref` becomes **`cas:sha256/<hex>`** — a deliberately
+backend-agnostic relative address (a later object-store swap rewrites zero
+rows) — its `retention_class` is upgraded to `evidence_hold`, and its
+extracted full text is marked for re-indexing into the search corpus. A
+sidecar row (`evidence_archive`, migration 0104 — **no FK**, so archived
+evidence outlives any future signal purge) records the outcome:
+`archived` / `failed` / `skipped_license` / `skipped_size`.
+
+The fetch path is guarded: an SSRF egress guard, per-host politeness
+(2s default), a hard 20 MB size cap, and the **LIC-2 license gate** — a
+source whose declared
+`license_class` is in the forbidden set is *skipped with an honest recorded
+counter*, never quietly fetched; an unknown class archives with the class
+recorded for later re-evaluation. Lineage, export, and signal projections
+carry the `archived` state + hash, so a receipt walk now terminates in a
+verifiable local copy rather than a rotting URL. What is deliberately NOT
+built — retention/expiry over the archive (nothing deletes evidence), an
+object-store backend, and beyond-cited coverage — is declared in
+`SEAMS.md` #42.
+
+### 8.7 The operator read surface — the v3 route family + the MCP built-ins
+
+The wave added a family of read routes under `/api/v1/v3` (all bearer-gated
+like the rest of §4 in `RUNBOOK.md`):
+
+| Route | What it serves |
+|---|---|
+| `GET /v3/since?cursor=&channel=` | "what changed since" — verified-new (floor + exempt gates) / superseded reversals / band changes / situation edges / alerts, stateless with a client-owned cursor (90-day cap, per-section cap with honest `total` + `truncated`; `channel=` scopes the alerts section). Backs the console's movers view |
+| `GET /v3/timeline` | the validity-window timeline — facts / situations / findings as temporal ranges + supersession edges (the temporal substrate's first temporal read) |
+| `POST /v3/export` | collection basket → markdown / JSON with live-resolved citations (pruned refs read `resolved: false`, never faked), verify states, receipt links; 50-item cap → 413 |
+| `GET /v3/narratives` (+ `/echo`, `/{contention_id}`) | reified narratives + the directed source-echo graph (detect-only; every envelope carries the descriptive-not-causal honesty note) |
+| `GET /v3/eval/desk_baselines` | the per-desk statistical baseline board (explicitly NOT a forecast) |
+| `GET /v3/eval/goldset/worksheet` + `POST /v3/eval/goldset/label` | the weekly correctness gold-set labeling loop |
+| `GET /v3/eval/band_trajectory` | per-desk band history for the calibration view |
+| `GET /v3/eval/calibration` | grew an **additive** `band_calibration` section (no Brier — stated on the route) |
+| `GET /v3/sources/{id}/assurance` | the source-assurance ledger read (ratings + dossier + earned track record; `include_private` opt-in seam) |
+| `GET/POST/PUT/DELETE /v3/watchlist` | operator standing watches — **the first WRITE surface in the v3 route family** (update is PUT, delete is soft — `active=false`) |
+| `GET /v3/system/source-firing` | now grades each source's freshness (`ok` / `stale` / `warn` / `empty` / `ungraded`) against a cadence-derived budget |
+
+The **MCP surface** (`src/legba/ui/mcp_server.py`, the `legba-mcp` stdio
+image) now ships **seven built-in tools** — `substrate_findings`,
+`substrate_situations`, `substrate_signals`, `lineage_walk`, `since`,
+`export`, `consult` — fixing the standalone-empty catalog (previously the
+catalog was descriptor-driven only, and a standalone container saw none).
+Built-ins are reads + consult **only** (`assert_reads_and_consult_only()`
+— no registry mutation rides MCP); the descriptor-driven catalog remains
+the second source, and a built-in wins a name collision.
+
 ## 9. The actor → Dapr-Workflow seam (the optimizer precedent)
 
 Some work is too long and too expensive to run inside a turn-based actor: the
@@ -1609,9 +1723,16 @@ schema — `facts.source_credibility` (`0054`) + the `fact_contention` sidecar
 `unit_reference_labels` correctness-gold table (`0057`, §5.10), and the
 composition-supersession fold + critique index + null-target composition-head fold
 (`0058`–`0060`), the contested-claims + data-quality-program migrations
-(`0061`–`0075`), the 2026-07-06 audit sweep (`0076`–`0080`), and the
+(`0061`–`0075`), the 2026-07-06 audit sweep (`0076`–`0080`), the
 signal-content-depth / NER-reenrich wave (`0081`–`0085`: the OpenSearch-corpus +
-Qdrant-embedding + NER-backfill markers)):
+Qdrant-embedding + NER-backfill markers), the entity-identity / salience /
+journal-data wave (`0086`–`0090`), and the 2026-07-28 release wave
+(`0091`–`0105`; `0095`/`0100` intentionally unused — alert-trigger watermarks,
+poll `newest_entry_ts`, band-calibration claims, the source-assurance ledger,
+correctness labels + gold-set pinning, contention surfacing + the tie-break
+cache, fact-decay states, source track records, the traces-retention index,
+narratives + echo edges, desk baselines, the evidence archive, and the
+watchlist — see `DATA_MODEL.md`)):
 
 - Real RSS sources (BBC / Deutsche Welle / Al Jazeera) acquire enriched signals —
   geo, language, and entity-class promoted to indexed columns; the
@@ -1619,7 +1740,7 @@ Qdrant-embedding + NER-backfill markers)):
   ≈3.7k of ≈4.6k total) with `valid_from` stamped + value-change supersession.
 - Fan-out on `legba.signals.>` routes them to the country desks, each
   subscribing by a geo/tag predicate; the **seven bounded units** each bind to all
-  25 desks (the 19 G20 targets + the 6-country `watch` tier) via a single
+  32 desks (the 19 G20 targets + the 13-country `watch` tier) via a single
   `has_tag("g20") or has_tag("watch")` selector and fan out one run per desk.
 - The units produce distinct per-country findings, each **cited to source, put
   through the mandatory faithfulness verify pass** (deterministic floor + the LLM

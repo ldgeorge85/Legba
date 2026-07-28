@@ -101,6 +101,40 @@ def test_lens_prompt_contains_prior_and_citation_mandate_not_diary() -> None:
     assert "[[ref:x1]]" in out and "(salience 0.95" in out
 
 
+def test_lens_prompt_empty_slice_renders_tower_fallback() -> None:
+    """E-1 (2026-07-27 sweep): an EMPTY lens slice must not prime a blank —
+    the render redirects the faculty at the verified tower top explicitly
+    (the chronicle/consolidation behavior on the same bad-input cycle)."""
+    from legba.prompts.lens_capability import LENS_PRIOR_BLOCK
+
+    out = _render_user_prompt([], tier="lens", lens_prior_block=LENS_PRIOR_BLOCK)
+    assert "the signal slice is EMPTY this cycle" in out
+    assert "VERIFIED TOWER TOP" in out
+    assert "get_assessments" in out
+    # honesty stays: never fabricate
+    assert "never fabricate" in out
+    # rows without renderable titles count as empty too
+    out2 = _render_user_prompt(
+        [{"id": None, "title": "", "source_id": "graph_metrics"}],
+        tier="lens", lens_prior_block=LENS_PRIOR_BLOCK,
+    )
+    assert "the signal slice is EMPTY this cycle" in out2
+    # a populated slice renders rows, NOT the fallback line
+    populated = _render_user_prompt(
+        _ROWS, tier="lens", lens_prior_block=LENS_PRIOR_BLOCK
+    )
+    assert "the signal slice is EMPTY this cycle" not in populated
+    assert "[[ref:x1]]" in populated
+
+
+def test_empty_slice_fallback_is_lens_only() -> None:
+    """The other tiers keep their pre-existing empty-slice renders unchanged
+    (the diary/chronicle/diff prompts never carry the lens fallback line)."""
+    for tier in ("entry", "consolidation", "chronicle", "lens_diff"):
+        out = _render_user_prompt([], tier=tier)
+        assert "the signal slice is EMPTY this cycle" not in out, tier
+
+
 def test_lens_diff_prompt_carries_aperture_and_convergence_guard() -> None:
     out = _render_user_prompt(_ROWS, tier="lens_diff")
     assert "CONVERGENCE GUARD" in out

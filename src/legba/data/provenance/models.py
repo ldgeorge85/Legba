@@ -225,6 +225,13 @@ class CritiquePayload(_AnalystOutputBase):
     analyzed_analyst_version: str = Field(default="", max_length=64)
     analyzed_model: str = Field(default="", max_length=128)
     judge_model: str = Field(default="", max_length=128)
+    # P2-4 (judge route separation): the RESOLVED judge stack-ref
+    # (``JudgeRoute.component_id``, e.g. ``llm.primary.openai_compat``) behind a
+    # faithfulness verdict — provenance for WHICH model judged, forever, so the
+    # record survives the second judge model landing. ``""`` = floor-only (no
+    # judge wired). Additive + defaulted: every existing row/writer validates
+    # unchanged.
+    judge_llm_ref: str = Field(default="", max_length=256)
     scores: dict[str, float] = Field(default_factory=dict)
     overall_score: float | None = Field(default=None, ge=0.0, le=1.0)
     revision_delta: str | None = Field(default=None, max_length=8192)

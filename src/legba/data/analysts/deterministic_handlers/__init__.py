@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from . import (
     adversarial_signals,
+    alert_trigger_scan,
+    analyst_traces_retention,
     anomaly_detection,
     calibration_tracking,
     collection_gap,
@@ -24,6 +26,7 @@ from . import (
     cross_source_dedup,
     entity_gc,
     entity_resolution,
+    evidence_archiver,
     fact_contention_arbiter,
     fact_decay,
     finding_supersession,
@@ -38,6 +41,8 @@ from . import (
 
 __all__ = [
     "adversarial_signals",
+    "alert_trigger_scan",
+    "analyst_traces_retention",
     "anomaly_detection",
     "calibration_tracking",
     "collection_gap",
@@ -45,6 +50,7 @@ __all__ = [
     "cross_source_dedup",
     "entity_gc",
     "entity_resolution",
+    "evidence_archiver",
     "fact_contention_arbiter",
     "fact_decay",
     "finding_supersession",

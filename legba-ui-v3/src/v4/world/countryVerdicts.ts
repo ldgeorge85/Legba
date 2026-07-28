@@ -42,6 +42,9 @@ interface FindingsResponse {
 
 export interface CountryVerdict {
   iso2: string
+  /** The desk target id the composition was produced for (`country_g20_us`) —
+   *  lets a consumer select the desk (P1-7 Wall band grid). */
+  targetId: string
   verdict: Verdict
   title: string
   producedAt: string
@@ -98,6 +101,7 @@ async function fetchCountryVerdicts(): Promise<Map<string, CountryVerdict>> {
     if (prev && Date.parse(prev.producedAt) >= Date.parse(row.produced_at)) continue
     byIso.set(iso2, {
       iso2,
+      targetId: row.target_id ?? '',
       verdict: toVerdict(row),
       title: row.title ?? '(untitled composition)',
       producedAt: row.produced_at,

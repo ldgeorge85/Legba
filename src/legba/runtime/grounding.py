@@ -73,6 +73,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
+from ..data.facts.decay import fact_decay_weighting_enabled
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,6 +126,31 @@ def trusted_source_types() -> tuple[str, ...]:
         return _DEFAULT_TRUSTED_SOURCE_TYPES
     parsed = tuple(t.strip().lower() for t in raw.split(",") if t.strip())
     return parsed or _DEFAULT_TRUSTED_SOURCE_TYPES
+
+
+def contention_surfacing_enabled() -> bool:
+    """P3-2 — whether the grounding preamble ANNOTATES a disputed fact
+    (CONTESTED/DISPUTED). Default ON (``LEGBA_CONTENTION_SURFACING`` truthy or
+    unset); set the flag to a falsey value ('0'/'off'/'false'/'no') for a kill
+    switch that renders disputed facts plainly (no annotation). This is a pure
+    read annotation — it never changes WHICH fact is grounded, only whether the
+    dispute is disclosed to the reading LLM."""
+    raw = os.getenv("LEGBA_CONTENTION_SURFACING")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def contention_prefer_surfaced() -> bool:
+    """P3-2 — whether slice assembly PREFERS the arbiter's surfaced winner over
+    its contested siblings in the grounding ORDER BY. **Default OFF**
+    (``LEGBA_CONTENTION_SURFACING_PREFER`` unset/falsey): this changes WHAT
+    analysts consume, so it never ships silently — the annotation (above) stays
+    the ON default, the preference is an explicit opt-in."""
+    raw = os.getenv("LEGBA_CONTENTION_SURFACING_PREFER")
+    if raw is None or not raw.strip():
+        return False
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 # A bare Wikidata QID (``Q22686``) — what a fact value degrades to when an
@@ -344,6 +371,14 @@ class GroundingFact:
     when uncontested. The annotation NEVER injects ingestion content: only the
     already-eligible fact's own line is decorated; the sibling values live in
     the sidecar (surfaced by the read API), not in the ground-truth preamble.
+
+    DECAY annotation (C4, flag ``LEGBA_FACT_DECAY_WEIGHTING`` — default OFF):
+    when the flag is ON, ``_query_facts`` also joins the ``fact_decay_states``
+    sidecar (migration 0098) and threads ``decayed_confidence`` /
+    ``decay_state`` here; an ``aging``/``stale`` fact's line gets an explicit
+    age annotation (``revoke_candidate`` rows never reach the preamble — the
+    SQL excludes them). Flag OFF (the shipped default): both stay ``None``
+    and the rendered line is byte-identical to the pre-C4 output.
     """
 
     __slots__ = (
@@ -356,6 +391,8 @@ class GroundingFact:
         "contested",
         "surfaced_winner",
         "contention_value_count",
+        "decayed_confidence",
+        "decay_state",
     )
 
     def __init__(
@@ -370,6 +407,8 @@ class GroundingFact:
         contested: bool = False,
         surfaced_winner: bool = False,
         contention_value_count: int | None = None,
+        decayed_confidence: float | None = None,
+        decay_state: str | None = None,
     ) -> None:
         self.subject = subject
         self.predicate = predicate
@@ -380,12 +419,32 @@ class GroundingFact:
         self.contested = bool(contested)
         self.surfaced_winner = bool(surfaced_winner)
         self.contention_value_count = contention_value_count
+        self.decayed_confidence = decayed_confidence
+        self.decay_state = decay_state
 
     def render(self) -> str:
         since = ""
         if isinstance(self.valid_from, datetime):
             since = f" (since {self.valid_from.date().isoformat()})"
-        return f"{self.subject} — {self.predicate}: {self.value}{since}{self._contested_suffix()}"
+        return (
+            f"{self.subject} — {self.predicate}: {self.value}{since}"
+            f"{self._contested_suffix()}{self._decay_suffix()}"
+        )
+
+    def _decay_suffix(self) -> str:
+        """The decay annotation appended under LEGBA_FACT_DECAY_WEIGHTING.
+
+        Empty when no decay readout was threaded (flag OFF — the shipped
+        default — or no sidecar row yet) and for ``fresh`` facts, so the
+        common case renders byte-identically to the pre-C4 line. An
+        aging/stale fact is annotated so the LLM weighs an unre-observed
+        assertion below a recently-sighted one."""
+        if self.decay_state not in ("aging", "stale"):
+            return ""
+        dc = ""
+        if self.decayed_confidence is not None:
+            dc = f"; decayed confidence {float(self.decayed_confidence):.2f}"
+        return f"  [{self.decay_state.upper()}: not recently re-observed{dc}]"
 
     def _contested_suffix(self) -> str:
         """The CONTESTED/DISPUTED annotation appended to a contested fact line.
@@ -1331,7 +1390,17 @@ class SubstrateGroundingResolver:
         # ``collapsed`` group (down to one value) reads as uncontested, so the
         # COALESCE folds it back to the marker default — we trust the live
         # sidecar status over a possibly-stale ``facts.contested`` marker.
-        sql = """
+        # P3-2 preference (default OFF): when opted in, a surfaced winner
+        # outranks its contested siblings so the grounded line is the arbiter's
+        # pick. OFF by default so analyst consumption is unchanged unless an
+        # operator explicitly enables it. The annotation (contested/disputed)
+        # is independent and governed by contention_surfacing_enabled().
+        prefer_order = (
+            "\n              COALESCE(f.surfaced_winner, false) DESC,"
+            if contention_prefer_surfaced()
+            else ""
+        )
+        sql = f"""
             SELECT f.subject, f.predicate, f.value, f.valid_from,
                    f.source_type, f.confidence,
                    (f.contested AND fc.status IN ('contested','surfaced'))
@@ -1346,6 +1415,43 @@ class SubstrateGroundingResolver:
               AND (f.valid_until IS NULL OR f.valid_until > now())
               AND f.value !~ '^Q[0-9]+$'
             ORDER BY
+              (f.source_type IN ('seed','curated')) DESC,{prefer_order}
+              f.confidence DESC NULLS LAST,
+              f.valid_from DESC NULLS LAST
+            LIMIT $3
+        """
+        # C4 DECAY WEIGHTING (flag LEGBA_FACT_DECAY_WEIGHTING, default OFF):
+        # when ON, ALSO join the fact_decay_states sidecar (the daily
+        # fact_decay_scan readout, migration 0098) — a fact whose decayed
+        # confidence sits at/below the revoke threshold (decay_state
+        # 'revoke_candidate') is EXCLUDED from the ground-truth preamble
+        # outright, and decayed_confidence/decay_state annotate the surviving
+        # lines. A fact with NO sidecar row yet (scan hasn't run / draft
+        # analyst) passes through un-annotated — the seam degrades to the
+        # unweighted read, it never drops an unstamped fact. Flag OFF: the
+        # ORIGINAL sql above runs untouched, so the read (and the assembled
+        # slice) is byte-identical to the pre-C4 behavior.
+        if fact_decay_weighting_enabled():
+            sql = """
+            SELECT f.subject, f.predicate, f.value, f.valid_from,
+                   f.source_type, f.confidence,
+                   (f.contested AND fc.status IN ('contested','surfaced'))
+                       AS contested,
+                   COALESCE(f.surfaced_winner, false) AS surfaced_winner,
+                   fc.value_count AS contention_value_count,
+                   fds.decayed_confidence AS decayed_confidence,
+                   fds.decay_state AS decay_state
+            FROM facts f
+            LEFT JOIN fact_contention fc ON fc.id = f.contention_id
+            LEFT JOIN fact_decay_states fds ON fds.fact_id = f.id
+            WHERE lower(f.subject) = ANY($1::text[])
+              AND f.source_type = ANY($2::text[])
+              AND f.superseded_by IS NULL
+              AND (f.valid_until IS NULL OR f.valid_until > now())
+              AND f.value !~ '^Q[0-9]+$'
+              AND (fds.decay_state IS NULL
+                   OR fds.decay_state <> 'revoke_candidate')
+            ORDER BY
               (f.source_type IN ('seed','curated')) DESC,
               f.confidence DESC NULLS LAST,
               f.valid_from DESC NULLS LAST
@@ -1353,6 +1459,7 @@ class SubstrateGroundingResolver:
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, lowered, list(trusted), int(limit))
+        annotate = contention_surfacing_enabled()
         out: list[GroundingFact] = []
         for r in rows:
             # Backstop the SQL guard: never let a bare-QID value through to the
@@ -1365,10 +1472,19 @@ class SubstrateGroundingResolver:
             # default. ``_row_get`` keeps a pre-Wave-5 row shape (one that never
             # SELECTed the joined columns) backward-compatible — it degrades to
             # the plain/uncontested default rather than raising.
+            # Annotation kill-switch (P3-2): flag OFF renders every fact plainly
+            # (uncontested), regardless of the sidecar. Default ON = unchanged.
             contested_raw = _row_get(r, "contested")
-            contested = bool(contested_raw) if contested_raw is not None else False
+            contested = (
+                bool(contested_raw) if (annotate and contested_raw is not None) else False
+            )
             vc_raw = _row_get(r, "contention_value_count")
             value_count = int(vc_raw) if vc_raw is not None else None
+            # C4 decay annotation — the columns exist ONLY on the flag-ON SQL;
+            # _row_get degrades a flag-OFF row (or a stub row without them) to
+            # None, which renders byte-identically to the pre-C4 line.
+            dc_raw = _row_get(r, "decayed_confidence")
+            ds_raw = _row_get(r, "decay_state")
             out.append(
                 GroundingFact(
                     subject=r["subject"],
@@ -1382,6 +1498,10 @@ class SubstrateGroundingResolver:
                     contested=contested,
                     surfaced_winner=bool(_row_get(r, "surfaced_winner") or False),
                     contention_value_count=value_count,
+                    decayed_confidence=(
+                        float(dc_raw) if dc_raw is not None else None
+                    ),
+                    decay_state=(str(ds_raw) if ds_raw is not None else None),
                 )
             )
         return out

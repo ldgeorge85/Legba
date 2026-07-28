@@ -165,7 +165,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 4096
-  budget_tokens_per_day: 300000
+  budget_tokens_per_day: 30000000
   # If the per-analyst cap is projected to be crossed on a signal-dense day,
   # pause THIS unit until the next UTC budget bucket rather than demoting to a
   # paid fallback (the primary is the self-hosted core plane; no cheap fallback

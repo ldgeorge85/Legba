@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# deploy/swarm/registry-service.yml — DRAFT: local Docker image registry.
+#
+# ############################################################################
+# ##  DRAFT — NOT DEPLOYABLE YET. Phase-1 validation pending.               ##
+# ##  See deploy/swarm/README.md + planning/SWARM_CONVERSION_ASSESSMENT_    ##
+# ##  2026-07-25.md before touching this with `docker stack deploy`.        ##
+# ############################################################################
+#
+# WHY: `docker stack deploy` IGNORES `build:` — swarm nodes only PULL. The
+# four locally-built app images (legba-registry, legba-runtime-dapr,
+# legba-dapr-workflow-worker, legba-ui-build) therefore need a registry every
+# node's engine can reach. This is the standard swarm pattern (a registry:2
+# service on the cluster itself).
+#
+# WHY INGRESS MODE (the one deliberate routing-mesh use in these drafts):
+# publishing 5000 on the mesh makes `localhost:5000` resolve on EVERY node —
+# which is exactly what lets each engine pull `localhost:5000/legba/...`
+# WITHOUT any insecure-registries daemon.json change (engines exempt
+# localhost from the HTTPS requirement). The cost: 5000/tcp is reachable on
+# every node's external interfaces too — an UNAUTHENTICATED registry. The
+# phase runbook firewalls 5000 at the host (DOCKER-USER chain / provider
+# firewall) on both nodes; do not deploy this without that rule.
+#
+# FLOW (phase 1, runbook):
+#   docker stack deploy -c deploy/swarm/registry-service.yml legba-infra
+#   docker compose --profile runtime --profile dapr-workflow build   # compose still builds
+#   for img in legba-registry legba-runtime-dapr legba-dapr-workflow-worker legba-ui-build; do
+#     docker tag legba/$img:latest localhost:5000/legba/$img:latest
+#     docker push localhost:5000/legba/$img:latest
+#   done
+
+services:
+  registry:
+    # registry:2 = the battle-tested distribution v2 tag every swarm local-
+    # registry doc assumes. distribution v3 (registry:3) is GA but changes
+    # config layout — nothing here needs it. Pin the boring one.
+    image: registry:2
+    environment:
+      # Delete-enabled so old digests can be GC'd (registry GC is a manual
+      # `bin/registry garbage-collect` exec — runbook maintenance note).
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - registry_data:/var/lib/registry
+    ports:
+      - target: 5000
+        published: 5000
+        protocol: tcp
+        mode: ingress   # routing mesh — see header for why + the firewall rule
+    deploy:
+      replicas: 1
+      placement:
+        # Pin beside the build host (node1 = manager = runtime node) so pushes
+        # never cross the wire and the volume stays where builds happen.
+        constraints: ["node.role == manager"]
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  registry_data:   # stack-scoped (legba-infra_registry_data), manager-local

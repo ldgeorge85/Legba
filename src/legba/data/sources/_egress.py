@@ -27,6 +27,7 @@ the realistic vector. A rebinding-hardened transport is a tracked follow-up.
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from typing import Any
 
@@ -35,6 +36,21 @@ import httpx
 
 class EgressBlockedError(httpx.TransportError):
     """A source fetch targeted a non-public address — blocked by the SSRF guard."""
+
+
+def _allowed_internal_hosts() -> frozenset[str]:
+    """Operator-declared trusted internal hostnames (opt-in allowlist).
+
+    A co-located sidecar reachable only over the compose network — e.g. the
+    RSSHub lane's ``rsshub:1200`` — resolves to a PRIVATE address that the SSRF
+    guard below would otherwise refuse. ``LEGBA_EGRESS_ALLOW_HOSTS`` (comma-
+    separated hostnames) lets an operator permit EXACTLY those service names.
+    Empty/unset (the default for every deployment that hasn't opted in) means
+    the guard behaves exactly as before — no internal host is ever permitted.
+    Read per-call so a container that sets the env after import still applies.
+    """
+    raw = os.environ.get("LEGBA_EGRESS_ALLOW_HOSTS", "")
+    return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
 
 
 # Cloud metadata endpoints (covered by is_link_local, but called out explicitly
@@ -67,6 +83,12 @@ def assert_public_host(host: str, port: int) -> None:
     """
     if not host:
         raise EgressBlockedError("egress blocked: empty host")
+    # Trusted internal-sidecar allowlist (opt-in via LEGBA_EGRESS_ALLOW_HOSTS).
+    # Permits an EXACT hostname match only — never a wildcard — so a co-located
+    # service like the RSSHub lane's `rsshub` is reachable while every OTHER
+    # internal address a descriptor/selector could name stays blocked.
+    if host.lower() in _allowed_internal_hosts():
+        return
     # Literal IP?
     try:
         literal = ipaddress.ip_address(host)

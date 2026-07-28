@@ -1,0 +1,77 @@
+# RSSHub lane — Taiwan desk (country_watch_tw). Ships DRAFT (operator activates).
+#
+# AP News country hub for Taiwan bridged to RSS by the self-hosted RSSHub sidecar
+# (docker-compose `rsshub`, profile `sources-extra`). The `rss` handler polls
+# `http://rsshub:1200/apnews/topics/taiwan`, which RSSHub renders from apnews.com/hub/taiwan (probed
+# 2026-07-24, HTTP 200). Chosen for the Taiwan desk — a STARVED non-G7 desk
+# (TW: 2 signals/7d) — because AP is a top-tier international wire with dedicated Taiwan coverage and no native RSS for the hub.
+#
+# source_class: reporting. Article links in the RSSHub feed are the real
+# apnews.com URLs, so the credibility filter reads host apnews.com (seeded 0.90/wire by the
+# registrar).
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the sidecar is up and
+# the route is verified live on the instance.
+
+identity:
+  id: source.rsshub.apnews.taiwan
+  name: AP News — Taiwan hub (via RSSHub)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: a7_rsshub_lane
+  created: "2026-07-24T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [TW]
+  languages: [en]
+  tags: [news, world, indo_pacific, taiwan, rsshub_lane]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. RSSHub caches upstream (CACHE_EXPIRE=1h by
+  # default), so polling faster just serves cache — hourly is courteous.
+  schedule:
+    factory_kind: cron
+    raw: "13 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "http://rsshub:1200/apnews/topics/taiwan"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual can use the detected language.
+    # No fact_extractor: the default RSSHub feed carries title+link (not full
+    # bodies), so relation mining is low-value here — the operator can add the
+    # stage after confirming the route yields article text.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

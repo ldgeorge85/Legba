@@ -1,11 +1,15 @@
 /**
- * Status bar — footer with mode badge, panel count, last refresh, auth state.
+ * Status bar — footer with mode badge, panel count, last refresh, auth state,
+ * and (A10) the export-basket chip: a count of collected items that opens the
+ * Report Export panel. The chip only renders when the basket is non-empty.
  */
 
+import { FileDown } from 'lucide-react'
 import type { Mode } from '@/types'
 import { cn } from '@/lib/cn'
 import { PreferencesControls } from '@/components/density/PreferencesControls'
 import { useDebugMode } from '@/lib/debugMode'
+import { useExportBasket } from '@/state/exportBasket'
 
 export interface StatusBarProps {
   mode: Mode
@@ -13,9 +17,29 @@ export interface StatusBarProps {
   authenticated: boolean
   lastRefresh: Date | null
   errorText?: string | null
+  /** Open the Report Export panel (the basket chip's click target). */
+  onOpenExport?: () => void
 }
 
-export function StatusBar({ mode, panelCount, authenticated, lastRefresh, errorText }: StatusBarProps) {
+/** A10 — the persistent basket count; hidden at zero so the chrome stays lean. */
+function ExportBasketChip({ onOpen }: { onOpen?: () => void }) {
+  const count = useExportBasket((s) => s.items.length)
+  if (count === 0) return null
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="inline-flex items-center gap-1 rounded border border-line px-1.5 py-px text-ink-2 hover:text-ink-1"
+      title="open Report Export (collection basket)"
+      data-testid="statusbar-export-chip"
+    >
+      <FileDown className="h-3 w-3" aria-hidden />
+      export: {count}
+    </button>
+  )
+}
+
+export function StatusBar({ mode, panelCount, authenticated, lastRefresh, errorText, onOpenExport }: StatusBarProps) {
   // The mode badge + registered-panel counter are developer plumbing; keep only
   // the refresh time by default and reveal the rest under debug chrome (item 5).
   const debug = useDebugMode()
@@ -40,6 +64,7 @@ export function StatusBar({ mode, panelCount, authenticated, lastRefresh, errorT
           </span>
         )}
         {lastRefresh && <span>refreshed {lastRefresh.toLocaleTimeString()}</span>}
+        <ExportBasketChip onOpen={onOpenExport} />
       </div>
       <div className="flex items-center gap-3">
         {errorText && <span className="text-accent-critical truncate max-w-md">{errorText}</span>}

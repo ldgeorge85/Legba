@@ -6,6 +6,7 @@
  */
 
 import type { PanelRegistration, Mode } from '@/types'
+import type { TimelineResponse } from '@/lib/timelineWindows'
 
 export class ApiError extends Error {
   status: number
@@ -98,6 +99,50 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** One composed export artifact off `POST /api/v1/v3/export` (A10). */
+export interface ExportArtifact {
+  filename: string
+  mime: string
+  content: string
+}
+
+/**
+ * POST the collection basket to the server-side export composer and return
+ * the raw document (markdown text or pretty JSON) plus the server-suggested
+ * filename. NOT `apiPost` — the markdown format answers `text/markdown`, so
+ * the body must be read as text, and the filename rides the
+ * `Content-Disposition` header.
+ */
+export async function exportCollection(body: {
+  items: Array<{ kind: 'finding' | 'journal_entry'; id: string }>
+  format: 'markdown' | 'json'
+  title?: string | null
+}): Promise<ExportArtifact> {
+  const res = await fetch(`${API_BASE}/v3/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    throw new ApiError(res.status, await readErrorBody(res))
+  }
+  const mime = res.headers.get('Content-Type') ?? 'text/plain'
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const match = /filename="?([^";]+)"?/.exec(disposition)
+  const fallback = `legba-export.${body.format === 'json' ? 'json' : 'md'}`
+  const raw = await res.text()
+  // Pretty-print the JSON document for preview/download readability.
+  let content = raw
+  if (body.format === 'json') {
+    try {
+      content = JSON.stringify(JSON.parse(raw), null, 2)
+    } catch {
+      content = raw
+    }
+  }
+  return { filename: match?.[1] ?? fallback, mime, content }
+}
+
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'PUT',
@@ -107,6 +152,17 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
       ...authHeaders(),
     },
     body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    throw new ApiError(res.status, await readErrorBody(res))
+  }
+  return res.json() as Promise<T>
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json', ...authHeaders() },
   })
   if (!res.ok) {
     throw new ApiError(res.status, await readErrorBody(res))
@@ -682,4 +738,25 @@ export async function getSystemEscalations(
   return apiGet<EscalationDeliveriesResponse>(
     `/v3/system/escalations${qs ? `?${qs}` : ''}`,
   )
+}
+
+// ---------------------------------------------------------------------------
+// Validity-window timeline (P4-4) — the `system.timeline` panel's read.
+//
+// `GET /api/v1/v3/timeline?target_id=&days=` returns facts / situations /
+// findings as RANGED items ([start, end|open) + supersession-chain edges) over
+// one window. Mirrors `timeline_api.TimelineResponse`; the shape + all pure
+// shaping live in `lib/timelineWindows`.
+// ---------------------------------------------------------------------------
+
+/** Fetch the ranged validity-window items for the timeline panel. `target_id`
+ *  desk-scopes the read; `days` bounds the window (backend caps at 90). */
+export async function fetchTimeline(
+  opts: { target_id?: string | null; days?: number } = {},
+): Promise<TimelineResponse> {
+  const params = new URLSearchParams()
+  if (opts.target_id) params.set('target_id', opts.target_id)
+  if (opts.days != null) params.set('days', String(opts.days))
+  const qs = params.toString()
+  return apiGet<TimelineResponse>(`/v3/timeline${qs ? `?${qs}` : ''}`)
 }

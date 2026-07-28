@@ -1,0 +1,99 @@
+# Source Track Record analyst descriptor (A6 layer 3 — the EARNED source
+# record; P3-3; the MEASURED half of the source assurance ledger).
+#
+# A first-class `deterministic`-kind META analyst that, DAILY, recomputes every
+# source's earned track record from OUR OWN substrate and refreshes the
+# `source_track_records` table (migration 0099):
+#
+#   * WINS / LOSSES over RESOLVED contention groups (the 0055/0097
+#     `fact_contention` sidecar; status='surfaced' with a surfaced-winner value
+#     cluster). A WIN = the source carried the winning cluster; a LOSS = it
+#     carried ONLY losing (non-winner, non-junk) clusters. One outcome per
+#     (contention, source) so a chatty source counts once. Source attribution
+#     via supporting_fact_ids -> facts.derived_from -> signals.source_id.
+#   * a SMOOTHED win-rate — Beta-Bernoulli posterior mean with a neutral
+#     Beta(2,2) prior (prior-damped toward 0.5 by sample size, so a 2-contest
+#     source is never rated extreme) + a conservative Wilson lower bound + a
+#     low-sample flag.
+#   * CORROBORATION outcomes — of the clusters this source carried, how many
+#     drew >= 2 distinct backing sources (independent corroboration accrued).
+#
+# CIRCULARITY GUARD (operator + program doc both flagged it): the record feeds
+# the arbiter's tie-break weight, which decides winners, so it must not feed
+# back into the cycle that produced it. Enforced three ways:
+#   (a) LAG — only contentions surfaced STRICTLY BEFORE now - lag
+#       (LEGBA_CONTENTION_EARNED_LAG_HOURS, default 72h) count;
+#   (b) DAMPING — the consumed signal is the prior-damped smoothed rate (low n
+#       -> ~0.5 -> ~0 weight);
+#   (c) NO SELF-INFLUENCE — the arbiter recomputes the consumed weight LIVE at
+#       decision time EXCLUDING the very contention being decided (it never
+#       reads this stored aggregate). Acyclic: records -> decision(C) is built
+#       only from decisions on OTHER, older, settled disputes.
+#
+# CONSUMPTION (HARD, A6): this record feeds WEIGHTING / TIE-BREAK / flags /
+# display ONLY — NEVER the faithfulness score. The arbiter's consumption seam
+# (`_earned_track_record_weight`) is OFF by default behind
+# LEGBA_CONTENTION_EARNED_WEIGHT (=0). This analyst only computes + stores +
+# exposes the record; the flip to consuming it is a later MEASURED step.
+#
+# Target-agnostic + META: reads the WHOLE substrate per run. No `targets`
+# selector -> a SINGLE global run per cadence tick; the handler reads directly
+# via deps.pg_pool and ignores the materialized input slice.
+#
+# Method:
+#   * kind = deterministic — pure SQL + arithmetic, NO LLM, token usage zero.
+#   * impl = the deterministic kind dispatcher module:run_method, routed by
+#     `options.sub_handler`. Set explicitly AND id == sub-handler name so either
+#     resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "23 4 * * *" — daily at 04:23 (clear of the top-of-
+#     hour sweeps; the record only needs a daily refresh — contentions accrue
+#     slowly and the 72h lag makes sub-daily recompute pointless).
+#   * cooldown_seconds = 79200 — a 22h floor below the 24h tick so an organic
+#     daily tick is never swallowed by its own cooldown.
+#
+# State: draft in-tree — registration (scripts/bringup_register_source_track_
+# record.py) and the operator's activate flip are DEPLOY steps.
+
+identity:
+  id: source_track_record
+  name: Source Track Record
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: a6_source_assurance
+
+subscription:
+  # No `targets` block → META analyst: one global recompute per cadence tick
+  # over the whole substrate. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: source_track_record
+  # Deterministic kind: no LLM block and no per-day token budget — the whole
+  # run is pure SQL + win-rate arithmetic over the resolved contention sidecar.
+
+cadence:
+  fallback_schedule: "23 4 * * *"
+  cooldown_seconds: 79200
+
+# No output bindings: the honest per-source distribution rides the
+# deterministic kind's FINDING dispatch (the measurement IS the product — the
+# calibration_tracking / fact_decay_scan precedent); the REAL product — the
+# refreshed source_track_records rows — is side-written by the handler and read
+# by the assurance route + the /sources earned_win_rate projection.
+outputs: []

@@ -45,6 +45,10 @@ interface FindingRow {
   produced_at: string
   data?: unknown
   payload?: unknown
+  /** Faithfulness-verify block — a top-level `/findings` sibling of `data`
+   *  (null on a legacy/unverified row). Carried through so the citation
+   *  chips' hover cards can show per-claim judge verdicts (P1-8). */
+  verification?: Record<string, unknown> | null
 }
 
 interface FindingsResponse {
@@ -94,6 +98,7 @@ function firstNumber(...vals: unknown[]): number | null {
 type ProjectedAssessment = WorldAssessmentT & {
   citations: Citation[]
   confidence: number | null
+  verification: Record<string, unknown> | null
 }
 
 /** Project a findings row into the WorldAssessment shape. */
@@ -107,6 +112,8 @@ function projectAssessment(row: FindingRow): ProjectedAssessment {
     producedAt: Date.parse(row.produced_at),
     citations: extractCitations(payload),
     confidence: firstNumber(payload.confidence, row.confidence),
+    verification:
+      row.verification && typeof row.verification === 'object' ? row.verification : null,
   }
 }
 
@@ -305,6 +312,7 @@ function DeskIntelligenceCard({
             <CitedAssessment
               text={current.summary}
               citations={current.citations}
+              verification={current.verification}
               confidence={current.confidence}
               analystId={COUNTRY_COMPOSITION_ID}
             />
@@ -470,6 +478,7 @@ export default function WorldAssessment() {
           <CitedAssessment
             text={assessment.summary}
             citations={assessment.citations}
+            verification={assessment.verification}
             confidence={assessment.confidence}
             analystId={ASSESSOR_ID}
           />

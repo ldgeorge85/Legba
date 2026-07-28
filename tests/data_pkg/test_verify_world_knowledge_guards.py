@@ -254,3 +254,274 @@ async def test_verify_demotes_cross_target_finding():
     )
     assert any(s.reason == "cross_target_leak" for s in report.unsupported_spans)
     assert report.faithfulness_score < 1.0
+
+
+# ---------------------------------------------------------------------------
+# E-1 (2026-07-27 sweep rec #2) — the FACTS-RECONCILED officeholder guard.
+# The M13 heuristic above is curated-regex world knowledge; this sibling probes
+# the CURRENT facts-table officeholder row and flags a mismatch under the
+# DISTINCT reason ``stale_leader_vs_facts`` (hard_fail — same entity-scramble
+# class, separable in calibration). HONESTY: the seed facts can THEMSELVES be
+# stale (known live: the DRC PM upstream), so a mismatch only ever
+# DEMOTES/flags — never auto-corrects; every ambiguity fails OPEN; a facts
+# read failure degrades to no flag.
+# ---------------------------------------------------------------------------
+
+from legba.data.provenance.verify import (  # noqa: E402 — E-1 section imports
+    FAIL_CLASS_HARD,
+    extract_officeholder_claims,
+    stale_leader_vs_facts_spans,
+)
+
+
+class _FactsConn:
+    """Stub conn: canned current-officeholder rows; records the probe calls."""
+
+    def __init__(self, rows: list[dict] | None = None) -> None:
+        self.rows = rows or []
+        self.calls: list[tuple] = []
+
+    async def fetch(self, sql, *args):
+        self.calls.append((sql, args))
+        return list(self.rows)
+
+
+class _FailingConn:
+    async def fetch(self, sql, *args):
+        raise RuntimeError("facts table unavailable")
+
+
+def _office_row(subject: str, predicate: str, value: str) -> dict:
+    return {"subject": subject, "predicate": predicate, "value": value}
+
+
+# --- pure extraction --------------------------------------------------------
+
+
+def test_extract_officeholder_claims_recognizes_the_explicit_shapes():
+    country_first = extract_officeholder_claims(
+        "Slovenia's Prime Minister Janez Jansa met the delegation."
+    )
+    assert len(country_first) == 1
+    assert country_first[0].role == "prime minister"
+    assert country_first[0].person == "Janez Jansa"
+    # acronym surface (uppercase-only) expands to the full alias group
+    acronym = extract_officeholder_claims(
+        "DRC Prime Minister Sama Lukonde announced the budget."
+    )
+    assert acronym and "democratic republic of the congo" in acronym[0].country_aliases
+    role_first = extract_officeholder_claims(
+        "President Nicolas Maduro of Venezuela spoke on Tuesday."
+    )
+    assert role_first and role_first[0].country_aliases == ("venezuela",)
+    # repeated claim de-duplicates
+    dedup = extract_officeholder_claims(
+        "US President Trump signed it. US President Trump praised it."
+    )
+    assert len(dedup) == 1
+
+
+def test_extract_officeholder_claims_skips_qualified_and_noise():
+    # correct prose about a PREDECESSOR must never enter the probe
+    assert extract_officeholder_claims("former President Biden attended.") == []
+    assert extract_officeholder_claims("ex-Prime Minister Hamdok of Sudan spoke.") == []
+    # a DIFFERENT office (vice/deputy) is not the officeholder claim
+    assert extract_officeholder_claims(
+        "Vice President Delcy Rodriguez of Venezuela chaired the session."
+    ) == []
+    # lowercase 'us' is an English word, not the US acronym
+    assert extract_officeholder_claims("Tell us president material is scarce.") == []
+    # role without a following capitalized name — no claim
+    assert extract_officeholder_claims("the President of France arrived") == []
+    assert extract_officeholder_claims("") == []
+
+
+# --- the probe (stub conn) --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_flags_mismatch_with_distinct_reason():
+    """The exact sweep shape: the facts table carries the (stale) seeded DRC PM;
+    a finding names a different person in that office → flag, DISTINCT reason,
+    hard_fail class, and the span says flag-only (never a correction)."""
+    conn = _FactsConn([
+        _office_row(
+            "Democratic Republic of the Congo", "head of government",
+            "Sylvestre Ilunga Ilunkamba",
+        ),
+    ])
+    spans = await stale_leader_vs_facts_spans(
+        conn, "Prime Minister Judith Suminwa Tuluka of the DRC visited Goma.",
+    )
+    assert len(spans) == 1
+    assert spans[0].reason == "stale_leader_vs_facts"
+    assert spans[0].as_dict()["fail_class"] == FAIL_CLASS_HARD
+    assert "never auto-corrected" in spans[0].text
+    assert conn.calls  # the facts table was actually probed
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_no_flag_when_person_matches_current_holder():
+    conn = _FactsConn([
+        _office_row("Slovenia", "head of government", "Janez Janša"),
+    ])
+    # diacritic-folded surname match: prose 'Jansa' vs fact 'Janša'
+    assert await stale_leader_vs_facts_spans(
+        conn, "Slovenia's Prime Minister Jansa Cabinet survived the vote.",
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_fails_open_without_a_current_office_fact():
+    # No rows at all → nothing to reconcile → no flag.
+    assert await stale_leader_vs_facts_spans(
+        _FactsConn([]), "DRC Prime Minister Judith Suminwa Tuluka spoke.",
+    ) == []
+    # A current fact exists only for the OTHER office family member → the
+    # claimed office has no basis row → fail-open, no flag.
+    conn = _FactsConn([
+        _office_row(
+            "Democratic Republic of the Congo", "head of state",
+            "Felix Tshisekedi",
+        ),
+    ])
+    assert await stale_leader_vs_facts_spans(
+        conn, "DRC Prime Minister Judith Suminwa Tuluka spoke.",
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_role_confusion_is_not_a_mismatch():
+    """Prose calling the head of STATE 'prime minister' matches a current
+    family officeholder — role confusion, not a stale leader → no flag."""
+    conn = _FactsConn([
+        _office_row(
+            "Democratic Republic of the Congo", "head of government",
+            "Sylvestre Ilunga Ilunkamba",
+        ),
+        _office_row(
+            "Democratic Republic of the Congo", "head of state",
+            "Felix Tshisekedi",
+        ),
+    ])
+    assert await stale_leader_vs_facts_spans(
+        conn, "DRC Prime Minister Felix Tshisekedi addressed the nation.",
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_leader_of_row_counts_as_current_holder():
+    """A person-subject 'leader of' row is part of the family: matching it is
+    consistent even when the country-subject office row names someone else
+    (two seed producers can disagree; consistency with EITHER fails open)."""
+    conn = _FactsConn([
+        _office_row("Venezuela", "head of state", "Delcy Rodriguez"),
+        {"subject": "Nicolas Maduro", "predicate": "leader of",
+         "value": "Venezuela"},
+    ])
+    assert await stale_leader_vs_facts_spans(
+        conn, "President Nicolas Maduro of Venezuela spoke.",
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_read_failure_degrades_to_no_flag():
+    assert await stale_leader_vs_facts_spans(
+        _FailingConn(), "DRC Prime Minister Judith Suminwa Tuluka spoke.",
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_no_claim_makes_no_query():
+    conn = _FactsConn([])
+    assert await stale_leader_vs_facts_spans(
+        conn, "A quiet week; nothing about officeholders.",
+    ) == []
+    assert conn.calls == []
+
+
+# --- integration through verify_finding_faithfulness ------------------------
+
+
+@pytest.mark.asyncio
+async def test_verify_folds_vs_facts_span_and_demotes():
+    body = (
+        "Prime Minister Judith Suminwa Tuluka of the DRC announced the "
+        "reshuffle [1]."
+    )
+    citations = [{"marker": "[1]", "signal_id": "sig-1"}]
+    conn = _FactsConn([
+        _office_row(
+            "Democratic Republic of the Congo", "head of government",
+            "Sylvestre Ilunga Ilunkamba",
+        ),
+    ])
+    report = await verify_finding_faithfulness(
+        body=body, citations=citations, facts_conn=conn,
+    )
+    # 1 supported cited clause + 1 vs-facts guard span → 1/2 = 0.5.
+    assert report.faithfulness_score == pytest.approx(0.5)
+    assert any(
+        s.reason == "stale_leader_vs_facts" for s in report.unsupported_spans
+    )
+    # DISTINCT from the heuristic reason — calibration can tell them apart.
+    assert not any(s.reason == "stale_leader" for s in report.unsupported_spans)
+
+
+@pytest.mark.asyncio
+async def test_verify_without_facts_conn_never_probes():
+    """Default facts_conn=None → byte-identical no-op for existing callers."""
+    body = "Prime Minister Judith Suminwa Tuluka of the DRC announced it [1]."
+    report = await verify_finding_faithfulness(
+        body=body, citations=[{"marker": "[1]", "signal_id": "sig-1"}],
+    )
+    assert not any(
+        s.reason == "stale_leader_vs_facts" for s in report.unsupported_spans
+    )
+
+
+# --- ephemeral DB — the probe SQL against the real facts schema -------------
+
+
+@pytest.mark.asyncio
+async def test_vs_facts_probe_live_schema_honors_supersession(migrated_pg):
+    """Against the real ``facts`` table: only OPEN rows (superseded_by IS NULL
+    AND valid_until IS NULL) are the reconciliation basis; a superseded prior
+    holder neither flags a correct current claim nor shields a stale one."""
+    import asyncpg as _asyncpg
+    from uuid import uuid4 as _uuid4
+
+    conn = await _asyncpg.connect(migrated_pg.dsn)
+    try:
+        current_id, prior_id = _uuid4(), _uuid4()
+        await conn.execute(
+            "INSERT INTO facts (id, subject, predicate, value, source_type, "
+            "confidence, produced_at, valid_from) VALUES "
+            "($1, 'Democratic Republic of the Congo', 'head of government', "
+            "'Sylvestre Ilunga Ilunkamba', 'seed', 0.9, now(), now())",
+            current_id,
+        )
+        # A CLOSED prior holder — must never be part of the basis.
+        await conn.execute(
+            "INSERT INTO facts (id, subject, predicate, value, source_type, "
+            "confidence, produced_at, valid_from, valid_until, superseded_by) "
+            "VALUES ($1, 'Democratic Republic of the Congo', "
+            "'head of government', 'Bruno Tshibala', 'seed', 0.9, now(), "
+            "now() - interval '2 years', now() - interval '1 year', $2)",
+            prior_id, current_id,
+        )
+        # Naming the CLOSED prior holder as current PM → mismatch vs the OPEN row.
+        spans = await stale_leader_vs_facts_spans(
+            conn, "DRC Prime Minister Bruno Tshibala spoke in Kinshasa.",
+        )
+        assert len(spans) == 1
+        assert spans[0].reason == "stale_leader_vs_facts"
+        # Naming the OPEN row's holder → consistent, no flag.
+        assert await stale_leader_vs_facts_spans(
+            conn, "DRC Prime Minister Sylvestre Ilunga Ilunkamba spoke.",
+        ) == []
+    finally:
+        await conn.execute(
+            "DELETE FROM facts WHERE subject = 'Democratic Republic of the Congo'"
+        )
+        await conn.close()

@@ -39,7 +39,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDownToLine, EyeOff, Eye } from 'lucide-react'
+import { ArrowDownToLine, EyeOff, Eye, FilePlus2 } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
 import { VerdictBadge } from '@/components/VerdictBadge'
@@ -53,6 +53,7 @@ import { useLiveTail } from '@/lib/useLiveTail'
 import { useBatchedTail } from '@/lib/liveTail'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
+import { useExportBasket } from '@/state/exportBasket'
 import {
   FINDINGS_TAIL_FILTER,
   SIGNALS_TAIL_FILTER,
@@ -622,6 +623,44 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
 }
 
 /**
+ * A10 — the feed row's "add to export" context action (findings only),
+ * mirroring consult's pin-to-context: one click drops the row into the
+ * persistent export basket. Rendered as a keyboard-operable span because the
+ * whole FeedCard is itself a <button> (no nested interactive elements);
+ * click/keys stop propagation so adding never also opens the Inspector.
+ */
+function FeedAddToExport({ id, title }: { id: string; title: string | null }) {
+  const add = useExportBasket((s) => s.add)
+  const inBasket = useExportBasket((s) => s.items.some((i) => i.kind === 'finding' && i.id === id))
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-disabled={inBasket}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!inBasket) add({ kind: 'finding', id, label: title ?? undefined })
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.stopPropagation()
+        e.preventDefault()
+        if (!inBasket) add({ kind: 'finding', id, label: title ?? undefined })
+      }}
+      className={`shrink-0 self-center rounded border border-line px-1 py-0.5 text-label ${
+        inBasket
+          ? 'text-accent-ok'
+          : 'text-ink-3 opacity-0 hover:text-ink-1 focus:opacity-100 group-hover:opacity-100'
+      }`}
+      title={inBasket ? 'in the export basket' : 'add to export basket'}
+      data-testid={`feed-add-export-${id}`}
+    >
+      <FilePlus2 className="inline h-3 w-3" aria-hidden />
+    </span>
+  )
+}
+
+/**
  * One feed row — a finding OR a signal. A finding carries the full card + a
  * muted VerdictBadge (ICD-203); a signal is the slim raw-intake variant.
  */
@@ -681,6 +720,7 @@ function FeedCard({
         >
           {relativeTime(row.produced_at)}
         </span>
+        {!isSignal && <FeedAddToExport id={row.id} title={row.title} />}
       </div>
 
       {/* meta line */}

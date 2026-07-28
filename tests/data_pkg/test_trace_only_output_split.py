@@ -46,6 +46,9 @@ KEEP_FINDING_SUB_HANDLERS = (
     "anomaly_detection",
     "situation_clustering",
     "calibration_tracking",
+    # P2-3 band-calibration harness — its summary IS the measurement product
+    # the /eval/calibration band_calibration section reads.
+    "band_calibration_tracker",
 )
 
 
@@ -156,3 +159,30 @@ def test_resolver_passes_through_bind_kind_for_non_deterministic_kinds():
         )
         is OutputKind.FINDING
     )
+
+
+def test_structural_verify_exempt_registry_matches_finding_sub_handlers():
+    """P0-4 drift guard — the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS registry (the
+    `unverified — structural` badge source) must equal EXACTLY the deterministic
+    sub-handlers that emit a genuine FINDING. Deterministic runs never route
+    through the faithfulness verify pass, so a FINDING sub-handler missing from
+    the registry would surface verify-exempt rows WITHOUT the honest badge; a
+    registry entry with no FINDING sub-handler would badge nothing real."""
+    from legba.data.provenance.kinds import (
+        STRUCTURAL_VERIFY_EXEMPT_ANALYSTS,
+        verify_exempt_reason,
+    )
+
+    finding_sub_handlers = {
+        name
+        for name, kind in OUTPUT_KIND_BY_SUB_HANDLER.items()
+        if kind is OutputKind.FINDING
+    }
+    assert finding_sub_handlers == set(STRUCTURAL_VERIFY_EXEMPT_ANALYSTS)
+
+    # The stamp helper: structural for registry members, honest None otherwise.
+    assert verify_exempt_reason("graph_mining") == "structural"
+    assert verify_exempt_reason("indicator_tracker") == "structural"
+    assert verify_exempt_reason("country_assessor") is None
+    assert verify_exempt_reason("world_assessor") is None
+    assert verify_exempt_reason(None) is None

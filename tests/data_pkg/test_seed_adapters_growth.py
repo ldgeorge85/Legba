@@ -199,6 +199,149 @@ async def test_wikidata_maps_facts_and_signed_nexuses():
 
 
 # ---------------------------------------------------------------------------
+# S-3: current-holder selection (stale ex-leaders must NOT seed)
+# ---------------------------------------------------------------------------
+
+
+def _drc_gov_row(leader: str, start: str, end: str | None = None) -> dict:
+    """A DR Congo head-of-government (P6) SPARQL binding fixture row."""
+    row = {
+        "country": _wd_binding("http://www.wikidata.org/entity/Q974"),
+        "countryLabel": _wd_binding("Democratic Republic of the Congo"),
+        "leader": _wd_binding(f"http://www.wikidata.org/entity/{leader.replace(' ', '_')}"),
+        "leaderLabel": _wd_binding(leader),
+        "role": _wd_binding("head_of_government"),
+        "start": _wd_binding(start),
+    }
+    if end is not None:
+        row["end"] = _wd_binding(end)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_wikidata_current_holder_wins_over_former_with_end_date():
+    # DR Congo head of government (S-3): a FORMER PM carrying an end-date +
+    # the incumbent (no end-date). The adapter must emit ONLY the incumbent —
+    # for BOTH the country-subject office fact AND the subject=leader LeaderOf
+    # fact, so the ex-PM never enters `facts` at all.
+    fixture = {
+        "leaders": [
+            _drc_gov_row("Sylvestre Ilunga Ilunkamba", "+2019-05-20T00:00:00Z",
+                         end="+2021-04-12T00:00:00Z"),
+            _drc_gov_row("Judith Suminwa Tuluka", "+2024-06-12T00:00:00Z"),
+        ],
+        "alliances": [],
+    }
+    adapter = WikidataLeadersSeedSource()
+    raw = await adapter.fetch(SeedContext(options={"sparql_json": fixture}))
+    facts = [p for p in adapter.map(raw) if isinstance(p, SeedFact)]
+
+    gov = [f for f in facts if f.predicate == "head of government"]
+    assert len(gov) == 1, "exactly one current head of government per country"
+    assert gov[0].subject == "Democratic Republic of the Congo"
+    assert gov[0].value == "Judith Suminwa Tuluka"
+
+    leader_of = {f.subject for f in facts if f.predicate == "LeaderOf"}
+    assert leader_of == {"Judith Suminwa Tuluka"}
+    assert "Sylvestre Ilunga Ilunkamba" not in leader_of, "stale ex-PM must not seed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_wikidata_multiple_no_end_holders_latest_start_wins(reverse: bool):
+    # Wikidata DATA LAG: TWO head-of-government statements for one country BOTH
+    # lack an end-date (no preferred rank to let BestRank pick the incumbent).
+    # The most-recent term-start (P580) must win — regardless of row order.
+    rows = [
+        _drc_gov_row("Former Holder", "+2019-05-20T00:00:00Z"),   # older start
+        _drc_gov_row("Current Holder", "+2024-06-12T00:00:00Z"),  # later start
+    ]
+    if reverse:
+        rows.reverse()
+    adapter = WikidataLeadersSeedSource()
+    raw = await adapter.fetch(SeedContext(options={"sparql_json": {"leaders": rows, "alliances": []}}))
+    facts = [p for p in adapter.map(raw) if isinstance(p, SeedFact)]
+
+    gov = [f for f in facts if f.predicate == "head of government"]
+    assert len(gov) == 1
+    assert gov[0].value == "Current Holder"
+    assert {f.subject for f in facts if f.predicate == "LeaderOf"} == {"Current Holder"}
+
+
+@pytest.mark.asyncio
+async def test_wikidata_leader_facts_carry_as_of_seed_stamp():
+    # Every leader fact records the seed instant in data['as_of'] so a downstream
+    # freshness pass can age the (flat 0.92) confidence.
+    adapter = WikidataLeadersSeedSource()
+    raw = await adapter.fetch(SeedContext(options={"sparql_json": _WD_FIXTURE}))
+    facts = [p for p in adapter.map(raw) if isinstance(p, SeedFact)]
+    assert facts
+    for f in facts:
+        assert "as_of" in f.data, f"{f.predicate} fact missing as_of stamp"
+        # a parseable ISO instant
+        datetime.fromisoformat(str(f.data["as_of"]))
+
+
+@pytest.mark.asyncio
+async def test_wikidata_current_holder_still_degrades_undated_and_unlabelled():
+    # The degrade paths survive the current-holder selection: an undated holder
+    # is still skipped, a bare/unlabelled one still dropped, and a normal one for
+    # a DIFFERENT country still maps.
+    fixture = {
+        "leaders": [
+            _drc_gov_row("Judith Suminwa Tuluka", "+2024-06-12T00:00:00Z"),
+            {  # undated → skipped (no fabricated valid_from)
+                "country": _wd_binding("http://www.wikidata.org/entity/Q183"),
+                "countryLabel": _wd_binding("Germany"),
+                "leader": _wd_binding("http://www.wikidata.org/entity/Q568"),
+                "leaderLabel": _wd_binding("Undated Person"),
+                "role": _wd_binding("head_of_government"),
+            },
+            {  # bare-QID leaderLabel with no resolution → dropped
+                "country": _wd_binding("http://www.wikidata.org/entity/Q155"),
+                "countryLabel": _wd_binding("Brazil"),
+                "leader": _wd_binding("http://www.wikidata.org/entity/Q7654321"),
+                "leaderLabel": _wd_binding("Q7654321"),
+                "role": _wd_binding("head_of_government"),
+                "start": _wd_binding("+2023-01-01T00:00:00Z"),
+            },
+        ],
+        "alliances": [],
+    }
+    adapter = WikidataLeadersSeedSource()
+    # No label API resolution set → the bare QID stays bare → dropped by map().
+    adapter._sparql_client_factory = lambda: _NullLabelClient()
+    raw = await adapter.fetch(SeedContext(options={"sparql_json": fixture}))
+    facts = [p for p in adapter.map(raw) if isinstance(p, SeedFact)]
+
+    gov_subjects = {f.subject for f in facts if f.predicate == "head of government"}
+    assert gov_subjects == {"Democratic Republic of the Congo"}
+    values = {f.value for f in facts} | {f.subject for f in facts}
+    assert "Undated Person" not in values
+    assert not any(v.startswith("Q") and v[1:].isdigit() for v in values)
+
+
+class _NullLabelClient:
+    """A label-API client that resolves nothing (entities empty)."""
+
+    async def __aenter__(self) -> "_NullLabelClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def get(self, *a: object, **k: object):
+        class _R:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {"entities": {}}
+
+        return _R()
+
+
+# ---------------------------------------------------------------------------
 # ACLED adapter — mapping (no network)
 # ---------------------------------------------------------------------------
 

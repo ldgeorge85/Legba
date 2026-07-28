@@ -15,8 +15,12 @@ These tests pin the fix:
     ``geo`` at tier-1 enrichment;
   * when the body resolves a DIFFERENT country, that in-body country is what
     ``geo`` carries — the origin never appears;
-  * the origin is still applied to ``geo`` as a post-enrichment FALLBACK when
-    nothing in-body resolved (a genuinely-domestic story keeps its home country).
+  * (S-2) the origin is applied to ``geo`` as a post-enrichment fallback ONLY
+    when the story CONTENT corroborates it (the country is named in the body or
+    carried as a country-class NER entity). A world story from a state wire
+    whose body names no country stays geo-unattributed — never stamped with the
+    outlet's home country. This is the fix for the Singapore-outlet (CNA)
+    LeBron/OpenAI/F1 stories that were all landing geo=SG and flooding SG's desk.
 """
 
 from __future__ import annotations
@@ -95,24 +99,65 @@ async def test_run_baseline_inbody_country_beats_publisher_origin():
     assert out.payload["publisher_origin"] == ["TR"]      # origin still parked
 
 
-# --- fallback: origin applies only when nothing in-body resolved ------------
+# --- fallback: origin applies ONLY when the body corroborates it (S-2) ------
 
 
 @pytest.mark.asyncio
-async def test_run_baseline_fallback_applies_origin_when_nothing_resolved():
-    sig = _sig(title="Ankara passes 2027 budget")
+async def test_run_baseline_fallback_applies_origin_when_body_corroborates():
+    # Genuinely-domestic story that NAMES its own country: the geocoder happened
+    # to miss it (stub resolves nothing), but the body corroborates TR, so the
+    # publisher-origin fallback legitimately tags it.
+    sig = _sig(title="Türkiye passes 2027 budget")
     out = await run_baseline(sig, _ctx(["TR"]), enrichment_stage=_resolve_nothing)
     assert out is not None
-    assert out.geo == ["TR"]                              # domestic fallback holds
+    assert out.geo == ["TR"]                              # corroborated → tagged
     assert out.payload["publisher_origin"] == ["TR"]
 
 
 @pytest.mark.asyncio
-async def test_run_baseline_no_enrichment_stage_still_falls_back():
-    # No enrichment chain at all (bare source) — nothing resolves in-body, so the
-    # publisher-origin fallback still tags a domestic story with its home country.
-    sig = _sig(title="Ankara passes 2027 budget")
+async def test_run_baseline_fallback_corroborated_by_country_entity():
+    # No country name in the free text, but a country-class NER entity attests
+    # the origin — that counts as corroboration.
+    sig = _sig(
+        title="Central bank holds rates steady",
+        entities=[{"class": "country", "text": "Türkiye"}],
+    )
+    out = await run_baseline(sig, _ctx(["TR"]), enrichment_stage=_resolve_nothing)
+    assert out is not None
+    assert out.geo == ["TR"]
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_withholds_origin_when_body_does_not_corroborate():
+    # S-2: a Singapore wire's world story (LeBron) — the body names no country,
+    # so the SG origin must NOT be stamped. Under the old rule this landed
+    # geo=SG and flooded Singapore's country desk.
+    sig = _sig(
+        title="LeBron James re-signs with the Los Angeles Lakers",
+        text="The NBA star agreed to a two-year contract extension.",
+    )
+    out = await run_baseline(sig, _ctx(["SG"]), enrichment_stage=_resolve_nothing)
+    assert out is not None
+    assert out.geo == []                                  # NOT geo=SG
+    assert out.payload["publisher_origin"] == ["SG"]      # origin still parked
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_no_enrichment_stage_corroborated_still_falls_back():
+    # No enrichment chain (bare source): a domestic story that names its country
+    # still gets the home-country tag via the corroboration-gated fallback.
+    sig = _sig(title="Türkiye passes 2027 budget")
     out = await run_baseline(sig, _ctx(["TR"]))
     assert out is not None
     assert out.geo == ["TR"]
     assert out.payload["publisher_origin"] == ["TR"]
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_no_enrichment_stage_withholds_uncorroborated():
+    # Bare source, world story, no country in the body → no origin tag.
+    sig = _sig(title="LeBron James re-signs with the Los Angeles Lakers")
+    out = await run_baseline(sig, _ctx(["SG"]))
+    assert out is not None
+    assert out.geo == []
+    assert out.payload["publisher_origin"] == ["SG"]

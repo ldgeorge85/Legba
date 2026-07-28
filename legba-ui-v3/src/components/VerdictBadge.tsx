@@ -22,6 +22,7 @@ import { HelpCircle } from 'lucide-react'
 import {
   CONFIDENCE_LEGEND,
   LIKELIHOOD_LEGEND,
+  STRUCTURAL_EXEMPT_NOTE,
   buildVerdict,
   judgeStatusLabel,
   type ConfidenceLevel,
@@ -65,13 +66,20 @@ export function VerdictBadge({
 }) {
   const v = verdict ?? buildVerdict(input ?? {})
 
+  // P0-4 — a verify-EXEMPT structural analyst's finding never enters the
+  // faithfulness verify pass; make the exception visible instead of letting
+  // the row read like an ordinary (someday-verifiable) unverified one.
+  const structural = v.confidence === 'unassessed' && v.structural === true
+
   const likelihoodTitle =
     v.likelihood === 'unstated'
       ? 'Likelihood: not stated by this read (no probability recorded)'
       : `ICD-203 likelihood · assessed probability ${pct(v.probability)}`
   const confidenceTitle =
     v.confidence === 'unassessed'
-      ? 'Analytic confidence: no faithfulness-verify pass on this read (unverified)'
+      ? structural
+        ? `Analytic confidence: ${STRUCTURAL_EXEMPT_NOTE} (unverified — structural)`
+        : 'Analytic confidence: no faithfulness-verify pass on this read (unverified)'
       : `Analytic confidence (evidence quality) · faithfulness ${pct(v.faithfulness)} · ` +
         `${judgeStatusLabel(v.judgeStatus)} · ${v.citationCount} citation${
           v.citationCount === 1 ? '' : 's'
@@ -95,7 +103,7 @@ export function VerdictBadge({
         />
         <span className="uppercase tracking-wide text-ink-3">C</span>
         <span className={v.confidence === 'unassessed' ? 'italic text-ink-3' : ''}>
-          {confidenceLabel(v.confidence)}
+          {structural ? 'unverified — structural' : confidenceLabel(v.confidence)}
         </span>
       </span>
       {showLegend && <VerdictLegend />}

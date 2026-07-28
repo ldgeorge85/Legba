@@ -200,6 +200,13 @@ def _make_config(**overrides: Any) -> TelegramChannelSourceConfig:
             "api_hash_secret": "creds.telegram.api_hash",
             "session_secret": "creds.telegram.session",
             "channels": ["@warnews"],
+            # A7 poller guards: neutralize the wall-clock/startup guards by
+            # default so the existing behavior suite (which drives pull()
+            # synchronously with instant stubs) is never SKIPPED by GUARD 1's
+            # startup delay. The dedicated A7 guard tests below set explicit
+            # values to exercise each guard. (Mirrors how timing tests already
+            # pass backoff_base_seconds=0.0 to disable real sleeps.)
+            "startup_delay_seconds": 0.0,
             **overrides,
         }
     )
@@ -1281,3 +1288,339 @@ async def test_integration_real_telethon_smoke():
                     break
     finally:
         await handler.on_retire(SimpleNamespace())
+
+
+# ---------------------------------------------------------------------------
+# A7 — worldmonitor-proven poller guards
+#
+# Five ADDITIVE guards around the existing retry/backoff machinery, each of
+# which logs when it trips:
+#   1. startup delay        (AUTH_KEY_DUPLICATED on container swap)
+#   2. cross-poll FLOOD_WAIT early-abort (honor the server's wait across polls)
+#   3. single-flight poll lock + stale force-clear
+#   4. cycle-wide wall-clock cap
+#   5. per-channel wall-clock timeout
+# ---------------------------------------------------------------------------
+
+_LOCK_KEY = "telegram_poll_lock"
+_FLOODWAIT_KEY = "telegram_floodwait_until"
+
+
+def test_guard_config_defaults_are_production_sane():
+    """The five guard knobs default to the worldmonitor-proven values on a
+    bare (no-override) config — the production descriptor inherits them."""
+    cfg = TelegramChannelSourceConfig(
+        api_id_secret="a", api_hash_secret="b", session_secret="c",
+    )
+    assert cfg.startup_delay_seconds == 60.0
+    assert cfg.per_channel_timeout_seconds == 15.0
+    assert cfg.cycle_timeout_seconds == 180.0
+    assert cfg.flood_wait_abort_seconds == 30
+    assert cfg.poll_lock_stale_seconds == 300.0
+
+
+# --- GUARD 1: startup delay ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_guard_startup_delay_skips_poll_within_window(monkeypatch):
+    """Within the startup window the poll is SKIPPED (yields nothing) and the
+    client is never even constructed — nothing connects during a swap."""
+    from legba.data.sources import telegram as tg_mod
+
+    # Freeze the process-start marker so 'now' is inside the 60s window.
+    monkeypatch.setattr(tg_mod, "_PROCESS_STARTED_AT_MONOTONIC", tg_mod.time.monotonic())
+
+    cfg = _make_config(channels=["@warnews"], startup_delay_seconds=60.0)
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    out = [s async for s in handler.pull(_ctx_with_state())]
+    assert out == []
+    # Guard tripped BEFORE any connect — the client was never built/connected.
+    assert client.connect_calls == 0
+    assert client.iter_calls == []
+
+
+@pytest.mark.asyncio
+async def test_guard_startup_delay_zero_allows_poll():
+    """startup_delay_seconds=0 disables the guard (the unit-test default)."""
+    cfg = _make_config(channels=["@warnews"], startup_delay_seconds=0.0)
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=5, text="x", date=now)],
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    out = [s async for s in handler.pull(_ctx_with_state())]
+    assert [s.payload["message_id"] for s in out] == [5]
+
+
+# --- GUARD 2: FLOOD_WAIT early-abort (across-poll honoring) -----------------
+
+
+@pytest.mark.asyncio
+async def test_guard_floodwait_abort_defers_remaining_and_persists_deadline(monkeypatch):
+    """A FLOOD_WAIT exceeding the abort threshold aborts the WHOLE cycle
+    (remaining channels deferred, NOT hammered) and persists the server's wait
+    deadline so the next poll is skipped — honoring the wait across polls."""
+    from legba.data.sources import telegram as tg_mod
+
+    class FakeFloodWait(Exception):
+        def __init__(self, seconds: int) -> None:
+            super().__init__(f"flood {seconds}s")
+            self.seconds = seconds
+
+    monkeypatch.setattr(tg_mod, "_flood_wait_error_class", lambda: FakeFloodWait)
+
+    cfg = _make_config(
+        channels=["@floods", "@second"],
+        flood_wait_abort_seconds=30,
+        backoff_base_seconds=0.0,
+    )
+    now = datetime.now(tz=timezone.utc)
+    floods = _StubChannelState(
+        entity=_StubEntity(username="floods", id=1, title="F"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+        error_script=[FakeFloodWait(seconds=600)],  # 600 > 30 abort threshold
+    )
+    second = _StubChannelState(
+        entity=_StubEntity(username="second", id=2, title="S"),
+        messages=[_StubMessage(id=2, text="y", date=now)],
+    )
+    client = _StubTelegramClient({"floods": floods, "second": second})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert out == []
+    # The SECOND channel was NEVER attempted (cycle aborted on the first).
+    assert "second" not in client.iter_calls
+
+    # Server wait deadline persisted ~600s out (honored across polls).
+    fw = await store.get(_FLOODWAIT_KEY)
+    assert fw is not None
+    remaining = fw["until"] - __import__("time").time()
+    assert 590 <= remaining <= 601
+
+    # A transient flood is NOT a source error — health stays healthy.
+    health = await store.get(_HEALTH_KEY)
+    assert health["state"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_guard_floodwait_persisted_deadline_skips_next_poll():
+    """With a future FLOOD_WAIT deadline already persisted, the poll is skipped
+    up front (no connect) until it passes."""
+    cfg = _make_config(channels=["@warnews"], startup_delay_seconds=0.0)
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    import time as _t
+    store = InMemoryStateStore({_FLOODWAIT_KEY: {"until": _t.time() + 120}})
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert out == []
+    assert client.connect_calls == 0  # never connected
+
+
+@pytest.mark.asyncio
+async def test_guard_floodwait_below_threshold_still_honored_inline(monkeypatch):
+    """A FLOOD_WAIT at/under the abort threshold is honored INLINE (pre-existing
+    behavior) — no cycle abort, the channel still yields."""
+    from legba.data.sources import telegram as tg_mod
+
+    class FakeFloodWait(Exception):
+        def __init__(self, seconds: int) -> None:
+            super().__init__(f"flood {seconds}s")
+            self.seconds = seconds
+
+    monkeypatch.setattr(tg_mod, "_flood_wait_error_class", lambda: FakeFloodWait)
+
+    cfg = _make_config(
+        channels=["@warnews"], flood_wait_abort_seconds=30, backoff_base_seconds=0.0,
+    )
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=7, text="ok", date=now)],
+        error_script=[FakeFloodWait(seconds=0)],  # 0 <= 30 → sleep(0) inline
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert [s.payload["message_id"] for s in out] == [7]
+    assert await store.get(_FLOODWAIT_KEY) is None  # no cross-poll deadline set
+
+
+# --- GUARD 3: single-flight poll lock + stale force-clear ------------------
+
+
+@pytest.mark.asyncio
+async def test_guard_poll_lock_skips_overlapping_poll():
+    """A FRESH lock held by a still-running poll makes a second poll skip."""
+    cfg = _make_config(channels=["@warnews"], poll_lock_stale_seconds=300.0)
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    import time as _t
+    store = InMemoryStateStore({_LOCK_KEY: {"acquired_at": _t.time()}})  # fresh lock
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert out == []
+    assert client.connect_calls == 0  # never connected — skipped up front
+
+
+@pytest.mark.asyncio
+async def test_guard_poll_lock_force_clears_stale_lock():
+    """A lock older than poll_lock_stale_seconds is presumed crashed and is
+    force-cleared, so the poll proceeds normally."""
+    cfg = _make_config(channels=["@warnews"], poll_lock_stale_seconds=300.0)
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=9, title="W"),
+        messages=[_StubMessage(id=9, text="ok", date=now)],
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    import time as _t
+    stale = {_LOCK_KEY: {"acquired_at": _t.time() - 3600}}  # 1h old ≫ 300s
+    store = InMemoryStateStore(stale)
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert [s.payload["message_id"] for s in out] == [9]
+    # Lock released on completion (cleared to falsy).
+    assert not await store.get(_LOCK_KEY)
+
+
+@pytest.mark.asyncio
+async def test_guard_poll_lock_released_after_normal_poll():
+    """A normal poll takes then releases the lock, so a subsequent poll on the
+    same store is not blocked."""
+    cfg = _make_config(channels=["@warnews"])
+    now = datetime.now(tz=timezone.utc)
+    state = _StubChannelState(
+        entity=_StubEntity(username="warnews", id=1, title="W"),
+        messages=[_StubMessage(id=1, text="ok", date=now)],
+    )
+    client = _StubTelegramClient({"warnews": state})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out1 = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert len(out1) == 1
+    assert not await store.get(_LOCK_KEY)  # released
+
+
+# --- GUARD 4/5: cycle + per-channel wall-clock timeouts --------------------
+
+
+@pytest.mark.asyncio
+async def test_guard_cycle_timeout_defers_remaining_channels(monkeypatch):
+    """When the cycle wall-clock cap has already expired before a channel is
+    reached, the remaining channels are deferred to the next poll."""
+    from legba.data.sources import telegram as tg_mod
+
+    # Make the cycle deadline expire immediately: monotonic jumps forward by
+    # more than cycle_timeout_seconds right after the deadline is computed.
+    real_monotonic = tg_mod.time.monotonic
+    base = real_monotonic()
+    calls = {"n": 0}
+
+    def fake_monotonic():
+        calls["n"] += 1
+        # First call sets the cycle deadline (base + cycle_timeout); every
+        # later call is far in the future so .expired() is True.
+        return base if calls["n"] <= 1 else base + 10_000.0
+
+    monkeypatch.setattr(tg_mod.time, "monotonic", fake_monotonic)
+
+    cfg = _make_config(
+        channels=["@a", "@b"], cycle_timeout_seconds=1.0, startup_delay_seconds=0.0,
+    )
+    now = datetime.now(tz=timezone.utc)
+    sa = _StubChannelState(
+        entity=_StubEntity(username="a", id=1, title="A"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+    )
+    sb = _StubChannelState(
+        entity=_StubEntity(username="b", id=2, title="B"),
+        messages=[_StubMessage(id=2, text="y", date=now)],
+    )
+    client = _StubTelegramClient({"a": sa, "b": sb})
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    out = [s async for s in handler.pull(_ctx_with_state())]
+    # Cycle deadline already expired at the top of the loop → both deferred.
+    assert out == []
+    assert client.iter_calls == []
+
+
+@pytest.mark.asyncio
+async def test_guard_per_channel_timeout_abandons_hung_channel_continues_others():
+    """A channel whose request HANGS past its per-channel budget is abandoned
+    for this poll (timeout trip), and the next channel still delivers."""
+
+    class _HangingThenOkClient(_StubTelegramClient):
+        async def get_entity(self, handle: str):
+            self.get_entity_calls.append(handle)
+            state = self._channels.get(handle)
+            if state is None:
+                raise KeyError(handle)
+            if getattr(state, "hang", False):
+                await asyncio.sleep(100)  # hang well past the per-channel budget
+            return state.entity
+
+    now = datetime.now(tz=timezone.utc)
+    hung = _StubChannelState(
+        entity=_StubEntity(username="hung", id=1, title="H"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+    )
+    hung.hang = True  # type: ignore[attr-defined]
+    good = _StubChannelState(
+        entity=_StubEntity(username="good", id=2, title="G"),
+        messages=[_StubMessage(id=42, text="ok", date=now)],
+    )
+    client = _HangingThenOkClient({"hung": hung, "good": good})
+
+    cfg = _make_config(
+        channels=["@hung", "@good"],
+        per_channel_timeout_seconds=0.2,   # tight budget → the hang trips it
+        cycle_timeout_seconds=30.0,
+        startup_delay_seconds=0.0,
+    )
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+
+    store = InMemoryStateStore()
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    # Hung channel abandoned; the good channel still delivered.
+    assert [s.payload["channel"]["username"] for s in out] == ["good"]
+    cursors = await store.get("telegram_cursor")
+    assert cursors == {"good": 42}  # hung channel's cursor not advanced

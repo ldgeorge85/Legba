@@ -48,6 +48,7 @@ import hashlib
 import logging
 import os
 import tempfile
+import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -119,6 +120,15 @@ def _auth_error_classes() -> tuple[type[BaseException], ...]:
 
 
 _TELETHON_LOGGERS_TAMED = False
+
+# A7 poller guards — process-start marker for the startup-delay guard.
+# Captured at MODULE import (process start for the runtime container): after a
+# container swap the OLD container's MTProto connection can linger for tens of
+# seconds; connecting a fresh client with the SAME session while the old one is
+# alive is what triggers Telegram's AUTH_KEY_DUPLICATED (which KILLS the
+# session — a re-auth, not a retry). The guard skips polls until the process
+# has been up ``startup_delay_seconds`` (worldmonitor-proven mitigation).
+_PROCESS_STARTED_AT_MONOTONIC: float = time.monotonic()
 
 
 def _tame_telethon_loggers() -> None:
@@ -315,6 +325,60 @@ class TelegramChannelSourceConfig(BaseModel):
         ge=1.0,
         description="Per-connect timeout handed to the telethon client.",
     )
+    # --- A7 poller guards (worldmonitor parity) --------------------------
+    # The five guards below are ADDITIVE hard stops around the existing
+    # retry/backoff machinery. Every one of them logs when it trips.
+    startup_delay_seconds: float = Field(
+        default=60.0,
+        ge=0.0,
+        description="A7 guard — polls are SKIPPED until the process has been "
+                    "up this long. On a container swap the old container's "
+                    "MTProto connection can linger; a fresh client connecting "
+                    "with the same session while the old one is alive trips "
+                    "Telegram's AUTH_KEY_DUPLICATED, which permanently kills "
+                    "the session. 0 disables (unit tests).",
+    )
+    per_channel_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0.0,
+        description="A7 guard — wall-clock budget for ONE channel within one "
+                    "poll. A hung telethon request (no exception, socket "
+                    "stalled) or an over-long walk trips the budget: the "
+                    "channel is abandoned for THIS poll (cursor progress "
+                    "already yielded/persisted stands) and the poll moves on. "
+                    "Backoff/flood sleeps that cannot fit in the remaining "
+                    "budget trip it early instead of sleeping past it.",
+    )
+    cycle_timeout_seconds: float = Field(
+        default=180.0,
+        gt=0.0,
+        description="A7 guard — wall-clock cap for the WHOLE poll cycle "
+                    "(all channels). When it expires, remaining channels are "
+                    "deferred to the next poll (logged). Each channel's "
+                    "deadline is additionally clamped to the cycle deadline.",
+    )
+    flood_wait_abort_seconds: int = Field(
+        default=30,
+        ge=0,
+        description="A7 guard — FLOOD_WAIT early-abort. When Telegram's "
+                    "FloodWaitError demands a wait LONGER than this, the "
+                    "whole poll cycle aborts immediately (no inline sleep, "
+                    "no further channels hammered) and the server's wait "
+                    "deadline is persisted; subsequent polls are skipped "
+                    "until it passes — the server's wait is honored ACROSS "
+                    "polls instead of inside one. Waits <= this are still "
+                    "honored inline (pre-existing behavior).",
+    )
+    poll_lock_stale_seconds: float = Field(
+        default=300.0,
+        gt=0.0,
+        description="A7 guard — single-flight poll lock staleness. A poll "
+                    "records a lock in the state store and clears it when "
+                    "done; a second poll arriving while a FRESH lock is held "
+                    "skips (overlap). A lock OLDER than this is presumed "
+                    "left by a crashed poll and is force-cleared (logged). "
+                    "Keep it comfortably above cycle_timeout_seconds.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +393,11 @@ _STATE_KEY = "telegram_cursor"  # value: { channel_handle: int (max message_id) 
 # into an honest 'error' outcome instead of a silent 'empty'. Mirrors the RSS
 # handler's ``_RSS_HEALTH_KEY`` + ``health_state_key`` mechanism.
 _HEALTH_KEY = "telegram_health"
+# A7 guards — state-store keys. The poll lock makes polls single-flight per
+# source actor (with stale force-clear); the floodwait key persists a server
+# FLOOD_WAIT deadline so it is honored ACROSS polls after a cycle abort.
+_LOCK_KEY = "telegram_poll_lock"            # value: {"acquired_at": epoch_s}
+_FLOODWAIT_KEY = "telegram_floodwait_until"  # value: {"until": epoch_s}
 
 
 @dataclass
@@ -341,6 +410,24 @@ class _PullStats:
     # tell a systemic dead session from a per-channel hiccup.
     channels_auth_failed: dict[str, str] = field(default_factory=dict)
     last_error: str | None = None
+    # A7 guards — channels not attempted this poll (cycle cap / flood abort)
+    # and, when a FLOOD_WAIT cycle abort fired, the server-demanded wait.
+    channels_deferred: list[str] = field(default_factory=list)
+    flood_wait_abort_seconds: int | None = None
+
+
+@dataclass
+class _Deadline:
+    """A7 guards — a monotonic wall-clock budget (per channel / per cycle)."""
+
+    expires_at: float   # time.monotonic() basis
+    label: str = ""
+
+    def remaining(self) -> float:
+        return self.expires_at - time.monotonic()
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -503,37 +590,78 @@ class TelegramChannelSourceHandler:
         if cfg is None:  # on_configure could not source a config — nothing to do
             raise RuntimeError("pull() called before on_configure")
 
-        # Lazy client construction — the smoke harness can call pull
-        # directly without an explicit on_activate.
-        if self._client is None:
-            self._client = await self._build_client()
-            if self._client is not None:
-                with suppress(Exception):
-                    await self._client.connect()
-
-        if self._client is None:
-            # Telethon unavailable — log once and yield nothing. This
-            # mirrors the legacy ingestion path (`telegram.py`).
-            ctx.logger.warning(
-                "telegram_channel: telethon not installed; pull is a no-op"
-            )
+        # A7 GUARD 1 — startup delay (AUTH_KEY_DUPLICATED mitigation). Skip the
+        # poll entirely (no client connect) until the process has been up
+        # ``startup_delay_seconds``, so a fresh client never connects with the
+        # same session while a just-swapped-out container's connection lingers.
+        if await self._guard_startup_delay(ctx, cfg):
             return
 
-        cursors: dict[str, int] = dict(
-            await ctx.state_store.get(_STATE_KEY) or {}
-        )
+        # A7 GUARD 2 — cross-poll FLOOD_WAIT honoring. A prior cycle may have
+        # aborted on a server FLOOD_WAIT and persisted a wait deadline; skip
+        # polls (do not even connect) until it passes.
+        if await self._guard_floodwait_skip(ctx):
+            return
 
-        lower_bound = since or (
-            datetime.now(tz=timezone.utc) - timedelta(hours=cfg.lookback_hours)
-        )
-        if lower_bound.tzinfo is None:
-            lower_bound = lower_bound.replace(tzinfo=timezone.utc)
-
-        stats = _PullStats()
+        # A7 GUARD 3 — single-flight poll lock with stale force-clear. A fresh
+        # lock held by a still-running poll → skip (overlap). A lock older than
+        # ``poll_lock_stale_seconds`` is presumed crashed and force-cleared.
+        if not await self._acquire_poll_lock(ctx, cfg):
+            return
+        lock_held = True
 
         try:
+            # Lazy client construction — the smoke harness can call pull
+            # directly without an explicit on_activate.
+            if self._client is None:
+                self._client = await self._build_client()
+                if self._client is not None:
+                    with suppress(Exception):
+                        await self._client.connect()
+
+            if self._client is None:
+                # Telethon unavailable — log once and yield nothing. This
+                # mirrors the legacy ingestion path (`telegram.py`).
+                ctx.logger.warning(
+                    "telegram_channel: telethon not installed; pull is a no-op"
+                )
+                return
+
+            cursors: dict[str, int] = dict(
+                await ctx.state_store.get(_STATE_KEY) or {}
+            )
+
+            lower_bound = since or (
+                datetime.now(tz=timezone.utc) - timedelta(hours=cfg.lookback_hours)
+            )
+            if lower_bound.tzinfo is None:
+                lower_bound = lower_bound.replace(tzinfo=timezone.utc)
+
+            stats = _PullStats()
+
+            # A7 GUARD 4 — cycle-wide wall-clock cap. Each channel's own budget
+            # (GUARD 5) is additionally clamped to this cycle deadline.
+            cycle_deadline = _Deadline(
+                expires_at=time.monotonic() + cfg.cycle_timeout_seconds,
+                label="cycle",
+            )
+
             for channel_ref in cfg.channels:
                 handle = self._normalize_handle(channel_ref)
+
+                # A7 GUARD 4 — cycle cap reached: defer the rest to next poll.
+                if cycle_deadline.expired():
+                    remaining = [
+                        self._normalize_handle(c)
+                        for c in cfg.channels[cfg.channels.index(channel_ref):]
+                    ]
+                    stats.channels_deferred.extend(remaining)
+                    ctx.logger.warning(
+                        "telegram_channel: cycle timeout %.0fs reached — "
+                        "deferring %d channel(s) to next poll: %s",
+                        cfg.cycle_timeout_seconds, len(remaining), remaining,
+                    )
+                    break
 
                 # Task #206 — durable-across-pages cursor persistence. A
                 # catch-up walk (see _pull_channel) can span MULTIPLE
@@ -562,14 +690,31 @@ class TelegramChannelSourceHandler:
                         cursors[_handle] = new_cursor
                     await ctx.state_store.set(_STATE_KEY, dict(cursors))
 
+                # A7 GUARD 5 — per-channel wall-clock budget, clamped to the
+                # remaining cycle budget so one hung/slow channel can neither
+                # overrun its own slice nor blow the whole cycle. Enforced by
+                # ``_iter_with_deadline`` (times out each generator step) plus
+                # the backoff/flood early-trip in ``_apply_backoff_or_giveup``.
+                channel_budget = min(
+                    cfg.per_channel_timeout_seconds, cycle_deadline.remaining()
+                )
+                channel_deadline = _Deadline(
+                    expires_at=time.monotonic() + channel_budget,
+                    label=f"channel:{handle}",
+                )
+
                 try:
-                    async for sig in self._pull_channel(
-                        ctx=ctx,
+                    async for sig in self._iter_with_deadline(
+                        self._pull_channel(
+                            ctx=ctx,
+                            handle=handle,
+                            since=lower_bound,
+                            last_seen_id=int(cursors.get(handle, 0)),
+                            cfg=cfg,
+                            persist_cursor=_persist_page_cursor,
+                        ),
+                        deadline=channel_deadline,
                         handle=handle,
-                        since=lower_bound,
-                        last_seen_id=int(cursors.get(handle, 0)),
-                        cfg=cfg,
-                        persist_cursor=_persist_page_cursor,
                     ):
                         stats.yielded += 1
                         # Track max message_id per channel for cursor advance.
@@ -578,6 +723,35 @@ class TelegramChannelSourceHandler:
                             cursors[handle] = mid
                         yield sig
                     stats.channels_ok.append(handle)
+                except _CycleAbort as ab:
+                    # A7 GUARD — abort the WHOLE cycle (cycle cap hit mid-walk,
+                    # or a FLOOD_WAIT exceeding the abort threshold). Remaining
+                    # channels are deferred; a flood abort persists the server
+                    # wait deadline (below) so subsequent polls honor it.
+                    idx = cfg.channels.index(channel_ref)
+                    remaining = [self._normalize_handle(c) for c in cfg.channels[idx + 1:]]
+                    stats.channels_deferred.extend(remaining)
+                    stats.last_error = str(ab)
+                    if ab.flood_wait_seconds is not None:
+                        stats.flood_wait_abort_seconds = ab.flood_wait_seconds
+                    ctx.logger.warning(
+                        "telegram_channel: cycle abort on %s (%s) — deferring "
+                        "%d channel(s) to next poll",
+                        handle, ab, len(remaining),
+                    )
+                    break
+                except _ChannelDeadlineExceeded as dl:
+                    # A7 GUARD 5 — this channel exhausted its time budget. Treat
+                    # like a per-channel give-up: abandon it for THIS poll (any
+                    # already-yielded/persisted cursor progress stands), move on.
+                    stats.channels_failed[handle] = str(dl)
+                    stats.last_error = str(dl)
+                    ctx.logger.warning(
+                        "telegram_channel: %s per-channel timeout %.0fs — "
+                        "abandoning for this poll: %s",
+                        handle, channel_budget, dl,
+                    )
+                    continue
                 except _ChannelAuthFailure as af:
                     # SESSION-level auth failure (revoked / expired session).
                     # Systemic — tracked apart from a transient give-up so the
@@ -613,6 +787,13 @@ class TelegramChannelSourceHandler:
                     continue
 
             await ctx.state_store.set(_STATE_KEY, cursors)
+            # A7 GUARD 2 — persist the server FLOOD_WAIT deadline so the NEXT
+            # poll (and any until it passes) is skipped, honoring the server's
+            # wait ACROSS polls instead of sleeping it inside one.
+            if stats.flood_wait_abort_seconds is not None:
+                await self._persist_floodwait_deadline(
+                    ctx, stats.flood_wait_abort_seconds
+                )
             if stats.yielded > 0 or stats.channels_ok:
                 self._last_success_at = datetime.now(tz=timezone.utc)
                 self._rows_pulled_24h = stats.yielded  # last-pull approximation
@@ -625,6 +806,11 @@ class TelegramChannelSourceHandler:
             # this line always runs for that case.
             await self._record_pull_health(ctx, stats)
         finally:
+            # A7 GUARD 3 — always release the single-flight poll lock we took
+            # so a finished/aborted/closed poll never leaves a stale lock that
+            # blocks the next one until the stale-clear window.
+            if lock_held:
+                await self._release_poll_lock(ctx)
             # H1: the SourceActor builds a FRESH handler per pull, so the
             # "held open across pulls" optimization never actually applies in
             # production — and leaving the client connected leaks a telethon
@@ -911,6 +1097,23 @@ class TelegramChannelSourceHandler:
         fw_cls = _flood_wait_error_class()
         if fw_cls is not None and isinstance(exc, fw_cls):
             wait = getattr(exc, "seconds", 0) or 0
+            # A7 GUARD — FLOOD_WAIT early-abort. When the server demands a wait
+            # LONGER than the abort threshold, do NOT sleep it inline and do NOT
+            # keep hammering the remaining channels with the same session (which
+            # escalates the flood/ban risk). Abort the whole cycle; ``pull``
+            # persists the server's wait deadline and skips polls until it
+            # passes — honoring the server's wait ACROSS polls.
+            if wait > cfg.flood_wait_abort_seconds:
+                ctx.logger.warning(
+                    "telegram_channel: %s FLOOD_WAIT %ds exceeds abort "
+                    "threshold %ds — aborting cycle, honoring wait across polls",
+                    handle, wait, cfg.flood_wait_abort_seconds,
+                )
+                raise _CycleAbort(
+                    f"FLOOD_WAIT {wait}s exceeds abort threshold "
+                    f"{cfg.flood_wait_abort_seconds}s",
+                    flood_wait_seconds=wait,
+                ) from exc
             if wait > cfg.flood_wait_cap_seconds:
                 raise _ChannelGiveUp(
                     f"FloodWait {wait}s exceeds cap "
@@ -1112,6 +1315,138 @@ class TelegramChannelSourceHandler:
             await ctx.state_store.set(_HEALTH_KEY, record)
         except Exception:  # pragma: no cover
             ctx.logger.warning("telegram.health.persist_failed", exc_info=True)
+
+    # --- A7 poller guards ----------------------------------------------
+
+    async def _iter_with_deadline(
+        self,
+        agen: AsyncIterator[Signal],
+        *,
+        deadline: _Deadline,
+        handle: str,
+    ) -> AsyncIterator[Signal]:
+        """A7 GUARD 5 — consume ``agen`` bounding EACH step by the remaining
+        channel budget.
+
+        Wrapping each ``__anext__`` in :func:`asyncio.wait_for` bounds BOTH a
+        genuinely hung telethon request (a stalled socket that never returns —
+        the boundary checks below could not catch it) AND an over-long walk /
+        an inline backoff-or-flood sleep that overruns the budget (wait_for
+        cancels the in-flight step). A timeout raises
+        :class:`_ChannelDeadlineExceeded`; the caller abandons this channel for
+        the poll. Control-flow signals (``_CycleAbort`` / ``_ChannelAuthFailure``
+        / ``_ChannelGiveUp``) propagate UNCHANGED — only timeouts convert.
+        """
+        it = agen.__aiter__()
+        try:
+            while True:
+                remaining = deadline.remaining()
+                if remaining <= 0.0:
+                    raise _ChannelDeadlineExceeded(
+                        f"{handle}: channel budget exhausted before next message"
+                    )
+                try:
+                    sig = await asyncio.wait_for(it.__anext__(), timeout=remaining)
+                except StopAsyncIteration:
+                    return
+                except asyncio.TimeoutError as exc:
+                    raise _ChannelDeadlineExceeded(
+                        f"{handle}: channel step exceeded {deadline.label} budget"
+                    ) from exc
+                yield sig
+        finally:
+            # Close the wrapped generator so a mid-walk timeout/abort never
+            # leaks a suspended telethon iterator (unclosed-generator warning).
+            with suppress(Exception):
+                await agen.aclose()
+
+    async def _guard_startup_delay(
+        self, ctx: SourceContext, cfg: TelegramChannelSourceConfig,
+    ) -> bool:
+        """A7 GUARD 1 — True (skip poll) when the process is still inside the
+        startup-delay window (AUTH_KEY_DUPLICATED mitigation on container swap)."""
+        delay = getattr(cfg, "startup_delay_seconds", 0.0) or 0.0
+        if delay <= 0.0:
+            return False
+        elapsed = time.monotonic() - _PROCESS_STARTED_AT_MONOTONIC
+        if elapsed < delay:
+            ctx.logger.info(
+                "telegram_channel: startup delay active (%.0fs of %.0fs "
+                "elapsed) — skipping poll to avoid AUTH_KEY_DUPLICATED on a "
+                "fresh session connect during container swap",
+                elapsed, delay,
+            )
+            return True
+        return False
+
+    async def _guard_floodwait_skip(self, ctx: SourceContext) -> bool:
+        """A7 GUARD 2 — True (skip poll) when a prior cycle persisted a server
+        FLOOD_WAIT deadline that has not yet passed. Honors the server's wait
+        ACROSS polls instead of sleeping it inline."""
+        try:
+            record = await ctx.state_store.get(_FLOODWAIT_KEY)
+        except Exception:  # pragma: no cover — state store hiccup, fail open
+            return False
+        if not record:
+            return False
+        until = float(record.get("until", 0.0) or 0.0)
+        now = time.time()
+        if until > now:
+            ctx.logger.warning(
+                "telegram_channel: honoring persisted FLOOD_WAIT — %.0fs "
+                "remaining before polls resume",
+                until - now,
+            )
+            return True
+        return False
+
+    async def _persist_floodwait_deadline(
+        self, ctx: SourceContext, wait_seconds: int,
+    ) -> None:
+        """A7 GUARD 2 — persist ``now + wait_seconds`` as the deadline until
+        which polls are skipped (server FLOOD_WAIT honored across polls)."""
+        with suppress(Exception):
+            await ctx.state_store.set(
+                _FLOODWAIT_KEY, {"until": time.time() + float(wait_seconds)}
+            )
+
+    async def _acquire_poll_lock(
+        self, ctx: SourceContext, cfg: TelegramChannelSourceConfig,
+    ) -> bool:
+        """A7 GUARD 3 — single-flight poll lock with stale force-clear.
+
+        Returns True when the lock is acquired (caller proceeds), False when a
+        FRESH lock is already held (overlapping poll → caller skips). A lock
+        OLDER than ``poll_lock_stale_seconds`` is presumed left by a crashed
+        poll and force-cleared before acquiring (logged)."""
+        try:
+            record = await ctx.state_store.get(_LOCK_KEY)
+        except Exception:  # pragma: no cover — fail open (acquire)
+            record = None
+        now = time.time()
+        if record:
+            acquired_at = float(record.get("acquired_at", 0.0) or 0.0)
+            age = now - acquired_at
+            if age < cfg.poll_lock_stale_seconds:
+                ctx.logger.warning(
+                    "telegram_channel: poll lock held (%.0fs old) — skipping "
+                    "overlapping poll",
+                    age,
+                )
+                return False
+            ctx.logger.warning(
+                "telegram_channel: force-clearing STALE poll lock (%.0fs old, "
+                "threshold %.0fs) — prior poll presumed crashed",
+                age, cfg.poll_lock_stale_seconds,
+            )
+        with suppress(Exception):
+            await ctx.state_store.set(_LOCK_KEY, {"acquired_at": now})
+        return True
+
+    async def _release_poll_lock(self, ctx: SourceContext) -> None:
+        """A7 GUARD 3 — clear the single-flight poll lock (best-effort)."""
+        with suppress(Exception):
+            await ctx.state_store.set(_LOCK_KEY, None)
 
     # --- Helpers --------------------------------------------------------
 
@@ -1352,6 +1687,32 @@ class TelegramChannelSourceHandler:
 
 class _ChannelGiveUp(Exception):
     """Per-channel give-up signal — caught inside ``pull``."""
+
+
+class _ChannelDeadlineExceeded(Exception):
+    """A7 guard — a channel exhausted its per-channel/cycle time budget.
+
+    Raised by :meth:`_apply_backoff_or_giveup` (a backoff/flood sleep that
+    cannot fit the remaining budget) and by the per-channel deadline check in
+    ``pull``. Caught per-channel like :class:`_ChannelGiveUp`: the channel is
+    abandoned for THIS poll (already-yielded/persisted cursor progress stands)
+    and the loop moves to the next channel.
+    """
+
+
+class _CycleAbort(Exception):
+    """A7 guard — abort the ENTIRE poll cycle immediately.
+
+    Two triggers: (a) the cycle-wide wall-clock cap expired, or (b) a
+    FLOOD_WAIT longer than ``flood_wait_abort_seconds`` — we do NOT sleep it
+    inline; the server's wait deadline is persisted and honored across polls.
+    ``flood_wait_seconds`` is set for the FLOOD_WAIT trigger so ``pull`` can
+    persist the cross-poll skip deadline.
+    """
+
+    def __init__(self, message: str, *, flood_wait_seconds: int | None = None) -> None:
+        super().__init__(message)
+        self.flood_wait_seconds = flood_wait_seconds
 
 
 class _ChannelAuthFailure(Exception):

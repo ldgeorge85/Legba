@@ -109,6 +109,69 @@ class RegistryHTTPClient:
                 pass
             self._client = None
 
+    async def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: Any | None = None,
+        timeout_seconds: float | None = None,
+    ) -> tuple[int, Any]:
+        """Issue an arbitrary registry request against an ABSOLUTE ``path``.
+
+        Unlike :meth:`get_descriptor` and its siblings this does **not**
+        prepend the ``/api/v1/registry`` descriptor prefix — ``path`` is
+        used verbatim (e.g. ``/api/v1/findings``, ``/api/v1/v3/since``) so a
+        caller can reach the daily-driver read + consult surfaces that live
+        on the same host:port but outside the descriptor-registry prefix.
+        This is the generic wire the :command:`legba-mcp` built-in tool set
+        rides.
+
+        Returns ``(status_code, body)``:
+
+          * ``body`` is the parsed JSON when the response advertises a JSON
+            content type (and parses), else the raw response text.
+          * The HTTP status is **never** raised on — a 4xx / 5xx is returned
+            as ``(status_code, body)`` so the caller can surface a *described*
+            error rather than a fabricated success. Only transport / DNS /
+            TCP failures raise :class:`RegistryClientError`.
+
+        ``params`` entries whose value is ``None`` are dropped so an unset
+        optional filter never serializes to a literal ``"None"`` query value.
+        ``timeout_seconds`` overrides the client-default per-request timeout
+        (the consult surface blocks for the whole ReAct loop, well past the
+        10s descriptor-fetch default).
+        """
+        client = await self._ensure_client()
+        clean_params: dict[str, Any] | None = None
+        if params:
+            clean_params = {k: v for k, v in params.items() if v is not None}
+        request_kwargs: dict[str, Any] = {"headers": self._headers()}
+        if clean_params:
+            request_kwargs["params"] = clean_params
+        if json_body is not None:
+            request_kwargs["json"] = json_body
+        if timeout_seconds is not None:
+            request_kwargs["timeout"] = timeout_seconds
+        try:
+            resp = await client.request(method.upper(), path, **request_kwargs)
+        except httpx.HTTPError as exc:
+            raise RegistryClientError(
+                f"registry {method.upper()} {path} failed: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        content_type = resp.headers.get("content-type", "")
+        body: Any
+        if "application/json" in content_type:
+            try:
+                body = resp.json()
+            except ValueError:
+                body = resp.text
+        else:
+            body = resp.text
+        return resp.status_code, body
+
     async def get_descriptor(
         self,
         descriptor_id: str,

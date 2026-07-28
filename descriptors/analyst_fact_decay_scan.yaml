@@ -1,0 +1,114 @@
+# Fact Decay Scan analyst descriptor (C4 — fact confidence-decay readout,
+# MISP/OpenCTI mechanics, LLM-free).
+#
+# A first-class `deterministic`-kind META analyst that, on a DAILY cadence,
+# walks every OPEN fact and stamps its derived decay readout into the
+# `fact_decay_states` SIDECAR (migration 0098):
+#
+#   decayed_confidence = stored confidence × the per-CLASS MISP retention
+#                        curve (1 - (t/lifetime)^(1/decay_speed)) at
+#                        t = days since the fact's LAST SIGHTING
+#   decay_state        = fresh | aging | stale | revoke_candidate
+#                        (reaction points on the curve + the ABSOLUTE revoke
+#                        threshold on decayed confidence)
+#
+# HARD RULE — readout, never mutation: this handler NEVER touches a `facts`
+# row (`confidence` / `confidence_components` / `updated_at` stay exactly as
+# the write path left them). The legacy `fact_decay` sweep (which SUBTRACTS
+# from the stored scalar) is a separate, unchanged analyst; this one is the
+# non-destructive C4 model beside it. Drop the sidecar, re-run, identical
+# content — the readout is derived, recomputable state.
+#
+# SIGHTINGS are DERIVED, not written: a corroborating re-assert of the same
+# open triple unions the backing signal ids into `facts.derived_from` (both
+# fact producers), so last_sighting_at = max backing-signal observation time,
+# falling back to facts.created_at (birth = first sighting) when no backing
+# signal survives. `facts.updated_at` is deliberately NOT used (polluted by
+# arbiter marker stamps / entity_gc renames / the legacy decay mutation).
+#
+# CURVES (defaults; operator-overridable via a JSON file at
+# LEGBA_FACT_DECAY_CONFIG — see legba/data/facts/decay.py):
+#   structural   1460d  (located in / capital of / part of / border with …)
+#   officeholder  730d  (leader of / head of state / head of government …)
+#   affiliation   365d  (member of / allied with / operates in …)
+#   stance        180d  (hostile to / controls / sanctioned by / supplies to …)
+#   event          45d  (involved in conflict event / targets / reported …)
+#   default       120d  (unmapped predicates)
+# seed/curated rows age at 2× lifetime (the provenance-gate trusted set is
+# vetted, not scraped). Reaction points: fresh >= 0.85 retention, aging >=
+# 0.50; revoke_candidate at decayed confidence <= 0.20 (absolute).
+#
+# CONSUMPTION SHIPS OFF: nothing reads the sidecar by default. Under
+# LEGBA_FACT_DECAY_WEIGHTING (default OFF, docker-compose-documented) the
+# grounding fact read joins the sidecar — revoke candidates are excluded from
+# the grounding preamble and decayed_confidence annotates the rendered lines.
+# Flipping the flag is a measured operator step.
+#
+# The per-run summary FINDING is the measurement product (counts per
+# decay_state + top revoke candidates; zero-state honest — an all-fresh or
+# empty scan reports so explicitly), which keeps this handler in the
+# FINDING-emitters set the STRUCTURAL_VERIFY_EXEMPT drift guard asserts
+# (renders with the `unverified — structural` badge).
+#
+# Target-agnostic + META: reads the WHOLE facts substrate per scan. No
+# `targets` selector → a SINGLE global run per cadence tick; the handler
+# reads directly via deps.pg_pool and ignores the materialized input slice.
+#
+# Method:
+#   * kind = deterministic — pure SQL + curve arithmetic, NO LLM, token
+#     usage zero.
+#   * impl = the deterministic kind dispatcher module:run_method, which routes
+#     by `options.sub_handler`. Set explicitly AND id == sub-handler name so
+#     either resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "52 4 * * *" — daily at 04:52 UTC, OFFSET from the
+#     other maintenance sweeps (legacy fact_decay "23 */8", integrity_sweep
+#     "41 */1", situation_clustering "5-59/20") so they never share a tick.
+#   * cooldown_seconds = 3600 — idempotent daily stamp; a re-fire floor of an
+#     hour is plenty.
+#
+# State: draft in-tree — registration (scripts/bringup_register_
+# fact_decay_scan.py) and the operator's activate flip are DEPLOY steps
+# (migration 0098 must be applied first).
+
+identity:
+  id: fact_decay_scan
+  name: Fact Decay Scan
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: c4_fact_decay
+
+subscription:
+  # No `targets` block → META analyst: one global scan per cadence tick over
+  # the whole facts substrate. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: fact_decay_scan
+  # Deterministic kind: no LLM block and no per-day token budget — the whole
+  # run is one substrate read + pure curve arithmetic + the sidecar stamp.
+
+cadence:
+  fallback_schedule: "52 4 * * *"
+  cooldown_seconds: 3600
+
+# No output bindings: the summary finding rides the deterministic kind's
+# FINDING dispatch; the REAL product — the fact_decay_states sidecar rows —
+# is side-written by the handler (and consumed only behind the default-OFF
+# LEGBA_FACT_DECAY_WEIGHTING grounding seam).
+outputs: []

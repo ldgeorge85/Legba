@@ -1395,7 +1395,7 @@ _GATHER_SYSTEM_SUFFIX = (
     "\n\nBefore you write the finding you may FIRST query the substrate to "
     "ground your assessment. Each query must be a single strict-JSON object.\n"
     "Available tools:\n"
-    "  - search_signals(query, [category], [limit]) — full-text signal search.\n"
+    "  - search_signals(query, [limit]) — full-text signal search (title + summary).\n"
     "  - search_corpus(query, [filters], [size]) — BM25 keyword search over the "
     "FULL raw body of every ingested signal (the whole corpus, not the recent "
     "slice); a row's id is the signal id. Use it to FIND source documents.\n"
@@ -1420,8 +1420,9 @@ _GATHER_SYSTEM_SUFFIX = (
     "Use a situation_id with query_hypotheses to pull its ACH rows.\n"
     "  - query_predictions([target_id], [status], [limit]) — the platform's "
     "event-volume forecasts (forecast_method='naive_mean' means no trend could "
-    "be fit, low-confidence; 'auto_arima' means fitted); "
-    "cite the output_id.\n\n"
+    "be fit, low-confidence; 'auto_arima' means fitted). The feed is FROZEN "
+    "(writer retired 2026-07-01) — rows are historical, never present one as "
+    "a current forecast; cite the output_id.\n\n"
     "Protocol:\n"
     '  - To query, reply with strict JSON: {"tool": "<name>", "args": {...}}\n'
     '  - When you have gathered enough, reply with: {"done": true}\n'

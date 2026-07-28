@@ -104,3 +104,26 @@ deploy/deploy.sh --seed
 `sipri_arms_transfers`) before the runtime boots. Because the adapters degrade
 gracefully, `--seed` is a **no-op** if you have not provided the seed files —
 the instance simply boots with an empty knowledge base.
+
+## Source ratings (assurance ledger catalog seed)
+
+`seeds/source_ratings.yaml` (curated, gitignored) feeds the **source assurance
+ledger** (`source_ratings`, migration 0094) rather than the knowledge layer:
+per-source rubric grades with the Admiralty display vocabulary, upserted as
+`method='catalog_seed'`, `visibility_class='public'` rows with supersession
+history. It has its own loader (not a `SeedSource` adapter — it writes ratings,
+not facts):
+
+```bash
+# Dry-run (parse + validate, no DB writes).
+python scripts/seed_source_ratings.py --dry-run
+
+# Import for real.
+python scripts/seed_source_ratings.py
+```
+
+Format (with inline field comments):
+[`source_ratings.example.yaml`](source_ratings.example.yaml) — the example
+sources in it are FAKE. Same graceful degrade: a missing file is a warn +
+no-op. Ratings are display/weighting metadata only — they never touch the
+faithfulness score.

@@ -78,7 +78,7 @@ class _RecorderPort:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
-    async def search_signals(self, *, query, category=None, limit=20,
+    async def search_signals(self, *, query, limit=20,
                              scope_predicate=None):
         self.calls.append(("search_signals", {
             "query": query, "scope_predicate": scope_predicate,
@@ -103,9 +103,11 @@ class _RecorderPort:
         self.calls.append(("search_context", {
             "query": query, "corpus": corpus, "country": country, "k": k,
         }))
+        # W2-T4 ref honesty: the real port returns ctx:-prefixed chunk ids
+        # (non-substrate, excluded from lineage) + the parallel context_refs.
         return {
             "rows": [{
-                "chunk_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+                "chunk_id": "ctx:3f2504e0-4f89-41d3-9a0c-0305e82c3301",
                 "corpus": corpus or "world_context",
                 "doc_id": "brief-1", "title": "Prior", "section": "S1",
                 "countries": [country] if country else [],
@@ -113,7 +115,8 @@ class _RecorderPort:
                 "effective_date": "2026-01-01", "text": "a curated prior",
                 "score": 0.88,
             }],
-            "refs": ["3f2504e0-4f89-41d3-9a0c-0305e82c3301"],
+            "refs": ["ctx:3f2504e0-4f89-41d3-9a0c-0305e82c3301"],
+            "context_refs": ["ctx:3f2504e0-4f89-41d3-9a0c-0305e82c3301"],
             "count": 1,
         }
 
@@ -177,7 +180,10 @@ async def test_search_context_handler_returns_chunks_no_db():
     assert result.status == "completed"
     assert result.output["count"] == 1
     assert result.output["rows"][0]["corpus"] == "world_context"
-    assert result.output["refs"] == ["3f2504e0-4f89-41d3-9a0c-0305e82c3301"]
+    assert result.output["refs"] == ["ctx:3f2504e0-4f89-41d3-9a0c-0305e82c3301"]
+    assert result.output["context_refs"] == [
+        "ctx:3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    ]
     # The port received the coerced args.
     assert port.calls[-1] == (
         "search_context",

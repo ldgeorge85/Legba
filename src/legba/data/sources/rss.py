@@ -38,7 +38,7 @@ import calendar
 import hashlib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from time import struct_time
 from typing import Any, AsyncIterator, ClassVar
@@ -96,6 +96,18 @@ _TRANSIENT_STATUS = {502, 503, 504}
 # (it is load-bearing for bandwidth); the forced refetch is the exception,
 # not the rule. The consecutive-304 count is persisted in the cursor.
 _MAX_CONSECUTIVE_304 = 12
+
+# B0-12 watchdog-precision evidence. On every parsed 200 the handler records
+# the newest entry timestamp it OBSERVED in the feed document — BEFORE the
+# ``since``-filter drops anything — in its health record
+# (``detail.newest_entry_ts``). The source actor surfaces that observation on
+# the poll-outcome row, where the liveness watchdog's empty-streak check uses
+# it to discriminate an honest-quiet feed (newest observed entry <= our last
+# ingest → silent) from a cursor/filter fault (feed carries NEWER entries yet
+# the poll yielded 0 → escalate). Feed-provided timestamps further in the
+# future than this skew are junk (the B0-11 stategov year-typo class) and are
+# excluded so one bad date can't poison the evidence.
+_NEWEST_ENTRY_MAX_FUTURE_SKEW = timedelta(hours=26)
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +216,12 @@ class RSSSourceHandler:
                     "consecutive_304": next_304,
                 },
             )
+            # B0-12: a 304 means the feed document is UNCHANGED, so the
+            # previous poll's newest-entry observation still holds — carry it
+            # forward so an empty streak of 304s stays classifiable as
+            # honest-quiet instead of degrading to "no evidence".
+            previous = await ctx.state_store.get(_RSS_HEALTH_KEY) or {}
+            prev_newest = (previous.get("detail") or {}).get("newest_entry_ts")
             await self._record_health(
                 ctx,
                 state="healthy",
@@ -212,6 +230,7 @@ class RSSSourceHandler:
                     "status": 304,
                     "note": "not modified",
                     "consecutive_304": next_304,
+                    "newest_entry_ts": prev_newest,
                 },
             )
             return
@@ -237,10 +256,29 @@ class RSSSourceHandler:
             return
 
         emitted = 0
+        # B0-12: newest entry timestamp OBSERVED in this feed document — over
+        # ALL parsed entries, BEFORE the since-filter (that is the point: when
+        # a poisoned cursor / over-trimming filter eats every entry, this is
+        # the only evidence the feed actually carried fresh content).
+        newest_entry_ts: datetime | None = None
+        skew_ceiling = datetime.now(tz=timezone.utc) + _NEWEST_ENTRY_MAX_FUTURE_SKEW
         for entry in getattr(feed, "entries", []) or []:
             signal = self._entry_to_signal(entry, ctx=ctx)
             if signal is None:
                 continue
+            published = signal.payload.get("_published_at_dt")
+            if isinstance(published, datetime):
+                p_utc = (
+                    published
+                    if published.tzinfo
+                    else published.replace(tzinfo=timezone.utc)
+                )
+                # Future-skewed junk dates (the B0-11 year-typo class) must
+                # not poison the observation.
+                if p_utc <= skew_ceiling and (
+                    newest_entry_ts is None or p_utc > newest_entry_ts
+                ):
+                    newest_entry_ts = p_utc
             if since is not None and _is_not_after(signal, since):
                 continue
             emitted += 1
@@ -262,6 +300,13 @@ class RSSSourceHandler:
                 "status": response.status_code,
                 "entries_yielded": emitted,
                 "etag": new_cursor["etag"],
+                # B0-12 discriminator evidence (see the loop above). None when
+                # the feed carried no (sanely-dated) entries this poll.
+                "newest_entry_ts": (
+                    newest_entry_ts.isoformat()
+                    if newest_entry_ts is not None
+                    else None
+                ),
             },
         )
 

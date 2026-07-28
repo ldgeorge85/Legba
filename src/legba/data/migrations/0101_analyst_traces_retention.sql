@@ -1,0 +1,45 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0101_analyst_traces_retention.sql
+--
+-- analyst_traces retention — TTL purge support (S-6, disk-creep remediation).
+--
+-- `analyst_traces` is the per-run debug/telemetry receipt table (one row per
+-- analyst run: prompt, llm_calls, tool_calls, output_payload, receipt chain).
+-- It had NO retention and grew forever (~470MB / 164k rows, +5.4k/day),
+-- feeding the disk pressure that breached OpenSearch's watermark. The answer
+-- mirrors the `signals_retention` precedent (migration 0036): a scheduled TTL
+-- PURGE run by the deterministic `analyst_traces_retention` sub-handler, NOT a
+-- range-partition. This migration adds only what a fast TTL purge needs:
+--
+--   1. A btree index on `run_started_at` so the purge job's "oldest rows below
+--      the TTL, oldest-first, LIMIT batch" scan is an index range-scan, not a
+--      seq-scan over the whole table.
+--
+-- Why a NEW index (not the existing `analyst_traces_analyst_idx`): that index
+-- leads with `analyst_id` — `(analyst_id, run_started_at DESC)` — so a purge
+-- predicate on `run_started_at` ALONE cannot range-scan it. A leading-column
+-- index on `run_started_at` is required for the age-only sweep.
+--
+-- The purge itself is the deterministic `analyst_traces_retention` sub-handler
+-- (analyst_traces_retention.py), run on the maintenance cadence. It deletes
+-- traces older than a configurable TTL (default DISABLED, ttl_days<=0 — the
+-- operator opts in). The two FK children are DB-handled, so the purge never
+-- orphans a row:
+--   * analyst_critiques.trace_id  → ON DELETE CASCADE  (linked critique dropped
+--                                    with its aged trace, in the same txn)
+--   * output_dead_letter.run_id   → ON DELETE SET NULL (DLQ row preserved,
+--                                    run_id nulled)
+-- The receipt-chain `prev_receipt_hash` of the oldest surviving row dangles
+-- after a purge (log-rotation semantics) — the audit_checkpointer signs only
+-- the current chain HEAD, so this is safe; no full-history walk hard-fails.
+--
+-- SAFETY (idempotent, CREATE-only, no data mutation):
+--   CREATE INDEX IF NOT EXISTS only — adds an index, mutates no row, and is a
+--   no-op on re-apply. No DROP. Consistent with the CREATE-only migration
+--   policy (migrations/__init__.py).
+
+-- Purge-scan support: oldest-first by run start time.
+CREATE INDEX IF NOT EXISTS idx_analyst_traces_retention_run_started_at
+    ON public.analyst_traces USING btree (run_started_at);

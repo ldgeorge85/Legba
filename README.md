@@ -42,8 +42,9 @@ The pitch is the discipline, not the data: most tools let an LLM *assert*.
 Here every assertion is **cited**, a **mandatory second pass checks that each
 claim actually follows from what it cites** (an LLM judge plus a deterministic
 citation check), and a hash-chained receipt trail connects every output back to
-source. You run it yourself (AGPL, self-hosted, no SaaS dependencies), so you
-can inspect all of it.
+source. The whole chain — source item, citation, verify verdict, composed
+conclusion — is preserved and replayable after the fact. You run it yourself
+(AGPL, self-hosted, no SaaS dependencies), so you can inspect all of it.
 
 **What "verified" means — and doesn't.** The verify pass measures
 *groundedness*: "does this claim follow from the evidence it cites?" — not "is
@@ -115,6 +116,22 @@ carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
   faithfulness gate between every layer ([how to read one](docs/TOUR.md)).
 - **Provenance you can walk** — lineage API + receipt chains
   ("chain-consistent (single-node)" — an honest badge, not a tamper-proof claim).
+- **Verification-gated alerts, with receipts** — deterministic triggers on
+  *verified* state changes (band crossings, new high-severity verified
+  findings, contested-claim flips, deviation from a desk's own statistical
+  baseline, hits on operator-defined **watchlists**) fan out through a
+  ledgered sink plane (webhook / ntfy push, operator-activated); every alert
+  states its verification posture and links back to its receipt chain, and
+  cooldown-suppressed alerts coalesce rather than vanish.
+- **An evidence archive** — signals cited by verified findings have their
+  original bytes fetched and stored content-addressed (SHA-256), license-gated,
+  so a citation resolves to a preserved copy rather than a rotting URL.
+- **A calibration record** — scorecard band changes are logged as resolvable
+  claims and graded at 14/28-day horizons, published as persistence and
+  reversal rates (deliberately not a Brier score — bands aren't probabilities).
+- **Temporal and narrative views** — a validity-window timeline over the
+  temporal substrate, and contested-claim families reified as narratives with
+  a who-publishes-first source-echo graph (detect-only, descriptive-not-causal).
 - **On-demand consult** — ask questions against the live substrate
   (`POST /api/v1/consult`; ReAct over governed read tools).
 - **An introspective journal + voice roster** — the system's first-person voice
@@ -163,7 +180,8 @@ correctness gold set is tiny; the forecast pilot reports **no proven skill**;
 the self-optimizer has yet to produce a promotable improvement. Every gap is
 declared: [docs/STATUS.md](docs/STATUS.md) is the truth-in-labeling table,
 [docs/SEAMS.md](docs/SEAMS.md) the registry of intentionally-not-built things
-(they fail loud, never fake output). Retired legacy analysts and what replaced
+(they fail loud, never fake output). Release history: [CHANGELOG.md](CHANGELOG.md)
+(public history is squashed per release; the changelog is the record). Retired legacy analysts and what replaced
 them: [docs/STATUS.md §Retirements](docs/STATUS.md#retirements--freezes).
 
 ## Contact & license

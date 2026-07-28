@@ -263,6 +263,84 @@ class TestGeoLadderOrdering:
 
 
 # ===========================================================================
+# S-2 — subject guard: a dateline / incidental location must not out-vote the
+# story's actual subject, and a publisher's home country must not be stamped
+# on its world stories.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+class TestSubjectGuardS2:
+    async def test_incidental_location_does_not_beat_title_country(self):
+        # Yonhap inter-Korean story: the subject is Korea (in the title) but an
+        # envoy was mentioned speaking in Brasília (an NER `location` in the
+        # body, NOT in the title). The title's Korea must win — geo=KR, not BR.
+        backend = _StubBackend(
+            {
+                "Korea, Republic of": _result("Korea, Republic of", "KR"),
+                "Brasília": _result("Brazil", "BR", precision="municipality"),
+            }
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="South Korea proposes new talks with North Korea",
+            text="The proposal was announced by an envoy speaking in Brasília.",
+            entities=[{"class": "location", "text": "Brasília"}],
+            canonical_url="https://example.com/world/123",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "KR"
+        # Korea resolved first; the incidental Brasília was never even queried.
+        assert backend.calls == ["Korea, Republic of"]
+
+    async def test_subject_location_in_title_still_resolves(self):
+        # When the city IS the subject (in the title), it keeps its high
+        # priority and resolves to its finer point — no recall lost.
+        backend = _StubBackend(
+            {"Caracas": _result("Venezuela", "VE", precision="municipality")}
+        )
+        handler = GeocodeHandler(
+            GeocodeConfig(precision="municipality"), backend=backend
+        )
+        sig = _signal(
+            title="Caracas erupts in mass protest",
+            entities=[{"class": "location", "text": "Caracas"}],
+            canonical_url="https://example.com/x",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "VE"
+        assert backend.calls[0] == "Caracas"
+
+    async def test_cna_sports_story_stays_geo_unattributed(self):
+        # A Singapore outlet (CNA) sports story with no SG content: nothing in
+        # the body resolves and the .com host yields no ccTLD — the signal must
+        # pass through geo-unattributed, NOT tagged SG.
+        backend = _StubBackend({"Singapore": _result("Singapore", "SG")})
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="LeBron James re-signs with the Los Angeles Lakers",
+            text="The NBA star agreed to a two-year contract extension.",
+            entities=[{"class": "person", "text": "LeBron James"}],
+            canonical_url="https://www.channelnewsasia.com/sport/123",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert "geo" not in (out.payload or {})
+        assert backend.calls == []
+
+    async def test_genuine_singapore_subject_story_resolves_sg(self):
+        # A CNA story genuinely ABOUT Singapore still resolves geo=SG from the
+        # in-body country mention (precision preserved, not over-corrected).
+        backend = _StubBackend({"Singapore": _result("Singapore", "SG")})
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Singapore tightens monetary policy as MAS raises rates",
+            canonical_url="https://www.channelnewsasia.com/business/456",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "SG"
+
+
+# ===========================================================================
 # D5 — EONET geometry reverse-geocode (geojson source path)
 # ===========================================================================
 

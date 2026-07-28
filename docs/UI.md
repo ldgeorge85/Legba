@@ -54,37 +54,62 @@ The root component (`src/App.tsx`) lays out three regions:
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **Sidebar** (`components/Sidebar.tsx`) — a grouped panel tree: a layout-preset
-  selector, the singleton panels grouped by operator task, and **Targets** /
-  **Analysts** / **Dashboards (registered)** sections expanded from the live
-  registry rows. Clicking a row opens that panel in the workspace.
+- **Sidebar** (`components/Sidebar.tsx`) — the ONE grouped navigation tree
+  (S7-T2): a Search (⌘K) launcher, a compact **Layouts** menu (named presets +
+  save/restore), then five collapsible **verb-grouped sections** the analyst
+  scans top to bottom — **Awareness** (what's happening now) / **Investigation**
+  (dig into the why) / **Analysis** (reason over it) / **Products** (the
+  finished intelligence) / **Operations** (the plumbing) — followed by the
+  per-**Target** and per-**Analyst** instance groups. Clicking a row
+  opens/focuses that panel in the workspace. Operations and the registry-scale
+  Targets/Analysts groups start collapsed so the first screenful stays the
+  five-group tree.
 
-  The #90 redesign splits the sidebar into two **top-level product sections** so
-  the intelligence product leads and the plumbing is demoted (`Sidebar.tsx`):
-  - **Intelligence** — the product the operator reads (findings, the world
-    assessment, consult, lineage, entities), leading the rail.
-  - **Operations** — the runtime/plumbing surfaces (actor health, dead-letter,
-    stream lag, governor, budget, audit), which starts **collapsed** on first
-    run so the product leads.
+  A panel's group comes from an explicit per-kind override, else a prefix
+  fallback on its kind segment (`registry.`/`source.`/`system.` → Operations,
+  `v4.` → Investigation), so a new panel kind auto-slots with no nav edit
+  (`panel-registry/navGroups.ts`).
 
-  Within those sections singleton panels auto-slot into named task groups
-  (`panel-registry/navGroups.ts`): **Monitor** (what's happening now) /
-  **Investigate** (dig into the why) / **Configure** (registries, tenancy) /
-  **Operate** (runtime/plumbing) / **More** (the catch-all disclosure, collapsed
-  by default). A panel's group comes from an explicit per-kind override, else a
-  prefix fallback on its kind segment (`registry.`/`source.` → Configure,
-  `system.` → Operate, …), so a new panel kind auto-slots with no nav edit.
+  The Targets/Analysts instance groups render the runtime registry's rows
+  **UNION a synthesized bound-panel set** (P0-2f, `panel-registry/synthesize.ts`):
+  the live `ui_panel_registrations` surface is empty (no descriptor declares
+  `outputs.ui_panel`), so the groups are minted from the live descriptor heads
+  (`GET /registry/descriptors?family=target|analyst&head_only=true`) — one
+  synthetic registration per (record × bound panel kind). Real registry rows
+  stay authoritative: a synthetic row whose panel instance is already covered by
+  a live, non-retired registration is dropped (`mergeRegistrations`).
 - **Workspace** — a `DockviewReact` instance (`dockview-theme-abyss`). Each
   tile is a `LegbaPanelComponent` frame that resolves its bound
   `PanelRegistration` (or a synthetic singleton registration) to a lazy-loaded
   React component.
 - **StatusBar** (`components/StatusBar.tsx`) — footer showing the active
   deployment mode badge, the registered-panel count, the last registry refresh
-  time, the auth state (`auth: ok` / `auth: dev`), and any registry-load error.
+  time, the auth state (`auth: ok` / `auth: dev`), any registry-load error, and
+  (A10) the **export-basket chip** — a count of collected items that opens the
+  Report Export panel; it only renders when the basket is non-empty.
 
 Panel components are **code-split** (`React.lazy`) and suspend behind a
 "Loading panel…" fallback, so the initial bundle stays small and a panel's
 chart/map libraries load only when its tile is first opened.
+
+Two shared hooks kill the blank-surface classes measured surfaces hit inside
+Dockview (P0-2f):
+
+- **`useDockviewTileRedraw`** (`components/useTileRedraw.ts`) — Dockview keeps
+  inactive tab content mounted but hidden, so a WebGL map (maplibre) or a
+  measured chart (recharts `ResponsiveContainer`) that mounts into a hidden
+  tile initializes against a zero-size box and stays blank on activation. The
+  hook subscribes to the tile's own panel api
+  (`onDidVisibilityChange` / `onDidDimensionsChange`), calls the redraw
+  callback (`map.resize()` / `fitView()`) a frame after the tile becomes
+  visible, and bumps a tick usable as a `key` to remount mount-time-measuring
+  components.
+- **`useElementWidth`** (`lib/useElementWidth.ts`) — container-width
+  measurement with the **callback-ref** pattern, so the ResizeObserver follows
+  the element, not the mount: a panel that renders a loading empty-state first
+  has nothing in the ref slot when a `[]`-deps effect runs, and the width would
+  stick at 0 forever (the `system.timeline` first-mount blank). The callback
+  ref re-observes on every attach/detach.
 
 The console now centers on a **unified selection store** (`src/state/selection.ts`,
 `useSelection`): a single source of truth for "what is selected" across the whole
@@ -99,53 +124,66 @@ vocabulary so a lineage-walk click is never a dead-end.
 
 ### Command palette
 
-`Ctrl/Cmd-K` toggles the **command palette** (`components/CommandPalette.tsx`):
-a fuzzy quick-open modal over every non-binding singleton panel available in the
-current mode. Arrow keys move the selection, `Enter` opens, `Esc` (or a backdrop
-click) dismisses. Binding-required panels (per-target / per-analyst) are *not*
-offered here — opening one unbound would only render a placeholder — so they
-live in the sidebar's per-scope groups instead.
+`Ctrl/Cmd-K` toggles the **command palette** (`components/CommandPalette.tsx`)
+— the record-jump gateway. A single fuzzy query resolves across four indexed
+families, ranked by recents → favorites → the rest:
+
+1. **Records** — targets / analysts / sources from the live registry
+   (`usePaletteRecords`). `Enter` opens the record's bound primary panel
+   (target → Findings, analyst → Outputs, source → Detail);
+   `⌘/Ctrl-Enter` selects it into the Inspector instead.
+2. **Panels** — every singleton panel kind (including the hidden-but-registered
+   set, which stays off the sidebar but is discoverable here).
+3. **Presets** — the named layout workspaces, one fuzzy match away.
+4. **Actions** — "Investigate · <target/analyst>" entries that open the bound
+   analysis grid (the same machinery as the sidebar's instance groups).
+
+Arrow keys move the selection, `Esc` (or a backdrop click) dismisses; a leading
+star toggle persists favorites to localStorage.
 
 ### Boot layout
 
 On first workspace-ready, in `personal` and `cis` modes the shell seeds the
-**rebalanced daily-driver grid** (redesign Move 6 — "the active task gets the
-room"). The map no longer anchors the canvas (it used to eat ~70%); the **Live
-Feed** is the anchor, the **Inspector** is a first-class right rail, and the
-**World Map** is demoted to a bottom strip with **Why** tabbed within it:
+**mission-control grid** (S7-T2 — the first screenful is the glance state plus
+the product):
 
 ```
-┌──────────────────────────────────┬──────────────────┐
-│  Live Feed (system.findings)     │  INSPECTOR       │
-│  the active task — the surface   │  (system.        │
-│  you scan; ~65% width            │   inspector)     │
-├──────────────────────────────────┤  ~35% width      │
-│  World Map (v4.map) — demoted    │  selection →     │
-│  bottom strip ~28% tall          │  full detail     │
-│  + Why (v4.why) tabbed within    │                  │
-└──────────────────────────────────┴──────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│  KPI STRIP (v4.kpi) — signals/findings/situations/sources │
+├──────────────────┬───────────────────┬────────────────────┤
+│  Live Feed       │  World Map        │  World Assessment  │
+│  (system.        │  (v4.map)         │  (v4.assessment,   │
+│   findings)      │  at real size     │   the REPORT)      │
+├──────────────────┤                   │  + Inspector       │
+│  Timeline lanes  │                   │    tabbed behind   │
+│  (v4.timeline)   │                   │                    │
+└──────────────────┴───────────────────┴────────────────────┘
 ```
+
+The KPI glance strip spans the full width up top; the **Live Feed** anchors the
+left column with the global **Timeline lanes** beneath it; the **World Map**
+takes the center at real size; and the verified **World Assessment** report is a
+first-class right panel with the **Inspector** tabbed behind it. Everything is
+brushed by the one shared selection store, and `sizeMissionControl` pins the
+proportions after seeding. The Live Feed and the Inspector are pinned
+**non-closable anchors** (a close-button-less tab). `cis` boots the same grid —
+every panel in the seed ships in both `personal` and `cis`.
 
 (The Live Feed anchor is `system.findings` — the unified findings+signals feed
 described in §3 *Daily driver*. The former separate `v4.feed` rail was deleted
 in the #90 feed merge; `system.findings` subsumed it wholesale.)
 
-The seed order is Live Feed (anchor) → Inspector (right of the feed) → World Map
-(below the feed) → Why (tabbed *within* the map group). After seeding,
-`sizeWorkspace` pins the proportions so the split isn't a naive 50/50: the
-Inspector to ≈35% of the canvas width and the map to a ≈28%-tall bottom strip,
-leaving the feed the dominant surface. `cis` boots the same grid — every panel in
-the seed ships in both `personal` and `cis`.
-
 ### Layout presets & custom layouts
 
-The sidebar's **Layout preset** dropdown (`lib/layoutPresets.ts`) re-seeds the
-workspace with a named arrangement. Six presets ship (the redesign swapped the
+The sidebar's **Layouts** menu (`lib/layoutPresets.ts`) re-seeds the
+workspace with a named arrangement. Seven presets ship (the redesign swapped the
 former Lineage slot for the keystone Inspector and added a Zen focus mode; the
-#90 redesign added the **Workspace** intel-desk preset):
+#90 redesign added the **Workspace** intel-desk preset; P1-7 added the optional
+**Wall** preset — the default boot grid is unchanged, the operator opts in):
 
 | Preset | Panels |
 | --- | --- |
+| **Wall** | The Wall (`system.wall`) with the Inspector riding right, so the Wall's finding / desk / situation rows have somewhere to land |
 | **Monitoring** | Live Feed · Inspector · Target Registry · Alert Center |
 | **Workspace** | Live Feed · Inspector · Consult · Why (the 2×2 intel desk, all brushed by the shared selection) |
 | **Investigation** | Live Feed · Inspector · Entities · Global Search |
@@ -154,8 +192,8 @@ former Lineage slot for the keystone Inspector and added a Zen focus mode; the
 | **Focus (Zen)** | Inspector alone, full canvas — an undistracted single-record read |
 
 (Monitoring's third tile is the canonical **Target Registry** — the former
-`system.targets.roster` was collapsed into it in #90 Wave A, so the preset points
-at `registry.targets`, not the hidden roster dupe.)
+`system.targets.roster` was collapsed into it in #90 Wave A and deleted outright
+in S7-T2, so the preset points at `registry.targets`.)
 
 Presets are seeded through the same singleton opener the boot grid uses, so
 preset tiles are mode-gated identically and indistinguishable from
@@ -176,8 +214,8 @@ layout through Dockview's own `toJSON()` / `fromJSON()` serializer into
 
 Each panel kind declares the modes it ships in; the sidebar, the command
 palette, and the layout opener all filter on the active mode. `personal` is the
-single-operator daily driver (the widest panel set); `cis` is an alternate
-panel-set lens that adds an owner-rollup convenience view. **It is NOT a
+single-operator daily driver (the widest panel set); `cis` is an alternate,
+narrower panel-set lens. **It is NOT a
 multi-tenant isolation surface** — Legba ships single-tenant (one operating
 tenant; see `docs/DIRECTION.md` §0); the mode only filters which panels show.
 The mode is a UI lens — the registry remains the source of truth for what data
@@ -210,16 +248,22 @@ subscribes to the `registry.>` NATS subjects over the events WebSocket. Any
 `registry.bindings.*` / `registry.targets.*` / `registry.analysts.*` event
 triggers a focused **refetch** (the SQL surface is authoritative; the WS feed is
 a "something changed" nudge). Retired rows are filtered from the sidebar but kept
-resolvable so deep links into them don't 404.
+resolvable so deep links into them don't 404. The hook also fetches the target /
+analyst descriptor heads and **unions in the synthesized bound-panel
+registrations** (P0-2f, `synthesize.ts` — see §1 Sidebar): the live
+`ui_panel_registrations` surface is empty, so without synthesis every bound
+panel kind was sidebar-unreachable; real rows stay authoritative, and a registry
+event re-runs the descriptor fetch so the synthesized groups track it.
 
 A handful of panel kinds are registered but **hidden** (`HIDDEN_KINDS` in
 `registry.ts`): they stay in the bundle so saved layouts referencing them still
-resolve, but don't surface in the sidebar or palette. The set has two cohorts:
-the original §6 DROP set (an empty Global-Pulse aggregate, the single-operator
-Users panel, a NATS-tail stub, the empty wiring/mutations editors, the abstract
-dynamic dashboard) and the **#90 Wave A consolidation** set (Discovery, Backfill,
-Targets Roster, Casework, Tenant View, World Assessment, Runtime Actor Health) —
-see *Consolidated / hidden by #90* below.
+resolve, but don't surface in the sidebar (the ⌘K palette still lists them).
+The old DROP/consolidation cohorts (Global Pulse, Users, NATS-tail,
+wiring/mutations editors, dynamic dashboard, Discovery, Backfill, Targets
+Roster, Casework, Tenant View, Runtime Actor Health) were **deleted outright**
+in the S7-T2 shell reform — those kinds no longer exist. What remains hidden
+today are live panels merged under a peer or reachable via ⌘K only — see
+*Consolidated / hidden / deleted* below.
 
 ---
 
@@ -247,24 +291,60 @@ tile that headlines the whole panel set.
   like any other when selected. The store is **capped at one selection**
   (brushing-and-linking degrades past ~3 surfaces — which is the design reason
   for three rooms + one Inspector, not 82 panels). It ships in `personal` and
-  `cis`, and is the right rail of the boot grid and the Monitoring / Investigation
-  / Focus presets.
+  `cis`, is tabbed into the boot grid's right rail (behind the World Assessment
+  report), and rides the Wall / Monitoring / Workspace / Investigation / Focus
+  presets.
 
   For a finding the Inspector renders the **cited read card**
   (`components/inspector/CitedAssessment.tsx`) at the top — this is the drillable
-  product read. It is built from the shared **reading kit** — `CitedProse` (renders
-  prose with inline citation chips), `VerdictBadge` (the banded-verdict pill), and the
-  per-desk **Intelligence Card** framing. The report prose renders with its inline `[N]`
-  markers turned
-  into clickable citation chips: a chip scrolls to and flashes the matching row
-  in the **Evidence** panel below, whose title is itself a `RecordLink` into the
-  cited signal (so a claim drills to its source). A header strip carries the
-  citation count, a **faithfulness-verify label** (`ShieldCheck` + the
-  `faithfulness_score` when the merged body carries the verify block, else an
-  honest `unverified` label — never a fabricated score), and the per-unit
-  **eval badge** (`UnitEvalBadge`, below). A legacy / uncited finding degrades
-  honestly: its prose renders plainly under an explicit "uncited (legacy
-  finding)" marker with no fabricated anchors and no empty evidence panel.
+  product read. It is built from the shared **reading kit** — `CitedProse` (the
+  ONE prose renderer: markdown always rendered, `[N]` / `[[ref:N]]` markers
+  tokenized into interactive chips) and `VerdictBadge` (below). The report prose
+  renders with its inline markers turned into clickable citation chips: a chip
+  scrolls to and flashes the matching row in the **Evidence** panel below, whose
+  title is itself a `RecordLink` into the cited signal (so a claim drills to its
+  source). A header strip carries the citation count, the `VerdictBadge`, and
+  the per-unit **eval badge** (`UnitEvalBadge`, below). A legacy / uncited
+  finding degrades honestly: its prose renders plainly under an explicit
+  "uncited (legacy finding)" marker with no fabricated anchors and no empty
+  evidence panel.
+
+  The **VerdictBadge** (`components/VerdictBadge.tsx` + `lib/verdictModel.ts`)
+  is the ONE verification dialect, ICD-203 aligned: two muted chips kept
+  separate exactly as ICD-203 keeps the axes separate — **L** (likelihood: the
+  finding's probability mapped onto the seven-point verbal scale, `unstated`
+  when none is recorded) and **C** (analytic confidence: Low / Moderate / High
+  derived from the faithfulness-verify pass + judge status + citation breadth,
+  `unverified` when no verify block exists). A `?` legend affordance opens the
+  ICD-203 tables in place. Two honest verify-exempt states (P0-4 / C2b): a
+  deterministic structural analyst's finding renders **`unverified —
+  structural`** (it never enters the faithfulness pass — the client mirrors the
+  server's `STRUCTURAL_VERIFY_EXEMPT_ANALYSTS` registry for live-tail rows),
+  while a structural finding whose asserted quantities were deterministically
+  **re-derived from its own lineage and matched** is stamped
+  `verify_exempt: "structural-verified"` by the reads API and classified apart
+  (`isStructuralVerified`) — a miscount becomes a flagged critique instead.
+
+  **Citation-chip hover verdict card** (P1-8, `CitedProse.tsx` +
+  `lib/claimVerdicts.ts`): hovering (or focusing / tapping) a resolved citation
+  chip opens a card with the source, the **cited passage** (or an honest "cited
+  passage not recorded"), the citation's credibility, and the **per-claim verify
+  verdict** for that chip's ordinal, derived from the verify block's
+  `unsupported_spans` — the only per-claim record the verify pass persists in
+  the finding body. A flagged claim shows its honesty-vocabulary label
+  (contradicted / unsupported / hedge-laundering / …) plus the flagged claim
+  text; when the LLM judge ran and nothing names this chip the card says "not
+  flagged" with the pooled `supported/checkable` context (a positive per-claim
+  "supported" is not recorded per-chip, and the card never claims one); a
+  floor-only or legacy row reads the explicit `claim-level verdict not
+  recorded`. Nothing is fabricated.
+
+  Two selection-origin affordances ride the Inspector header: **add to export**
+  (A10) drops the selected finding into the collection basket
+  (`@/state/exportBasket` — see Report Export), and **Watch this** (P5-6, shown
+  for a selected entity) creates a server-side entity watch via
+  `POST /v3/watchlist` in one click, with honest watching / watched / failed
+  states — verified hits then alert through the shared dispatcher.
 
   The **UnitEvalBadge** (`components/inspector/UnitEvalBadge.tsx`, off
   `GET /api/v1/eval/scores`) shows a bounded reasoning unit's honest eval — a
@@ -273,6 +353,50 @@ tile that headlines the whole panel set.
   server). It renders **nothing** when the analyst id is not a bounded unit, the
   scorer has never run, or the fetch fails — a non-unit finding gets no badge
   rather than a fabricated one.
+
+### The Wall & the Timeline (awareness surfaces)
+
+- **The Wall** (`system.wall`) — the mission-control anchor tile (P1-7,
+  `panels/system/Wall.tsx`): one glanceable screen, four quadrants, each
+  clipping and scrolling its own overflow. Opened from the sidebar (Awareness)
+  or the optional **Wall** preset — the default boot grid is unchanged.
+  - **World at a glance** — a compact per-desk band grid over the SAME data as
+    the World Map's banded-verdict choropleth (`useCountryVerdicts` +
+    `CONFIDENCE_FILL`), so grid chip and map band never disagree; a chip click
+    selects the desk into the Inspector. Honest empty state: "no verified
+    country compositions yet".
+  - **Movers since last visit** — `GET /v3/since` (the "what changed since"
+    diff API) with a **client-owned cursor** (`localStorage.legba_wall_cursor`;
+    first-ever open = 24h lookback). Band changes first (direction-colored),
+    then the superseded-reversal count, then situation lifecycle edges. The
+    cursor resolves once per mount and advances to each response's
+    `server_now` (never backwards), so the next open diffs from the last
+    moment the Wall was live. All non-DOM logic in `lib/wallModel.ts`.
+  - **Newest high-severity verified** — top 5 of the since-window's verified
+    findings (verified-only server-side), severity-badged, each row selecting
+    into the Inspector.
+  - **System health** — a rollup over the System Status routes
+    (`/v3/system/source-firing`, `/v3/system/analyst-cadence`): signal volume,
+    sub-hour source liveness, stale analysts, source errors — each number
+    stamped with a **ProvenanceBadge** (`live|fallback|absent`, below).
+
+  Ships in `personal` and `cis`; Awareness nav group.
+- **Timeline** (`system.timeline`) — the validity-window temporal view (P4-4,
+  `panels/system/Timeline.tsx`): the temporal substrate (facts with
+  `[valid_from, valid_until)`, situations with a lifecycle window, findings
+  with `[produced_at, superseded_at)` + supersession chains) had no temporal
+  view — this is it. Ranged items on three lanes (facts / situations /
+  findings) over a brushable, zoomable time axis (ms → months), with
+  **supersession-sequence connectors** between finding versions; an OPEN window
+  (server `end=null`) draws live to the right edge with a dashed cap — never a
+  fabricated close. Built as a lightweight custom SVG (not vis-timeline) with
+  all shaping pure in `lib/timelineWindows.ts`; width measurement uses the
+  shared `useElementWidth` callback-ref hook (the first-mount-blank fix,
+  below). Data: `GET /api/v1/v3/timeline?target_id=&days=` (added for this
+  panel). Desk-scoped to the unified selection's target; click a bar →
+  `selectRow` into the Inspector. Ships in `personal` and `cis`; pinned to the
+  Investigation nav group. (Distinct from the `v4.timeline` KPI-strip lanes in
+  the boot grid.)
 
 ### The Journal (reflective voice)
 
@@ -287,18 +411,27 @@ tile that headlines the whole panel set.
   reflective voice can never pollute product output. This panel reads the
   accruing entries live (routing those reflections back into the product via the
   human-gated proposal queue is a future item, not yet done).
-  Renders `GET /api/v1/journal` (`panels/system/Journal.tsx`) with three stacked
-  regions:
-  - **The current inner landscape** — the single open
-    `entry_kind='consolidation'` row rendered prominently at the top (the daily
-    consolidation tier distils prior entries into one forward-carried narrative).
-    With none yet, an empty-state note explains the consolidation opens once
-    enough entries accumulate.
-  - **Recent entries** — a scrollable stream of `entry_kind='entry'` cards below
-    it, cursor-paginated via a "load more" button (`next_cursor`), each card
-    showing its title, the period it reflects on, the markdown narrative (inline
-    `[[ref:uuid]]` markers stripped — the binding lives in the claims sidecar),
-    and per-entry honesty pills.
+  The panel (`panels/system/Journal.tsx`, the "Voices" cut) reads
+  `GET /api/v1/journal` summary-weight for the list plus
+  `GET /api/v1/journal/{id}` full-weight on row-select, and surfaces:
+  - **A filter rail** — entry-kind chips (Journal / Consolidation / Chronicle,
+    plus any lens kinds actually present) with live row counts and a
+    verify-score pill; multi-select, all-selected by default.
+  - **The latest consolidation** prominently above the list — "Legba's current
+    inner landscape" (the single open `entry_kind='consolidation'` row). With
+    none yet, an empty-state note explains the consolidation opens once enough
+    entries accumulate.
+  - **A grouped-by-cycle collapsed list** — rows bucketed by their `period_end`
+    date, newest cycle expanded, synthesized rows (consolidation / chronicle /
+    lenses) leading each group and the high-volume diary entries capped behind
+    a reveal (group headers label the bucket date — daily buckets are no longer
+    mislabeled "week of").
+  - **A reader pane** — selecting a row fetches the full entry and renders it
+    with the shared reading kit; when the row's verify body names contested
+    spans (`[judge_contradicted]` / `[judge_unsupported]`) a compact per-claim
+    **verdict block** renders them as flagged chips — the operator's window
+    into what the verify pass actually disputed. Entry cards also carry the
+    A10 **add to export** action into the collection basket.
   - **Per-claim provenance chips** — every `claims[].refs` ref renders as a
     `ProvenanceChip` (the same chip The Why uses) bound to its specific cited
     span, not a footnote pile. A chip click calls the shared `selectRow` (origin
@@ -322,8 +455,7 @@ tile that headlines the whole panel set.
   `honesty_flags`; it is never green-washed (the `forecast_unproven` /
   `calibration_thin` legs are stated plainly, with BSS and sample sizes), and it
   flags drift when the open consolidation omits a leg the live metric now
-  raises. Ships in `personal` and `cis`. (It was tsc-green + fully wired but
-  pending its first real in-browser render at the time of writing.)
+  raises. Ships in `personal` and `cis`; Products nav group.
 
   The journal's outward changes — a correction, a `change`, or a `self_revision`
   (including to its own instructions) — go to the **human-gated
@@ -332,9 +464,8 @@ tile that headlines the whole panel set.
   `POST /api/v1/journal_proposals/{id}/{accept,reject}` (accept runs an
   idempotent per-kind apply; a `self_revision` touching a protected section
   auto-rejects). A dedicated operator **review surface** for that queue is **not
-  yet wired in the console** — the Mutations Queue panel (`registry.mutations`,
-  itself hidden by #90) covers GEPA / entity-merge / nexus proposals but not the
-  journal queue; the journal-proposals review panel is a tracked follow-up.
+  yet wired in the console** (the former Mutations Queue panel was deleted in
+  S7-T2); the journal-proposals review panel is a tracked follow-up.
 
 ### System Status (per-layer health)
 
@@ -365,31 +496,68 @@ tile that headlines the whole panel set.
     readiness) rolled up from the existing health surfaces.
 
   A panel's nav group comes from its kind prefix, so `system.status` auto-slots
-  into the **Operate** section (`navGroups.ts`, `system.*` → Operate) with no nav
-  edit. Ships in `personal`. (Panel registered at
+  into the **Operations** section (`navGroups.ts`, `system.*` → Operations) with
+  no nav edit. Ships in `personal`. (Panel registered at
   `panel-registry/registry.ts` as `system.status` → `SystemStatus`; routes in
-  `src/legba/data/registry/v3_api.py`, `build_v3_router`.) It is tsc-green with
-  both new routes confirmed serving live data, but was pending its first real
-  in-browser render at the time of writing.
+  `src/legba/data/registry/v3_api.py`, `build_v3_router`.) The standalone
+  **Consumer-Lag Monitor** (`system.stream_lag`) was rolled into this
+  at-a-glance view and is hidden from the sidebar (still ⌘K-reachable).
 
 ### v4 visual workspace
 
 The "three rooms" visual surface — World / Flow / Why — all selection-linked
 through the same store. The boot anchor is no longer a `v4`-namespace feed: the
 former `v4.feed` rail was **deleted** in the #90 feed merge and replaced by the
-unified `system.findings` Live Feed (see §3 *Daily driver*). World Map / Flow /
-Why ship in `personal` and `cis`.
+unified `system.findings` Live Feed (see §3 *Daily driver*). Every panel in
+this group ships in `personal` and `cis`.
 
-- **World Map** (`v4.map`) — the default is now a **maplibre-gl banded-verdict
+- **World Map** (`v4.map`) — the default is a **maplibre-gl banded-verdict
   choropleth** (`v4/world/MapLibreWorldMap` + `countryVerdicts`), which shades each
   country desk by its scorecard/verdict band; the **Leaflet** map
   (`v4/world/LeafletWorldMap`) is the fallback when `hasWebGL` is false. Both carry
-  a layer panel, time scrubber, KPI strip, and a selection drawer; demoted
-  to the boot grid's bottom strip. A map click selects into the store.
+  a layer panel, time scrubber, KPI strip, and a selection drawer; the boot grid
+  gives it the center column. A map click selects into the store. The P4-3
+  deepening, layered bottom → top:
+  - **Choropleth hover + click** — hovering a desk shows a popup with its band,
+    faithfulness, and windowed activity (top movers); clicking selects the desk
+    into the Inspector. Popups are themed to the dark chrome (E-5).
+  - **Signal density** — a light maplibre heatmap (*Heat*), or a richer
+    **deck.gl `HexagonLayer`** (*Hex*) camera-synced over the basemap. deck.gl
+    is **dynamically imported** only when a deck layer is first turned on — the
+    map opens without paying for it (data shaping pure in `lib/mapLayers.ts`).
+  - **Co-mention arcs** (deck.gl `ArcLayer`) — countries a single signal
+    jointly references, from the `/signals` `geo[]` column. Honest empty: the
+    geo backfill stamps single countries, so `countries.length >= 2` never
+    holds on the live substrate today and the arc layer is **honest-empty** —
+    arcs appear the moment multi-country geo lands upstream.
+  - **Geo-convergence markers** — the A7 deterministic cross-stream
+    correlator's active bins, fetched as recent `geo_convergence`-channel
+    alerts through `GET /v3/since?channel=geo_convergence`
+    (`v4/world/convergenceData.ts`, bounded 7-day lookback); a bin with no
+    parseable placement gets **no marker**, never a fabricated one.
+  - **Watch locations** — operator "watch here" points + radius rings
+    (`lib/watchLocations.ts`: localStorage-persisted, haversine proximity,
+    100–1000 km radius options, 24-point cap); proximate signals are haloed.
+    Client-local — distinct from the server-side Watchlist panel.
+  - **Time scrubber** (`v4/world/TimeScrubber.tsx` + `lib/mapTime.ts`) — a
+    **dual-thumb range slider** over the window that actually filters what the
+    map renders (both ends adjustable), with span presets and a play control
+    that advances the window end until it reaches LIVE.
 - **Flow Canvas** (`v4.flow`) — The Flow: the live registry canvas over
   sources → targets → analysts → packs (`v4/flow`), with NiFi-style live
   telemetry. The node highlight reads `useSelection` (its former local
-  `selectedNodeId` was retired into the store).
+  `selectedNodeId` was retired into the store). **Edge-density gate** (P0-2f,
+  `v4/flow/flowState.ts`): the predicate fan-out (`analyst_target`, one edge
+  per analyst × matched target) is default-hidden, and any edge kind past
+  `DENSE_EDGE_COUNT_THRESHOLD` (400) starts hidden too — the layer toggles
+  state the real per-kind counts, so nothing is silently thinned; the operator
+  can switch any kind back on.
+- **KPI Strip** (`v4.kpi`) — the boot grid's full-width top strip: signal /
+  finding / situation / source counts with band-change deltas, the glance
+  state the mission-control layout leads with.
+- **Timeline** (`v4.timeline`) — the global recharts Timeline lanes seeded
+  beneath the Live Feed in the boot grid (event dots per lane; distinct from
+  the `system.timeline` validity-window view above).
 - **Why · Provenance** (`v4.why`) — The Why: selection-driven provenance and the
   **lineage DAG**. With nothing selected the room renders an in-panel **node
   picker** (recent findings / situations / entities) so it is useful on its own;
@@ -404,28 +572,22 @@ Why ship in `personal` and `cis`.
   "tamper-proof" — analyst-trace provenance is a hash-chained receipt, not an
   Ed25519 signature); a mismatched re-hash flags the hop. Signal hops render a
   `ModalityRef` link out to the real source URL, so a walk always reaches the
-  clickable acquisition source. Tabbed within the map group in the boot grid.
+  clickable acquisition source. Seeded by the Workspace preset (the boot grid's
+  right rail is the World Assessment + Inspector instead).
 
-Two former panels from this group were **hidden** by #90 Wave A (still in the
-bundle, see *Consolidated / hidden by #90* below): **World Assessment**
-(`v4.assessment`) and **Casework Board** (`v4.case`, an Excalidraw board shelved
-because no pin entry points were wired). `v4.assessment` stays out of the default
-nav, but its component (`v4/why/WorldAssessment.tsx`) has since been re-pointed:
-for a **selected country** it renders the **bounded-unit read column**
-(`CountryUnitsAssessment`) as the headline — one card per bounded reasoning unit
-(**leadership_transition**, **energy_security**, **escalation**,
-**narrative_coordination**), each carrying its `UnitEvalBadge` and linking its
-latest cited read into the Inspector, with the **retired** `country_assessor`
-one-pager demoted to a collapsible "legacy monolith" below it. That producer is
-**stopped** — nothing in the spine reads it, and its ~1.2k historical findings
-remain in the DB (unread), so the column surfaces whatever legacy one-pager
-already exists but no new ones accrue; the bounded units + the per-country
-composition supersede it. For the world view it renders the `world_assessor`
-finding. Note: the world-view copy in this component and in the
-`AssessmentBanner` strip still carries the earlier transitional framing ("one
-producer's finding, not a global verdict") and has not been fully re-pointed to
-the composed world view, so treat the world one-pager as one analyst's read until
-that copy lands.
+- **World Assessment** (`v4.assessment`) — the reading surface for a
+  composition, **un-hidden by S7-T2** and now the boot grid's right-rail REPORT
+  panel (Products nav group; `v4/why/WorldAssessment.tsx`). WORLD mode (no
+  selection): the `world_assessor` one-pager — the composed, verified world
+  view — as a calm centered reading column. DESK mode (a country selected):
+  the desk **Intelligence Card** (S7-T3), reading top-to-bottom as a finished
+  product — banded score + delta → BLUF → the verified `country_composition`
+  (expanded) → the per-desk bounded **unit cards** (`CountryUnitsAssessment`,
+  each carrying its `UnitEvalBadge`) → related → history (older/superseded runs
+  collapsed). Both modes render through the shared reading kit and offer a
+  client-side Download (.md / print → PDF). The former **Casework Board**
+  (`v4.case`) was deleted outright in S7-T2 (shelved — no pin entry points were
+  ever wired).
 
 ### Daily driver
 
@@ -457,7 +619,9 @@ provenance trail and pairs Consult with Deep Consult).
   grouping / sorting / view / row-mapping logic lives
   in `@/lib/findingsViews` so it is unit-tested without a DOM. A row click selects
   the row into the unified store (Inspector + Why follow); it also still deep-links
-  provenance into Lineage.
+  provenance into Lineage. Finding rows carry the A10 **add to export** context
+  action (findings only) into the collection basket — the same basket the
+  Inspector button and Journal cards feed, counted by the status-bar chip.
 - **Provenance Lineage** (`system.lineage`) — walks the `derived_from` DAG
   upstream or downstream from any substrate row via
   `GET /lineage/{row_kind}/{row_id}`. It listens for the
@@ -522,10 +686,17 @@ and the predicate fan-out. (Operator-category, `personal`-only.)
   and the exactly-one-of `SourceRef` invariant, previews "what it'd match" by
   resolving sources and recent signals, and emits copy-ready `SourceRef` JSON to
   paste into a target descriptor's `sources: [...]`.
+- **Subscription Policy** (`source.subscription_policy`) — the operator surface
+  for a source's `subscription_policy` gate (`open` / `allowlist` / `grant`),
+  enforced at subscription registration on the control plane; manages the
+  per-(source, target) `subscription_grant` wirings.
 - **Fan-out Explorer** (`source.fanout`) — walks `source → signal → finding`:
   hop 1 lists a source's signals (`GET /signals?source_id=`), hop 2 lists the
   findings whose `derived_from ⊇ {signal_id}` (`GET /findings`, joined
   client-side). Any node hands off to Lineage for the full bidirectional walk.
+
+(The Subscription Builder, Subscription Policy, and Fan-out Explorer are in the
+hidden set — niche source-config surfaces reachable via ⌘K, off the sidebar.)
 
 ### Analysis (per target / per analyst)
 
@@ -590,12 +761,18 @@ analyst (`entity_profiles` / `signal_entity_links` / `proposed_edges`).
 - **Entity Graph** (`system.entity_graph`) — a Cytoscape rendering of
   `GET /entities/graph`: nodes colored by `entity_class`, sized by mention
   count, the densest subgraph by default, click-to-ego-center.
+- **Notable Structure** (`system.notable_structure`) — the ranked `interesting`
+  shortlist the graph-analysis handlers (structural_balance + graph_mining)
+  distil every run (`GET /graph/structure`): tense actors, brokers, new-hostile
+  edges, sign-imbalanced triads, proxy chains, each with rationale + score.
+  Selection-aware — a selected country/entity scopes and prioritises matching
+  items.
 
 ### Registries (guided authoring)
 
 Browse/search HEAD descriptors and author new ones. Two authoring surfaces sit
 side by side: the **guided builder** (a form that produces a valid descriptor
-body) and the **inline YAML editor** (the raw escape hatch). All four operator
+body) and the **inline YAML editor** (the raw escape hatch). All operator
 registries are `personal`-only.
 
 - **Target Registry** (`registry.targets`) — target descriptors via
@@ -611,6 +788,16 @@ registries are `personal`-only.
   `nlp_service`). Credentials are never returned (vault refs
   resolve at call time). Stack components use the starter-clone surface (a
   separate API path), not the form builder.
+- **Action-Pack Grants** (`registry.action_packs`) — the action-pack descriptor
+  family (`GET /registry/action_packs`): tools / channels / tags / governor
+  caps per pack, plus the effective-capability view (the three-way
+  `analyst ∩ target ∩ pack` intersection the governor gates).
+- **Model Stack Settings** (`system.settings`) — model-component configuration
+  + the first-run wizard. The runtime source of truth for LLM / embedding / NLP
+  endpoints is the `stack_components` registry, NOT `.env` (which only seeds
+  those rows at bring-up); this panel reads/writes those rows
+  (`GET /registry/config/status`, `GET/POST/PUT /registry/stack`) and routes
+  credentials to the vault (`POST /registry/vault/secrets`).
 
 Authoring components:
 
@@ -660,7 +847,7 @@ The evaluation and operations surfaces (mostly `personal`-only).
   snapshot-based and **never imports dspy** (the registry process stays
   dspy-free); a 404 only fires for an unknown candidate id, and candidates
   emitted before the snapshot field existed render an empty current side. Tier:
-  `preview`.
+  `preview`; hidden from the sidebar — opened from Optimizer Candidates (or ⌘K).
 - **Eval Scorecard** (`system.eval_scorecard`) — the measurement surface, three
   stacked sections (`panels/system/EvalScorecard.tsx`), each written to publish a
   no-skill / insufficient-sample result rather than hide it. All grouping / band /
@@ -677,7 +864,12 @@ The evaluation and operations surfaces (mostly `personal`-only).
     (it accumulates toward n=30 and abstains on a degenerate probability vector),
     which the panel states plainly. Before any calibration finding exists the
     whole strip reads "no forecast / calibration pilot has been computed yet"
-    (distinct from a failed pilot).
+    (distinct from a failed pilot). Displayed calibration numbers carry the
+    P4-5 **ProvenanceBadge** (`live|fallback|absent`, below) so a real-live
+    figure is never confused with an honest empty. (The route also carries the
+    P2-3 additive `band_calibration` section — band transitions logged as
+    resolvable claims and graded at 14/28-day horizons as persistence /
+    reversal rates — which the panel does not yet render; a follow-up surface.)
   - **Banded per-country scorecard** (`GET /v3/eval/country_scorecard`) — one
     honest card per active desk tagged `g20` **or** `watch`, each written by the
     deterministic `scorecard_producer` (the 12th OutputKind, `scorecard`). The
@@ -709,6 +901,35 @@ The evaluation and operations surfaces (mostly `personal`-only).
     worst-scoring analysts first). A 404 while the cross-analyst rollup is unwired
     degrades to an honest "endpoint pending" note pointing at the per-analyst
     Critiques panel — never an error.
+- **Correctness Gold Set** (`system.goldset`) — the weekly correctness labeling
+  worksheet (P2-5, `panels/system/Goldset.tsx`). The correctness-vs-reference
+  gold set only grows if labeling is cheap: the panel shows the week's
+  deterministic, server-pinned stratified sample (~8 verified findings,
+  stratified per unit + faithfulness band) as a card list — finding title →
+  cited read (the same `CitedProse` reading kit) → four verdict buttons +
+  optional rationale → saved state. Verdicts upsert via
+  `POST /v3/eval/goldset/label` (the server snapshots what was judged) and flow
+  into the eval scoreboard's additive per-unit `operator … (n=…)` segment —
+  never pooled with the deterministic recall leg. Honest states: an exhausted
+  week says "all labeled — next sample Monday"; a week with no verified
+  candidates says so. Progress/verdict logic is DOM-free in `@/lib/goldsetModel`.
+  `personal`-only; pinned to the Operations nav group (a weekly operator duty,
+  not an analysis read).
+
+  **Provenance badges on displayed numbers** (P4-5, shared components): the
+  `live | fallback | absent` enum (`lib/provenance.ts`) stamps every number
+  that *could* come from live data, a degraded fallback, or nothing —
+  **ProvenanceBadge** (`components/ProvenanceBadge.tsx`) renders which, with
+  shape + label (not color alone). Honesty: `fallback` is only ever shown on an
+  **explicit** backend fallback signal; with no such signal (the common case
+  today) a present value reads `live` and an empty one `absent` — a fallback
+  state is never synthesized (the backend fallback flag is a documented seam,
+  §7). **ProvenanceCard** (`components/ProvenanceCard.tsx` +
+  `describeProvenance`) maps what the substrate already carries (lineage,
+  verify state, source, produced/fetched-at, confidence) onto a purpose /
+  source / freshness / confidence / limitations card — no fabricated fields.
+  Wired into the Wall's health quadrant, the Eval Scorecard's calibration
+  numbers, and the Timeline's provenance card.
 - **Budget Ledger** (`system.budget`) — per-analyst tokens/runs/cost
   (`/budget/ledger`), the global per-bucket envelope (`/budget/envelope`), and
   budget-exhaustion demote events (`/budget/demotions`).
@@ -735,13 +956,13 @@ The evaluation and operations surfaces (mostly `personal`-only).
   `GET /v3/runtime/actors` (lifecycle, `last_run_at`, `last_outcome`,
   `cooldown_until`, error counts; polled every 5s). It first-classes the `source`
   actor kind (SourceActor) alongside target/analyst/discovery/consult, with a
-  kind/lifecycle rollup and an expandable last-error inspector. **Runtime Actor
-  Health** (`system.runtime`) read the same endpoint and was **hidden by #90 Wave
-  A** as a dup (still in the bundle).
+  kind/lifecycle rollup and an expandable last-error inspector. (The duplicate
+  **Runtime Actor Health** kind, `system.runtime`, was deleted in S7-T2.)
 - **Consumer-Lag Monitor** (`system.stream_lag`) — per-consumer NATS JetStream
   lag (`GET /v3/streams/consumer_lag`): `num_pending` headline lag,
   redeliveries (poison messages), unacked backlog (slow consumers); polled
-  every 5s.
+  every 5s. Hidden from the sidebar (rolled into System Status's Queues
+  section; still ⌘K-reachable).
 
 ### Product
 
@@ -756,50 +977,73 @@ The customer-facing surfaces, available in `personal` and `cis`.
   (scope × min-severity), fired by **polling** `GET /findings` and diffing
   successive polls (the first poll seeds without firing; alerts de-dup on
   finding id). Subscriptions persist to localStorage; each alert deep-links to
-  Lineage.
-- **Report Export** (`system.report_export`) — pick a slice of findings (+
-  situations) and export four ways: a **STIX 2.1** bundle (report + indicator
-  SDOs, `derived_from` → relationship SDOs, TLP markings), raw JSON, a
-  severity-grouped markdown brief, and print → PDF.
-- **Tenant View** (`system.tenant_view`) — **hidden by #90 Wave A** (multitenancy
-  is not product-baked; the build is ingestion-only single-tenant). Still in the
-  bundle. An **operator-convenience** rollup that groups HEAD descriptors
-  (target / source / analyst) by the descriptor
-  `owner` field, drills into a selected owner's roster, and broadcasts the
-  active owner via `legba:set-tenant` for any panel that opts into owner
-  scoping. It is a **client-side UI grouping, not a multi-tenant isolation
-  boundary** — there is no per-tenant access control behind it (Legba ships
-  single-tenant; see `docs/DIRECTION.md` §0). Do not read it as enforced
-  tenancy.
+  Lineage. Client-only (`preview` tier) — it fires while the panel is open;
+  contrast the Watchlist below.
+- **Watchlist** (`system.watchlist`) — **server-side standing watches** (P5-6,
+  `panels/system/Watchlist.tsx`). The operator names a watch — an **entity**
+  ("Wagner Group", alias-resolved), a free-text **topic** ("Strait of Hormuz"),
+  or a **place** (ISO2 country list, or a lat/lon point + radius) — and the
+  `watchlist_hit` trigger class inside the server's `alert_trigger_scan` pages
+  on any VERIFIED finding touching it, on its own cadence, whether or not any
+  UI is open (alerts flow the shared dispatcher → ntfy). The rows live in the
+  `watchlist` table over `GET/POST/PUT/DELETE /v3/watchlist` — this panel is
+  MANAGEMENT (list + add + optional min-severity floor + per-watch 7-day hit
+  count); the alerts themselves are the product. Deletes are **soft**
+  (`active=false`), so a watch's no-refire watermark history survives and
+  re-activating never re-pages already-seen hits. The Inspector's **Watch
+  this** affordance creates an entity watch from the current selection. `live`
+  tier; ships in `personal` and `cis`; Awareness nav group.
+- **Escalation Deliveries** (`system.escalations`) — the human-visible alert
+  edge: renders `alert_sink_deliveries` (`GET /v3/system/escalations`) so the
+  operator can see whether each escalation actually **landed** (delivered) or
+  went nowhere (failed / logged_only). `live` tier; `personal` and `cis`.
+- **Report Export** (`system.report_export`) — the **collection basket** (A10).
+  The operator collects findings / analyst reports / journal entries from
+  wherever selection already flows — the Inspector's "add to export" button, a
+  feed row's + action, a Journal entry card — into ONE persistent basket
+  (`@/state/exportBasket`, localStorage-backed; the status-bar chip shows the
+  count) and composes here: basket list (removable), title, markdown/JSON toggle,
+  Export. Composition is **server-side** (`POST /api/v1/v3/export`,
+  `export_api.py`): each finding carries its cited body (`[N]` markers intact),
+  citations resolved LIVE to signal titles + canonical_urls, the verify state
+  (faithfulness or an explicit `unverified — <reason>`), confidence + verify-folded
+  effective_confidence, the lineage receipt link, and — where the P2-1 evidence
+  archiver has captured a cited signal — its `archived` flag + `archive_sha256`
+  content hash (derived from the `cas:sha256/<hex>` object ref; honestly
+  `false`/absent for un-archived rows); each journal entry carries
+  its tier label + the reflective off-product-chain VOICE framing, claims + refs.
+  Markdown renders a preview pane + `window.print()` for PDF. Size-capped at 50
+  items (honest 413 beyond). **STIX is demoted to optional-later** (operator
+  decision, A10 — not built into this flow; the DOM-free `@/lib/reportModel`
+  STIX machinery stays in the repo, unused here). `live` tier + unhidden since
+  A10; Products nav group; ships in `personal` and `cis`.
 
-### Cross-target dashboard
+### Consolidated / hidden / deleted
 
-- **Target Roster** (`system.targets.roster`) — the cross-target inventory: every
-  registered target with its source-first scope (geo countries, domain, languages,
-  entity-class footprint) surfaced inline, from
-  `GET /registry/descriptors?family=target&head_only=true`. **Hidden by #90 Wave
-  A** — collapsed into the **Target Registry** (`registry.targets`) so there is a
-  single Targets panel; the registry row points the Monitoring preset at
-  `registry.targets`. See *Consolidated / hidden by #90* below.
+The S7-T2 shell reform **deleted** the earlier DROP/consolidation cohorts
+outright — `system.pulse` / `system.eval` / `system.users` / `system.streams`,
+`registry.wirings` / `registry.mutations` / `registry.discovery`,
+`dashboard.dynamic`, `system.backfill`, `system.runtime`, `system.tenant_view`,
+`system.targets.roster`, and `v4.case` no longer exist as panel kinds (the #90
+feed merge had already deleted `v4.feed`, subsumed by `system.findings`; the
+Targets Roster's function lives in **Target Registry**, `registry.targets`).
+Tenant View's deletion is deliberate truth-in-labeling: multitenancy is not
+product-baked (Legba ships single-tenant; see `docs/DIRECTION.md` §0).
 
-### Consolidated / hidden by #90
-
-The #90 Wave A consolidation moved seven panel kinds into `HIDDEN_KINDS`
-(`registry.ts`). They are **present in the bundle, not deleted** — saved layouts
-and deep links that reference them still resolve — but they no longer appear in
-the default nav, the command palette, or the singleton boot list. (The lone
-genuine deletion in #90 was the `v4.feed` rail and its `LiveFeed.tsx` /
-`FeedPanel.tsx` components, subsumed by `system.findings`.)
+What remains in `HIDDEN_KINDS` (`registry.ts`) today are **live** panels kept in
+the bundle — saved layouts and ⌘K deep links still resolve them — but dropped
+from the sidebar so the catalog stays ~25–30 good panels:
 
 | Hidden kind | Why | Where the function lives now |
 | --- | --- | --- |
-| `registry.discovery` | dead — 0 descriptors carry a `discovery` block | — |
-| `system.backfill` | hard-disabled honest-501 stub (also `preview`) | tracked SEAM — registry→runtime proxy |
-| `system.targets.roster` | one Targets panel | **Target Registry** (`registry.targets`) |
-| `v4.case` | Casework Board shelved — no pin entry points wired | — |
-| `system.tenant_view` | multitenancy not product-baked (ingestion-only) | — |
-| `v4.assessment` | world assessment is a FINDING (opens in the Inspector); its component was re-pointed to the bounded-unit read column but the panel stays out of the default nav | **Inspector** (world one-pager) · bounded-unit reads still rendered by `WorldAssessment.tsx` |
-| `system.runtime` | same endpoint as Actor Health (a dup) | **Actor Health** (`system.actor_health`) |
+| `system.optimizer.diff` | operator review aid folded under Optimizer | opened from **Optimizer Candidates** |
+| `source.subscription_builder` | niche source-config | ⌘K |
+| `source.subscription_policy` | niche source-config | ⌘K |
+| `source.fanout` | niche explorer | ⌘K |
+| `system.stream_lag` | rolled into the at-a-glance view | **System Status** (Queues section) |
+
+(`system.report_export` left this set in A10 — no longer the Report panel's
+download twin but the collection-basket export surface, unhidden and `live`.)
 
 ### Cross-panel events
 
@@ -812,7 +1056,10 @@ panel can drive another without knowing whether it's mounted:
 | `legba:open-source-detail` | Source Registry, Fan-out | Source Detail |
 | `legba:open-optimizer-diff` | Optimizer Candidates | Prompt-Module Diff |
 | `legba:open-entity-graph` | Entities | Entity Graph |
-| `legba:set-tenant` | Tenant View | tenant-scoped panels |
+
+(`legba:set-tenant` died with the Tenant View deletion; most cross-panel
+coordination now flows through the unified selection store instead — the events
+above are the survivors where an *open-this-panel* side effect is the point.)
 
 ---
 
@@ -892,9 +1139,10 @@ In production, the `legba-ui-build` one-shot job builds `dist/` into the
 `legba_ui_dist` volume, which `legba-caddy` mounts read-only and serves with an
 SPA fallback (`try_files {path} /index.html`). Key libraries: `dockview` /
 `dockview-react` (workspace), `@tanstack/react-query` (data), `recharts`
-(timeline/charts), `maplibre-gl` (maps), `cytoscape` + `react-cytoscapejs`
-(graphs), `react-markdown` (consult/reports), Tailwind (styling). See
-`RUNBOOK.md` for deploy and ops procedures.
+(timeline/charts), `maplibre-gl` (maps), `deck.gl` (map density/arc layers —
+**lazy-loaded** only when a deck layer is first switched on), `cytoscape` +
+`react-cytoscapejs` (graphs), `react-markdown` (consult/reports), Tailwind
+(styling). See `RUNBOOK.md` for deploy and ops procedures.
 
 ---
 
@@ -908,36 +1156,52 @@ panels don't each re-declare it):
 - **`live`** (default) — a product surface backed by a real, wired route.
 - **`preview`** — registered and usable, but either a guarded-preview /
   honest-pending backend or an operator-experimental surface. The current
-  preview set:
-  - **Backfill Replay** (`system.backfill`) — `preview` *and* hidden by #90 (it
-    is no longer in the default nav). The trigger button is disabled
-    ("backend not exposed"): the registry-side `POST /registry/targets/{id}/backfill`
-    is an honest **501**, because the P-12 catch-up replay
-    (`Backfiller.catch_up_and_forward`, `runtime/subscription/backfill.py`) is a
-    runtime-plane operation not reachable through the registry API in this build
-    (cross-plane loopback, no Caddy route). Wiring a registry→runtime proxy is a
-    tracked follow-up.
+  preview set (`PREVIEW_KINDS`, `registry.ts`) is three kinds:
   - **Prompt-Module Diff** (`system.optimizer.diff`) — operator review aid over
     the GEPA loop; the `/diff` route is wired (snapshot-based, no dspy).
-  - **Global Search / Alert Center / Report Export** — client-only product
-    surfaces with no dedicated backend route yet. (**Tenant View** is also in this
-    `preview` cohort but is now hidden by #90 — see *Consolidated / hidden by #90*.)
+  - **Global Search / Alert Center** — client-only product surfaces with no
+    dedicated backend route yet (the Alert Center's server-side counterpart is
+    the `live` **Watchlist**).
+
+  **Report Export** left the `preview` cohort in A10: it now fronts the real
+  `POST /api/v1/v3/export` collection-basket route (shipped on the same train)
+  and is `live` + unhidden. The new panels on the same train — the Wall,
+  Timeline, Correctness Gold Set, Watchlist, Escalation Deliveries — all ship
+  `live` (each fronts a real route: `/v3/since`, `/v3/timeline`,
+  `/v3/eval/goldset/*`, `/v3/watchlist`, `/v3/system/escalations`). (The former
+  Backfill Replay preview panel was deleted with the S7-T2 DROP set — the
+  catch-up replay itself remains a runtime-plane operation with no registry
+  proxy; see §7.)
 
 ## 7. Future seams
 
 The authoritative list of declared seams is `docs/SEAMS.md`. UI-relevant entries:
 
-- **Backfill trigger route** — see the Backfill preview note above (registry
-  `POST .../backfill` is an honest 501; the button is disabled, not faked).
+- **Backfill trigger** — the Backfill Replay panel was deleted in S7-T2; the
+  P-12 catch-up replay (`Backfiller.catch_up_and_forward`,
+  `runtime/subscription/backfill.py`) remains a runtime-plane operation not
+  reachable through the registry API (no registry→runtime proxy). Nothing in
+  the UI fakes it.
 - **A2A skill surface** (SEAMS #15) — operator-gated OFF by default
   (fail-closed); when disabled the runtime answers `/a2a/skills` with a 503 +
   enable recipe (never a silent 404). No UI panel today.
 - **Source health** — Source Detail derives staleness from the latest signal vs
-  cadence; a dedicated source-health endpoint is a later add.
+  cadence; System Status's source-firing matrix is the at-a-glance rollup. The
+  backend's per-source freshness grades (cadence-derived budgets) are not yet
+  rendered as a grade column.
+- **Backend fallback flag** (P4-5) — the ProvenanceBadge's `fallback` state is
+  only ever shown on an explicit backend signal, and no route carries one yet:
+  today every displayed number honestly reads `live` or `absent`. Threading a
+  real degraded-source flag through the routes is the declared follow-up.
+- **Band-calibration surface** (P2-3) — `/v3/eval/calibration` carries the
+  additive `band_calibration` section (persistence / reversal rates at
+  14/28-day horizons); the Eval Scorecard does not render it yet.
+- **Co-mention arcs** — the map's ArcLayer is honest-empty until multi-country
+  `geo[]` lands upstream (the geo backfill stamps single countries today).
 
-Hidden-by-default kinds (Global Pulse, Users, NATS-tail, wiring/mutations
-editors, dynamic dashboard) stay registered so saved layouts resolve, but are
-kept off the daily-driver surface until they carry real data.
+Hidden-by-default kinds (see §3 *Consolidated / hidden / deleted*) stay
+registered so saved layouts resolve, but are kept off the sidebar; the ⌘K
+palette still reaches them.
 
 ---
 

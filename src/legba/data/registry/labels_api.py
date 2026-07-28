@@ -28,6 +28,7 @@ shared deps bundle + the same ``require_bearer`` gate + the primary pg pool via
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -82,7 +83,15 @@ class UnitEvalScore(BaseModel):
     ``unit_correctness_scorer`` run (P2-T5). ``correctness_vs_reference`` is None
     (NOT a fabricated number) until the unit has scorable gold labels; the
     ``badge`` string is composed HERE, server-side, so the "no invented number"
-    honesty contract is enforced in one place."""
+    honesty contract is enforced in one place.
+
+    P2-5 (additive): ``correctness_operator`` is the unit's OPERATOR-labeled
+    semantic correctness — the mean of the weekly gold-set verdicts
+    (``correctness_labels``: correct=1.0, partially_correct=0.5, incorrect=0.0;
+    ``unresolvable`` excluded from both numerator and denominator). It is read
+    LIVE per request, so ``n_operator_scored`` grows the moment a label lands —
+    never gated on a scorer cadence — and it is SEGREGATED from the
+    deterministic source-overlap ``correctness_vs_reference``, never pooled."""
 
     unit: str
     faithfulness: float | None = None
@@ -90,6 +99,10 @@ class UnitEvalScore(BaseModel):
     n_labeled: int = 0
     n_findings: int = 0
     status: str | None = None
+    # P2-5 — operator-labeled semantic correctness (its own keys, live count).
+    correctness_operator: float | None = None
+    n_operator_labels: int = 0
+    n_operator_scored: int = 0
     badge: str
 
 
@@ -167,6 +180,9 @@ def _compose_badge(
     faithfulness: float | None,
     correctness: float | None,
     n_labeled: int,
+    operator_correctness: float | None = None,
+    n_operator_scored: int = 0,
+    n_operator_labels: int = 0,
 ) -> str:
     """The honest eval badge (P2-T6) — composed server-side so "no invented
     number" is enforced in ONE place. Examples:
@@ -176,7 +192,14 @@ def _compose_badge(
     ``verified`` denotes the unit runs the mandatory faithfulness-verify pass; the
     faithfulness figure is its measured score. Correctness is only shown when there
     are scorable gold labels — otherwise the badge SAYS it is unmeasured (with the
-    label count) rather than inventing a number."""
+    label count) rather than inventing a number.
+
+    P2-5 (additive tail segment): when the weekly gold-set loop has operator
+    verdicts for the unit, the badge grows an
+    ``operator 0.75 (n=6)`` segment — n counting the SCORED verdicts (the
+    unresolvable ones excluded, never silently: all-unresolvable reads
+    ``operator unresolved (3 labels)``). No verdicts → no segment (absence is
+    absent, not zero)."""
     parts = ["verified"]
     if faithfulness is not None:
         parts.append(f"faithfulness {faithfulness:.2f}")
@@ -184,6 +207,10 @@ def _compose_badge(
         parts.append(f"correctness {correctness:.2f} (n={n_labeled})")
     else:
         parts.append(f"unmeasured ({n_labeled} labels)")
+    if operator_correctness is not None and n_operator_scored > 0:
+        parts.append(f"operator {operator_correctness:.2f} (n={n_operator_scored})")
+    elif n_operator_labels > 0:
+        parts.append(f"operator unresolved ({n_operator_labels} labels)")
     return " | ".join(parts)
 
 
@@ -263,8 +290,14 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
         """Per-unit eval scoreboard (P2-T6) read off the LATEST
         ``unit_correctness_scorer`` run (P2-T5) — faithfulness (measured) +
         correctness-vs-reference (None until scorable gold labels exist) + an
-        honest ``badge`` per unit. No scorer run yet → empty units (no invented
-        rows). Optionally filter to one ``unit_analyst_id``."""
+        honest ``badge`` per unit. No scorer run yet → no scored_at and no
+        scorer-derived rows. Optionally filter to one ``unit_analyst_id``.
+
+        P2-5: the per-unit OPERATOR gold-set aggregate (``correctness_labels``,
+        the weekly labeling loop) is overlaid LIVE on every read — its n grows
+        the moment a verdict lands, independent of the scorer cadence. A unit
+        with operator verdicts but no scorer record still gets a row (only the
+        operator keys populated) so a growing gold set is never invisible."""
         async with deps.descriptor_registry.pg.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -277,29 +310,70 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
                 LIMIT 1
                 """
             )
-        if row is None:
-            return EvalScoresOut(scored_at=None, units=[])
-        data = row["data"]
-        if isinstance(data, str):
-            import json as _json
-
+            # P2-5 — live operator-verdict aggregate. Defensive: before
+            # migration 0096 lands the table is absent; that degrades to an
+            # empty overlay, never a broken scoreboard.
             try:
-                data = _json.loads(data)
-            except ValueError:
-                data = {}
-        # The scorer's payload nests under data['data'] (the FindingPayload
-        # envelope); 'units' maps unit_id -> the per-unit record.
-        nested = (data or {}).get("data") if isinstance(data, dict) else None
-        units_map = (nested or {}).get("units") if isinstance(nested, dict) else None
+                op_rows = await conn.fetch(
+                    """
+                    SELECT unit_analyst_id,
+                           COUNT(*)::int AS n_total,
+                           COUNT(*) FILTER (WHERE label <> 'unresolvable')::int
+                               AS n_scored,
+                           AVG(CASE label
+                                 WHEN 'correct' THEN 1.0
+                                 WHEN 'partially_correct' THEN 0.5
+                                 WHEN 'incorrect' THEN 0.0
+                               END)::float8 AS operator_correctness
+                      FROM correctness_labels
+                     GROUP BY unit_analyst_id
+                    """
+                )
+            except Exception:  # noqa: BLE001 — additive overlay, never breaks the read
+                op_rows = []
+        operator_by_unit: dict[str, dict[str, object]] = {
+            r["unit_analyst_id"]: {
+                "n_total": int(r["n_total"] or 0),
+                "n_scored": int(r["n_scored"] or 0),
+                "correctness": _as_float(r["operator_correctness"]),
+            }
+            for r in op_rows
+        }
+
+        units_map: dict[str, Any] = {}
+        scored_at = None
+        if row is not None:
+            scored_at = row["produced_at"]
+            data = row["data"]
+            if isinstance(data, str):
+                import json as _json
+
+                try:
+                    data = _json.loads(data)
+                except ValueError:
+                    data = {}
+            # The scorer's payload nests under data['data'] (the FindingPayload
+            # envelope); 'units' maps unit_id -> the per-unit record.
+            nested = (data or {}).get("data") if isinstance(data, dict) else None
+            found = (nested or {}).get("units") if isinstance(nested, dict) else None
+            if isinstance(found, dict):
+                units_map = found
+
         out: list[UnitEvalScore] = []
-        for unit_id, rec in sorted((units_map or {}).items()):
+        all_units = sorted(set(units_map) | set(operator_by_unit))
+        for unit_id in all_units:
             if unit_analyst_id is not None and unit_id != unit_analyst_id:
                 continue
-            if not isinstance(rec, dict):
-                continue
+            rec = units_map.get(unit_id)
+            rec = rec if isinstance(rec, dict) else {}
+            op = operator_by_unit.get(unit_id) or {}
             faith = _as_float(rec.get("faithfulness"))
             corr = _as_float(rec.get("correctness_vs_reference"))
             n_labeled = int(rec.get("n_labeled") or 0)
+            op_corr = op.get("correctness")
+            op_corr = op_corr if isinstance(op_corr, float) else None
+            n_op_total = int(op.get("n_total") or 0)
+            n_op_scored = int(op.get("n_scored") or 0)
             out.append(
                 UnitEvalScore(
                     unit=str(rec.get("unit", unit_id)),
@@ -308,9 +382,19 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
                     n_labeled=n_labeled,
                     n_findings=int(rec.get("n_findings") or 0),
                     status=rec.get("status"),
-                    badge=_compose_badge(faith, corr, n_labeled),
+                    correctness_operator=op_corr,
+                    n_operator_labels=n_op_total,
+                    n_operator_scored=n_op_scored,
+                    badge=_compose_badge(
+                        faith,
+                        corr,
+                        n_labeled,
+                        operator_correctness=op_corr,
+                        n_operator_scored=n_op_scored,
+                        n_operator_labels=n_op_total,
+                    ),
                 )
             )
-        return EvalScoresOut(scored_at=row["produced_at"], units=out)
+        return EvalScoresOut(scored_at=scored_at, units=out)
 
     return router

@@ -1,0 +1,88 @@
+# P3-6 Wave-A (A2) — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# NHK World English news JSON (Japan desk). Verified reachable 2026-07-03 (same-day ids). Undocumented-but-stable JSON; page_url is relative.
+#
+# source_class: reporting. Credibility host nhk.or.jp (seeded 0.82/wire, state_affiliation True by the registrar).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route live.
+
+identity:
+  id: source.nhk.world_news
+  name: NHK World — News (JSON)
+  kind: json_api
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: p3_6_wave_a
+  created: "2026-07-27T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [JP]
+  languages: [en]
+  tags: [news, indo_pacific, japan, wave_a]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "39 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  # UNVERIFIED SHAPE — NHK World all.json is undocumented. items_path + field paths below are a best-effort structural guess; the OPERATOR MUST probe the live JSON and correct them before activating (draft gate). page_url is relative — prefix the host when wiring url_path. Wrong paths → the handler emits nothing + reports unhealthy (it never fabricates).
+  url_template:
+    factory_kind: text
+    raw: "https://www3.nhk.or.jp/nhkworld/data/en/news/all.json"
+  items_path:
+    factory_kind: text
+    raw: "channel.item"
+  id_path:
+    factory_kind: text
+    raw: "id"
+  title_path:
+    factory_kind: text
+    raw: "title"
+  timestamp_path:
+    factory_kind: text
+    raw: "pubDate"
+  body_path:
+    factory_kind: text
+    raw: "description"
+  language:
+    factory_kind: text
+    raw: "en"
+  max_items_per_pull:
+    factory_kind: number
+    raw: 50
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

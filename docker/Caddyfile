@@ -105,3 +105,16 @@
 		format console
 	}
 }
+
+# ntfy alert push (E-4/P1-2) — the local ntfy server exposed under its own
+# subdomain so the operator's browser / the ntfy phone app can subscribe from
+# anywhere. Same basic_auth perimeter as the console (the ntfy app supports
+# per-server user/password — use the same credential). WebSocket + long-poll
+# subscribe paths must flow through, so the proxy carries Upgrade headers
+# (Caddy's reverse_proxy does this natively). DNS: alerts.<domain> must
+# resolve to this host (add the record or a wildcard) — until then this vhost
+# just fails cert issuance quietly and the loopback :8093 port keeps working.
+alerts.{$LEGBA_PUBLIC_DOMAIN:localhost} {
+	import basic_auth_perimeter
+	reverse_proxy ntfy:80
+}

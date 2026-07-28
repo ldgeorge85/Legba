@@ -334,6 +334,49 @@ async def test_get_run_health_flags_quiet_analysts(pg_pool, port):
 
 
 @pytest.mark.asyncio
+async def test_get_run_health_covers_whole_fleet_stalest_first(pg_pool, port):
+    """W2-T6 / M4: the old ``LIMIT 40`` on an analyst-ordered DISTINCT ON
+    silently dropped every analyst past the 40th ALPHABETICALLY —
+    world_assessor (the registry-breakage canary) included. The default call
+    must now cover a 45+ fleet, order the heads STALEST-FIRST (so a clip can
+    only shed the freshest), and state scanned/total/truncated explicitly."""
+    fresh = NOW - timedelta(hours=1)
+    stalest = NOW - timedelta(hours=240)
+
+    async def _trace(conn, aid, started):
+        await conn.execute(
+            "INSERT INTO analyst_traces (run_id, analyst_id, analyst_version, "
+            "cadence_trigger, status, run_started_at, run_ended_at, receipt_hash) "
+            "VALUES ($1,$2,'v','schedule','success',$3,$3,$4)",
+            uuid4(), aid, started, "h" + uuid4().hex[:8],
+        )
+
+    async with pg_pool.acquire() as conn:
+        # 44 fresh analysts sorting BEFORE world_assessor, plus one very
+        # stale canary sorting AFTER it — under the old alphabetical cap both
+        # world_assessor and the stale straggler fell off the roster.
+        for i in range(44):
+            await _trace(conn, f"aa_wt6cov_{i:02d}", fresh)
+        await _trace(conn, "zz_wt6cov_stalest", stalest)
+        await _trace(conn, "world_assessor", fresh)
+
+    out = await port.get_run_health(quiet_hours=24)  # DEFAULT limit
+    ids = [r["analyst_id"] for r in out["rows"]]
+    assert "world_assessor" in ids                  # the canary is visible
+    assert "zz_wt6cov_stalest" in ids
+    assert "zz_wt6cov_stalest" in out["quiet_analysts"]
+    # Stalest-first: the quiet straggler ranks before every fresh cov row.
+    assert ids.index("zz_wt6cov_stalest") < min(
+        ids.index(f"aa_wt6cov_{i:02d}") for i in range(44)
+    )
+    # Coverage honesty fields.
+    assert out["analysts_scanned"] == len(out["rows"])
+    assert out["analysts_total"] >= 46
+    assert out["truncated"] == (out["analysts_scanned"] < out["analysts_total"])
+    assert out["truncated"] is False  # default limit covers this fleet
+
+
+@pytest.mark.asyncio
 async def test_get_run_health_surfaces_error_flag(pg_pool, port):
     async with pg_pool.acquire() as conn:
         await conn.execute(
@@ -374,6 +417,10 @@ async def test_get_source_health_reports_silence_and_errors(pg_pool, port):
     assert rows["src_quiet"]["last_poll_outcome"] == "error"
     assert out["error_count"] >= 1
     assert out["refs"] == []
+    # W2-T6 coverage honesty: the scan states how many active heads it
+    # covered vs the fleet.
+    assert out["scanned"] >= 1
+    assert out["truncated"] == (out["scanned"] < out["summary"]["active_total"])
 
 
 # ---------------------------------------------------------------------------

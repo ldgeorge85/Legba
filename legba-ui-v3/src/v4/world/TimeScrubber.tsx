@@ -30,20 +30,52 @@ import {
   timeDomain,
   type TimelinePoint,
 } from '@/lib/timelinePoints'
+import {
+  SPAN_PRESETS,
+  clampWindow,
+  isLiveWindow,
+  sliderStep,
+  windowFraction,
+} from '@/lib/mapTime'
 
 /** Window is "live" when its end is within ~1 minute of now. */
 const LIVE_THRESHOLD_MS = 60_000
-/** Each ~1s playback tick advances the window by speed × 2 simulated minutes. */
+/** Each ~1s playback tick advances the window END by speed × 2 sim minutes. */
 const TICK_INTERVAL_MS = 1_000
 const TICK_BASE_MS = 120_000
 const SPEEDS = [0.5, 1, 2, 4] as const
 
+/** Shared thumb styling so both overlaid range inputs match the dark chrome and
+ *  their thumbs stay clickable while their tracks are click-through. */
+const THUMB_CLASS = cn(
+  'pointer-events-none absolute left-0 top-1/2 h-0 w-full -translate-y-1/2 appearance-none bg-transparent',
+  'focus:outline-none',
+  '[&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:w-3.5',
+  '[&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none',
+  '[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2',
+  '[&::-webkit-slider-thumb]:border-accent-info [&::-webkit-slider-thumb]:bg-surface-100',
+  '[&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:w-3.5',
+  '[&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:rounded-full',
+  '[&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-accent-info [&::-moz-range-thumb]:bg-surface-100',
+)
+
+/**
+ * TimeScrubber — a genuine two-ended [t0, t1] window control.
+ *
+ * A dual-thumb range over the outer span [now − spanMs, now] drives BOTH the
+ * window start and end; the map filters signals / findings / situations to that
+ * window (see MapLibreWorldMap `winSignals` etc.). Span presets (6h/24h/7d/30d)
+ * re-anchor the outer span so widening actually reaches further back in the
+ * data. Play sweeps the END forward to LIVE, revealing events up to time T.
+ */
 export default function TimeScrubber() {
   const windowStartMs = useWorldState((s) => s.windowStartMs)
   const windowEndMs = useWorldState((s) => s.windowEndMs)
+  const spanMs = useWorldState((s) => s.spanMs)
   const playing = useWorldState((s) => s.playing)
   const speed = useWorldState((s) => s.speed)
   const setWindow = useWorldState((s) => s.setWindow)
+  const setSpan = useWorldState((s) => s.setSpan)
   const setPlaying = useWorldState((s) => s.setPlaying)
   const setSpeed = useWorldState((s) => s.setSpeed)
 
@@ -65,12 +97,30 @@ export default function TimeScrubber() {
     return () => clearInterval(id)
   }, [playing])
 
-  // Keep "now" fresh for the slider's max bound across renders.
+  // Keep "now" fresh for the slider's upper bound across renders.
   const nowRef = useRef(Date.now())
   nowRef.current = Math.max(nowRef.current, Date.now(), windowEndMs)
   const now = nowRef.current
+  // Outer bounds: the whole span sits inside [lo, hi]. `lo` follows the span
+  // preset; a start thumb dragged inward raises windowStartMs above lo.
+  const lo = Math.min(windowStartMs, now - spanMs)
+  const hi = now
+  const step = sliderStep(hi - lo)
 
-  const isLive = now - windowEndMs <= LIVE_THRESHOLD_MS
+  const isLive = isLiveWindow(windowEndMs, now, LIVE_THRESHOLD_MS)
+  const startPct = windowFraction(windowStartMs, lo, hi) * 100
+  const endPct = windowFraction(Math.min(windowEndMs, hi), lo, hi) * 100
+
+  const onStart = (v: number) => {
+    const w = clampWindow(v, windowEndMs, lo, hi)
+    setWindow(w.startMs, w.endMs)
+  }
+  const onEnd = (v: number) => {
+    const w = clampWindow(windowStartMs, v, lo, hi)
+    setWindow(w.startMs, w.endMs)
+  }
+
+  const rangeLabel = `${format(windowStartMs, 'MMM d HH:mm')} – ${format(windowEndMs, 'HH:mm')}`
 
   return (
     <div
@@ -91,42 +141,71 @@ export default function TimeScrubber() {
           'focus:outline-none focus:ring-1 focus:ring-accent-info',
         )}
       >
-        {playing ? (
-          <Pause className="h-3.5 w-3.5" />
-        ) : (
-          <Play className="h-3.5 w-3.5" />
-        )}
+        {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
       </button>
 
-      <input
-        type="range"
-        min={windowStartMs}
-        max={now}
-        step={60_000}
-        value={Math.min(windowEndMs, now)}
-        onChange={(e) => setWindow(windowStartMs, Number(e.target.value))}
-        aria-label="Scrub the map time window"
-        aria-valuetext={format(windowEndMs, 'MMM d HH:mm')}
-        className={cn(
-          'h-1.5 flex-1 cursor-pointer appearance-none rounded-full',
-          'bg-surface-50 accent-accent-info',
-          'focus:outline-none focus:ring-1 focus:ring-accent-info',
-        )}
-      />
+      {/* Span presets — re-anchor the outer window to the last N. */}
+      <div className="flex shrink-0 items-center gap-0.5" aria-label="Window span">
+        {SPAN_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => setSpan(p.ms)}
+            aria-pressed={spanMs === p.ms}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors',
+              'focus:outline-none focus:ring-1 focus:ring-accent-info',
+              spanMs === p.ms
+                ? 'bg-accent-info/20 font-medium text-accent-info'
+                : 'text-slate-500 hover:text-slate-300',
+            )}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
 
-      <div className="flex w-28 shrink-0 items-center justify-end gap-1 tabular-nums">
+      {/* Dual-thumb window range — two overlaid inputs, click-through tracks. */}
+      <div className="relative h-4 flex-1" data-testid="time-scrubber-range">
+        <div className="absolute left-0 top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full bg-surface-50" />
+        <div
+          className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent-info/60"
+          style={{ left: `${startPct}%`, width: `${Math.max(0, endPct - startPct)}%` }}
+        />
+        <input
+          type="range"
+          min={lo}
+          max={hi}
+          step={step}
+          value={Math.min(Math.max(windowStartMs, lo), hi)}
+          onChange={(e) => onStart(Number(e.target.value))}
+          aria-label="Window start"
+          aria-valuetext={format(windowStartMs, 'MMM d HH:mm')}
+          className={THUMB_CLASS}
+        />
+        <input
+          type="range"
+          min={lo}
+          max={hi}
+          step={step}
+          value={Math.min(Math.max(windowEndMs, lo), hi)}
+          onChange={(e) => onEnd(Number(e.target.value))}
+          aria-label="Window end"
+          aria-valuetext={format(windowEndMs, 'MMM d HH:mm')}
+          className={THUMB_CLASS}
+        />
+      </div>
+
+      <div className="flex w-40 shrink-0 items-center justify-end gap-1 tabular-nums">
         {isLive ? (
           <span className="flex items-center gap-1 text-xs font-medium text-accent-ok">
-            <span aria-hidden className="text-[10px] leading-none">
-              ●
-            </span>
+            <span aria-hidden className="text-[10px] leading-none">●</span>
             LIVE
           </span>
-        ) : (
-          <span className="text-xs text-slate-400">
-            {format(windowEndMs, 'MMM d HH:mm')}
-          </span>
-        )}
+        ) : null}
+        <span className="text-[11px] text-slate-400" title="Selected window">
+          {rangeLabel}
+        </span>
       </div>
 
       <div className="flex shrink-0 items-center gap-1" aria-label="Playback speed">

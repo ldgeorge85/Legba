@@ -93,7 +93,7 @@ class _SubstrateStub:
     fact_refs: list[UUID] = field(default_factory=list)
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
-    async def search_signals(self, *, query: str, category: str | None = None,
+    async def search_signals(self, *, query: str,
                              limit: int = 20, scope_predicate: str | None = None) -> dict[str, Any]:
         self.calls.append(("search_signals", {"query": query, "scope_predicate": scope_predicate}))
         return {"rows": [{"id": str(r), "title": "row"} for r in self.signal_refs],
@@ -241,6 +241,32 @@ async def test_acquire_reuses_dispatch_tool_and_collects_refs() -> None:
 
     assert str(ref) in acquired["cited_substrate_refs"]
     assert acquired["evidence"][0]["tool"] == "search_signals"
+
+
+@pytest.mark.asyncio
+async def test_acquire_excludes_non_uuid_refs_from_lineage() -> None:
+    """W2-T4 ref honesty: the acquire lift only admits REAL UUIDs into
+    cited_substrate_refs — search_context's ``ctx:``-prefixed background-chunk
+    refs (and any other non-UUID string) are excluded, mirroring consult's
+    ``_coerce_uuid_list``, so a Qdrant chunk id can never masquerade as
+    substrate lineage on the deep-consult path either."""
+    real = uuid4()
+
+    class _MixedRefStub(_SubstrateStub):
+        async def search_signals(self, *, query: str, limit: int = 20,
+                                 scope_predicate: str | None = None) -> dict[str, Any]:
+            return {
+                "rows": [],
+                "refs": [f"ctx:{uuid4()}", str(real), "not-a-uuid"],
+            }
+
+    llm = _ScriptedLLM([_plan_json()])
+    deps = DeepConsultStageDeps(llm=llm, substrate=_MixedRefStub())
+
+    plan = await _run_plan(_input(), deps)
+    acquired = await _run_acquire(plan, deps)
+
+    assert acquired["cited_substrate_refs"] == [str(real)]
 
 
 @pytest.mark.asyncio

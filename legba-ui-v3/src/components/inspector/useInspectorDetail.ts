@@ -65,37 +65,52 @@ interface FindingsBodyRow {
   id: string
   body?: string | null
   data?: Record<string, unknown> | null
+  /** P0-T3 faithfulness-verify block — `/findings` projects it as a top-level
+   *  sibling of `data` (null on a legacy/unverified row). */
+  verification?: Record<string, unknown> | null
+}
+
+/** What the `/findings` window fetch yields for the Inspector merge. */
+interface FindingReportFetch {
+  payload: Record<string, unknown> | null
+  verification: Record<string, unknown> | null
 }
 
 /**
  * The lineage `root` node carries metadata only (title/target/analyst/schema) —
- * NOT the report text, which lives in the finding's `data` payload. So for a
- * `finding` root we fetch the actual report from `/findings` (the only endpoint
- * that returns `data`), narrowed by the root's target/analyst and matched by id,
- * and return its payload to merge into the Inspector body. Degrades to null
- * (Inspector shows metadata only, as before) when the row is outside the window
- * or the kind isn't a plain `finding` (the endpoint is hard-fixed to that kind).
+ * NOT the report text, which lives in the finding's `data` payload, and NOT
+ * the faithfulness `verification` block, which only the `/findings` projection
+ * carries (it is derived from the verify critique row, never stored inside the
+ * `data` envelope). So for a `finding` root we fetch the row from `/findings`,
+ * narrowed by the root's target/analyst and matched by id, and return payload
+ * + verification to merge into the Inspector body — the verify block feeds
+ * both the report's VerdictBadge and the citation chips' per-claim hover
+ * verdicts (P1-8). Degrades to nulls (Inspector shows what it has; the chips
+ * honestly say "claim-level verdict not recorded") when the row is outside the
+ * window or the kind isn't a plain `finding` (the endpoint is fixed to it).
  */
 async function fetchFindingReport(root: {
   id: string
   row_kind: string
   target_id: string | null
   analyst_id: string | null
-}): Promise<Record<string, unknown> | null> {
-  if (root.row_kind !== 'finding') return null
+}): Promise<FindingReportFetch> {
+  if (root.row_kind !== 'finding') return { payload: null, verification: null }
   const params = new URLSearchParams({ limit: '100' })
   if (root.target_id) params.set('target_id', root.target_id)
   if (root.analyst_id) params.set('analyst_id', root.analyst_id)
   try {
     const resp = await apiGet<{ data: FindingsBodyRow[] }>(`/findings?${params.toString()}`)
     const match = resp.data.find((r) => r.id === root.id)
-    if (!match) return null
+    if (!match) return { payload: null, verification: null }
     const payload: Record<string, unknown> =
       match.data && typeof match.data === 'object' ? { ...match.data } : {}
     if (str(match.body) && payload.body == null) payload.body = match.body
-    return Object.keys(payload).length > 0 ? payload : null
+    const verification =
+      match.verification && typeof match.verification === 'object' ? match.verification : null
+    return { payload: Object.keys(payload).length > 0 ? payload : null, verification }
   } catch {
-    return null
+    return { payload: null, verification: null }
   }
 }
 
@@ -116,7 +131,20 @@ async function resolveWalkable(sel: Selection): Promise<InspectorDetail> {
     root.body && typeof root.body === 'object' && Object.keys(root.body).length > 0
       ? (root.body as Record<string, unknown>)
       : null
-  if (!report_body) report_body = await fetchFindingReport(root)
+  // The faithfulness verify block lives ONLY on the /findings projection (it
+  // is a critique-derived sibling, never inside the data envelope), so a
+  // finding hydrates it from the window fetch even when the lineage root
+  // already supplied the report body — it drives the per-claim citation-chip
+  // verdicts (P1-8). Absent ⇒ the chips honestly say "not recorded".
+  let verification: Record<string, unknown> | null =
+    report_body?.verification && typeof report_body.verification === 'object'
+      ? (report_body.verification as Record<string, unknown>)
+      : null
+  if (!report_body || (!verification && root.row_kind === 'finding')) {
+    const fetched = await fetchFindingReport(root)
+    if (!report_body) report_body = fetched.payload
+    if (!verification) verification = fetched.verification
+  }
   const core: Record<string, unknown> = {}
   if (root.row_kind) core.kind = root.row_kind
   if (root.target_id) core.target = root.target_id
@@ -149,6 +177,8 @@ async function resolveWalkable(sel: Selection): Promise<InspectorDetail> {
       // identity fields — so DescriptorView's BODY_PRIMARY floats the actual
       // report text to the top instead of showing metadata only.
       ...(report_body ?? {}),
+      // The /findings-hydrated verify block (P1-8) — only set when it exists.
+      ...(verification ? { verification } : {}),
       title: root.title,
       target_id: root.target_id,
       analyst_id: root.analyst_id,

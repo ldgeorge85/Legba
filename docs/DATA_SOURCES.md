@@ -192,6 +192,103 @@ The `narrative_coordination` unit weighs `state_media == framing`, and the
 `collection_gap` I&W analyst names which `source_class` would plausibly feed a
 starved desk × dimension cell (see `ANALYSIS.md` §3.11).
 
+### 2.5 The RSSHub lane (profile-gated, draft — a starved-desk booster)
+
+Many credible **regional / gov / major-media** outlets publish **no native
+RSS** (or only a homepage feed), so the worst-covered watch desks stay thin no
+matter how many global wires we poll. The **RSSHub lane** closes that gap
+*without a new source kind*: a self-hosted **RSSHub** sidecar bridges a chosen
+outlet **route** into a standard RSS feed the existing `rss` handler polls.
+
+- **Machinery.** `docker-compose.yml` adds an `rsshub` service
+  (`diygod/rsshub`, the non-chromium / puppeteer-less image) behind its **own
+  profile `sources-extra`** — `docker compose up -d` and `--profile runtime`
+  **never** start it. It is loopback-bound (`127.0.0.1:1200`), memory-capped
+  (512 MB), and dependency-free by default (`CACHE_TYPE=memory`; it can be
+  pointed at the substrate redis via env). The curated descriptors poll it over
+  the compose network at `http://rsshub:1200/<route>`.
+- **Ships inert.** The ten `descriptors/source_rsshub_*.yaml` feeds all ship
+  **`state: draft`**, so bulk registration creates **no live actor** — even with
+  the sidecar up, nothing polls until the operator activates each descriptor
+  (`draft → configured → active`). Registrar (idempotent, house pattern):
+  `scripts/bringup_register_rsshub_sources.py`, which also seeds host-level
+  `source_credibility` rows for the upstream outlets (the feed's article links
+  are the *real* outlet URLs, so the credibility filter keys on `apnews.com` /
+  `rfi.fr` / `focustaiwan.tw` / `aljazeera.com` / `rfa.org`, never on `rsshub`).
+- **Egress.** The `rss` handler's SSRF egress guard blocks internal hosts, so
+  activation also requires `rsshub` on the runtime's
+  **`LEGBA_EGRESS_ALLOW_HOSTS`** allowlist (an exact-hostname permit, defaulted
+  to `rsshub` on `legba-runtime-dapr`; inert until a draft is activated).
+- **Curation (the five worst-covered non-G7 desks, chosen from a live 7-day
+  signals-per-desk query).** Two feeds per desk — a top-tier English wire (AP
+  News country hubs) plus a strong regional/local voice — all `source_class:
+  reporting`; **no Chinese state media** (that is reserved for the CN desk,
+  where it is knowingly labeled `state_media`):
+
+  | Desk | Feeds (route → outlet) |
+  |---|---|
+  | **NE** Niger | `apnews/topics/niger` → AP · `rfi/fr/afrique` → RFI Afrique |
+  | **TW** Taiwan | `apnews/topics/taiwan` → AP · `focustaiwan/news` → Focus Taiwan (CNA EN) |
+  | **HT** Haiti | `apnews/topics/haiti` → AP · `rfi/fr/ameriques` → RFI Amériques |
+  | **CD** DR Congo | `apnews/topics/democratic-republic-of-the-congo` → AP · `aljazeera/english/where/democratic-republic-of-the-congo` → Al Jazeera EN |
+  | **KP** North Korea | `apnews/topics/north-korea` → AP · `rfa/english/news/korea` → Radio Free Asia |
+
+  Deploy (operator-paced): `docker compose --profile sources-extra up -d rsshub`
+  → `python scripts/bringup_register_rsshub_sources.py` (registers drafts +
+  seeds credibility) → verify each route on the instance → activate per desk.
+
+### 2.6 The Wave-A breadth batch (draft — 41 no-auth feeds)
+
+The **Wave-A** batch is the additive-breadth slice of the 2026-07-02/03
+new-source research sweep (`planning/SOURCE_RESEARCH_2026-07-02.md`,
+"Wave A — register this week (verified live, no auth)"). It adds **41
+independently verified, keyless feeds** — **38 `rss` + 3 `json_api`** — with no
+new source kind and no sidecar, straight onto the existing handlers. It is
+**additive breadth, not revival**: the roster is otherwise healthy.
+
+- **Ships inert.** Every `descriptors/source_*.yaml` in the batch ships
+  **`state: draft`**, so bulk registration creates **no live actor** — nothing
+  polls until the operator activates each descriptor (`draft → configured →
+  active`) after verifying the route live on the instance. The three `json_api`
+  feeds (WHO Disease Outbreak News, NHK World, ISW) carry field paths marked
+  **VERIFY** in-descriptor — probe the live JSON and correct any before
+  activating (a wrong path makes the handler emit nothing + report `unhealthy`;
+  it never fabricates).
+- **Registrar (idempotent, house pattern):**
+  `scripts/bringup_register_wave_a_sources.py` — registers the 41 drafts and
+  seeds host-level `source_credibility` rows for the upstream outlets
+  (`INSERT .. ON CONFLICT DO NOTHING`, so operator overrides and any
+  pre-existing seed — `eia.gov` / `state.gov` from the S-1 catalog — always win).
+- **What's in it (by research section):**
+
+  | Section | Count | Feeds |
+  |---|---|---|
+  | **A1** additive dead-feed complements | 3 | WHO Disease Outbreak News (json_api) · EIA Today in Energy · CGTN World |
+  | **A2** desk-gap fills | 19 | Israel (Times of Israel, Jerusalem Post) · Taiwan (Taipei Times) · N.Korea (Daily NK, 38 North) · Japan (NHK json_api, Japan Times) · Brazil · Mexico · Argentina · Spain/LatAm (El País) · Gulf (Asharq Al-Awsat, Middle East Eye) · Indonesia (ANTARA) · Russia (Meduza) · RFE/RL · Australia · Canada · Italy |
+  | **A3** topical / unit feeds | 13 | ISW (json_api) · State Dept press · UN press · Kremlin · EUvsDisinfo · DFRLab · Breaking Defense · Defense News · Naval News · OilPrice · Rigzone · World Nuclear News · Arms Control Association |
+  | **A4** quality adds | 6 | Guardian World · Euronews · Le Monde EN · Der Spiegel Intl · Bangkok Post · Dawn |
+
+- **State media / editorial labeling.** Only **`source.cgtn.world`** is
+  state-controlled Chinese media — knowingly ingested for the **CN desk** as
+  labeled `state_media` FRAMING (the house rule permits Chinese state media only
+  for the CN desk). State-**funded** but editorially-conventional public
+  broadcasters (NHK / ABC / CBC / RFE-RL / EBC-Agência Brasil / ANTARA) stay
+  `source_class: reporting` with `state_affiliation = True` on the credibility
+  row — the same honest-provenance / editorial-independence split §2.4 uses.
+  Kremlin.ru is `official` (a government primary-source publisher) with a **low**
+  credibility score.
+- **Deliberately excluded** (documented in the registrar): the A1 pure
+  re-points (WHO news, CDC travel/outbreaks, EIA press) are **already** registered
+  in the S-1 catalog at their current endpoints; **EMSC FDSN** was retired
+  2026-06-12 as duplicative-of-USGS noise; **Focus Taiwan/CNA** is already
+  double-covered (`source.cna.all` + `source.rsshub.focustaiwan.news`); **OFAC
+  SDN delta** is an XML two-step the generic handlers don't cover (sanctions ride
+  `opensanctions.*`).
+
+  Deploy (operator-paced): `python scripts/bringup_register_wave_a_sources.py`
+  (registers drafts + seeds credibility) → verify each route on the instance
+  (the `json_api` field paths especially) → activate per desk.
+
 ---
 
 ## 3. Credentialed sources: live status

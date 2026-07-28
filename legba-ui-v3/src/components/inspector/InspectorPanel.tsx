@@ -12,12 +12,15 @@
  * GET /lineage/{kind}/{id}). When nothing is selected it shows the world
  * assessment one-pager (parity with Why's empty state) — never dead space.
  */
-import { ChevronRight, ChevronLeft } from 'lucide-react'
+import { ChevronRight, ChevronLeft, FilePlus2, Telescope } from 'lucide-react'
+import { useState } from 'react'
+import { apiPost } from '@/lib/api'
 import { PanelChrome } from '@/components/PanelChrome'
 import { DescriptorView } from '@/components/DescriptorView'
 import { RecordLink, refKindForField } from '@/components/inspector/RecordLink'
 import { useInspectorDetail, type InspectorDetail, type Ref } from './useInspectorDetail'
 import { useSelection, type Selection, type SelectionPreview } from '@/state/selection'
+import { useExportBasket } from '@/state/exportBasket'
 import ProvenanceTrail from '@/v4/why/ProvenanceTrail'
 import CitedAssessment from '@/components/inspector/CitedAssessment'
 import { extractCitations } from '@/lib/citationsModel'
@@ -80,7 +83,7 @@ export default function InspectorPanel({ registration }: PanelProps) {
       <div className="space-y-density" data-testid="inspector-body">
         <Breadcrumb history={history} selection={selection} onBack={back} />
 
-        <Header kind={selection.kind} id={selection.id} />
+        <Header kind={selection.kind} id={selection.id} label={title} />
 
         {detail ? (
           <DetailView detail={detail} />
@@ -102,7 +105,7 @@ export default function InspectorPanel({ registration }: PanelProps) {
   )
 }
 
-function Header({ kind, id }: { kind: Selection['kind']; id: string }) {
+function Header({ kind, id, label }: { kind: Selection['kind']; id: string; label?: string }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-line pb-2">
       <span className="rounded bg-surf-1 px-1.5 py-0.5 text-label uppercase tracking-wide text-ink-2">
@@ -111,7 +114,77 @@ function Header({ kind, id }: { kind: Selection['kind']; id: string }) {
       <code className="truncate font-mono text-label text-ink-3" title={id}>
         {id}
       </code>
+      {kind === 'finding' && <AddToExportButton id={id} label={label} />}
+      {kind === 'entity' && <WatchThisButton id={id} label={label} />}
     </div>
+  )
+}
+
+/**
+ * P5-6 — "watch this" for the selected ENTITY, mirroring the add-to-export
+ * affordance: one click creates a SERVER-side entity watch on
+ * POST /v3/watchlist (the alert_trigger_scan's watchlist_hit class then pages
+ * on any verified finding touching it). The selection label is the entity's
+ * canonical name (graph/list nodes key on it); a bare-UUID selection posts the
+ * id instead. State is honest: watching / watched / failed — never silent.
+ */
+function WatchThisButton({ id, label }: { id: string; label?: string }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'failed'>('idle')
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+  const name = label && label !== id ? label : isUuid ? null : id
+  async function watch() {
+    setState('busy')
+    try {
+      await apiPost('/v3/watchlist', {
+        kind: 'entity',
+        pattern: name ? { name } : { entity_id: id },
+        label: name ?? id,
+      })
+      setState('done')
+    } catch {
+      setState('failed')
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={watch}
+      disabled={state === 'busy' || state === 'done'}
+      className="ml-auto inline-flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-label text-ink-2 hover:text-ink-1 disabled:opacity-50"
+      title={
+        state === 'done'
+          ? 'standing watch created — verified hits will alert'
+          : 'create a standing watch on this entity (server-side; alerts on any verified finding touching it)'
+      }
+      data-testid="inspector-watch-this"
+    >
+      <Telescope className="h-3 w-3" aria-hidden />
+      {state === 'done' ? 'Watching' : state === 'busy' ? 'Watching…' : state === 'failed' ? 'Watch failed — retry' : 'Watch this'}
+    </button>
+  )
+}
+
+/**
+ * A10 — "add to export" for the selected finding, mirroring the consult
+ * panel's pin-to-context affordance (#90): one click drops the selected record
+ * into the persistent export basket; already-added state is disabled + stated.
+ * Findings only — a signal/entity/target is not an exportable document item.
+ */
+function AddToExportButton({ id, label }: { id: string; label?: string }) {
+  const add = useExportBasket((s) => s.add)
+  const inBasket = useExportBasket((s) => s.items.some((i) => i.kind === 'finding' && i.id === id))
+  return (
+    <button
+      type="button"
+      onClick={() => add({ kind: 'finding', id, label })}
+      disabled={inBasket}
+      className="ml-auto inline-flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-label text-ink-2 hover:text-ink-1 disabled:opacity-50"
+      title={inBasket ? 'already in the export basket' : 'add this finding to the export basket'}
+      data-testid="inspector-add-to-export"
+    >
+      <FilePlus2 className="h-3 w-3" aria-hidden />
+      {inBasket ? 'In export' : 'Add to export'}
+    </button>
   )
 }
 

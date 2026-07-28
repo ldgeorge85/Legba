@@ -54,6 +54,14 @@ export type PanelKind =
   //    system.streams/users/backfill DELETED in S7-T2 consolidation)
   // System Status — at-a-glance per-layer health (acquisition/analysis/queues/infra)
   | 'system.status'
+  // The Timeline — validity-window temporal view (P4-4): facts/situations/
+  // findings as ranged items ([valid_from, valid_until) / lifecycle /
+  // [produced_at, superseded_at)) + supersession-chain edges, brushable/zoomable
+  | 'system.timeline'
+  // The Wall — the mission-control anchor tile (P1-7): banded-verdict desk
+  // grid + movers-since-last-visit (/v3/since) + newest high-severity
+  // verified + a system-health corner, one glanceable 2×2 screen
+  | 'system.wall'
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
   | 'system.entities'
   | 'system.entity_graph'
@@ -67,6 +75,9 @@ export type PanelKind =
   | 'source.fanout'
   // Eval + Ops (UI-5 / Tiers E+F — appended)
   | 'system.eval_scorecard'
+  // Correctness gold-set weekly labeling worksheet (P2-5) — the operator
+  // judges ~8 sampled verified findings/week; verdicts grow the scoreboard n
+  | 'system.goldset'
   | 'system.optimizer.diff'
   | 'system.governor'
   | 'system.audit'
@@ -80,6 +91,10 @@ export type PanelKind =
   // went nowhere. Distinct from system.alert_center (the localStorage
   // subscription watchlist over the findings feed).
   | 'system.escalations'
+  // Watchlist v2 (P5-6): SERVER-side standing watches (entity/topic/place) the
+  // alert_trigger_scan's watchlist_hit class evaluates — distinct from
+  // system.alert_center's client-only localStorage subscriptions.
+  | 'system.watchlist'
   | 'system.report_export'
   //   (system.tenant_view DELETED — multitenancy is ingestion-only, not baked)
   // The Inspector — the unified detail surface (redesign Move 1, the keystone)

@@ -65,25 +65,33 @@ from ..provenance.models import FindingPayload
 from ...runtime.analyst_method import AnalystMethodResult
 from .deterministic_handlers import (
     adversarial_signals,
+    alert_trigger_scan,
+    analyst_traces_retention,
     anomaly_detection,
+    band_calibration_tracker,
     calibration_tracking,
     collection_gap,
     composition_lineage_sweep,
     corpus_indexer,
     cross_source_coalesce,
     cross_source_dedup,
+    desk_baseline,
     entity_gc,
     entity_resolution,
+    evidence_archiver,
     fact_contention_arbiter,
     fact_decay,
+    fact_decay_scan,
     finding_supersession,
     forecast_scoreboard,
+    geo_convergence_scan,
     hypothesis_lifecycle,
     indicator_tracker,
     situation_clustering,
     thematic_proposal,
     graph_mining,
     integrity_sweep,
+    narrative_mapper,
     nexus_decay,
     proposed_edge_governance,
     reenrich_ner,
@@ -92,6 +100,7 @@ from .deterministic_handlers import (
     signal_embedder,
     signal_summarizer,
     signals_retention,
+    source_track_record,
     structural_balance,
     unit_correctness_scorer,
 )
@@ -122,6 +131,13 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     "anomaly_detection": OutputKind.FINDING,
     # Confidence-vs-outcome Brier/reliability tracking. A genuine finding.
     "calibration_tracking": OutputKind.FINDING,
+    # P2-3 band-calibration harness — band transitions logged as resolvable
+    # claims (band_calibration_claims side-writes, migration 0093) + the per-run
+    # persistence/reversal aggregate. The summary IS the measurement product the
+    # /eval/calibration band_calibration section reads (the calibration_tracking
+    # precedent), so it stays a genuine FINDING — and its data carries the
+    # explicit no-Brier honesty note (bands are not probabilities).
+    "band_calibration_tracker": OutputKind.FINDING,
     # P2-T5 per-unit correctness-vs-reference (source-id overlap recall vs the
     # gold labels) + faithfulness mean. A genuine measurement finding.
     "unit_correctness_scorer": OutputKind.FINDING,
@@ -158,9 +174,61 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # write_hypothesis + returns a FindingPayload summary. NOT in the
     # operator-confirmed trace-only list, so unchanged here (left FINDING).
     "hypothesis_lifecycle": OutputKind.FINDING,
+    # A7 geographic convergence detector — fires kind='alert' rows on the
+    # FORMATION/DISSOLUTION edges of multi-source-family geographic
+    # convergence (1° cells / country bins over the rolling 24h window). The
+    # returned summary is a genuine FINDING on runs where something happened
+    # (formations / dissolutions / first-scan seeding) and suppressed via the
+    # run's force_trace_only on a quiet steady-state sweep (the
+    # indicator_tracker pattern) — which keeps this handler in the
+    # FINDING-emitters set the STRUCTURAL_VERIFY_EXEMPT drift guard asserts.
+    "geo_convergence_scan": OutputKind.FINDING,
+    # C4 fact confidence-decay readout stamper — daily scan that stamps the
+    # fact_decay_states SIDECAR (migration 0098; NEVER mutates a facts row,
+    # unlike the legacy fact_decay sweep) and emits the honest per-state
+    # distribution summary (counts per fresh/aging/stale/revoke_candidate +
+    # top revoke candidates; zero-state honest). The distribution IS the
+    # measurement product (the calibration_tracking precedent), so it stays a
+    # genuine FINDING — which keeps this handler in the FINDING-emitters set
+    # the STRUCTURAL_VERIFY_EXEMPT drift guard asserts.
+    "fact_decay_scan": OutputKind.FINDING,
+    # A6 P3-3 source track record — daily recompute of the per-source EARNED
+    # record (wins/losses over RESOLVED contentions + corroboration outcomes;
+    # smoothed win-rate) into source_track_records (migration 0099). The honest
+    # per-source distribution IS the measurement product (the calibration_
+    # tracking / fact_decay_scan precedent), so it stays a genuine FINDING —
+    # which keeps this handler in the FINDING-emitters set the STRUCTURAL_
+    # VERIFY_EXEMPT drift guard asserts. Grades feed weighting/tie-break/display
+    # ONLY, never faithfulness (A6 hard rule).
+    "source_track_record": OutputKind.FINDING,
+    # P4-1/P4-2 narrative mapper — reifies contested-claim families as
+    # `narratives` rows (carrier sources + first-seen/echo lags + propagation
+    # edges) + refreshes the directed source-echo graph (`narrative_echo_edges`),
+    # both DERIVED and wholesale-refreshed from the contention sidecar (mig 0102).
+    # DETECT-ONLY (never mutates facts); echo-lead is descriptive co-carriage
+    # timing, not causal. The honest per-run distribution IS the measurement
+    # product (the source_track_record / fact_decay_scan precedent), so it stays
+    # a genuine FINDING — which keeps this handler in the FINDING-emitters set the
+    # STRUCTURAL_VERIFY_EXEMPT drift guard asserts.
+    "narrative_mapper": OutputKind.FINDING,
+    # A7 P3-7 CAST-recipe per-desk statistical baseline — daily recompute of the
+    # per-desk (g20 + watch) trailing baseline expectation + uncertainty band +
+    # current-window deviation into desk_baselines (migration 0103). The honest
+    # per-desk distribution IS the measurement product (the calibration_tracking
+    # / fact_decay_scan / source_track_record precedent), so it stays a genuine
+    # FINDING — which keeps this handler in the FINDING-emitters set the
+    # STRUCTURAL_VERIFY_EXEMPT drift guard asserts. NOT a forecast (frozen): no
+    # Brier, no skill, no prediction-as-claim — a falsifiable prior the desk LLM
+    # reads + the P1-3 baseline_deviation trigger can consume, never a forecast.
+    "desk_baseline": OutputKind.FINDING,
     # Signals TTL purge — NOT in the operator-confirmed trace-only list;
     # disabled by default (ttl_days<=0). Left FINDING (unchanged).
     "signals_retention": OutputKind.FINDING,
+    # S-6 analyst_traces TTL purge — mirrors signals_retention exactly: an
+    # honest per-run summary FINDING (traces/critiques counts; zero-state
+    # honest), disabled by default (ttl_days<=0). Keeps this handler in the
+    # FINDING-emitters set the STRUCTURAL_VERIFY_EXEMPT drift guard asserts.
+    "analyst_traces_retention": OutputKind.FINDING,
 
     # --- TRACE-ONLY (real product is side-written; run audited in the trace;
     #     stop the redundant analyst_outputs FINDING receipt) ---
@@ -187,6 +255,13 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # analytical finding (like signal_summarizer / entity_resolution); the per-run
     # counts (examined / indexed / failed) live in the trace.
     "corpus_indexer": TRACE_ONLY,
+    # evidence_archiver (P2-1) — pure side-effect sweep: archives the original
+    # bytes behind CITED signals content-addressed onto the archive volume,
+    # upserts the evidence_archive sidecar (mig 0104) + stamps
+    # signals.object_ref / retention_class / payload.archived_text. Emits no
+    # analytical finding (like corpus_indexer); the per-run counts (examined /
+    # archived / skipped_license / …) live in the trace.
+    "evidence_archiver": TRACE_ONLY,
     # signal_embedder — pure side-effect sweep: projects signals into the Qdrant
     # legba_signals collection (the VECTOR PLANE — semantic retrieval that lights
     # up vector_search) + stamps embedding_ref. Emits no analytical finding (like
@@ -239,6 +314,14 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # receipt NEVER lands a finding / prediction / claim on any trust surface —
     # forecasting surfaces ONLY as acute_forecasts rows + the T4 scoreboard.
     "forecast_scoreboard": TRACE_ONLY,
+    # P1-3 verification-gated trigger scan — the REAL product = the side-written
+    # `kind=alert` rows (one per fired verified-state transition, fanned outward
+    # through the shared P1-1 alert-sink dispatcher); the returned summary is a
+    # per-run counts RECEIPT fully audited in analyst_traces. TRACE_ONLY keeps
+    # the receipt off analyst_outputs AND keeps this handler out of the
+    # FINDING-emitters set the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS drift guard
+    # asserts equality against.
+    "alert_trigger_scan": TRACE_ONLY,
 }
 
 # READ_SLICE defaults to the signals reader — graph_mining + anomaly +
@@ -254,6 +337,12 @@ SUB_HANDLERS: dict[str, Any] = {
     "anomaly_detection": anomaly_detection.handle,
     "structural_balance": structural_balance.handle,
     "calibration_tracking": calibration_tracking.handle,
+    # P2-3 band-calibration harness — logs a resolvable claim per scorecard
+    # band transition (ladder→ladder only), auto-resolves each at T0+14d/28d
+    # against LATER scorecard rows (deterministic, no LLM), and emits the honest
+    # persistence/reversal summary finding the /eval/calibration band section
+    # projects. Watermark + unique-index dedup make claim logging fire-once.
+    "band_calibration_tracker": band_calibration_tracker.handle,
     # P2-T5 per-unit correctness-vs-reference scorer (deterministic, LLM-free) —
     # source-id overlap RECALL of each bounded unit's latest head finding vs the
     # operator-authored gold rows; honest-None when nothing is scorable.
@@ -280,6 +369,14 @@ SUB_HANDLERS: dict[str, Any] = {
     # shared pool). Idempotent + forward-progressing (stamps signals.indexed_at;
     # OpenSearch `_id` = the signal id, so a re-index overwrites in place).
     "corpus_indexer": corpus_indexer.handle,
+    # evidence_archiver — P2-1 cited-evidence archival sweep: fetches + stores
+    # the original bytes behind signals cited by VERIFIED findings (content-
+    # addressed at {LEGBA_ARCHIVE_ROOT}/{sha256[:2]}/{sha256}), stamps
+    # signals.object_ref (cas:sha256/<hex>) + the evidence_archive sidecar, and
+    # re-queues extracted full text for the corpus via the corpus_indexer
+    # dirty-marker contract. Idempotent + forward-progressing (object_ref IS
+    # NULL is the selection gate; sidecar attempt caps bound retries).
+    "evidence_archiver": evidence_archiver.handle,
     # signal_embedder — async sweep that embeds signal bodies into the Qdrant
     # legba_signals collection (the VECTOR PLANE — semantic retrieval that lights
     # up vector_search, which no-ops today with 0 points). Idempotent +
@@ -329,6 +426,11 @@ SUB_HANDLERS: dict[str, Any] = {
     # Signals TTL purge (graph-and-data Wave-1b item 3 / D4). Disabled by
     # default (ttl_days<=0); operator opts in with a positive TTL on options.
     "signals_retention": signals_retention.handle,
+    # S-6 analyst_traces TTL purge — bounds the unbounded debug/telemetry
+    # table (~470MB/164k rows, +5.4k/day; disk-creep source). Disabled by
+    # default (ttl_days<=0); FK children DB-handled (critiques CASCADE, DLQ
+    # run_id SET NULL). TTL must stay above the 7-day cadence-health window.
+    "analyst_traces_retention": analyst_traces_retention.handle,
     # Proposed-edge governance (FIX P3-1) — promotes corroborated co_occurs
     # proposed_edges to nexuses + flips status; ages out thin stale ones.
     "proposed_edge_governance": proposed_edge_governance.handle,
@@ -341,6 +443,50 @@ SUB_HANDLERS: dict[str, Any] = {
     # acute_forecasts rows via the existing forecast_acute writers; returns a
     # TRACE_ONLY counts receipt. Forecasting surfaces only in the T4 scoreboard.
     "forecast_scoreboard": forecast_scoreboard.handle,
+    # P1-3 verification-gated trigger scan — ~10-min sweep over verified state
+    # TRANSITIONS (scorecard band crossings, new verified high-severity
+    # findings, contention flips, desk baseline deviations). Side-writes
+    # kind=alert rows + fans them through the shared P1-1 sink dispatcher;
+    # durable watermarks (migration 0091) make every transition fire-once.
+    "alert_trigger_scan": alert_trigger_scan.handle,
+    # A7 geographic convergence detector — ~30-min LLM-free scan that bins the
+    # rolling 24h of geolocated signals (1°×1° cells for point-trustworthy
+    # coordinates; country bins for ISO2-tagged signals) and fires a medium
+    # kind=alert row when ≥3 DISTINCT source families converge in one bin
+    # (diversity is the signal). State-transition edges only (formation + one
+    # dissolution) via trigger_class='geo_convergence' watermarks in the
+    # EXISTING alert_trigger_watermarks table — no new migration.
+    "geo_convergence_scan": geo_convergence_scan.handle,
+    # C4 fact confidence-decay readout stamper — daily walk of every OPEN fact
+    # computing the derived MISP-curve readout (legba.data.facts.decay:
+    # per-class lifetimes, sightings derived from the corroboration-unioned
+    # derived_from signal ids, reaction points + revoke threshold) into the
+    # fact_decay_states sidecar (0098). Readout only: NEVER touches facts.
+    # Consumption ships OFF behind LEGBA_FACT_DECAY_WEIGHTING.
+    "fact_decay_scan": fact_decay_scan.handle,
+    # A6 P3-3 EARNED source track record — daily recompute of per-source
+    # wins/losses over RESOLVED fact_contention groups (+ corroboration) with a
+    # Beta-smoothed win-rate, stored in source_track_records (0099). The arbiter
+    # consumption seam (_earned_track_record_weight) is OFF behind
+    # LEGBA_CONTENTION_EARNED_WEIGHT; circularity-guarded (lag + live exclusion).
+    "source_track_record": source_track_record.handle,
+    # P4-1/P4-2 narrative mapper — DAILY deterministic META sweep that reifies
+    # every active contested-claim family (`fact_contention` group) into a
+    # `narratives` row with its carrier sources, per-source first-seen, echo lags
+    # and propagation ordering, and refreshes the directed source-echo graph
+    # (`narrative_echo_edges`: leader->follower co-carriage + lag over the
+    # narrative population). Reads the contention sidecar + fact->signal->source
+    # lineage; wholesale-refreshes both derived tables (mig 0102). DETECT-ONLY.
+    "narrative_mapper": narrative_mapper.handle,
+    # A7 P3-7 CAST-recipe per-desk statistical baseline — daily LLM-free
+    # recompute over the g20 + watch desk set. For each desk × {signal_volume,
+    # high_sev_findings} it computes a robust trailing baseline (mean rate,
+    # median, Poisson-floored sigma) + an uncertainty band + the current-window
+    # deviation (with the SAME absolute floors as the P1-3 trigger), plus the
+    # CAST feature recipe (lags 1/7/28, rolling means, time-since-last-high-sev,
+    # neighbour-desk spillover), into desk_baselines (0103). Returns an honest
+    # distribution FINDING; NEVER a forecast (no Brier / skill / prediction).
+    "desk_baseline": desk_baseline.handle,
 }
 
 
